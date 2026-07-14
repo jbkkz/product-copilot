@@ -4,12 +4,14 @@ from pydantic import ValidationError
 
 from src.engine import (
     PRD,
+    AcceptanceCriteria,
     Confidence,
     EngineOutput,
     Slot,
     _extract_json,
     _readiness_blockers,
     _state_of,
+    criteria_markdown,
     estimate_confidence,
     prd_markdown,
     soft_slots,
@@ -104,3 +106,35 @@ def test_prd_markdown_renders_title_and_requirement_table():
     md = prd_markdown(prd)
     assert md.startswith("# Leave approval")
     assert "| FR-1 | Submit a request | Must |" in md
+
+
+def test_criteria_markdown_renders_gherkin_checklist():
+    ac = AcceptanceCriteria(
+        title="Leave approval",
+        features=[
+            {
+                "name": "Submitting a request",
+                "scenarios": [
+                    {
+                        "id": "AC-1",
+                        "title": "Valid request is accepted",
+                        "kind": "happy_path",
+                        "given": ["the employee is logged in", "they have enough balance"],
+                        "when": "they submit a 3-day request",
+                        "then": ["the request is created", "the manager is notified"],
+                    }
+                ],
+            }
+        ],
+        open_questions=["Can a manager approve their own request?"],
+    )
+    md = criteria_markdown(ac)
+    assert md.startswith("# Leave approval")
+    assert "### [ ] AC-1 — Valid request is accepted  _Happy path_" in md
+    # First given is "Given", subsequent ones fold to "And"; likewise Then → And.
+    assert "- **Given** the employee is logged in" in md
+    assert "- **And** they have enough balance" in md
+    assert "- **When** they submit a 3-day request" in md
+    assert "- **Then** the request is created" in md
+    assert "- **And** the manager is notified" in md
+    assert "## Open questions" in md
