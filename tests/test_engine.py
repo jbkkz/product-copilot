@@ -10,6 +10,7 @@ from src.engine import (
     Confidence,
     EngineOutput,
     Epic,
+    ReleaseNotes,
     Slot,
     _extract_json,
     _readiness_blockers,
@@ -20,6 +21,7 @@ from src.engine import (
     epic_markdown,
     estimate_confidence,
     prd_markdown,
+    release_markdown,
     soft_slots,
 )
 
@@ -190,3 +192,26 @@ def test_epic_export_is_neutral_and_maps_issues():
     assert payload["issues"][1]["depends_on"] == ["#1"]
     # The JSON writer emits valid, parseable JSON.
     assert json.loads(epic_export_json(epic)) == payload
+
+
+def test_release_markdown_stamps_version_and_sections():
+    rn = ReleaseNotes(
+        title="Leave approval",
+        version="v1.0",
+        summary="Your team can now request and approve leave online.",
+        highlights=["Submit a request in a few clicks"],
+        known_limitations=["Payroll export is not included yet"],
+        notes=["An administrator sets the approval circuit first"],
+    )
+    md = release_markdown(rn)
+    assert md.startswith("# Leave approval — v1.0")
+    assert "Your team can now request and approve leave online." in md
+    assert "## What's new" in md
+    assert "## Not included yet" in md
+    assert "## Before you start" in md
+
+
+def test_release_markdown_omits_version_when_empty():
+    md = release_markdown(ReleaseNotes(title="Leave approval", highlights=["A"]))
+    assert md.startswith("# Leave approval\n")
+    assert "—" not in md.splitlines()[0]

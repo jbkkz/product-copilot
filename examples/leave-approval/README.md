@@ -11,8 +11,9 @@ One discovery, end to end. Read it in order; no install required.
 | 5 | [`acceptance-criteria.md`](acceptance-criteria.md) | Given/When/Then recette checklist, from the *same* model. |
 | 6 | [`epic.md`](epic.md) | A delivery epic — work broken into trackable issues, from the *same* model. |
 | 7 | [`epic.json`](epic.json) | The same epic as a tool-neutral, GitHub/GitLab-importable export. |
+| 8 | [`release-notes.md`](release-notes.md) | Client-facing release notes, from the *same* model. |
 
-Steps 3 through 7 are all views of step 2. Any other artifact (user stories, an estimate) comes from
+Steps 3 through 8 are all views of step 2. Any other artifact (user stories, an estimate) comes from
 the same `model.json` — that's the point: the model is the product, everything else is a render of it.
 
 ## Reproduce it
@@ -22,7 +23,8 @@ python src/engine.py --from examples/leave-approval/model.json             # reg
 python src/engine.py --from examples/leave-approval/model.json --prd       # regenerate the PRD
 python src/engine.py --from examples/leave-approval/model.json --criteria  # regenerate the criteria
 python src/engine.py --from examples/leave-approval/model.json --epic       # regenerate the epic
-python src/engine.py --from examples/leave-approval/model.json --epic-json  # neutral GitHub/GitLab export
+python src/engine.py --from examples/leave-approval/model.json --epic-json      # neutral GitHub/GitLab export
+python src/engine.py --from examples/leave-approval/model.json --release v1.0   # regenerate the release notes
 ```
 
 The `model.json` here was produced by a real interactive discovery from `request.md`.

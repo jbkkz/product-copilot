@@ -102,10 +102,13 @@ Each generator is the same shape — **prompt + Pydantic contract + generator fn
 via `prd_markdown()` + `write_artifact()`), `criteria.md`/`AcceptanceCriteria`/`generate_criteria()`
 (Given/When/Then recette checklist → `out/<slug>/acceptance-criteria.md` via `criteria_markdown()`),
 `epic.md`/`Epic`/`generate_epic()` (delivery epic — work broken into trackable issues with labels +
-`depends_on` → `out/<slug>/epic.md` via `epic_markdown()`). Adding one (test plan, more exports)
-= those four pieces, plus a `--flag` in `main()`. Any generator whose text is user-facing must carry
-the **Voice** rule (no slot ids / percentages / confidence labels in prose). CLI flags: `--stories`,
-`--estimate`, `--prd`, `--criteria`, `--epic`.
+`depends_on` → `out/<slug>/epic.md` via `epic_markdown()`),
+`release.md`/`ReleaseNotes`/`generate_release()` (client-facing release notes → `out/<slug>/release-notes.md`
+via `release_markdown()`; `generate_release()` takes an optional `version` the CLI stamps from
+`--release [version]`). Adding one (test plan, more exports) = those four pieces, plus a `--flag` in
+`main()`. Any generator whose text is user-facing must carry the **Voice** rule (no slot ids /
+percentages / confidence labels in prose). CLI flags: `--stories`, `--estimate`, `--prd`, `--criteria`,
+`--epic`, `--release`.
 
 A generator can also have **more than one writer** on the same contract — a second *view* of the same
 LLM output, no extra model call. `Epic` has two: `epic_markdown()` (human) and `epic_export_json()`
