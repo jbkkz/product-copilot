@@ -1,62 +1,62 @@
-# Framework d'élicitation
+# Elicitation framework
 
-Le cœur du produit. Product-agnostic : il encode *comment* un PM transforme une demande floue en
-modèle de solution. Le contexte (`context/*.md`) l'ancre dans un produit précis.
+The core of the product. Product-agnostic: it encodes *how* a PM turns a vague request into a
+solution model. The context (`context/*.md`) grounds it in a specific product.
 
-## Les 4 piliers (navigation + pitch)
+## The 4 pillars (navigation + pitch)
 
-| Pilier | Question | Slots |
+| Pillar | Question | Slots |
 |---|---|---|
-| 🟢 **Why**      | Pourquoi ?  | Problème réel · Processus actuel (as-is) · Critères de succès |
-| 🟡 **What**     | Quoi ?      | Acteurs & rôles · Objets métier · Règles métier · Workflow/cycle de vie |
-| 🔵 **How**      | Comment ?   | Intégrations & notifications · Permissions · Config vs custom · Contraintes |
-| 🔴 **Validate** | Validation  | Cas limites · Reporting · Critères d'acceptation · Risques & rollout |
+| 🟢 **Why**      | Why?      | Real problem · Current process (as-is) · Success criteria |
+| 🟡 **What**     | What?     | Actors & roles · Business objects · Business rules · Workflow/lifecycle |
+| 🔵 **How**      | How?      | Integrations & notifications · Permissions · Config vs custom · Constraints |
+| 🔴 **Validate** | Validation | Edge cases · Reporting · Acceptance criteria · Risks & rollout |
 
-Les piliers sont des **buckets de navigation**. L'unité atomique reste le **slot** — c'est lui qui se
-remplit, se track, et depuis lequel les artefacts se génèrent.
+Pillars are **navigation buckets**. The atomic unit stays the **slot** — it's what gets filled,
+tracked, and what the artifacts are generated from.
 
-## Chaque slot est un objet
+## Each slot is an object
 
 ```
 slot {
-  completeness : 0-100        # à quel point on le connaît
+  completeness : 0-100        # how well we know it
   confidence   : explicit | inferred | empty
-  impact       : low | medium | high    # combien il change la forme/le coût de la solution
-  value        : ce qu'on sait
-  evidence     : d'où ça vient (mots du client / inférence / réponse)
+  impact       : low | medium | high    # how much it changes the shape/cost of the solution
+  value        : what we know
+  evidence     : where it comes from (client's words / inference / answer)
 }
 ```
 
-`confidence` porte la **provenance** : un slot `inferred` est une **hypothèse à confirmer** — c'est
-exactement ce qui alimente la section *"Hypothèses posées"* du résumé.
+`confidence` carries the **provenance**: an `inferred` slot is an **assumption to confirm** — exactly
+what feeds the *"Assumptions made"* section of the summary.
 
-## Le driver : Incertitude × Impact
+## The driver: Uncertainty × Impact
 
-Le moteur ne pose **pas** une question parce qu'un slot est vide. Il calcule la **valeur de
-l'information** :
+The engine does **not** ask a question because a slot is empty. It computes the **information
+value**:
 
 ```
-information_value = incertitude × impact
+information_value = uncertainty × impact
 ```
 
-- **Incertitude** ← dérivée de `completeness` + `confidence`.
-- **Impact** ← combien ce slot change la solution. **Estimé grâce au contexte produit.** Sans contexte,
-  l'impact est une devinette : le moteur n'est aussi intelligent que le contexte qu'on lui donne.
+- **Uncertainty** ← derived from `completeness` + `confidence`.
+- **Impact** ← how much this slot changes the solution. **Estimated using the product context.**
+  Without context, impact is a guess: the engine is only as smart as the context you give it.
 
-On pose **les bonnes** questions, pas toutes.
+We ask **the right** questions, not all of them.
 
-- Slot vide, impact bas (ex. Reporting sur un ajout de champ) → **on ne demande pas.**
-- Slot partiel, impact haut, confiance moyenne (ex. une règle métier qui varie selon le pays) → **on creuse.**
+- Empty slot, low impact (e.g. Reporting on adding a field) → **we don't ask.**
+- Partial slot, high impact, medium confidence (e.g. a business rule that varies by country) → **we dig.**
 
-## Le config-vs-custom : l'edge des plateformes
+## config-vs-custom: the platform edge
 
-Slot `optional` : ON pour les produits configurables (plateformes multi-clients), OFF pour une app
-one-shot. La quasi-totalité des outils de discovery sont pensés greenfield et ne posent jamais
-*"hardcodé / configurable / spécifique client / réutilisable pour tous ?"*. C'est LA question qui
-sépare une plateforme scalable d'un plat de forks clients.
+`optional` slot: ON for configurable products (multi-client platforms), OFF for a one-shot app.
+Almost every discovery tool is greenfield-minded and never asks
+*"hardcoded / configurable / client-specific / reusable for all?"*. That's THE question that
+separates a scalable platform from a pile of per-client forks.
 
-## Ce que le moteur produit (v0)
+## What the engine produces (v0)
 
-Deux rendus du même modèle :
-1. **Résumé métier** — objectif · périmètre pressenti · hypothèses posées · angle mort principal.
-2. **Questions prioritaires** — triées par valeur d'information, avec le *pourquoi* de chaque question.
+Two renders of the same model:
+1. **Business summary** — objective · likely scope · assumptions made · main blind spot.
+2. **Priority questions** — sorted by information value, with the *why* of each question.

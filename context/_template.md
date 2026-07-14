@@ -1,26 +1,26 @@
-# Fiche de contexte — {NOM}
+# Context card — {NAME}
 
-> Template. Copier en `context/<nom>.md` et remplir. Les fichiers `_préfixés` sont ignorés par le moteur.
+> Template. Copy to `context/<name>.md` and fill it in. Files prefixed with `_` are ignored by the engine.
 
-## Qui
-- Domaine métier :
-- Type de produit : (app one-shot | plateforme configurable multi-clients)
-- Utilisateurs / rôles types :
+## Who
+- Business domain:
+- Product type: (one-shot app | configurable multi-client platform)
+- Typical users / roles:
 
-## Le produit / module
-- Ce qu'il fait :
-- Objets métier principaux (entités) :
-- Concepts clés du domaine :
+## The product / module
+- What it does:
+- Main business objects (entities):
+- Key domain concepts:
 
-## L'existant (surface déjà construite)
-> Sert au moteur à estimer l'impact et à repérer les conflits ("est-ce que ça touche X ?").
-- Fonctionnalités majeures :
-- Modules / zones sensibles :
+## The existing surface (already built)
+> Helps the engine estimate impact and spot conflicts ("does this touch X?").
+- Major features:
+- Sensitive modules / areas:
 
-## Sensibilités & contraintes
-- Réglementaire (droit du travail, RGPD, pays…) :
-- Contraintes techniques connues :
-- Pièges récurrents / angles morts fréquents chez ce client :
+## Sensitivities & constraints
+- Regulatory (labor law, GDPR, country…):
+- Known technical constraints:
+- Recurring traps / frequent blind spots for this client:
 
-## Configurabilité (plateformes uniquement)
-- Ce qui est standard pour tous vs spécifique par client :
+## Configurability (platforms only)
+- What is standard for all vs client-specific:
