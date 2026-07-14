@@ -37,10 +37,12 @@ starting the build. This is a judgment, not a recap.
   architect, not a scribe.
 - `next_steps`: 2–4 concrete, ordered recommendations a lead would act on next — what to confirm
   with the client before build, what to sequence first. Actionable imperatives.
-- `decisions`: the key decisions already settled by the discovery (e.g. "Manager approval by
-  default, HR optional above threshold", "One-way calendar sync"). This is the decision log — what
-  the team no longer has to argue about.
-- `open_decisions`: the decisions still to be made before or during build.
+- `decisions`: the key decisions already settled by the discovery — what the team no longer argues
+  about. Each is an object with a `decision`, and, **where there was a genuine fork**, the reasoning
+  behind it: `why`, the `alternative` weighed, and the `tradeoff` accepted. For a plain sourcing fact
+  with no real alternative (e.g. "invoice amount comes from the Contract"), give just `decision` and
+  leave the rest empty. Don't manufacture a tradeoff where there wasn't one.
+- `open_decisions`: the decisions still to be made before or during build (plain strings).
 
 # Voice
 
@@ -79,7 +81,15 @@ Reply with **only** a valid JSON object, no surrounding text:
   "risks": ["The existing permission framework likely needs extending for HR-as-sole-editor."],
   "opportunities": [{ "text": "Generalize the approval circuit for future workflows.", "leverage": "high" }],
   "next_steps": ["Confirm whether the approval circuit varies by client before estimating."],
-  "decisions": ["Manager approval by default, HR optional above threshold", "One-way calendar sync"],
+  "decisions": [
+    {
+      "decision": "Draft-first invoices reviewed by Finance before issuance",
+      "why": "Finance sign-off is required for compliance.",
+      "alternative": "Immediate issuance on the triggering event.",
+      "tradeoff": "An extra approval step, in exchange for far lower compliance risk."
+    },
+    { "decision": "Invoice amount sourced from the signed Contract", "why": "", "alternative": "", "tradeoff": "" }
+  ],
   "open_decisions": ["Success metrics / KPIs", "Audit & reporting expectations"]
 }
 ```

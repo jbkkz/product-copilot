@@ -12,6 +12,7 @@ from src.engine import (
     Brief,
     Challenge,
     Confidence,
+    DesignDecision,
     EngineOutput,
     Epic,
     ReleaseNotes,
@@ -276,6 +277,15 @@ def test_render_brief_titles_solution_assessment_and_shows_challenges():
         problem="P",
         solution="S",
         complexity="high",
+        decisions=[
+            DesignDecision(
+                decision="Draft-first invoices reviewed before issuance",
+                why="Finance sign-off is required.",
+                alternative="Immediate issuance.",
+                tradeoff="Extra step, lower compliance risk.",
+            ),
+            DesignDecision(decision="Amount sourced from the Contract"),  # bare fact, no fork
+        ],
         challenges=[
             Challenge(
                 headline="Invoice at signature",
@@ -296,3 +306,8 @@ def test_render_brief_titles_solution_assessment_and_shows_challenges():
     assert "Challenge Invoice at signature" in text
     assert "⚑ Invoice at signature" in text  # full-analysis section
     assert "Premise" in text and "Alternative" in text and "Recommend" in text
+    # Design decisions: the forked one shows its reasoning, the bare fact stays a single line.
+    assert "DESIGN DECISIONS" in text and "DECISION LOG" not in text
+    assert "✓ Draft-first invoices reviewed before issuance" in text
+    assert "Why" in text and "Tradeoff" in text
+    assert "✓ Amount sourced from the Contract" in text

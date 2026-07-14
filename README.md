@@ -8,7 +8,7 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
 
 > **Product Copilot doesn't generate documents. It builds understanding.**
 
-![Product Copilot — from a one-line request to a discovery brief](demo.gif)
+![Product Copilot — from a one-line request to a solution assessment](demo.gif)
 
 ```
                  Customer request
@@ -52,7 +52,7 @@ rest, it infers and flags as an assumption. You spend your discovery time where 
 
 Product Copilot builds a **structured model of the solution** and refines it through a short,
 targeted conversation. The chat is just the interface. **The product is the model** — and every
-artifact (a discovery brief, a PRD, user stories, an estimate) is a view rendered from it.
+artifact (a solution assessment, a PRD, user stories, an estimate) is a view rendered from it.
 
 The same discovery can later produce a PRD, a test plan, or a Jira export **without redoing the
 conversation**.
@@ -61,31 +61,31 @@ conversation**.
 
 ## What you get
 
-The deliverable is a **discovery brief** — and it opens with the answer a stakeholder actually wants:
+The deliverable is a **solution assessment** — a judgment on what you're about to build, not a recap
+of what you said. It doesn't just organize the request; it **pushes back on it**, the way a senior PM
+who has built this kind of system before would:
 
 ```
-READY FOR IMPLEMENTATION?
-  Status               Nearly ready
-  Blocking decision    Confirm the underlying business problem
-  Remaining gaps       Success metrics, reporting expectations
+CHALLENGES
+  ⚑ Immediate invoice on signature
+      Premise      Invoices are generated the moment a contract is signed.
+      Alternative  Many B2B contracts bill on a schedule — milestones, recurring
+                   periods, usage — not a single lump sum at signature.
+      Consequence  Signature-triggered invoicing multiplies cancellation and
+                   credit-note handling when deals change before they start.
+      Recommend    Validate the billing trigger with Finance before build.
 
-MAIN RISKS
-  ⚠ The shared approval framework is used across other modules — changes here can ripple
-    into contracts and invoicing.
-  ⚠ Balance checks under concurrent requests risk race conditions if not serialized.
-
-OPPORTUNITIES
-  High leverage    ◆ Generalize the approval-circuit engine — it could later drive invoice
-                     sign-off and mission validation too.
-
-RECOMMENDED NEXT STEPS
-  1. Confirm the pilot's success metrics and target clients before committing an estimate.
-  2. Nail down reporting and audit requirements early, given the regulatory sensitivity.
+DESIGN DECISIONS
+  ✓ Draft-first invoices, reviewed by Finance before issuance
+      Why          Finance sign-off is required for compliance.
+      Alternative  Immediate issuance on the triggering event.
+      Tradeoff     An extra approval step, in exchange for far lower compliance risk.
 ```
 
-Above this sits a five-line **executive summary** (problem · solution · risks · unknowns · next
-step). Below it, the full analysis includes a **decision log** of what's settled versus still open,
-an understanding checklist, and the reasoning behind each recommendation.
+Above these sits a five-line **executive summary** (problem · solution · challenge · risks · next).
+Below, the full analysis adds context-specific **risks**, ranked **opportunities**, a readiness
+verdict with its single blocker — and the reasoning behind each. Every line is in a PM's language;
+none of the engine's internals leak through.
 
 ---
 
@@ -111,7 +111,7 @@ Walk through a full discovery example, end to end, in
 |---|---|
 | [`request.md`](examples/leave-approval/request.md) | The one-sentence input |
 | [`model.json`](examples/leave-approval/model.json) | The structured model the discovery built |
-| [`discovery-brief.md`](examples/leave-approval/discovery-brief.md) | The deliverable — brief with risks, decisions, next steps |
+| [`solution-assessment.md`](examples/leave-approval/solution-assessment.md) | The deliverable — challenges, design decisions, risks, next steps |
 | [`prd.md`](examples/leave-approval/prd.md) | A PRD generated from the same model |
 | [`epic.json`](examples/leave-approval/epic.json) | The same model as a GitHub/GitLab-importable epic |
 
@@ -173,7 +173,7 @@ Better context → sharper impact estimates → better questions. Files prefixed
 ## Roadmap
 
 **Current**
-- Discovery engine — priority questions, multi-turn refinement, discovery brief
+- Discovery engine — priority questions, multi-turn refinement, solution assessment (with challenges)
 - Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria, delivery
   epic, release notes
 - Tool-neutral epic export (`epic.json`) — importable into GitHub / GitLab issues

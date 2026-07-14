@@ -41,15 +41,20 @@ prompt data, not in Python. `src/engine.py` is a thin runner:
    with a corrective nudge in a *local* message copy, so the caller's clean history is never
    polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it.
 3. Rendering is split: `render_turn()` is the lightweight per-turn view (a ✅/🟡/⚪ Understanding
-   checklist + priority questions); `render_brief()` is the deliverable — a **two-tier** brief in PM
-   language: an Executive Summary (Problem / Solution / Risks / Unknowns / Next) a PM reads in
-   seconds, then the full analysis (Understanding checklist, Decision log, Complexity + why, Main
+   checklist + priority questions); `render_brief()` is the deliverable — the **SOLUTION ASSESSMENT**,
+   a two-tier document in PM language (the function/contract/prompt keep the `brief` name; only the
+   printed title and the product term are "solution assessment"). It's a *judgment*, not a recap: an
+   Executive Summary (Problem / Solution / Challenge / Risks / Next) a PM reads in seconds, then the
+   full analysis (Understanding checklist, Design decisions, **Challenges**, Complexity + why, Main
    risks, ranked Opportunities, Next steps, Ready-for-implementation with a single blocker). The
    checklist, discovery-complete %, decision states and readiness are computed **in Python**; the
-   advisory `Brief` (problem, solution, introduces, complexity + reasons, risks, opportunities ranked
-   by `Leverage`, next steps, decisions/open_decisions) is LLM-generated. Both layers must avoid
-   exposing internals (slot ids, completeness numbers, confidence labels) in user-facing text —
-   `prompts/brief.md` has an explicit Voice rule enforcing this for the LLM prose.
+   advisory `Brief` (problem, solution, introduces, `challenges` [premise/alternative/consequence/
+   recommendation], complexity + reasons, risks, opportunities ranked by `Leverage`, next steps,
+   `decisions` as `DesignDecision` [decision + optional why/alternative/tradeoff], open_decisions) is
+   LLM-generated. The `challenges` block **contests the premise** (grounded in model + context, never
+   generic); it's the core differentiator. Both layers must avoid exposing internals (slot ids,
+   completeness numbers, confidence labels) in user-facing text — `prompts/brief.md` has an explicit
+   Voice rule enforcing this for the LLM prose.
 
 **Consequence for changes:** behavior is tuned by editing the Markdown/JSON assets, not the Python.
 

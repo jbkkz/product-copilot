@@ -134,6 +134,15 @@ class Challenge(BaseModel):
     recommendation: str    # what to do about it before build
 
 
+class DesignDecision(BaseModel):
+    # A settled decision. why/alternative/tradeoff are filled only where there was a real fork —
+    # trivial sourcing facts stay a bare `decision` line.
+    decision: str          # what was decided
+    why: str = ""          # the rationale
+    alternative: str = ""  # what was weighed instead
+    tradeoff: str = ""     # the cost accepted for this choice
+
+
 class Brief(BaseModel):
     # The advisory layer: what a senior consultant would add on top of the discovery.
     problem: str = ""                                   # one-line problem statement (exec summary)
@@ -146,7 +155,7 @@ class Brief(BaseModel):
     risks: list[str] = Field(default_factory=list)
     opportunities: list[Opportunity] = Field(default_factory=list)  # ranked by leverage
     next_steps: list[str] = Field(default_factory=list)
-    decisions: list[str] = Field(default_factory=list)      # decisions already made (the decision log)
+    decisions: list[DesignDecision] = Field(default_factory=list)  # settled decisions, with tradeoffs
     open_decisions: list[str] = Field(default_factory=list)  # decisions still to make
 
 
@@ -541,11 +550,15 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     render_understanding(out)
 
     if brief.decisions or brief.open_decisions:
-        print("\nDECISION LOG")
-        if brief.decisions:
-            print("  Decided")
-            for d in brief.decisions:
-                print(_bullet(d, marker="✓", indent="    "))
+        print("\nDESIGN DECISIONS")
+        for d in brief.decisions:
+            print(_bullet(d.decision, marker="✓", indent="  "))
+            if d.why:
+                print(_labeled("Why", d.why, lw=12, indent="      "))
+            if d.alternative:
+                print(_labeled("Alternative", d.alternative, lw=12, indent="      "))
+            if d.tradeoff:
+                print(_labeled("Tradeoff", d.tradeoff, lw=12, indent="      "))
         if brief.open_decisions:
             print("  Still to decide")
             for d in brief.open_decisions:

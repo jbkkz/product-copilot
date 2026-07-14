@@ -6,7 +6,7 @@ One discovery, end to end. Read it in order; no install required.
 |---|---|---|
 | 1 | [`request.md`](request.md) | The raw input — a single vague sentence. |
 | 2 | [`model.json`](model.json) | The structured model the discovery built (the product). |
-| 3 | [`discovery-brief.md`](discovery-brief.md) | The deliverable — executive summary, decision log, risks, opportunities, next steps. |
+| 3 | [`solution-assessment.md`](solution-assessment.md) | The deliverable — executive summary, challenges, design decisions, risks, opportunities, next steps. |
 | 4 | [`prd.md`](prd.md) | A PRD generated from the *same* model. |
 | 5 | [`acceptance-criteria.md`](acceptance-criteria.md) | Given/When/Then recette checklist, from the *same* model. |
 | 6 | [`epic.md`](epic.md) | A delivery epic — work broken into trackable issues, from the *same* model. |
@@ -21,7 +21,7 @@ the same `model.json` — that's the point: the model is the product, everything
 ## Reproduce it
 
 ```bash
-python src/engine.py --from examples/leave-approval/model.json             # regenerate the brief
+python src/engine.py --from examples/leave-approval/model.json             # regenerate the assessment
 python src/engine.py --from examples/leave-approval/model.json --prd       # regenerate the PRD
 python src/engine.py --from examples/leave-approval/model.json --criteria  # regenerate the criteria
 python src/engine.py --from examples/leave-approval/model.json --epic       # regenerate the epic
