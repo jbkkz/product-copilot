@@ -13,8 +13,9 @@ One discovery, end to end. Read it in order; no install required.
 | 7 | [`epic.json`](epic.json) | The same epic as a tool-neutral, GitHub/GitLab-importable export. |
 | 8 | [`release-notes.md`](release-notes.md) | Client-facing release notes, from the *same* model. |
 | 9 | [`epic.github.json`](epic.github.json) | A GitHub issue-creation plan (adapter over the neutral export). |
+| 10 | [`epic.gitlab.json`](epic.gitlab.json) | A GitLab plan — `depends_on` becomes structured issue links. |
 
-Steps 3 through 9 are all views of step 2. Any other artifact (user stories, an estimate) comes from
+Steps 3 through 10 are all views of step 2. Any other artifact (user stories, an estimate) comes from
 the same `model.json` — that's the point: the model is the product, everything else is a render of it.
 
 ## Reproduce it
@@ -27,6 +28,7 @@ python src/engine.py --from examples/leave-approval/model.json --epic       # re
 python src/engine.py --from examples/leave-approval/model.json --epic-json      # neutral GitHub/GitLab export
 python src/engine.py --from examples/leave-approval/model.json --release v1.0   # regenerate the release notes
 python src/engine.py --from examples/leave-approval/model.json --epic-github    # GitHub issue-creation plan
+python src/engine.py --from examples/leave-approval/model.json --epic-gitlab    # GitLab plan (issue links)
 ```
 
 The `model.json` here was produced by a real interactive discovery from `request.md`.

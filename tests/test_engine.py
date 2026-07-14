@@ -24,6 +24,7 @@ from src.engine import (
     release_markdown,
     soft_slots,
     to_github,
+    to_gitlab,
 )
 
 
@@ -217,6 +218,28 @@ def test_to_github_plan_degrades_honestly_and_is_idempotent():
     # depends_on has no native GitHub concept — stated in the body, resolved to the issue's title.
     assert "**Depends on:** Model the leave object" in plan["issues"][1]["body"]
     assert "_Part of epic: Leave approval_" in plan["issues"][0]["body"]
+
+
+def test_to_gitlab_wires_depends_on_as_issue_links():
+    epic = Epic(
+        title="Leave approval",
+        milestone="Pilot",
+        issues=[
+            {"id": "#1", "title": "Model the leave object", "labels": ["backend"]},
+            {"id": "#2", "title": "Approval circuit", "labels": ["feature"], "depends_on": ["#1"]},
+            {"id": "#3", "title": "UI", "labels": ["frontend"], "depends_on": ["#1", "#2"]},
+        ],
+    )
+    plan = to_gitlab(epic_export(epic), "leave-approval")
+    assert plan["target"] == "gitlab"
+    label = "pc-epic:leave-approval"
+    assert all(label in issue["labels"] for issue in plan["issues"])
+    # GitLab maps depends_on to structured issue links (the dependency blocks the dependent), not text.
+    assert {"source_ref": "#1", "target_ref": "#2", "type": "blocks"} in plan["links"]
+    assert {"source_ref": "#2", "target_ref": "#3", "type": "blocks"} in plan["links"]
+    assert len(plan["links"]) == 3
+    # No dependency text in the body — the relationship is structured.
+    assert "Depends on" not in plan["issues"][1]["description"]
 
 
 def test_release_markdown_stamps_version_and_sections():

@@ -805,6 +805,59 @@ def to_github_json(epic: Epic, slug: str) -> str:
     return json.dumps(to_github(epic_export(epic), slug), indent=2) + "\n"
 
 
+def to_gitlab(export: dict, slug: str) -> dict:
+    """Adapter: neutral epic export → a GitLab issue-creation plan (pure, no network).
+
+    GitLab maps more faithfully than GitHub: `depends_on` becomes structured issue `links`
+    (`blocks`) an automation wires after create — not body text. Native Epics are Premium-only, so
+    for portability the epic is a tracking issue with a task list on any tier. Each issue carries the
+    `pc-epic:<slug>` idempotency label; `milestone` is a name the automation resolves to its id.
+    """
+    label = f"pc-epic:{slug}"
+    epic_title = export["epic"]["title"]
+
+    def child_description(issue: dict) -> str:
+        parts = [issue["description"]] if issue["description"] else []
+        parts.append(f"_Part of epic: {epic_title}_")
+        return "\n\n".join(parts)
+
+    task_list = "\n".join(f"- [ ] {i['title']}" for i in export["issues"])
+    tracking_description = (export["epic"]["description"] + "\n\n### Issues\n\n" + task_list).strip()
+
+    # depends_on: the dependency blocks the dependent issue. Wire as GitLab issue links after create.
+    links = [
+        {"source_ref": ref, "target_ref": issue["ref"], "type": "blocks"}
+        for issue in export["issues"]
+        for ref in issue.get("depends_on", [])
+    ]
+
+    return {
+        "target": "gitlab",
+        "idempotency_label": label,
+        "tracking_issue": {
+            "title": f"Epic: {epic_title}",
+            "description": tracking_description,
+            "labels": export["epic"]["labels"] + [label],
+            "milestone": export["epic"]["milestone"],
+        },
+        "issues": [
+            {
+                "ref": issue["ref"],
+                "title": issue["title"],
+                "description": child_description(issue),
+                "labels": issue["labels"] + [label],
+                "milestone": issue["milestone"],
+            }
+            for issue in export["issues"]
+        ],
+        "links": links,
+    }
+
+
+def to_gitlab_json(epic: Epic, slug: str) -> str:
+    return json.dumps(to_gitlab(epic_export(epic), slug), indent=2) + "\n"
+
+
 def release_markdown(rn: ReleaseNotes) -> str:
     """Render client-facing release notes as a clean, shareable Markdown announcement."""
     heading = f"# {rn.title}" + (f" — {rn.version}" if rn.version else "")
@@ -910,8 +963,8 @@ def main() -> None:
         if out:
             print(f"\nSaved model → {save_model(out, slug)}")
     else:
-        print('Usage: python src/engine.py [--once] [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--release [version]] "request" | file.md')
-        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--release [version]]')
+        print('Usage: python src/engine.py [--once] [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--epic-gitlab] [--release [version]] "request" | file.md')
+        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--epic-gitlab] [--release [version]]')
         sys.exit(1)
 
     if not out:
@@ -945,7 +998,7 @@ def main() -> None:
         print(markdown)
         print(f"\nWrote acceptance criteria → {path}")
 
-    if flags & {"--epic", "--epic-json", "--epic-github"}:
+    if flags & {"--epic", "--epic-json", "--epic-github", "--epic-gitlab"}:
         print("\nGenerating the delivery epic…")
         epic = generate_epic(client, out)  # one model call; every view renders from it
         if "--epic" in flags:
@@ -959,6 +1012,9 @@ def main() -> None:
         if "--epic-github" in flags:
             path = write_artifact(slug, "epic.github.json", to_github_json(epic, slug))
             print(f"Wrote GitHub issue-creation plan → {path}")
+        if "--epic-gitlab" in flags:
+            path = write_artifact(slug, "epic.gitlab.json", to_gitlab_json(epic, slug))
+            print(f"Wrote GitLab issue-creation plan → {path}")
 
     if "--release" in flags:
         print("\nGenerating the release notes…")

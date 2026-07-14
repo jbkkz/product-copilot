@@ -123,7 +123,9 @@ issue-creation plan (`out/<slug>/epic.github.json` behind `--epic-github`, via `
 GitHub has no native epic or dependency, so it degrades honestly (tracking issue + task list;
 `depends_on` stated in issue bodies) and stamps a `pc-epic:<slug>` idempotency label on every issue.
 The authenticated push (tokens, retries) is deliberately *not* in-repo — an n8n flow consumes the
-plan. Adding GitLab/Jira = another pure `to_<tracker>()` adapter + `--flag`, same shape.
+plan. `to_gitlab(export, slug)` (`--epic-gitlab` → `epic.gitlab.json`) is the same shape but maps
+`depends_on` to a structured `links` array (`blocks`) instead of body text — GitLab has native issue
+links. Adding Jira = another pure `to_<tracker>()` adapter + `--flag`.
 
 ## Extending
 
