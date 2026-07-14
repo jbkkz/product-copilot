@@ -2,11 +2,15 @@
 import pytest
 from pydantic import ValidationError
 
+import io
 import json
+from contextlib import redirect_stdout
 
 from src.engine import (
     PRD,
     AcceptanceCriteria,
+    Brief,
+    Challenge,
     Confidence,
     EngineOutput,
     Epic,
@@ -22,6 +26,7 @@ from src.engine import (
     estimate_confidence,
     prd_markdown,
     release_markdown,
+    render_brief,
     soft_slots,
     to_github,
     to_gitlab,
@@ -263,3 +268,31 @@ def test_release_markdown_omits_version_when_empty():
     md = release_markdown(ReleaseNotes(title="Leave approval", highlights=["A"]))
     assert md.startswith("# Leave approval\n")
     assert "—" not in md.splitlines()[0]
+
+
+def test_render_brief_titles_solution_assessment_and_shows_challenges():
+    model = {"real_problem": slot(80, "explicit", "high")}
+    brief = Brief(
+        problem="P",
+        solution="S",
+        complexity="high",
+        challenges=[
+            Challenge(
+                headline="Invoice at signature",
+                premise="Invoices are generated the moment a contract is signed.",
+                alternative="Many teams invoice at the contract start date or on a billing schedule.",
+                consequence="Signature-triggered invoicing multiplies credit-note handling.",
+                recommendation="Validate the billing trigger with Finance first.",
+            )
+        ],
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        render_brief(out(model), brief)
+    text = buf.getvalue()
+    assert "SOLUTION ASSESSMENT" in text and "DISCOVERY BRIEF" not in text
+    assert "CHALLENGES" in text
+    # the top challenge surfaces in the executive summary, detail in the full analysis
+    assert "Challenge Invoice at signature" in text
+    assert "⚑ Invoice at signature" in text  # full-analysis section
+    assert "Premise" in text and "Alternative" in text and "Recommend" in text

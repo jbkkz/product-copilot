@@ -125,11 +125,21 @@ class Opportunity(BaseModel):
     leverage: Leverage
 
 
+class Challenge(BaseModel):
+    # Not "what did we learn" but "what should we contest" — the senior-PM pushback on the premise.
+    headline: str          # 3–6 words naming the thing being challenged
+    premise: str           # the assumption the request takes for granted
+    alternative: str       # a concrete, domain-grounded alternative worth weighing
+    consequence: str       # what the current premise risks or costs
+    recommendation: str    # what to do about it before build
+
+
 class Brief(BaseModel):
     # The advisory layer: what a senior consultant would add on top of the discovery.
     problem: str = ""                                   # one-line problem statement (exec summary)
     solution: str = ""                                  # one-line solution statement (exec summary)
     introduces: list[str] = Field(default_factory=list)
+    challenges: list[Challenge] = Field(default_factory=list)  # premises worth contesting before build
     complexity: Level
     complexity_reasons: list[str] = Field(default_factory=list)  # the "because …" behind the verdict
     cost_driver: str = ""
@@ -438,8 +448,8 @@ def _bullet(text: str, marker: str = "•", indent: str = "  ", width: int = 80)
     )
 
 
-def _labeled(label: str, text: str, lw: int = 9, width: int = 80) -> str:
-    prefix = f"  {label:<{lw}} "
+def _labeled(label: str, text: str, lw: int = 9, width: int = 80, indent: str = "  ") -> str:
+    prefix = f"{indent}{label:<{lw}} "
     return textwrap.fill(text, width=width, initial_indent=prefix, subsequent_indent=" " * len(prefix))
 
 
@@ -500,10 +510,11 @@ def render_turn(out: EngineOutput) -> None:
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:
-    """The deliverable: a two-tier discovery brief — an executive summary a PM reads in seconds, then
-    the full analysis below. Written in a PM's language, never the engine's internals."""
+    """The deliverable: a two-tier solution assessment — an executive summary a PM reads in seconds,
+    then the full analysis below (including what to *challenge*, not just what was learned). Written
+    in a PM's language, never the engine's internals."""
     print("\n" + "═" * 64)
-    print("DISCOVERY BRIEF")
+    print("SOLUTION ASSESSMENT")
     print("═" * 64)
 
     # ── Executive summary (what a PM reads first) ──
@@ -511,6 +522,9 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     if brief.problem:
         print(_labeled("Problem", brief.problem))
     print(_labeled("Solution", brief.solution or out.summary.objective))
+    if brief.challenges:
+        more = f"   (+{len(brief.challenges) - 1} more below)" if len(brief.challenges) > 1 else ""
+        print(_labeled("Challenge", brief.challenges[0].headline + more))
     if brief.risks:
         more = f"   (+{len(brief.risks) - 1} more below)" if len(brief.risks) > 1 else ""
         print(_labeled("Risks", brief.risks[0] + more))
@@ -536,6 +550,15 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
             print("  Still to decide")
             for d in brief.open_decisions:
                 print(_bullet(d, marker="•", indent="    "))
+
+    if brief.challenges:
+        print("\nCHALLENGES")
+        for c in brief.challenges:
+            print(_bullet(c.headline, marker="⚑", indent="  "))
+            print(_labeled("Premise", c.premise, lw=12, indent="      "))
+            print(_labeled("Alternative", c.alternative, lw=12, indent="      "))
+            print(_labeled("Consequence", c.consequence, lw=12, indent="      "))
+            print(_labeled("Recommend", c.recommendation, lw=12, indent="      "))
 
     print(f"\nCOMPLEXITY  {brief.complexity.value.upper()}")
     for r in brief.complexity_reasons:
