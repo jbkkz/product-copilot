@@ -102,10 +102,17 @@ Each generator is the same shape — **prompt + Pydantic contract + generator fn
 via `prd_markdown()` + `write_artifact()`), `criteria.md`/`AcceptanceCriteria`/`generate_criteria()`
 (Given/When/Then recette checklist → `out/<slug>/acceptance-criteria.md` via `criteria_markdown()`),
 `epic.md`/`Epic`/`generate_epic()` (delivery epic — work broken into trackable issues with labels +
-`depends_on` → `out/<slug>/epic.md` via `epic_markdown()`). Adding one (test plan, Jira/GitLab export)
+`depends_on` → `out/<slug>/epic.md` via `epic_markdown()`). Adding one (test plan, more exports)
 = those four pieces, plus a `--flag` in `main()`. Any generator whose text is user-facing must carry
 the **Voice** rule (no slot ids / percentages / confidence labels in prose). CLI flags: `--stories`,
 `--estimate`, `--prd`, `--criteria`, `--epic`.
+
+A generator can also have **more than one writer** on the same contract — a second *view* of the same
+LLM output, no extra model call. `Epic` has two: `epic_markdown()` (human) and `epic_export_json()`
+(a tool-neutral, versioned envelope — `format`/`version`/`epic`/`issues[]` with labels, shared
+`milestone`, and `depends_on` refs — importable into GitHub/GitLab or consumable by an n8n flow,
+written to `out/<slug>/epic.json` behind `--epic-json`). `main()` calls `generate_epic()` once and
+renders whichever views were requested, so `--epic --epic-json` is a single API call.
 
 ## Extending
 

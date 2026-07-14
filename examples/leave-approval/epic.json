@@ -1,0 +1,231 @@
+{
+  "format": "product-copilot-epic",
+  "version": 1,
+  "epic": {
+    "title": "Digital Leave Approval Workflow",
+    "description": "Replace the current email/Excel leave approval process with a configurable, auditable digital workflow that enforces real-time balance checks and routes approvals by role.\n\n**Business value:** Eliminates manual errors and untracked approvals, gives HR a full audit trail, and lets the client roll out a consistent, client-specific approval circuit starting with a pilot before scaling to other clients.\n\n**In scope:**\n- Leave request lifecycle: submission, manager/HR approval, rejection, cancellation\n- Balance/quota validation before approval\n- Configurable multi-level approval circuit per client\n- Delegation layer and auto-escalation after 5 business days\n- HR-validated cancellation, including already-started leave\n- Email and in-app notifications on key events\n- One-way calendar sync (system to calendar)\n- Role-based permissions with HR as sole editor of approved requests\n- Multi-tenant configuration isolation for pilot-then-scale rollout\n\n**Out of scope:**\n- Payroll integration\n- Two-way calendar sync\n- Migration of historical leave requests / past audit data\n- Reporting dashboards and exports\n- Country templates beyond France at this stage",
+    "labels": [
+      "epic"
+    ],
+    "milestone": "Pilot"
+  },
+  "issues": [
+    {
+      "ref": "#1",
+      "title": "Spike: define concurrency and race-safety model for balance checks and escalation timing",
+      "description": "Investigate how to safely handle overlapping leave requests, simultaneous balance deductions, and an approver/delegate racing the escalation timer. Output a locking/versioning approach to guide implementation.",
+      "labels": [
+        "spike",
+        "backend"
+      ],
+      "milestone": "Pilot",
+      "depends_on": []
+    },
+    {
+      "ref": "#2",
+      "title": "Extend Leave/Absence data model for approval workflow",
+      "description": "Add approval status, approver chain, balance reference, delegation, escalation state, and calendar reference fields to the existing Leave/Absence entity.",
+      "labels": [
+        "backend",
+        "migration"
+      ],
+      "milestone": "Pilot",
+      "depends_on": []
+    },
+    {
+      "ref": "#3",
+      "title": "Build configurable approval circuit engine",
+      "description": "Implement a per-client configurable circuit (manager, then HR above a threshold) so rules can vary by client, country and contract without code changes.",
+      "labels": [
+        "backend",
+        "config",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#2"
+      ]
+    },
+    {
+      "ref": "#4",
+      "title": "Implement balance/quota validation with concurrency-safe checks",
+      "description": "Validate balance/quota before approval using the locking approach from the concurrency spike; revalidate at final approval to handle overlapping requests.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#1",
+        "#2"
+      ]
+    },
+    {
+      "ref": "#5",
+      "title": "Implement leave request state machine",
+      "description": "Build the submitted -> manager -> optional HR -> approved/rejected workflow, wired to the approval circuit engine and balance validation.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#3",
+        "#4"
+      ]
+    },
+    {
+      "ref": "#6",
+      "title": "Add auto-escalation after 5 business days",
+      "description": "Trigger automatic escalation to the next approver level if no action is taken within 5 business days, respecting the concurrency-safe timer design.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5"
+      ]
+    },
+    {
+      "ref": "#7",
+      "title": "Build delegation layer over existing permissions",
+      "description": "Allow an approver to delegate their approval authority; delegation must overlay existing role permissions without replacing them.",
+      "labels": [
+        "backend",
+        "permissions"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5"
+      ]
+    },
+    {
+      "ref": "#8",
+      "title": "Implement HR-validated cancellation flow",
+      "description": "Build a separate cancellation workflow requiring HR validation, including cancellation of leave that has already started.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5"
+      ]
+    },
+    {
+      "ref": "#9",
+      "title": "Configure notifications for key workflow events",
+      "description": "Send email and in-app notifications on submission, approval, rejection, escalation and cancellation, routed to the correct role/contact per event.",
+      "labels": [
+        "integration"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5",
+        "#6",
+        "#8"
+      ]
+    },
+    {
+      "ref": "#10",
+      "title": "Build one-way calendar sync integration",
+      "description": "Push approved leave to the external calendar system; no reverse sync is required at this stage.",
+      "labels": [
+        "integration"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5"
+      ]
+    },
+    {
+      "ref": "#11",
+      "title": "Implement role-based permissions for leave workflow",
+      "description": "Enforce Employee/Manager/HR/Admin permissions, with HR as the sole editor of approved requests and validator of cancellations, layered with the delegation model.",
+      "labels": [
+        "permissions",
+        "backend"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5",
+        "#7"
+      ]
+    },
+    {
+      "ref": "#12",
+      "title": "Build employee and manager request/approval UI",
+      "description": "Provide screens for employees to submit requests and for managers/HR to review, approve, reject or escalate, reflecting current workflow state and permissions.",
+      "labels": [
+        "frontend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5",
+        "#11"
+      ]
+    },
+    {
+      "ref": "#13",
+      "title": "Build HR admin console for circuit and entitlement configuration",
+      "description": "Let HR/admins configure the approval circuit and entitlement templates per client, without engineering involvement.",
+      "labels": [
+        "frontend",
+        "config"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#3"
+      ]
+    },
+    {
+      "ref": "#14",
+      "title": "Configure multi-tenant isolation for pilot rollout",
+      "description": "Ensure per-client configuration (circuits, entitlement templates, notification routing) is isolated so the pilot client's setup does not affect others during scale-out.",
+      "labels": [
+        "config",
+        "backend"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#13"
+      ]
+    },
+    {
+      "ref": "#15",
+      "title": "Add audit trail for requests and entitlement rule changes",
+      "description": "Log all state transitions on leave requests plus any changes to entitlement rule templates, so approvals and configuration changes are both traceable.",
+      "labels": [
+        "backend",
+        "qa"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#5",
+        "#13"
+      ]
+    },
+    {
+      "ref": "#16",
+      "title": "QA: acceptance suite for approval, escalation, cancellation and concurrency scenarios",
+      "description": "Cover approve/reject across the full circuit, auto-escalation timing, HR-validated cancellation of started leave, and race conditions between approvers/delegates and the escalation timer.",
+      "labels": [
+        "qa"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#9",
+        "#10",
+        "#12",
+        "#15"
+      ]
+    }
+  ],
+  "open_questions": [
+    "What is the target delivery timeline for the pilot, and which client goes first?",
+    "Do reporting/export needs stay fully out of scope for this phase, or is a minimal audit view expected at pilot launch?",
+    "Should historical leave requests be backfilled for continuity of the audit trail, even in summary form?"
+  ]
+}

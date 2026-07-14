@@ -2,6 +2,8 @@
 import pytest
 from pydantic import ValidationError
 
+import json
+
 from src.engine import (
     PRD,
     AcceptanceCriteria,
@@ -13,6 +15,8 @@ from src.engine import (
     _readiness_blockers,
     _state_of,
     criteria_markdown,
+    epic_export,
+    epic_export_json,
     epic_markdown,
     estimate_confidence,
     prd_markdown,
@@ -161,3 +165,28 @@ def test_epic_markdown_renders_issues_with_labels_and_deps():
     assert "### [ ] #1 — Model the leave object" in md
     assert "**Labels:** `feature`, `backend` · **Depends on:** #1" in md
     assert "## Open questions" in md
+
+
+def test_epic_export_is_neutral_and_maps_issues():
+    epic = Epic(
+        title="Leave approval",
+        milestone="Pilot",
+        goal="Employees request leave, managers approve.",
+        business_value="Removes email/Excel churn.",
+        in_scope=["Submission"],
+        issues=[
+            {"id": "#1", "title": "Model the leave object", "labels": ["backend"]},
+            {"id": "#2", "title": "Approval circuit", "labels": ["feature"], "depends_on": ["#1"]},
+        ],
+    )
+    payload = epic_export(epic)
+    assert payload["format"] == "product-copilot-epic" and payload["version"] == 1
+    assert payload["epic"]["labels"] == ["epic"] and payload["epic"]["milestone"] == "Pilot"
+    # goal + business value + scope fold into one importable description body.
+    assert "Business value" in payload["epic"]["description"]
+    assert "In scope" in payload["epic"]["description"]
+    # Each issue carries its ref, the shared milestone, and dependencies as refs.
+    assert payload["issues"][0]["ref"] == "#1" and payload["issues"][0]["milestone"] == "Pilot"
+    assert payload["issues"][1]["depends_on"] == ["#1"]
+    # The JSON writer emits valid, parseable JSON.
+    assert json.loads(epic_export_json(epic)) == payload

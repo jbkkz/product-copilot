@@ -687,6 +687,55 @@ def epic_markdown(epic: Epic) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+EPIC_EXPORT_FORMAT = "product-copilot-epic"
+EPIC_EXPORT_VERSION = 1
+
+
+def epic_export(epic: Epic) -> dict:
+    """A tool-neutral, importable view of an epic — maps cleanly onto GitHub or GitLab issues.
+
+    A stable, versioned envelope an importer (or an n8n flow) can validate and feed to either
+    tracker's API. The epic becomes a tracking issue / GitLab epic; each issue keeps its labels,
+    the shared milestone, and `depends_on` as issue refs so relationships can be wired after create.
+    """
+    description = "\n\n".join(
+        part
+        for part in [
+            epic.goal,
+            f"**Business value:** {epic.business_value}" if epic.business_value else "",
+            ("**In scope:**\n" + "\n".join(f"- {i}" for i in epic.in_scope)) if epic.in_scope else "",
+            ("**Out of scope:**\n" + "\n".join(f"- {i}" for i in epic.out_of_scope)) if epic.out_of_scope else "",
+        ]
+        if part
+    )
+    return {
+        "format": EPIC_EXPORT_FORMAT,
+        "version": EPIC_EXPORT_VERSION,
+        "epic": {
+            "title": epic.title,
+            "description": description,
+            "labels": ["epic"],
+            "milestone": epic.milestone,
+        },
+        "issues": [
+            {
+                "ref": issue.id,
+                "title": issue.title,
+                "description": issue.description,
+                "labels": issue.labels,
+                "milestone": epic.milestone,
+                "depends_on": issue.depends_on,
+            }
+            for issue in epic.issues
+        ],
+        "open_questions": epic.open_questions,
+    }
+
+
+def epic_export_json(epic: Epic) -> str:
+    return json.dumps(epic_export(epic), indent=2) + "\n"
+
+
 # ── Multi-turn loop ─────────────────────────────────────────────────────────
 
 
@@ -769,8 +818,8 @@ def main() -> None:
         if out:
             print(f"\nSaved model → {save_model(out, slug)}")
     else:
-        print('Usage: python src/engine.py [--once] [--stories] [--estimate] [--prd] [--criteria] [--epic] "request" | file.md')
-        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate] [--prd] [--criteria] [--epic]')
+        print('Usage: python src/engine.py [--once] [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] "request" | file.md')
+        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json]')
         sys.exit(1)
 
     if not out:
@@ -804,12 +853,17 @@ def main() -> None:
         print(markdown)
         print(f"\nWrote acceptance criteria → {path}")
 
-    if "--epic" in flags:
+    if "--epic" in flags or "--epic-json" in flags:
         print("\nGenerating the delivery epic…")
-        markdown = epic_markdown(generate_epic(client, out))
-        path = write_artifact(slug, "epic.md", markdown)
-        print(markdown)
-        print(f"\nWrote epic → {path}")
+        epic = generate_epic(client, out)  # one model call; both views render from it
+        if "--epic" in flags:
+            markdown = epic_markdown(epic)
+            path = write_artifact(slug, "epic.md", markdown)
+            print(markdown)
+            print(f"\nWrote epic → {path}")
+        if "--epic-json" in flags:
+            path = write_artifact(slug, "epic.json", epic_export_json(epic))
+            print(f"Wrote neutral epic export (GitHub/GitLab-importable) → {path}")
 
 
 if __name__ == "__main__":
