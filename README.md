@@ -141,8 +141,8 @@ python src/engine.py examples/case1_leave.md
 
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
 answers back in — then writes `out/<slug>/model.json` and produces the brief. Add `--prd`,
-`--stories`, `--estimate`, or `--criteria` to generate more artifacts; `--from out/<slug>/model.json`
-regenerates any of them without redoing discovery.
+`--stories`, `--estimate`, `--criteria`, or `--epic` to generate more artifacts;
+`--from out/<slug>/model.json` regenerates any of them without redoing discovery.
 
 ---
 
@@ -167,11 +167,11 @@ Better context → sharper impact estimates → better questions. Files prefixed
 
 **Current**
 - Discovery engine — priority questions, multi-turn refinement, discovery brief
-- Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria
+- Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria, delivery epic
 - The model as a durable product (`model.json`), regenerable via `--from`
 
 **Upcoming**
-- More generators — epics, release notes
+- More generators — release notes
 - Exports — Jira / GitLab, Notion, Confluence
 
 **Vision**

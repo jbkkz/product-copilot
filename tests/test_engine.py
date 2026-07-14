@@ -7,11 +7,13 @@ from src.engine import (
     AcceptanceCriteria,
     Confidence,
     EngineOutput,
+    Epic,
     Slot,
     _extract_json,
     _readiness_blockers,
     _state_of,
     criteria_markdown,
+    epic_markdown,
     estimate_confidence,
     prd_markdown,
     soft_slots,
@@ -137,4 +139,25 @@ def test_criteria_markdown_renders_gherkin_checklist():
     assert "- **When** they submit a 3-day request" in md
     assert "- **Then** the request is created" in md
     assert "- **And** the manager is notified" in md
+    assert "## Open questions" in md
+
+
+def test_epic_markdown_renders_issues_with_labels_and_deps():
+    epic = Epic(
+        title="Leave approval",
+        milestone="Pilot",
+        goal="Let employees request leave and managers approve it.",
+        issues=[
+            {"id": "#1", "title": "Model the leave object", "description": "Fields and states.",
+             "labels": ["backend"]},
+            {"id": "#2", "title": "Build approval circuit", "description": "Route to manager.",
+             "labels": ["feature", "backend"], "depends_on": ["#1"]},
+        ],
+        open_questions=["Half-day support?"],
+    )
+    md = epic_markdown(epic)
+    assert md.startswith("# Epic: Leave approval")
+    assert "**Milestone:** Pilot" in md
+    assert "### [ ] #1 — Model the leave object" in md
+    assert "**Labels:** `feature`, `backend` · **Depends on:** #1" in md
     assert "## Open questions" in md

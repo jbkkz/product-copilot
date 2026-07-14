@@ -100,10 +100,12 @@ Each generator is the same shape — **prompt + Pydantic contract + generator fn
 `brief.md`/`Brief`/`advise()`, `stories.md`/`Stories`/`derive_stories()`,
 `estimate.md`/`EstimateDraft`/`estimate()`, `prd.md`/`PRD`/`generate_prd()` (writes `out/<slug>/prd.md`
 via `prd_markdown()` + `write_artifact()`), `criteria.md`/`AcceptanceCriteria`/`generate_criteria()`
-(Given/When/Then recette checklist → `out/<slug>/acceptance-criteria.md` via `criteria_markdown()`).
-Adding one (epic, test plan, Jira export) = those four pieces, plus a `--flag` in `main()`. Any
-generator whose text is user-facing must carry the **Voice** rule (no slot ids / percentages /
-confidence labels in prose). CLI flags: `--stories`, `--estimate`, `--prd`, `--criteria`.
+(Given/When/Then recette checklist → `out/<slug>/acceptance-criteria.md` via `criteria_markdown()`),
+`epic.md`/`Epic`/`generate_epic()` (delivery epic — work broken into trackable issues with labels +
+`depends_on` → `out/<slug>/epic.md` via `epic_markdown()`). Adding one (test plan, Jira/GitLab export)
+= those four pieces, plus a `--flag` in `main()`. Any generator whose text is user-facing must carry
+the **Voice** rule (no slot ids / percentages / confidence labels in prose). CLI flags: `--stories`,
+`--estimate`, `--prd`, `--criteria`, `--epic`.
 
 ## Extending
 
