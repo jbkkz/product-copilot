@@ -11,18 +11,18 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
 ![Product Copilot — from a one-line request to a discovery brief](demo.gif)
 
 ```
-        Customer request
-              │
-              ▼
-         AI Discovery   ◀── product + client context
-              │
-              ▼
-       Structured model   ← the product (out/<slug>/model.json)
-              │
-      ┌───────┼───────────┬───────────┐
-      ▼       ▼           ▼           ▼
-  Discovery  PRD      User stories  Estimate      …and more
-   brief
+                 Customer request
+                         │
+                         ▼
+                   AI Discovery   ◀── product + client context
+                         │
+                         ▼
+                 Structured model   ← the product (out/<slug>/model.json)
+                         │
+    ┌─────────┬──────────┼──────────┬───────────────┐
+    ▼         ▼          ▼          ▼               ▼
+Discovery    PRD    User stories  Estimate   More artifacts
+  brief
 ```
 
 ---
@@ -54,8 +54,8 @@ Product Copilot builds a **structured model of the solution** and refines it thr
 targeted conversation. The chat is just the interface. **The product is the model** — and every
 artifact (a discovery brief, a PRD, user stories, an estimate) is a view rendered from it.
 
-Because the model is the product, the same discovery can later produce a PRD, a test plan, or a Jira
-export **without redoing the conversation**.
+The same discovery can later produce a PRD, a test plan, or a Jira export **without redoing the
+conversation**.
 
 ---
 
@@ -104,8 +104,8 @@ answer refines the model until nothing high-value is left to ask, then the brief
 
 ## See a complete example
 
-Walk through one real discovery end to end in [`examples/leave-approval/`](examples/leave-approval/) —
-no install required:
+Walk through a full discovery example, end to end, in
+[`examples/leave-approval/`](examples/leave-approval/) — no install required:
 
 | File | What it is |
 |---|---|
@@ -113,16 +113,21 @@ no install required:
 | [`model.json`](examples/leave-approval/model.json) | The structured model the discovery built |
 | [`discovery-brief.md`](examples/leave-approval/discovery-brief.md) | The deliverable — brief with risks, decisions, next steps |
 | [`prd.md`](examples/leave-approval/prd.md) | A PRD generated from the same model |
+| [`epic.json`](examples/leave-approval/epic.json) | The same model as a GitHub/GitLab-importable epic |
 
-Same model, four views. That's the whole idea.
+Each of these — plus user stories, an estimate, acceptance criteria and release notes — is generated
+from the same `model.json`. That's the whole idea:
+
+```bash
+python src/engine.py --from examples/leave-approval/model.json --prd    # regenerate prd.md
+```
 
 ---
 
 ## How it works
 
-Product Copilot builds a structured solution model rather than relying on conversation history. The
-model is a set of typed *slots* (problem, actors, business rules, permissions, edge cases…) grouped
-into four areas — **Why / What / How / Validate**.
+The solution model is a set of typed *slots* — the problem, actors, business rules, permissions and
+edge cases — grouped into four areas: **Why / What / How / Validate**.
 
 It decides what to ask with one rule: **information value = uncertainty × impact**. It never asks
 just because something is unknown — it asks when an answer would change what you build. Impact is
@@ -141,9 +146,9 @@ python src/engine.py examples/case1_leave.md
 
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
 answers back in — then writes `out/<slug>/model.json` and produces the brief. Add `--prd`,
-`--stories`, `--estimate`, `--criteria`, `--epic`, or `--epic-json` (a tool-neutral,
-GitHub/GitLab-importable export) to generate more artifacts; `--from out/<slug>/model.json`
-regenerates any of them without redoing discovery.
+`--stories`, `--estimate`, `--criteria`, `--epic`, `--epic-json` (a tool-neutral,
+GitHub/GitLab-importable export), or `--release` to generate more artifacts;
+`--from out/<slug>/model.json` regenerates any of them without redoing discovery.
 
 ---
 
@@ -168,13 +173,15 @@ Better context → sharper impact estimates → better questions. Files prefixed
 
 **Current**
 - Discovery engine — priority questions, multi-turn refinement, discovery brief
-- Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria, delivery epic
+- Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria, delivery
+  epic, release notes
 - Tool-neutral epic export (`epic.json`) — importable into GitHub / GitLab issues
 - The model as a durable product (`model.json`), regenerable via `--from`
 
 **Upcoming**
-- More generators — release notes
-- More exports — Jira / Linear, Notion, Confluence
+- Delivery integrations — direct push to Jira, GitLab, Notion and Confluence
+- Additional lifecycle artifacts — test plans, and a manual-import CSV export
+- Context tooling — validation and assisted generation of product context cards
 
 **Vision**
 - A full artifact chain from a single model — the reasoning layer beneath product delivery
