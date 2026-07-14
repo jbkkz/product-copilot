@@ -2,138 +2,156 @@
 
 **Turn a vague client request into a buildable spec — by asking only the questions that matter.**
 
-Discovery tools either ask you *everything* (endless checklists) or *nothing* (a chat that nods
-along). Product Copilot does neither. It builds a structured model of the solution and asks a
-question only when the answer would actually change what you build — high **uncertainty** on a
-high-**impact** slot. The rest, it infers and flags as an assumption.
+Built for Product Managers, Solutions Engineers and Business Analysts working on complex, configurable B2B products.
 
-The chat is just the interface. The product is the model, and the artifacts you render from it.
+> **Product Copilot doesn't generate documents. It builds understanding.**
+
+```
+        Customer request
+              │
+              ▼
+         AI Discovery   ◀── product + client context
+              │
+              ▼
+       Structured model   ← the product (out/<slug>/model.json)
+              │
+      ┌───────┼───────────┬───────────┐
+      ▼       ▼           ▼           ▼
+  Discovery  PRD      User stories  Estimate      …and more
+   brief
+```
+
+---
+
+## Why
+
+Discovery tools either ask you *everything* — endless checklists no one finishes — or *nothing* — a
+chat that nods along and hands back your own words. Neither helps you find the question you didn't
+think to ask: the one that turns a "small feature" into a three-month build.
+
+Product Copilot asks a question only when the answer would **materially change the solution**. The
+rest, it infers and flags as an assumption. You spend your discovery time where it moves the needle.
+
+### Why I built this
+
+> After several years as a Product Manager on complex, configurable enterprise software, I realised
+> that writing the specification was never the hard part. **Understanding the real problem was.** The
+> best PMs I worked with ran the same reasoning in their heads every time — what do we actually know,
+> what are we assuming, what would change the build if it turned out different. Product Copilot is my
+> attempt to formalise that reasoning process.
+
+---
+
+## What it does
+
+Product Copilot builds a **structured model of the solution** and refines it through a short,
+targeted conversation. The chat is just the interface. **The product is the model** — and every
+artifact (a discovery brief, a PRD, user stories, an estimate) is a view rendered from it.
+
+Because the model is the product, the same discovery can later produce a PRD, a test plan, or a Jira
+export **without redoing the conversation**.
+
+---
+
+## What you get
+
+The deliverable is a **discovery brief** — and it opens with the answer a stakeholder actually wants:
+
+```
+READY FOR IMPLEMENTATION?
+  Discovery complete   76%
+  Blocker              The underlying business problem isn't confirmed by the client.
+  Everything else      Good to go.
+
+MAIN RISKS
+  ⚠ The shared approval framework is used across other modules — changes here can ripple
+    into contracts and invoicing.
+  ⚠ Balance checks under concurrent requests risk race conditions if not serialized.
+
+OPPORTUNITIES
+  High leverage    ◆ Generalize the approval-circuit engine — it could later drive invoice
+                     sign-off and mission validation too.
+
+RECOMMENDED NEXT STEPS
+  1. Confirm the pilot's success metrics and target clients before committing an estimate.
+  2. Nail down reporting and audit requirements early, given the regulatory sensitivity.
+```
+
+Above this sits a five-line **executive summary** (problem · solution · risks · unknowns · next
+step). Below it, the full analysis: a **decision log** of what's settled versus still open, an
+understanding checklist, and the reasoning behind every verdict. It reads like a consultant wrote
+it — not a model dump.
+
+---
+
+## Example
+
+```bash
+python src/engine.py "We'd like to set up a leave approval system."
+```
+
+From that one sentence, on a platform whose context says *"approval usually hides a balance check
+and a multi-level circuit"*, the engine asks the few questions that matter — the multi-level circuit,
+the per-client variation, the balance rule — and leaves the low-stakes ones (reporting) alone. Each
+answer refines the model until nothing high-value is left to ask, then the brief is produced.
+
+---
+
+## How it works
+
+Product Copilot builds a structured solution model rather than relying on conversation history. The
+model is a set of typed *slots* (problem, actors, business rules, permissions, edge cases…) grouped
+into four areas — **Why / What / How / Validate**.
+
+It decides what to ask with one rule: **information value = uncertainty × impact**. It never asks
+just because something is unknown — it asks when an answer would change what you build. Impact is
+estimated from the product context, so the engine is only as sharp as the context you give it.
 
 ---
 
 ## Quickstart
 
 ```bash
-git clone <repo> && cd product-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env          # set ANTHROPIC_API_KEY
-python src/engine.py "We'd like to set up a leave approval system."
+python src/engine.py examples/case1_leave.md
 ```
 
-Pass a request inline, or a file: `python src/engine.py examples/case1_leave.md`.
-
-By default it runs an interactive loop: it shows the model, asks the priority questions, folds your
-answers back in, and repeats until nothing high-value is left to ask. Add `--once` for a single
-pass (also the default when piped or in CI).
-
----
-
-## What you get
-
-Each turn shows where the discovery stands and asks only the questions that still matter:
-
-```
-DISCOVERY STATUS
-  Business understanding   █████████░  Strong
-  Scope & rules            ███████░░░  Solid  · unclear: Business rules
-  Configuration & access   ████░░░░░░  Partial
-  Validation & rollout     ██░░░░░░░░  Thin
-
-  Ready for implementation?  ⛔ Not yet — 4 areas still open
-                             → Real problem, Business rules, Permissions, Config vs customization
-
-PRIORITY QUESTIONS
-  1. Does approval need a balance/quota check, and does that rule vary by client/country?
-     → Business rules
-```
-
-When nothing high-value is left to ask, it produces the deliverable — a **discovery brief** written
-in a PM's language, not the engine's:
-
-```
-WHAT'S UNDERSTOOD
-  Business understanding   █████████░  Strong
-  ...
-  This involves: a client-configurable approval-circuit engine · a real-time balance
-  engine · HR self-service administration.   Complexity: HIGH
-
-WHAT'S STILL UNCLEAR
-  • Real problem — still an inference, not stated by the client
-  • Parked as low impact (revisit after launch): Reporting
-
-MAIN RISKS
-  ⚠ Approval circuits are shared across modules — changing them risks touching
-    contracts and invoicing.
-
-RECOMMENDED NEXT STEPS
-  1. Confirm the underlying problem with the client before estimating.
-  ◆ Worth considering: generalize the approval circuit into a shared service.
-
-READY FOR IMPLEMENTATION?
-  ⚠ Nearly — 1 to confirm first → Real problem
-```
-
-The brief advises — it doesn't just restate. And the model behind it (`out/<slug>/model.json`) is
-the durable product: every artifact is regenerated from it with `--from`, so the same discovery can
-later produce a PRD, a test plan, or a Jira export without redoing the conversation.
-
----
-
-## How it works
-
-```
-Vague request ─▶ [ Engine ] ─▶ Structured model ─▶ Discovery brief · stories · estimate
-                     ▲
-              Product + client context
-```
-
-- **The model** is a set of typed *slots* (problem, actors, business rules, permissions, edge
-  cases…) grouped into four pillars — **Why / What / How / Validate**. Each slot tracks how well
-  it's known (`completeness`), where that knowledge came from (`confidence`:
-  explicit/inferred/empty), and how much it moves the solution (`impact`).
-
-- **The driver** is `information_value = uncertainty × impact`. The engine never asks just because a
-  slot is empty. It asks where an answer would change the build. **Impact is estimated from the
-  product context** — so the engine is only as sharp as the context cards you give it.
-
-- **Multi-turn**: each answer refines the same model (`inferred → explicit`, completeness climbs)
-  until no high-value question remains. Every reply is schema-validated (Pydantic) at the boundary.
-
-- **The outputs are renders of one model**: the status and questions are its state and gaps; the
-  brief adds a consultant's read (design considerations, risks, reuse opportunities); stories and the
-  estimate project the same model further down the delivery pipeline.
+It runs an interactive loop — showing what's understood, asking the priority questions, folding your
+answers back in — then writes `out/<slug>/model.json` and produces the brief. Add `--prd`,
+`--stories`, or `--estimate` to generate more artifacts; `--from out/<slug>/model.json` regenerates
+any of them without redoing discovery.
 
 ---
 
 ## Add your product
 
-The engine is domain-agnostic; the context makes it smart. Drop a card in `context/`:
+The engine is domain-agnostic; the context makes it smart. Drop a card in `context/` describing your
+product, its entities, and its recurring traps:
 
-```bash
-cp context/_template.md context/my-product.md   # then fill it in
+```
+context/
+  hris.md        ← HR / people platforms
+  crm.md         ← sales & pipeline tools
+  erp.md         ← finance & operations suites
+  my-product.md  ← yours
 ```
 
-Better context → better impact estimates → better questions. Files prefixed with `_` are ignored.
+Better context → sharper impact estimates → better questions. Files prefixed with `_` are ignored.
 
 ---
 
-## Layout
-
-| Path | What's there |
-|---|---|
-| `framework/` | The model: slots, pillars, the uncertainty×impact driver. **The core.** |
-| `context/`   | Product & client context cards that ground prioritization. |
-| `prompts/`   | The prompts, one per artifact (`engine.md`, `stories.md`, …). |
-| `src/engine.py` | Thin runner: assemble prompt → call → validate → render. |
-| `examples/`  | Real one-line requests to try. |
-
 ## Roadmap
 
-- [x] Model + priority questions
-- [x] Multi-turn refinement
-- [x] Discovery brief — status, readiness, design considerations, risks & opportunities
-- [x] User stories
-- [x] Uncertainty-aware estimate (day ranges + complexity, spread driven by the soft slots)
-- [x] PRD generator (`model.json → prd.md`) — the first file artifact of the generator chain
-- [ ] More generators: epic, test plan, Jira/GitLab export, release notes
+**Current**
+- Discovery engine — priority questions, multi-turn refinement, discovery brief
+- Artifact generators — PRD, user stories, uncertainty-aware estimate
+- The model as a durable product (`model.json`), regenerable via `--from`
+
+**Upcoming**
+- More generators — acceptance criteria, epics, release notes
+- Exports — Jira / GitLab, Notion, Confluence
+
+**Vision**
+- A full artifact chain from a single model — the reasoning layer beneath product delivery
