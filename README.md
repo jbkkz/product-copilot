@@ -1,5 +1,7 @@
 # Product Copilot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Turn a vague client request into a buildable spec — by asking only the questions that matter.**
 
 Built for Product Managers, Solutions Engineers and Business Analysts working on complex, configurable B2B products.
@@ -174,3 +176,9 @@ Better context → sharper impact estimates → better questions. Files prefixed
 
 **Vision**
 - A full artifact chain from a single model — the reasoning layer beneath product delivery
+
+---
+
+## License
+
+[MIT](LICENSE) © jbkkz
