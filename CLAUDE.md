@@ -82,9 +82,23 @@ Interactive mode (`converse()`) loops: `render_turn` → ask → collect answers
 to `MAX_TURNS` (8). The previous turn's validated output IS the state being refined — it is carried in
 the conversation history (re-serialized via `model_dump_json()`), not rebuilt from scratch. The
 engine flips `inferred → explicit` and raises `completeness` as answers come in. **Stop signal:** the
-model returns `questions: []` when nothing is both uncertain and high-impact; `converse()` then calls
-`advise()` and prints the discovery brief. `--once` (or no TTY) does a single pass (status +
-questions, no brief). `--stories` / `--estimate` chain the delivery pipeline after the model stage.
+model returns `questions: []` when nothing is both uncertain and high-impact. `converse()` returns the
+final model; `main()` handles finalization (brief + save) so the interactive and `--from` paths share
+it. `--once` (or no TTY) does a single pass (status + questions, no brief).
+
+## The model is the product; artifacts are views
+
+Discovery persists the model to `out/<slug>/model.json` (`save_model()`) — the durable product.
+Everything else is a **generator**: a pure function `model → artifact`. `--from out/<slug>/model.json`
+reloads a saved model and regenerates any artifact without redoing discovery (`load_model()`).
+
+Each generator is the same shape — **prompt + Pydantic contract + generator fn + writer**:
+`brief.md`/`Brief`/`advise()`, `stories.md`/`Stories`/`derive_stories()`,
+`estimate.md`/`EstimateDraft`/`estimate()`, `prd.md`/`PRD`/`generate_prd()` (writes `out/<slug>/prd.md`
+via `prd_markdown()` + `write_artifact()`). Adding one (epic, test plan, Jira export) = those four
+pieces, plus a `--flag` in `main()`. Any generator whose text is user-facing must carry the **Voice**
+rule (no slot ids / percentages / confidence labels in prose). CLI flags: `--stories`, `--estimate`,
+`--prd`.
 
 ## Extending
 

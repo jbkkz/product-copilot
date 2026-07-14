@@ -135,4 +135,5 @@ Better context → better impact estimates → better questions. Files prefixed 
 - [x] Discovery brief — status, readiness, design considerations, risks & opportunities
 - [x] User stories
 - [x] Uncertainty-aware estimate (day ranges + complexity, spread driven by the soft slots)
-- [ ] GitLab issue export
+- [x] PRD generator (`model.json → prd.md`) — the first file artifact of the generator chain
+- [ ] More generators: epic, test plan, Jira/GitLab export, release notes
