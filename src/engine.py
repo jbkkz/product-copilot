@@ -123,6 +123,7 @@ class Brief(BaseModel):
     cost_driver: str = ""
     risks: list[str] = Field(default_factory=list)
     opportunities: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
 
 
 # ── Schema metadata (slot → pillar / label) ─────────────────────────────────
@@ -321,9 +322,8 @@ def _readiness_blockers(out: EngineOutput) -> list[str]:
     return [sid for sid, s in out.model.items() if s.impact is Impact.high and s.confidence is not Confidence.explicit]
 
 
-def render_status(out: EngineOutput) -> None:
+def _print_pillar_bars(out: EngineOutput) -> None:
     pillars, _ = _slot_meta()
-    print("\nDISCOVERY STATUS")
     for pillar in PILLAR_ORDER:
         items = [
             (sid, s)
@@ -336,33 +336,42 @@ def render_status(out: EngineOutput) -> None:
         gaps = [_label(sid) for sid, s in items if s.completeness < 60 or s.confidence is Confidence.empty]
         line = f"  {PILLAR_LABELS[pillar]:<24} {_bar(avg)}  {_status_word(avg)}"
         if gaps:
-            line += f"  · gap: {', '.join(gaps)}"
+            line += f"  · unclear: {', '.join(gaps)}"
         print(line)
 
-    blockers = _readiness_blockers(out)
-    print()
+
+def _readiness(out: EngineOutput) -> tuple[str, list[str]]:
+    """Verdict + the areas to confirm — in plain language, no internal metrics."""
+    blockers = [_label(b) for b in _readiness_blockers(out)]
     if not blockers:
-        print("  Readiness   ✅ Ready for implementation")
-    elif len(blockers) <= 2:
-        print(f"  Readiness   ⚠ Nearly ready — {len(blockers)} to confirm before build")
-        print(f"              → {', '.join(_label(b) for b in blockers)}")
-    else:
-        print(f"  Readiness   ⛔ Not ready — {len(blockers)} high-impact areas still open")
-        print(f"              → {', '.join(_label(b) for b in blockers)}")
+        return "✅ Yes — nothing high-impact is unresolved", []
+    if len(blockers) <= 2:
+        return f"⚠ Nearly — {len(blockers)} to confirm first", blockers
+    return f"⛔ Not yet — {len(blockers)} areas still open", blockers
+
+
+def render_status(out: EngineOutput) -> None:
+    print("\nDISCOVERY STATUS")
+    _print_pillar_bars(out)
+    verdict, items = _readiness(out)
+    print(f"\n  Ready for implementation?  {verdict}")
+    if items:
+        print(f"                             → {', '.join(items)}")
 
 
 def render_turn(out: EngineOutput) -> None:
     """Lightweight per-turn view: progress + what's being asked."""
     render_status(out)
     if out.questions:
-        print("\nPRIORITY QUESTIONS  (uncertainty × impact)")
+        print("\nPRIORITY QUESTIONS")
         for i, q in enumerate(out.questions, 1):
             print(f"  {i}. {q.q}")
-            print(f"     → [{q.slot}] {q.why}")
+            print(f"     → {_label(q.slot)}")
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:
-    """The deliverable: a one-page discovery brief."""
+    """The deliverable: a one-page discovery brief in the language of a PM, not the engine's
+    internals (no slots, no completeness numbers)."""
     s = out.summary
     print("\n" + "═" * 60)
     print("DISCOVERY BRIEF")
@@ -372,47 +381,46 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
         print("\nOBJECTIVE")
         print(_wrap(s.objective))
 
-    render_status(out)
+    print("\nWHAT'S UNDERSTOOD")
+    _print_pillar_bars(out)
+    if brief.introduces:
+        print("\n  This involves:")
+        for it in brief.introduces:
+            print(_bullet(it, indent="    "))
+    tail = f"   ·   main cost driver: {brief.cost_driver}" if brief.cost_driver else ""
+    print(f"\n  Complexity: {brief.complexity.value.upper()}{tail}")
 
+    blockers = _readiness_blockers(out)
     deferred = [sid for sid, sl in out.model.items() if _is_deferred(sl)]
-    if deferred:
-        print("\nDEFERRED  (low impact — revisit after launch)")
-        for sid in deferred:
-            print(_bullet(f"{_label(sid)} — low impact for this request; suggested follow-up after implementation."))
-
-    if s.assumptions:
-        print(f"\nASSUMPTIONS TO CONFIRM  ({len(s.assumptions)})")
+    if blockers or s.assumptions or deferred:
+        print("\nWHAT'S STILL UNCLEAR")
+        for b in blockers:
+            note = "still an inference, not stated by the client" if out.model[b].confidence is Confidence.inferred else "not yet answered"
+            print(_bullet(f"{_label(b)} — {note}"))
         for a in s.assumptions:
-            print(_bullet(a))
+            print(_bullet(f"Assumed: {a}"))
+        if deferred:
+            print(_bullet("Parked as low impact (revisit after launch): " + ", ".join(_label(d) for d in deferred)))
 
-    if brief.introduces or brief.cost_driver:
-        print("\nDESIGN CONSIDERATIONS")
-        if brief.introduces:
-            print("  Introduces:")
-            for it in brief.introduces:
-                print(_bullet(it, marker="•", indent="    "))
-        print(f"  Estimated complexity   {brief.complexity.value.upper()}")
-        if brief.cost_driver:
-            if len(brief.cost_driver) < 55:
-                print(f"  Main cost driver       {brief.cost_driver}")
-            else:
-                print("  Main cost driver")
-                print(_wrap(brief.cost_driver, indent="    "))
-
-    if brief.risks or brief.opportunities:
-        print("\nPOTENTIAL RISKS & OPPORTUNITIES")
+    if brief.risks:
+        print("\nMAIN RISKS")
         for r in brief.risks:
-            print(_bullet(r, marker="⚠", indent="  "))
-        for o in brief.opportunities:
-            print(_bullet(o, marker="◆", indent="  "))
+            print(_bullet(r, marker="⚠"))
 
+    if brief.next_steps or brief.opportunities:
+        print("\nRECOMMENDED NEXT STEPS")
+        for i, step in enumerate(brief.next_steps, 1):
+            print(_bullet(step, marker=f"{i}."))
+        for o in brief.opportunities:
+            print(_bullet(f"Worth considering: {o}", marker="◆"))
+
+    verdict, items = _readiness(out)
     explicit = sum(1 for sl in out.model.values() if sl.confidence is Confidence.explicit)
-    inferred = sum(1 for sl in out.model.values() if sl.confidence is Confidence.inferred)
-    to_validate = len(_readiness_blockers(out))
-    print(
-        f"\nConfidence   {explicit}/{len(out.model)} areas confirmed · "
-        f"{inferred} assumptions · {to_validate} to validate before build"
-    )
+    print("\nREADY FOR IMPLEMENTATION?")
+    print(f"  {verdict}")
+    if items:
+        print(f"  → confirm: {', '.join(items)}")
+    print(f"  {explicit} of {len(out.model)} areas confirmed · {len(s.assumptions)} assumptions to validate")
 
 
 def render_stories(s: Stories) -> None:

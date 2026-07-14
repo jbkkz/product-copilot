@@ -36,41 +36,47 @@ Each turn shows where the discovery stands and asks only the questions that stil
 ```
 DISCOVERY STATUS
   Business understanding   █████████░  Strong
-  Scope & rules            ███████░░░  Solid  · gap: Business rules
+  Scope & rules            ███████░░░  Solid  · unclear: Business rules
   Configuration & access   ████░░░░░░  Partial
   Validation & rollout     ██░░░░░░░░  Thin
 
-  Readiness   ⛔ Not ready — 4 high-impact areas still open
-              → Real problem, Business rules, Permissions, Config vs customization
+  Ready for implementation?  ⛔ Not yet — 4 areas still open
+                             → Real problem, Business rules, Permissions, Config vs customization
 
-PRIORITY QUESTIONS  (uncertainty × impact)
+PRIORITY QUESTIONS
   1. Does approval need a balance/quota check, and does that rule vary by client/country?
-     → [business_rules]
-  2. Should the circuit be standard for all clients, or configurable per client?
-     → [config_vs_custom]
+     → Business rules
 ```
 
-When nothing high-value is left to ask, it produces the deliverable — a **discovery brief**:
+When nothing high-value is left to ask, it produces the deliverable — a **discovery brief** written
+in a PM's language, not the engine's:
 
 ```
-DEFERRED  (low impact — revisit after launch)
-  • Reporting & visibility — low impact for this request; follow-up after launch.
+WHAT'S UNDERSTOOD
+  Business understanding   █████████░  Strong
+  ...
+  This involves: a client-configurable approval-circuit engine · a real-time balance
+  engine · HR self-service administration.   Complexity: HIGH
 
-DESIGN CONSIDERATIONS
-  Introduces: a client-configurable approval-circuit engine · an entitlement/balance
-  engine · HR self-service administration · concurrency at approval time
-  Estimated complexity   HIGH        Main cost driver   the entitlement rule engine
+WHAT'S STILL UNCLEAR
+  • Real problem — still an inference, not stated by the client
+  • Parked as low impact (revisit after launch): Reporting
 
-POTENTIAL RISKS & OPPORTUNITIES
-  ⚠ The approval-circuit framework is shared across modules — extending it risks
-    touching contracts and invoicing.
-  ◆ Generalize it into a shared workflow service instead of building leave-specific.
+MAIN RISKS
+  ⚠ Approval circuits are shared across modules — changing them risks touching
+    contracts and invoicing.
 
-Confidence   11/15 areas confirmed · 4 assumptions · 1 to validate before build
+RECOMMENDED NEXT STEPS
+  1. Confirm the underlying problem with the client before estimating.
+  ◆ Worth considering: generalize the approval circuit into a shared service.
+
+READY FOR IMPLEMENTATION?
+  ⚠ Nearly — 1 to confirm first → Real problem
 ```
 
-`reporting` is deferred, not forgotten — it's low-impact, so it never costs a question. That's the
-point: **the right questions, then a brief that advises, not just a summary that restates.**
+The brief advises — it doesn't just restate. And the model behind it (`out/<slug>/model.json`) is
+the durable product: every artifact is regenerated from it with `--from`, so the same discovery can
+later produce a PRD, a test plan, or a Jira export without redoing the conversation.
 
 ---
 
