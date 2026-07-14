@@ -38,14 +38,16 @@ prompt data, not in Python. `src/engine.py` is a thin runner:
    validated against a Pydantic contract. On malformed/non-conformant JSON it retries (default 2×)
    with a corrective nudge in a *local* message copy, so the caller's clean history is never
    polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it.
-3. Rendering is split: `render_turn()` is the lightweight per-turn view (status bars + priority
-   questions); `render_brief()` is the deliverable — a one-page brief in **PM language** (What's
-   understood / What's still unclear / Main risks / Recommended next steps / Ready for
-   implementation?). The bars, status words, readiness verdict and counts are computed **in Python**
-   from the model; the advisory `Brief` (introduces, complexity, cost driver, risks, opportunities,
-   next steps) is LLM-generated. Both layers must avoid exposing internals (slot ids, completeness
-   numbers, confidence labels) in user-facing text — `prompts/brief.md` has an explicit Voice rule
-   enforcing this for the LLM prose.
+3. Rendering is split: `render_turn()` is the lightweight per-turn view (a ✅/🟡/⚪ Understanding
+   checklist + priority questions); `render_brief()` is the deliverable — a **two-tier** brief in PM
+   language: an Executive Summary (Problem / Solution / Risks / Unknowns / Next) a PM reads in
+   seconds, then the full analysis (Understanding checklist, Decision log, Complexity + why, Main
+   risks, ranked Opportunities, Next steps, Ready-for-implementation with a single blocker). The
+   checklist, discovery-complete %, decision states and readiness are computed **in Python**; the
+   advisory `Brief` (problem, solution, introduces, complexity + reasons, risks, opportunities ranked
+   by `Leverage`, next steps, decisions/open_decisions) is LLM-generated. Both layers must avoid
+   exposing internals (slot ids, completeness numbers, confidence labels) in user-facing text —
+   `prompts/brief.md` has an explicit Voice rule enforcing this for the LLM prose.
 
 **Consequence for changes:** behavior is tuned by editing the Markdown/JSON assets, not the Python.
 
