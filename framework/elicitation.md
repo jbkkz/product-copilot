@@ -62,12 +62,17 @@ it's one of the highest-impact questions there is: it's the difference between b
 to every client and behavior that ends up forked per client. Turning the slot on lets the engine
 surface the decision early, while it's still cheap to make.
 
-## What the engine produces (v0)
+## What the engine produces
 
-Two renders of the same model:
+Everything is a render of the same model. While the discovery is still open, each turn shows a
+**discovery status** (per-pillar progress, a readiness verdict) and the **priority questions** —
+ordered by information value, each with the reason it's being asked.
 
-1. **Business summary** — objective, likely scope, assumptions made, main blind spot.
-2. **Priority questions** — ordered by information value, each with the reason it's being asked.
+When nothing high-value is left to ask, it produces the deliverable: a **discovery brief**. Alongside
+the objective and the assumptions still to confirm, the brief adds a consultant's read — what the
+feature introduces, its likely complexity and main cost driver, and the risks and reuse
+opportunities worth weighing before the build. Slots parked as low-impact are listed as *deferred*
+rather than shown as gaps.
 
 Later stages project the same model further down the delivery pipeline: user stories, then a
 day-based estimate whose spread is driven by the slots that are still uncertain.

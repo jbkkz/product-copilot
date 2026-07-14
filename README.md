@@ -31,39 +31,53 @@ pass (also the default when piped or in CI).
 
 ## What you get
 
-From one throwaway sentence — *"We'd like to set up a leave approval system."* — on a platform whose
-context says *"approval usually hides a balance check + a multi-level circuit"*:
+Each turn shows where the discovery stands and asks only the questions that still matter:
 
 ```
-=== BUSINESS SUMMARY ===
-Objective : Introduce a structured leave approval system to replace a manual process.
-Blind spot: The client said "approval" but never said whether the circuit varies by client/
-            contract/country — the single factor most likely to turn a small feature into a
-            configurable engine, and it drives the permission model too.
+DISCOVERY STATUS
+  Business understanding   █████████░  Strong
+  Scope & rules            ███████░░░  Solid  · gap: Business rules
+  Configuration & access   ████░░░░░░  Partial
+  Validation & rollout     ██░░░░░░░░  Thin
 
-=== PRIORITY QUESTIONS (Uncertainty × Impact) ===
-1. Does approval need a balance/quota check before validating, and does that rule vary by
-   contract, client, or country?          → [business_rules]
-2. How many approval levels (manager only, or manager + HR), with escalation/delegation?
-                                           → [workflow]
-3. Should the circuit be standard for all clients, or configurable per client?
-                                           → [config_vs_custom]
+  Readiness   ⛔ Not ready — 4 high-impact areas still open
+              → Real problem, Business rules, Permissions, Config vs customization
 
-=== MODEL STATE (avg completeness: 7%) ===
-  business_rules     0%    empty     impact=high     ← asked
-  permissions        0%    empty     impact=high     ← asked
-  reporting          0%    empty     impact=low      ← NOT asked (empty, but low stakes)
+PRIORITY QUESTIONS  (uncertainty × impact)
+  1. Does approval need a balance/quota check, and does that rule vary by client/country?
+     → [business_rules]
+  2. Should the circuit be standard for all clients, or configurable per client?
+     → [config_vs_custom]
 ```
 
-Note the last line: `reporting` is empty too, but it's low-impact, so the engine stays quiet.
-That's the whole point — **the right questions, not all of them.**
+When nothing high-value is left to ask, it produces the deliverable — a **discovery brief**:
+
+```
+DEFERRED  (low impact — revisit after launch)
+  • Reporting & visibility — low impact for this request; follow-up after launch.
+
+DESIGN CONSIDERATIONS
+  Introduces: a client-configurable approval-circuit engine · an entitlement/balance
+  engine · HR self-service administration · concurrency at approval time
+  Estimated complexity   HIGH        Main cost driver   the entitlement rule engine
+
+POTENTIAL RISKS & OPPORTUNITIES
+  ⚠ The approval-circuit framework is shared across modules — extending it risks
+    touching contracts and invoicing.
+  ◆ Generalize it into a shared workflow service instead of building leave-specific.
+
+Confidence   11/15 areas confirmed · 4 assumptions · 1 to validate before build
+```
+
+`reporting` is deferred, not forgotten — it's low-impact, so it never costs a question. That's the
+point: **the right questions, then a brief that advises, not just a summary that restates.**
 
 ---
 
 ## How it works
 
 ```
-Vague request ─▶ [ Engine ] ─▶ Structured model ─▶ Artifacts (summary · questions · stories · estimate…)
+Vague request ─▶ [ Engine ] ─▶ Structured model ─▶ Discovery brief · stories · estimate
                      ▲
               Product + client context
 ```
@@ -80,8 +94,9 @@ Vague request ─▶ [ Engine ] ─▶ Structured model ─▶ Artifacts (summar
 - **Multi-turn**: each answer refines the same model (`inferred → explicit`, completeness climbs)
   until no high-value question remains. Every reply is schema-validated (Pydantic) at the boundary.
 
-- **The outputs are renders of one model**: the summary is the model as prose; the questions are its
-  gaps as questions; stories and estimates are the same model projected further down the pipeline.
+- **The outputs are renders of one model**: the status and questions are its state and gaps; the
+  brief adds a consultant's read (design considerations, risks, reuse opportunities); stories and the
+  estimate project the same model further down the delivery pipeline.
 
 ---
 
@@ -109,8 +124,9 @@ Better context → better impact estimates → better questions. Files prefixed 
 
 ## Roadmap
 
-- [x] Model + priority questions + business summary
+- [x] Model + priority questions
 - [x] Multi-turn refinement
-- [ ] User stories (in progress)
-- [ ] Uncertainty-aware estimate (day ranges + complexity, spread driven by the soft slots)
+- [x] Discovery brief — status, readiness, design considerations, risks & opportunities
+- [x] User stories
+- [x] Uncertainty-aware estimate (day ranges + complexity, spread driven by the soft slots)
 - [ ] GitLab issue export

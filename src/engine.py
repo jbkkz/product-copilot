@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 import sys
+import textwrap
 from enum import Enum
 from pathlib import Path
 
@@ -14,6 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 MAX_TURNS = 8
+SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+
+PILLAR_LABELS = {
+    "why": "Business understanding",
+    "what": "Scope & rules",
+    "how": "Configuration & access",
+    "validate": "Validation & rollout",
+}
+PILLAR_ORDER = ["why", "what", "how", "validate"]
 
 
 # ── Output contracts ────────────────────────────────────────────────────────
@@ -28,6 +39,12 @@ class Confidence(str, Enum):
 
 
 class Impact(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class Level(str, Enum):
     low = "low"
     medium = "medium"
     high = "high"
@@ -97,6 +114,28 @@ class EstimateDraft(BaseModel):
     # (from real slot data) so they can't be hallucinated.
     items: list[EstimateItem]
     risks: list[str] = Field(default_factory=list)
+
+
+class Brief(BaseModel):
+    # The advisory layer: what a senior consultant would add on top of the discovery.
+    introduces: list[str] = Field(default_factory=list)
+    complexity: Level
+    cost_driver: str = ""
+    risks: list[str] = Field(default_factory=list)
+    opportunities: list[str] = Field(default_factory=list)
+
+
+# ── Schema metadata (slot → pillar / label) ─────────────────────────────────
+
+
+@functools.lru_cache(maxsize=1)
+def _slot_meta() -> tuple[dict, dict]:
+    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    return ({s["id"]: s["pillar"] for s in slots}, {s["id"]: s["label"] for s in slots})
+
+
+def _label(slot_id: str) -> str:
+    return _slot_meta()[1].get(slot_id, slot_id)
 
 
 # ── Prompt assembly ─────────────────────────────────────────────────────────
@@ -173,13 +212,17 @@ def run(client: Anthropic, messages: list[dict], retries: int = 2) -> EngineOutp
 
 
 def derive_stories(client: Anthropic, out: EngineOutput) -> Stories:
-    """Second pipeline stage: a filled model → implementable user stories."""
+    """Pipeline stage: a filled model → implementable user stories."""
     system = build_prompt("stories.md")
     user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json(indent=2)
     return _complete(client, system, [{"role": "user", "content": user}], Stories)
 
 
-SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+def advise(client: Anthropic, out: EngineOutput) -> Brief:
+    """Finalization stage: a completed model → design considerations, risks, opportunities."""
+    system = build_prompt("brief.md")
+    user = "Completed requirements model to advise on:\n" + out.model_dump_json(indent=2)
+    return _complete(client, system, [{"role": "user", "content": user}], Brief)
 
 
 def soft_slots(out: EngineOutput) -> list[str]:
@@ -204,7 +247,7 @@ def estimate_confidence(n_soft: int) -> str:
 
 
 def estimate(client: Anthropic, out: EngineOutput, stories: Stories) -> tuple[EstimateDraft, list[str], str]:
-    """Third pipeline stage: stories + the model's soft slots → a day-based estimate.
+    """Pipeline stage: stories + the model's soft slots → a day-based estimate.
     Returns (draft, soft_slots, confidence) — the latter two are Python-authoritative."""
     soft = soft_slots(out)
     system = build_prompt("estimate.md")
@@ -221,33 +264,133 @@ def estimate(client: Anthropic, out: EngineOutput, stories: Stories) -> tuple[Es
 # ── Rendering ───────────────────────────────────────────────────────────────
 
 
-def avg_completeness(out: EngineOutput) -> int:
-    vals = [s.completeness for s in out.model.values()]
-    return round(sum(vals) / len(vals)) if vals else 0
+def _bar(pct: int, width: int = 10) -> str:
+    filled = round(pct / 100 * width)
+    return "█" * filled + "░" * (width - filled)
 
 
-def render(out: EngineOutput) -> None:
+def _status_word(pct: int) -> str:
+    if pct >= 85:
+        return "Strong"
+    if pct >= 65:
+        return "Solid"
+    if pct >= 40:
+        return "Partial"
+    return "Thin"
+
+
+def _wrap(text: str, indent: str = "  ", width: int = 78) -> str:
+    return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
+
+
+def _bullet(text: str, marker: str = "•", indent: str = "  ", width: int = 78) -> str:
+    return textwrap.fill(
+        text, width=width, initial_indent=f"{indent}{marker} ", subsequent_indent=f"{indent}  "
+    )
+
+
+def _is_deferred(s: Slot) -> bool:
+    """Low-impact, unfilled slots are intentionally parked, not weaknesses."""
+    return s.impact is Impact.low and s.completeness < SOFT_COMPLETENESS
+
+
+def _readiness_blockers(out: EngineOutput) -> list[str]:
+    """High-impact slots not yet explicitly confirmed — what stands between here and build."""
+    return [sid for sid, s in out.model.items() if s.impact is Impact.high and s.confidence is not Confidence.explicit]
+
+
+def render_status(out: EngineOutput) -> None:
+    pillars, _ = _slot_meta()
+    print("\nDISCOVERY STATUS")
+    for pillar in PILLAR_ORDER:
+        items = [
+            (sid, s)
+            for sid, s in out.model.items()
+            if pillars.get(sid) == pillar and not _is_deferred(s)
+        ]
+        if not items:
+            continue
+        avg = round(sum(s.completeness for _, s in items) / len(items))
+        gaps = [_label(sid) for sid, s in items if s.completeness < 60 or s.confidence is Confidence.empty]
+        line = f"  {PILLAR_LABELS[pillar]:<24} {_bar(avg)}  {_status_word(avg)}"
+        if gaps:
+            line += f"  · gap: {', '.join(gaps)}"
+        print(line)
+
+    blockers = _readiness_blockers(out)
+    print()
+    if not blockers:
+        print("  Readiness   ✅ Ready for implementation")
+    elif len(blockers) <= 2:
+        print(f"  Readiness   ⚠ Nearly ready — {len(blockers)} to confirm before build")
+        print(f"              → {', '.join(_label(b) for b in blockers)}")
+    else:
+        print(f"  Readiness   ⛔ Not ready — {len(blockers)} high-impact areas still open")
+        print(f"              → {', '.join(_label(b) for b in blockers)}")
+
+
+def render_turn(out: EngineOutput) -> None:
+    """Lightweight per-turn view: progress + what's being asked."""
+    render_status(out)
+    if out.questions:
+        print("\nPRIORITY QUESTIONS  (uncertainty × impact)")
+        for i, q in enumerate(out.questions, 1):
+            print(f"  {i}. {q.q}")
+            print(f"     → [{q.slot}] {q.why}")
+
+
+def render_brief(out: EngineOutput, brief: Brief) -> None:
+    """The deliverable: a one-page discovery brief."""
     s = out.summary
-    print("\n=== BUSINESS SUMMARY ===")
-    print(f"Objective : {s.objective}")
-    print(f"Scope     : {s.scope}")
-    print(f"Blind spot: {s.blind_spot}")
+    print("\n" + "═" * 60)
+    print("DISCOVERY BRIEF")
+    print("═" * 60)
+
+    if s.objective:
+        print("\nOBJECTIVE")
+        print(_wrap(s.objective))
+
+    render_status(out)
+
+    deferred = [sid for sid, sl in out.model.items() if _is_deferred(sl)]
+    if deferred:
+        print("\nDEFERRED  (low impact — revisit after launch)")
+        for sid in deferred:
+            print(_bullet(f"{_label(sid)} — low impact for this request; suggested follow-up after implementation."))
+
     if s.assumptions:
-        print("Assumptions made:")
+        print(f"\nASSUMPTIONS TO CONFIRM  ({len(s.assumptions)})")
         for a in s.assumptions:
-            print(f"  - {a}")
+            print(_bullet(a))
 
-    print("\n=== PRIORITY QUESTIONS (Uncertainty × Impact) ===")
-    for i, q in enumerate(out.questions, 1):
-        print(f"{i}. {q.q}")
-        print(f"   → [{q.slot}] {q.why}")
+    if brief.introduces or brief.cost_driver:
+        print("\nDESIGN CONSIDERATIONS")
+        if brief.introduces:
+            print("  Introduces:")
+            for it in brief.introduces:
+                print(_bullet(it, marker="•", indent="    "))
+        print(f"  Estimated complexity   {brief.complexity.value.upper()}")
+        if brief.cost_driver:
+            if len(brief.cost_driver) < 55:
+                print(f"  Main cost driver       {brief.cost_driver}")
+            else:
+                print("  Main cost driver")
+                print(_wrap(brief.cost_driver, indent="    "))
 
-    print(f"\n=== MODEL STATE (avg completeness: {avg_completeness(out)}%) ===")
-    for slot_id, slot in out.model.items():
-        print(
-            f"  {slot_id:<18} {str(slot.completeness) + '%':<5} "
-            f"{slot.confidence.value:<9} impact={slot.impact.value}"
-        )
+    if brief.risks or brief.opportunities:
+        print("\nPOTENTIAL RISKS & OPPORTUNITIES")
+        for r in brief.risks:
+            print(_bullet(r, marker="⚠", indent="  "))
+        for o in brief.opportunities:
+            print(_bullet(o, marker="◆", indent="  "))
+
+    explicit = sum(1 for sl in out.model.values() if sl.confidence is Confidence.explicit)
+    inferred = sum(1 for sl in out.model.values() if sl.confidence is Confidence.inferred)
+    to_validate = len(_readiness_blockers(out))
+    print(
+        f"\nConfidence   {explicit}/{len(out.model)} areas confirmed · "
+        f"{inferred} assumptions · {to_validate} to validate before build"
+    )
 
 
 def render_stories(s: Stories) -> None:
@@ -273,7 +416,7 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
     print(f"{'─' * 43:<44} {'':<5} {'─' * 9:<11}")
     print(f"{'TOTAL':<44} {'':<5} {total_low:g}–{total_high:g} d")
     if soft:
-        print(f"\nSpread driven by unresolved slots: {', '.join(soft)}")
+        print(f"\nSpread driven by unresolved slots: {', '.join(_label(s) for s in soft)}")
     if draft.risks:
         print("Risks / unknowns:")
         for r in draft.risks:
@@ -284,17 +427,17 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
 
 
 def converse(client: Anthropic, request: str) -> EngineOutput | None:
-    """Fill the model, ask, feed answers back, until no high-value question remains.
-    Returns the final model (or None if the user stopped before it converged)."""
+    """Fill the model, ask, feed answers back, until no high-value question remains, then
+    finalize with the discovery brief. Returns the final model (None if the user stopped early)."""
     messages = [{"role": "user", "content": request}]
+    out = None
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n──────────── TURN {turn} ────────────")
         out = run(client, messages)
-        render(out)
+        render_turn(out)
 
         if not out.questions:
-            print("\n✅ Model complete enough — no remaining high-information-value question.")
-            return out
+            break
 
         print("\nYour answers (Enter = skip a question · 'q' = stop):")
         answers = []
@@ -317,8 +460,12 @@ def converse(client: Anthropic, request: str) -> EngineOutput | None:
         # The assistant's prior model IS the state we refine — carry it in the history.
         messages.append({"role": "assistant", "content": out.model_dump_json()})
         messages.append({"role": "user", "content": "Client answers:\n" + "\n".join(answers)})
+    else:
+        print(f"\n⚠️  Reached the {MAX_TURNS}-turn limit.")
 
-    print(f"\n⚠️  Reached the {MAX_TURNS}-turn limit.")
+    # Finalize: the discovery brief is the deliverable.
+    print("\nFinalizing the discovery brief…")
+    render_brief(out, advise(client, out))
     return out
 
 
@@ -336,10 +483,10 @@ def main() -> None:
     request = Path(arg).read_text() if Path(arg).exists() else arg
     client = Anthropic()
 
-    # Interactive loop unless --once or no TTY (piped/CI).
+    # Interactive loop (finalizes with the brief). --once / no TTY = a single quick pass.
     if "--once" in flags or not sys.stdin.isatty():
         out = run(client, [{"role": "user", "content": request}])
-        render(out)
+        render_turn(out)
     else:
         out = converse(client, request)
 

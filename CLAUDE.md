@@ -28,28 +28,33 @@ No test/lint/build tooling exists yet — the whole runner is `src/engine.py`.
 The engine is a **single Anthropic call** (per turn) whose intelligence lives entirely in assembled
 prompt data, not in Python. `src/engine.py` is a thin runner:
 
-1. `build_system()` loads `prompts/engine.md` and substitutes two placeholders:
+1. `build_prompt(name)` loads a prompt file (`engine.md`, `stories.md`, `estimate.md`, `brief.md`)
+   and substitutes two placeholders:
    - `{{SCHEMA}}` ← `framework/model_schema.json` (the slot definitions + the driver rule)
    - `{{CONTEXT}}` ← `load_context()`, which concatenates every `context/*.md` **except** files
      whose name starts with `_` (so `_template.md` is skipped).
-2. The client request is the single user message; the model must reply with **JSON only**.
-   `run()` hardens this: `_first_text()` skips non-text blocks, `_extract_json()` strips a ```json
-   fence or slices `{ … }`, and the whole thing is validated against the Pydantic `EngineOutput`
-   contract. On malformed/non-conformant JSON it retries (default 2×) with a corrective nudge in a
-   *local* message copy, so the caller's clean history is never polluted.
-3. `render()` prints the two v0 outputs: the business summary and the prioritized questions.
+2. Every model reply must be **JSON only**. `_complete()` is the shared call: `_first_text()` skips
+   non-text blocks, `_extract_json()` strips a ```json fence or slices `{ … }`, and the result is
+   validated against a Pydantic contract. On malformed/non-conformant JSON it retries (default 2×)
+   with a corrective nudge in a *local* message copy, so the caller's clean history is never
+   polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it.
+3. Rendering is split: `render_turn()` is the lightweight per-turn view (discovery-status bars +
+   priority questions); `render_brief()` is the deliverable (status, readiness, deferred slots,
+   assumptions, design considerations, risks & opportunities, confidence footer). The bars, status
+   words, readiness verdict and confidence counts are computed **in Python** from the model — only the
+   advisory `Brief` (design considerations, risks, opportunities) is LLM-generated.
 
 **Consequence for changes:** behavior is tuned by editing the Markdown/JSON assets, not the Python.
 
 ## The output contract (keep in sync)
 
-The JSON shape is defined in three places that must agree:
-- the Pydantic models in `src/engine.py` (`EngineOutput` → `model` / `questions` / `summary`, with
-  `Slot`, `Question`, `Summary`; `Confidence` and `Impact` are enums),
-- the "Output format" block in `prompts/engine.md`,
-- the slot ids in `framework/model_schema.json`.
+Each stage has a Pydantic contract that must agree with its prompt's "Output format" block:
+`EngineOutput` (`model`/`questions`/`summary`) ↔ `engine.md`, `Stories` ↔ `stories.md`,
+`EstimateDraft` ↔ `estimate.md`, `Brief` (`introduces`/`complexity`/`cost_driver`/`risks`/
+`opportunities`) ↔ `brief.md`. Slot ids live in `framework/model_schema.json` (which also carries
+each slot's `pillar` and `label`, read back by the renderer via `_slot_meta()`).
 
-Pydantic validates at the boundary, so a rename that breaks the contract fails **loudly in `run()`**
+Pydantic validates at the boundary, so a rename that breaks a contract fails **loudly in `_complete()`**
 instead of silently mis-rendering. The field is literally named `model` (Pydantic
 `protected_namespaces=()` allows it). Per-slot keys: `completeness` (0-100), `confidence`
 (explicit|inferred|empty), `impact` (low|medium|high), `value`, `evidence`.
@@ -57,9 +62,10 @@ instead of silently mis-rendering. The field is literally named `model` (Pydanti
 ## The two core concepts
 
 - **Slots (the atomic unit).** Every requirement lives in a slot (see keys above). Slots are grouped
-  into 4 navigation pillars (Why / What / How / Validate) defined in `framework/elicitation.md`. The
-  two v0 outputs are just two renders of the same filled model: the summary = the model as prose; the
-  questions = the model's *gaps* (`inferred` slots feed the "Assumptions made" section).
+  into 4 navigation pillars (Why / What / How / Validate) defined in `framework/elicitation.md`. Every
+  output is a render of the same filled model: the status bars are its per-pillar completeness, the
+  questions are its *gaps*, the brief is a consultant's read of it (`inferred` slots feed the
+  "Assumptions to confirm" section).
 
 - **The driver: `information_value = uncertainty × impact`.** The engine does **not** ask because a
   slot is empty — it asks where information value is high. Empty-but-low-impact slots are left alone;
@@ -69,12 +75,13 @@ instead of silently mis-rendering. The field is literally named `model` (Pydanti
 
 ## Multi-turn refinement
 
-Interactive mode (`converse()`) loops: render → ask → collect answers → feed back → repeat, up to
-`MAX_TURNS` (8). The previous turn's validated output IS the state being refined — it is carried in
+Interactive mode (`converse()`) loops: `render_turn` → ask → collect answers → feed back → repeat, up
+to `MAX_TURNS` (8). The previous turn's validated output IS the state being refined — it is carried in
 the conversation history (re-serialized via `model_dump_json()`), not rebuilt from scratch. The
 engine flips `inferred → explicit` and raises `completeness` as answers come in. **Stop signal:** the
-model returns `questions: []` when nothing is both uncertain and high-impact. `--once` (or no TTY)
-does a single pass instead.
+model returns `questions: []` when nothing is both uncertain and high-impact; `converse()` then calls
+`advise()` and prints the discovery brief. `--once` (or no TTY) does a single pass (status +
+questions, no brief). `--stories` / `--estimate` chain the delivery pipeline after the model stage.
 
 ## Extending
 
