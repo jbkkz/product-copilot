@@ -6,6 +6,8 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
 
 > **Product Copilot doesn't generate documents. It builds understanding.**
 
+![Product Copilot generating a discovery brief](demo.gif)
+
 ```
         Customer request
               │
