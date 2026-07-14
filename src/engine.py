@@ -211,6 +211,28 @@ def run(client: Anthropic, messages: list[dict], retries: int = 2) -> EngineOutp
     return _complete(client, build_prompt("engine.md"), messages, EngineOutput, retries)
 
 
+# ── Model persistence (the model is the product; artifacts are views of it) ──
+
+
+def _slug(text: str) -> str:
+    words = re.findall(r"[a-z0-9]+", text.lower())[:5]
+    return "-".join(words) or "discovery"
+
+
+def save_model(out: EngineOutput, slug: str) -> Path:
+    """Persist the model — the durable product. Every artifact is regenerated from this file."""
+    folder = ROOT / "out" / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "model.json"
+    path.write_text(out.model_dump_json(indent=2))
+    return path
+
+
+def load_model(path: Path) -> EngineOutput:
+    """Load a saved model so artifacts can be regenerated without redoing discovery."""
+    return EngineOutput.model_validate_json(path.read_text())
+
+
 def derive_stories(client: Anthropic, out: EngineOutput) -> Stories:
     """Pipeline stage: a filled model → implementable user stories."""
     system = build_prompt("stories.md")
@@ -427,8 +449,9 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
 
 
 def converse(client: Anthropic, request: str) -> EngineOutput | None:
-    """Fill the model, ask, feed answers back, until no high-value question remains, then
-    finalize with the discovery brief. Returns the final model (None if the user stopped early)."""
+    """Fill the model, ask, feed answers back, until no high-value question remains.
+    Returns the final model (None if the user stopped early). Finalization (brief, save) is
+    handled by the caller so the interactive and --from paths share it."""
     messages = [{"role": "user", "content": request}]
     out = None
     for turn in range(1, MAX_TURNS + 1):
@@ -463,39 +486,63 @@ def converse(client: Anthropic, request: str) -> EngineOutput | None:
     else:
         print(f"\n⚠️  Reached the {MAX_TURNS}-turn limit.")
 
-    # Finalize: the discovery brief is the deliverable.
-    print("\nFinalizing the discovery brief…")
-    render_brief(out, advise(client, out))
     return out
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
 
 
-def main() -> None:
-    flags = {a for a in sys.argv[1:] if a.startswith("--")}
-    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if not argv:
-        print('Usage: python src/engine.py [--once] [--stories] [--estimate] "the client request…"  |  path/to/request.md')
-        sys.exit(1)
+def _flag_value(args: list[str], name: str) -> str | None:
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
 
-    arg = argv[0]
-    request = Path(arg).read_text() if Path(arg).exists() else arg
+
+def main() -> None:
+    args = sys.argv[1:]
+    flags = {a for a in args if a.startswith("--")}
+    from_path = _flag_value(args, "--from")
+    positional = [a for a in args if not a.startswith("--") and a != from_path]
     client = Anthropic()
 
-    # Interactive loop (finalizes with the brief). --once / no TTY = a single quick pass.
-    if "--once" in flags or not sys.stdin.isatty():
-        out = run(client, [{"role": "user", "content": request}])
-        render_turn(out)
+    if from_path:
+        # Regenerate artifacts from a saved model — no discovery.
+        out = load_model(Path(from_path))
+        print(f"Loaded model ← {from_path}")
+        quick = False
+    elif positional:
+        arg = positional[0]
+        request = Path(arg).read_text() if Path(arg).exists() else arg
+        slug = _slug(Path(arg).stem if Path(arg).exists() else request)
+        # Interactive loop, or a single quick pass with --once / no TTY.
+        quick = "--once" in flags or not sys.stdin.isatty()
+        if quick:
+            out = run(client, [{"role": "user", "content": request}])
+            render_turn(out)
+        else:
+            out = converse(client, request)
+        if out:
+            print(f"\nSaved model → {save_model(out, slug)}")
     else:
-        out = converse(client, request)
+        print('Usage: python src/engine.py [--once] [--stories] [--estimate] "request" | file.md')
+        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate]')
+        sys.exit(1)
 
-    # Pipeline stages. --estimate implies stories (it estimates them).
-    want_estimate = "--estimate" in flags
-    if out and ("--stories" in flags or want_estimate):
+    if not out:
+        return
+
+    # The discovery brief is the default deliverable (skipped on a quick --once pass).
+    if not quick:
+        print("\nGenerating the discovery brief…")
+        render_brief(out, advise(client, out))
+
+    # Delivery pipeline. --estimate implies stories (it estimates them).
+    if "--stories" in flags or "--estimate" in flags:
         stories = derive_stories(client, out)
         render_stories(stories)
-        if want_estimate:
+        if "--estimate" in flags:
             draft, soft, confidence = estimate(client, out, stories)
             render_estimate(draft, soft, confidence)
 
