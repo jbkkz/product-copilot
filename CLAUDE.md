@@ -111,11 +111,19 @@ percentages / confidence labels in prose). CLI flags: `--stories`, `--estimate`,
 `--epic`, `--release`.
 
 A generator can also have **more than one writer** on the same contract — a second *view* of the same
-LLM output, no extra model call. `Epic` has two: `epic_markdown()` (human) and `epic_export_json()`
+LLM output, no extra model call. `Epic` has several: `epic_markdown()` (human) and `epic_export_json()`
 (a tool-neutral, versioned envelope — `format`/`version`/`epic`/`issues[]` with labels, shared
 `milestone`, and `depends_on` refs — importable into GitHub/GitLab or consumable by an n8n flow,
 written to `out/<slug>/epic.json` behind `--epic-json`). `main()` calls `generate_epic()` once and
-renders whichever views were requested, so `--epic --epic-json` is a single API call.
+renders whichever views were requested, so `--epic --epic-json --epic-github` is a single API call.
+
+**Tracker adapters** are pure transforms over the *neutral export* (not the internal `Epic`), which
+keeps the core tool-agnostic: `to_github(export, slug)` maps `epic_export()` output → a GitHub
+issue-creation plan (`out/<slug>/epic.github.json` behind `--epic-github`, via `to_github_json()`).
+GitHub has no native epic or dependency, so it degrades honestly (tracking issue + task list;
+`depends_on` stated in issue bodies) and stamps a `pc-epic:<slug>` idempotency label on every issue.
+The authenticated push (tokens, retries) is deliberately *not* in-repo — an n8n flow consumes the
+plan. Adding GitLab/Jira = another pure `to_<tracker>()` adapter + `--flag`, same shape.
 
 ## Extending
 

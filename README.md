@@ -147,8 +147,9 @@ python src/engine.py examples/case1_leave.md
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
 answers back in — then writes `out/<slug>/model.json` and produces the brief. Add `--prd`,
 `--stories`, `--estimate`, `--criteria`, `--epic`, `--epic-json` (a tool-neutral,
-GitHub/GitLab-importable export), or `--release` to generate more artifacts;
-`--from out/<slug>/model.json` regenerates any of them without redoing discovery.
+GitHub/GitLab-importable export), `--epic-github` (a ready-to-run GitHub issue plan), or `--release`
+to generate more artifacts; `--from out/<slug>/model.json` regenerates any of them without redoing
+discovery.
 
 ---
 
@@ -176,11 +177,12 @@ Better context → sharper impact estimates → better questions. Files prefixed
 - Artifact generators — PRD, user stories, uncertainty-aware estimate, acceptance criteria, delivery
   epic, release notes
 - Tool-neutral epic export (`epic.json`) — importable into GitHub / GitLab issues
+- GitHub issue-creation plan (`epic.github.json`) — a tracker adapter, idempotent, n8n-ready
 - The model as a durable product (`model.json`), regenerable via `--from`
 
 **Upcoming**
-- Delivery integrations — direct push to Jira, GitLab, Notion and Confluence
-- Additional lifecycle artifacts — test plans, and a manual-import CSV export
+- More tracker adapters — GitLab and Jira, alongside GitHub
+- Delivery integrations — authenticated push (via n8n), Notion and Confluence
 - Context tooling — validation and assisted generation of product context cards
 
 **Vision**

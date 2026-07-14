@@ -23,6 +23,7 @@ from src.engine import (
     prd_markdown,
     release_markdown,
     soft_slots,
+    to_github,
 )
 
 
@@ -192,6 +193,30 @@ def test_epic_export_is_neutral_and_maps_issues():
     assert payload["issues"][1]["depends_on"] == ["#1"]
     # The JSON writer emits valid, parseable JSON.
     assert json.loads(epic_export_json(epic)) == payload
+
+
+def test_to_github_plan_degrades_honestly_and_is_idempotent():
+    epic = Epic(
+        title="Leave approval",
+        milestone="Pilot",
+        goal="Employees request leave.",
+        issues=[
+            {"id": "#1", "title": "Model the leave object", "description": "Fields.", "labels": ["backend"]},
+            {"id": "#2", "title": "Approval circuit", "labels": ["feature"], "depends_on": ["#1"]},
+        ],
+    )
+    plan = to_github(epic_export(epic), "leave-approval")
+    assert plan["target"] == "github"
+    # Every issue carries the idempotency label so a re-run can find-then-skip.
+    label = "pc-epic:leave-approval"
+    assert plan["idempotency_label"] == label
+    assert all(label in issue["labels"] for issue in plan["issues"])
+    assert label in plan["tracking_issue"]["labels"]
+    # The epic degrades to a tracking issue with a task list (GitHub has no native epic).
+    assert "- [ ] Model the leave object" in plan["tracking_issue"]["body"]
+    # depends_on has no native GitHub concept — stated in the body, resolved to the issue's title.
+    assert "**Depends on:** Model the leave object" in plan["issues"][1]["body"]
+    assert "_Part of epic: Leave approval_" in plan["issues"][0]["body"]
 
 
 def test_release_markdown_stamps_version_and_sections():
