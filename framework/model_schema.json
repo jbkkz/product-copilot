@@ -1,0 +1,32 @@
+{
+  "driver": {
+    "rule": "information_value = uncertainty * impact",
+    "ask_when": "information_value is high",
+    "do_not_ask_when": "slot is empty but impact is low",
+    "uncertainty": "derived from completeness (0-100) and confidence (explicit|inferred|empty)",
+    "impact": "how much this slot changes the shape/cost of the solution; estimated using the product context (context/*.md)"
+  },
+  "pillars": {
+    "why": "Pourquoi ? Le problème réel et la mesure du succès.",
+    "what": "Quoi ? Les acteurs, les objets, les règles, le cycle de vie.",
+    "how": "Comment ? Intégrations, permissions, configurabilité, contraintes.",
+    "validate": "Validation. Cas limites, reporting, critères d'acceptation, risques."
+  },
+  "slots": [
+    { "id": "problem",        "pillar": "why",      "impact_default": "high",   "label": "Problème réel",        "probe": "Quel problème derrière la demande ? Le client demande une solution, pas un besoin." },
+    { "id": "current_process","pillar": "why",      "impact_default": "high",   "label": "Processus actuel (as-is)", "probe": "Comment est-ce résolu aujourd'hui ? Manuel, Excel, un autre module, rien ?" },
+    { "id": "success_metrics","pillar": "why",      "impact_default": "medium", "label": "Critères de succès",   "probe": "Comment le client saura que c'est réussi ?" },
+    { "id": "actors",         "pillar": "what",     "impact_default": "high",   "label": "Acteurs & rôles",      "probe": "Qui déclenche, qui exécute, qui valide ?" },
+    { "id": "business_objects","pillar": "what",    "impact_default": "medium", "label": "Objets métier",        "probe": "Quelles entités, quels champs, d'où viennent les données ?" },
+    { "id": "business_rules", "pillar": "what",     "impact_default": "high",   "label": "Règles métier",        "probe": "Qui a le droit, sous quelles conditions, quelles exceptions, la règle change-t-elle selon client/pays/contrat ?" },
+    { "id": "workflow",       "pillar": "what",     "impact_default": "high",   "label": "Workflow / cycle de vie","probe": "Quels états, quelles transitions, qui les déclenche, quels événements enchaînent ?" },
+    { "id": "integrations",   "pillar": "how",      "impact_default": "medium", "label": "Intégrations & notifications", "probe": "Qui est notifié, quel autre système est mis à jour, quel webhook/API ?" },
+    { "id": "permissions",    "pillar": "how",      "impact_default": "high",   "label": "Permissions",          "probe": "Qui voit quoi, qui peut faire quoi ?" },
+    { "id": "config_vs_custom","pillar": "how",     "impact_default": "high",   "label": "Config vs customisation", "probe": "Hardcodé, configurable, spécifique client, ou réutilisable pour tous ? (plateformes configurables uniquement)", "optional": true },
+    { "id": "constraints",    "pillar": "how",      "impact_default": "medium", "label": "Contraintes",          "probe": "Deadline, dépendances, réglementaire, budget ?" },
+    { "id": "edge_cases",     "pillar": "validate", "impact_default": "medium", "label": "Cas limites",          "probe": "Et si vide / multiple / concurrent / rétroactif / annulé ?" },
+    { "id": "reporting",      "pillar": "validate", "impact_default": "low",    "label": "Reporting & visibilité","probe": "Filtrer, exporter, tableau de bord, audit des modifications ?" },
+    { "id": "acceptance",     "pillar": "validate", "impact_default": "medium", "label": "Critères d'acceptation","probe": "Quels scénarios de recette valident la livraison ?" },
+    { "id": "risks",          "pillar": "validate", "impact_default": "medium", "label": "Risques & rollout",    "probe": "Qu'est-ce qui peut casser, comment on déploie ?" }
+  ]
+}
