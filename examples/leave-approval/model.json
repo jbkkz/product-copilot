@@ -1,0 +1,119 @@
+{
+  "model": {
+    "problem": {
+      "completeness": 75,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Leave is approved inconsistently, with no systematic balance check or audit trail.",
+      "evidence": "Requested a \"system\", underlying pain inferred from as-is"
+    },
+    "current_process": {
+      "completeness": 90,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Handled today via email and an Excel spreadsheet.",
+      "evidence": "Client answer"
+    },
+    "success_metrics": {
+      "completeness": 60,
+      "confidence": "inferred",
+      "impact": "medium",
+      "value": "Fewer balance errors, full auditability, timely escalations, a successful pilot.",
+      "evidence": "Partly stated, partly inferred"
+    },
+    "actors": {
+      "completeness": 85,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Employee, Manager, HR, Administrator, and external client contacts.",
+      "evidence": "Client answer"
+    },
+    "business_objects": {
+      "completeness": 65,
+      "confidence": "inferred",
+      "impact": "medium",
+      "value": "Existing Leave/Absence extended with approval status, approver chain, balance, delegation, escalation and a calendar reference.",
+      "evidence": "Reuse of platform entities inferred"
+    },
+    "business_rules": {
+      "completeness": 85,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Balance/quota check before approval; manager then HR above a threshold; rules vary by client, country and contract.",
+      "evidence": "Client answer"
+    },
+    "workflow": {
+      "completeness": 90,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "submitted -> manager -> optional HR -> approved/rejected; auto-escalation after 5 business days; separate HR-validated cancellation, including started leave.",
+      "evidence": "Client answer"
+    },
+    "integrations": {
+      "completeness": 85,
+      "confidence": "explicit",
+      "impact": "medium",
+      "value": "Email + in-app notifications on key events; one-way calendar sync (system to calendar).",
+      "evidence": "Client answer"
+    },
+    "permissions": {
+      "completeness": 85,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Employee/Manager/HR/Admin; HR is the sole editor of approved requests and validator of cancellations; a delegation layer overlays existing permissions.",
+      "evidence": "Client answer"
+    },
+    "config_vs_custom": {
+      "completeness": 85,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Approval circuit configurable per client; multi-tenant configuration isolation for a pilot-then-scale rollout.",
+      "evidence": "Client answer"
+    },
+    "constraints": {
+      "completeness": 55,
+      "confidence": "inferred",
+      "impact": "medium",
+      "value": "French labour law (paid leave, RTT) and GDPR on HR data apply; delivery timeline not yet specified.",
+      "evidence": "Platform baseline + partial answer"
+    },
+    "edge_cases": {
+      "completeness": 80,
+      "confidence": "explicit",
+      "impact": "medium",
+      "value": "Overlapping requests allowed but revalidated at approval; cancellation of already-started leave; approver/delegate racing the escalation timer.",
+      "evidence": "Client answer"
+    },
+    "reporting": {
+      "completeness": 10,
+      "confidence": "empty",
+      "impact": "low",
+      "value": "",
+      "evidence": "Not raised; low impact for this request"
+    },
+    "acceptance": {
+      "completeness": 50,
+      "confidence": "inferred",
+      "impact": "medium",
+      "value": "Approve/reject scenarios across the circuit; concurrency and escalation timing not yet formalised.",
+      "evidence": "Inferred from workflow"
+    },
+    "risks": {
+      "completeness": 75,
+      "confidence": "explicit",
+      "impact": "medium",
+      "value": "Shared approval framework may ripple into other modules; concurrency on balance; audit trail weakened by not migrating historical requests.",
+      "evidence": "Client answer + context"
+    }
+  },
+  "questions": [],
+  "summary": {
+    "objective": "Replace the email/Excel-based leave approval process with a configurable, auditable digital workflow that enforces real-time balance checks, routes notifications by role, and scales safely via a pilot-first rollout.",
+    "scope": "Leave request lifecycle with balance validation, multi-level configurable circuit, delegation and auto-escalation, HR-validated cancellation, per-client entitlement templates, and a pilot rollout.",
+    "assumptions": [
+      "French labour law is one country template among others",
+      "No payroll integration at this stage; calendar sync is one-way"
+    ],
+    "blind_spot": "The audit trail should also cover changes to entitlement rule templates, and concurrent overlapping approvals must be race-safe."
+  }
+}

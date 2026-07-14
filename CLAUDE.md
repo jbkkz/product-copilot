@@ -21,7 +21,9 @@ python src/engine.py examples/case1_leave.md   # a file path is read as the requ
 python src/engine.py --once examples/case1_leave.md   # single pass, no interactive loop
 ```
 
-No test/lint/build tooling exists yet — the whole runner is `src/engine.py`.
+Run the tests with `.venv/bin/python -m pytest tests/ -q` (pure-logic units, no API calls). The whole
+runner is `src/engine.py`; there's no build step. A complete worked example lives in
+`examples/leave-approval/` (request → model.json → brief → PRD).
 
 ## Architecture
 

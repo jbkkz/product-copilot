@@ -382,11 +382,6 @@ def _state_of(s: Slot) -> str:
     return "unknown"
 
 
-def _discovery_complete(out: EngineOutput) -> int:
-    vals = [s.completeness for s in out.model.values() if not _is_deferred(s)]
-    return round(sum(vals) / len(vals)) if vals else 0
-
-
 def render_understanding(out: EngineOutput) -> None:
     print("UNDERSTANDING")
     for state, label in STATE_ROWS:
@@ -397,16 +392,18 @@ def render_understanding(out: EngineOutput) -> None:
 
 def render_readiness(out: EngineOutput) -> None:
     print("READY FOR IMPLEMENTATION?")
-    print(f"  {'Discovery complete':<20} {_discovery_complete(out)}%")
     blockers = [_label(b) for b in _readiness_blockers(out)]
-    if not blockers:
-        print(f"  {'Blocker':<20} none")
-        print(f"  {'Everything else':<20} Good to go.")
-    elif len(blockers) == 1:
-        print(_labeled("Blocker", f"{blockers[0]} — not explicitly confirmed by the client.", lw=20))
-        print(f"  {'Everything else':<20} Good to go.")
-    else:
-        print(_labeled("Blockers", ", ".join(blockers) + " — still open.", lw=20))
+    status = "Ready" if not blockers else ("Nearly ready" if len(blockers) <= 2 else "Not ready")
+    print(f"  {'Status':<20} {status}")
+    if blockers:
+        print(_labeled("Blocking decision", "Confirm " + ", ".join(b.lower() for b in blockers), lw=20))
+    gaps = [
+        _label(sid)
+        for sid, s in out.model.items()
+        if s.impact is not Impact.high and s.confidence is not Confidence.explicit
+    ]
+    if gaps:
+        print(_labeled("Remaining gaps", ", ".join(gaps), lw=20))
 
 
 def render_turn(out: EngineOutput) -> None:

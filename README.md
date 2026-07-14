@@ -34,11 +34,13 @@ rest, it infers and flags as an assumption. You spend your discovery time where 
 
 ### Why I built this
 
-> After several years as a Product Manager on complex, configurable enterprise software, I realised
-> that writing the specification was never the hard part. **Understanding the real problem was.** The
-> best PMs I worked with ran the same reasoning in their heads every time — what do we actually know,
-> what are we assuming, what would change the build if it turned out different. Product Copilot is my
-> attempt to formalise that reasoning process.
+> After several years working on complex, configurable enterprise software, I realised that writing
+> the specification was rarely the hardest part. The difficult part was building a shared
+> understanding of the real problem before development started.
+>
+> Over time, I noticed the same reasoning pattern behind good discovery work: what do we actually
+> know, what are we assuming, and what would materially change the solution? Product Copilot is my
+> attempt to formalise that process.
 
 ---
 
@@ -59,9 +61,9 @@ The deliverable is a **discovery brief** — and it opens with the answer a stak
 
 ```
 READY FOR IMPLEMENTATION?
-  Discovery complete   76%
-  Blocker              The underlying business problem isn't confirmed by the client.
-  Everything else      Good to go.
+  Status               Nearly ready
+  Blocking decision    Confirm the underlying business problem
+  Remaining gaps       Success metrics, reporting expectations
 
 MAIN RISKS
   ⚠ The shared approval framework is used across other modules — changes here can ripple
@@ -78,9 +80,8 @@ RECOMMENDED NEXT STEPS
 ```
 
 Above this sits a five-line **executive summary** (problem · solution · risks · unknowns · next
-step). Below it, the full analysis: a **decision log** of what's settled versus still open, an
-understanding checklist, and the reasoning behind every verdict. It reads like a consultant wrote
-it — not a model dump.
+step). Below it, the full analysis includes a **decision log** of what's settled versus still open,
+an understanding checklist, and the reasoning behind each recommendation.
 
 ---
 
@@ -94,6 +95,22 @@ From that one sentence, on a platform whose context says *"approval usually hide
 and a multi-level circuit"*, the engine asks the few questions that matter — the multi-level circuit,
 the per-client variation, the balance rule — and leaves the low-stakes ones (reporting) alone. Each
 answer refines the model until nothing high-value is left to ask, then the brief is produced.
+
+---
+
+## See a complete example
+
+Walk through one real discovery end to end in [`examples/leave-approval/`](examples/leave-approval/) —
+no install required:
+
+| File | What it is |
+|---|---|
+| [`request.md`](examples/leave-approval/request.md) | The one-sentence input |
+| [`model.json`](examples/leave-approval/model.json) | The structured model the discovery built |
+| [`discovery-brief.md`](examples/leave-approval/discovery-brief.md) | The deliverable — brief with risks, decisions, next steps |
+| [`prd.md`](examples/leave-approval/prd.md) | A PRD generated from the same model |
+
+Same model, four views. That's the whole idea.
 
 ---
 
