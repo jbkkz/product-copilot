@@ -1,62 +1,73 @@
-# Elicitation framework
+# The elicitation framework
 
-The core of the product. Product-agnostic: it encodes *how* a PM turns a vague request into a
-solution model. The context (`context/*.md`) grounds it in a specific product.
+The framework is the core of Product Copilot. It's domain-agnostic: it encodes how an experienced
+product person turns a vague request into a model precise enough to build from. The context cards in
+`context/` ground that method in a specific product.
 
-## The 4 pillars (navigation + pitch)
+## Four pillars
+
+Every requirement belongs to one of four pillars — a simple way to navigate the model and to explain
+it to someone new.
 
 | Pillar | Question | Slots |
 |---|---|---|
-| 🟢 **Why**      | Why?      | Real problem · Current process (as-is) · Success criteria |
-| 🟡 **What**     | What?     | Actors & roles · Business objects · Business rules · Workflow/lifecycle |
-| 🔵 **How**      | How?      | Integrations & notifications · Permissions · Config vs custom · Constraints |
-| 🔴 **Validate** | Validation | Edge cases · Reporting · Acceptance criteria · Risks & rollout |
+| **Why** | Why are we doing this? | Real problem · Current process · Success criteria |
+| **What** | What is the system? | Actors & roles · Business objects · Business rules · Workflow |
+| **How** | How does it work? | Integrations · Permissions · Config vs custom · Constraints |
+| **Validate** | How do we know it's right? | Edge cases · Reporting · Acceptance · Risks & rollout |
 
-Pillars are **navigation buckets**. The atomic unit stays the **slot** — it's what gets filled,
-tracked, and what the artifacts are generated from.
+Pillars are for navigation. The unit that actually gets filled and tracked is the slot.
 
-## Each slot is an object
+## Each slot is a small record
+
+A slot records not just what we know, but how well we know it and where it came from:
 
 ```
-slot {
-  completeness : 0-100        # how well we know it
-  confidence   : explicit | inferred | empty
-  impact       : low | medium | high    # how much it changes the shape/cost of the solution
-  value        : what we know
-  evidence     : where it comes from (client's words / inference / answer)
-}
+completeness   0–100                         how fully the slot is known
+confidence     explicit | inferred | empty   where that knowledge came from
+impact         low | medium | high           how much it shapes the solution
+value          what we currently know
+evidence       what it's based on
 ```
 
-`confidence` carries the **provenance**: an `inferred` slot is an **assumption to confirm** — exactly
-what feeds the *"Assumptions made"* section of the summary.
+`confidence` is what keeps assumptions visible. An `inferred` slot is something the engine deduced
+but hasn't confirmed, so it flows straight into the "Assumptions made" section of the summary —
+nothing is quietly taken for granted.
 
-## The driver: Uncertainty × Impact
+## The driver: uncertainty × impact
 
-The engine does **not** ask a question because a slot is empty. It computes the **information
-value**:
+The engine doesn't ask about a slot just because it's empty. It weighs the value of asking:
 
 ```
 information_value = uncertainty × impact
 ```
 
-- **Uncertainty** ← derived from `completeness` + `confidence`.
-- **Impact** ← how much this slot changes the solution. **Estimated using the product context.**
-  Without context, impact is a guess: the engine is only as smart as the context you give it.
+Uncertainty comes from `completeness` and `confidence`. Impact — how much the answer would change
+the solution — is estimated from the product context. That second input matters: without context,
+impact is only a guess, so the quality of the context cards sets the ceiling on how good the
+questions can be.
 
-We ask **the right** questions, not all of them.
+The result is selective. A slot that's empty but low-stakes (reporting on a small field change) is
+left alone. A slot that's only partly known but high-stakes (a business rule that varies by country)
+gets a question. The aim is the few questions that change the build, not a full checklist.
 
-- Empty slot, low impact (e.g. Reporting on adding a field) → **we don't ask.**
-- Partial slot, high impact, medium confidence (e.g. a business rule that varies by country) → **we dig.**
+## Config vs custom: the platform slot
 
-## config-vs-custom: the platform edge
+One slot is optional: `config_vs_custom`. It's on for configurable, multi-client platforms and off
+for one-off apps. It asks whether a piece of behavior should be hardcoded, configurable,
+client-specific, or shared across all clients.
 
-`optional` slot: ON for configurable products (multi-client platforms), OFF for a one-shot app.
-Almost every discovery tool is greenfield-minded and never asks
-*"hardcoded / configurable / client-specific / reusable for all?"*. That's THE question that
-separates a scalable platform from a pile of per-client forks.
+Most discovery tools assume a single-tenant, greenfield build and never raise this. On a platform
+it's one of the highest-impact questions there is: it's the difference between behavior that scales
+to every client and behavior that ends up forked per client. Turning the slot on lets the engine
+surface the decision early, while it's still cheap to make.
 
 ## What the engine produces (v0)
 
 Two renders of the same model:
-1. **Business summary** — objective · likely scope · assumptions made · main blind spot.
-2. **Priority questions** — sorted by information value, with the *why* of each question.
+
+1. **Business summary** — objective, likely scope, assumptions made, main blind spot.
+2. **Priority questions** — ordered by information value, each with the reason it's being asked.
+
+Later stages project the same model further down the delivery pipeline: user stories, then a
+day-based estimate whose spread is driven by the slots that are still uncertain.
