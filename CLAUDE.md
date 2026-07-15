@@ -14,7 +14,7 @@ output — is in English.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .          # installs deps + the `pc` command (needs pip>=21.3 / setuptools>=61)
+pip install -e ".[dev]"   # deps + the `pc` command + pytest (needs pip>=21.3 / setuptools>=61)
 cp .env.example .env      # then set ANTHROPIC_API_KEY (MODEL defaults to claude-sonnet-5)
 
 pc discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json

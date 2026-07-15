@@ -8,8 +8,6 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
 
 > **Product Copilot doesn't generate documents. It builds understanding.**
 
-![Product Copilot — from a one-line request to a solution assessment](demo.gif)
-
 ```
                  Customer request
                          │
