@@ -49,7 +49,8 @@ prompt data, not in Python. `src/engine.py` is a thin runner:
    risks, ranked Opportunities, Next steps, Ready-for-implementation with a single blocker). The
    checklist, discovery-complete %, decision states and readiness are computed **in Python**; the
    advisory `Brief` (problem, solution, introduces, `challenges` [premise/alternative/consequence/
-   recommendation], complexity + reasons, risks, opportunities ranked by `Leverage`, next steps,
+   recommendation], complexity + reasons, risks, opportunities ranked by `Leverage` (each naming the `modules` it
+   reaches, grounded in model + context), next steps,
    `decisions` as `DesignDecision` [decision + optional why/alternative/tradeoff], open_decisions) is
    LLM-generated. The `challenges` block **contests the premise** (grounded in model + context, never
    generic); it's the core differentiator. Both layers must avoid exposing internals (slot ids,

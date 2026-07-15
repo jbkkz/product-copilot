@@ -32,9 +32,13 @@ starting the build. This is a judgment, not a recap.
 - `risks`: 2–5 things that could bite during build — an existing framework that may need extending,
   concurrency / data races, regulatory exposure, shared modules affected. Be specific to THIS model.
 - `opportunities`: 1–4 architectural opportunities, each with a `leverage` of `high` | `medium` |
-  `future`. `high` = worth doing now and clearly pays off; `future` = a good idea for later. A piece
-  worth making reusable or abstracting (e.g. an engine other modules could share). Think like an
-  architect, not a scribe.
+  `future`, and `modules`. `high` = worth doing now and clearly pays off; `future` = a good idea for
+  later. A piece worth making reusable or abstracting (e.g. an engine other modules could share).
+  `modules`: the concrete existing modules or business objects this leverage actually reaches — the
+  ones that would share the abstracted piece or feel the ripple. **Name only modules present in the
+  model or the product context** (e.g. Absence, Invoicing, Missions, Contracts); leave the list empty
+  rather than inventing a module or naming a generic one. This is what turns an opportunity from a
+  slogan into an argument. Think like an architect, not a scribe.
 - `next_steps`: 2–4 concrete, ordered recommendations a lead would act on next — what to confirm
   with the client before build, what to sequence first. Actionable imperatives.
 - `decisions`: the key decisions already settled by the discovery — what the team no longer argues
@@ -79,7 +83,7 @@ Reply with **only** a valid JSON object, no surrounding text:
   "complexity_reasons": ["configurable approval engine", "concurrency on balance revalidation", "notification routing"],
   "cost_driver": "the entitlement rule engine",
   "risks": ["The existing permission framework likely needs extending for HR-as-sole-editor."],
-  "opportunities": [{ "text": "Generalize the approval circuit for future workflows.", "leverage": "high" }],
+  "opportunities": [{ "text": "Generalize the approval circuit for future workflows.", "leverage": "high", "modules": ["Absence", "Contracts", "Missions"] }],
   "next_steps": ["Confirm whether the approval circuit varies by client before estimating."],
   "decisions": [
     {

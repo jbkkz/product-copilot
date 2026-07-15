@@ -123,6 +123,7 @@ class Leverage(str, Enum):
 class Opportunity(BaseModel):
     text: str
     leverage: Leverage
+    modules: list[str] = Field(default_factory=list)  # concrete modules the leverage reaches (grounds it)
 
 
 class Challenge(BaseModel):
@@ -592,6 +593,8 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
                 print(f"  {label}")
                 for o in group:
                     print(_bullet(o.text, marker="◆", indent="    "))
+                    if o.modules:
+                        print(f"        ↳ reaches: {', '.join(o.modules)}")
 
     if brief.next_steps:
         print("\nRECOMMENDED NEXT STEPS")

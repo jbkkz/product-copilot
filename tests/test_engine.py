@@ -15,6 +15,8 @@ from src.engine import (
     DesignDecision,
     EngineOutput,
     Epic,
+    Leverage,
+    Opportunity,
     ReleaseNotes,
     Slot,
     _extract_json,
@@ -311,3 +313,28 @@ def test_render_brief_titles_solution_assessment_and_shows_challenges():
     assert "✓ Draft-first invoices reviewed before issuance" in text
     assert "Why" in text and "Tradeoff" in text
     assert "✓ Amount sourced from the Contract" in text
+
+
+def test_render_brief_opportunity_names_reached_modules():
+    model = {"real_problem": slot(80, "explicit", "high")}
+    brief = Brief(
+        problem="P",
+        solution="S",
+        complexity="high",
+        opportunities=[
+            Opportunity(
+                text="Generalize the approval circuit.",
+                leverage=Leverage.high,
+                modules=["Absence", "Contracts", "Missions"],
+            ),
+            Opportunity(text="Add a dashboard later.", leverage=Leverage.future),  # no modules
+        ],
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        render_brief(out(model), brief)
+    text = buf.getvalue()
+    # a grounded opportunity names the modules it reaches; an ungrounded one shows no ↳ line
+    assert "↳ reaches: Absence, Contracts, Missions" in text
+    assert "Add a dashboard later." in text
+    assert text.count("↳ reaches:") == 1
