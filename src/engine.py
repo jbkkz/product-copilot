@@ -16,8 +16,84 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from product_copilot.paths import ROOT
 
 load_dotenv()
+
+# ── Re-exported from the package (compat shim) ──
+from product_copilot.core.contracts import (
+    AcceptanceCriteria,
+    Brief,
+    Challenge,
+    Complexity,
+    Confidence,
+    DesignDecision,
+    EngineOutput,
+    Epic,
+    EpicIssue,
+    EstimateDraft,
+    EstimateItem,
+    Feature,
+    Impact,
+    Level,
+    Leverage,
+    Opportunity,
+    PRD,
+    Priority,
+    Question,
+    ReleaseNotes,
+    Requirement,
+    SOFT_COMPLETENESS,
+    Scenario,
+    ScenarioKind,
+    Slot,
+    Stories,
+    Story,
+    Summary,
+)
+from product_copilot.core.analysis import (
+    _is_deferred,
+    _label,
+    _readiness_blockers,
+    _slot_meta,
+    _state_of,
+    estimate_confidence,
+    soft_slots,
+)
+from product_copilot.core.llm import (
+    _complete,
+    _extract_json,
+    _first_text,
+    build_prompt,
+    load_context,
+)
+from product_copilot.core.discovery import (
+    run,
+)
+from product_copilot.core.persistence import (
+    _slug,
+    load_model,
+    save_model,
+    write_artifact,
+)
+from product_copilot.core.adapters import (
+    EPIC_EXPORT_FORMAT,
+    EPIC_EXPORT_VERSION,
+    epic_export,
+    epic_export_json,
+    to_github,
+    to_github_json,
+    to_gitlab,
+    to_gitlab_json,
+)
+from product_copilot.core.generators import (
+    advise,
+    derive_stories,
+    estimate,
+    generate_criteria,
+    generate_epic,
+    generate_prd,
+    generate_release,
+)
+
 MAX_TURNS = 8
-SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),
@@ -25,462 +101,17 @@ STATE_ROWS = [
     ("unknown", "⚪ Unknown"),
 ]
 
-
-# ── Output contracts ────────────────────────────────────────────────────────
-# Pydantic validates every model reply at the boundary. Rename a slot or a key
-# and validation fails loudly in _complete() instead of silently mis-rendering.
-
-
-class Confidence(str, Enum):
-    explicit = "explicit"
-    inferred = "inferred"
-    empty = "empty"
-
-
-class Impact(str, Enum):
-    low = "low"
-    medium = "medium"
-    high = "high"
-
-
-class Level(str, Enum):
-    low = "low"
-    medium = "medium"
-    high = "high"
-
-
-class Slot(BaseModel):
-    completeness: int = Field(ge=0, le=100)
-    confidence: Confidence
-    impact: Impact
-    value: str = ""
-    evidence: str = ""
-
-
-class Question(BaseModel):
-    q: str
-    slot: str
-    why: str
-
-
-class Summary(BaseModel):
-    objective: str = ""
-    scope: str = ""
-    assumptions: list[str] = Field(default_factory=list)
-    blind_spot: str = ""
-
-
-class EngineOutput(BaseModel):
-    # protected_namespaces=() lets us keep the field literally named `model`.
-    model_config = ConfigDict(protected_namespaces=())
-    model: dict[str, Slot]
-    questions: list[Question] = Field(default_factory=list)
-    summary: Summary
-
-
-class Story(BaseModel):
-    id: str
-    title: str
-    as_a: str = ""
-    i_want: str = ""
-    so_that: str = ""
-    acceptance: list[str] = Field(default_factory=list)
-    slots: list[str] = Field(default_factory=list)
-
-
-class Stories(BaseModel):
-    stories: list[Story]
-
-
-class Complexity(str, Enum):
-    S = "S"
-    M = "M"
-    L = "L"
-
-
-class EstimateItem(BaseModel):
-    story_id: str
-    title: str
-    complexity: Complexity
-    days_low: float = Field(ge=0)
-    days_high: float = Field(ge=0)
-    drives: list[str] = Field(default_factory=list)
-    note: str = ""
-
-
-class EstimateDraft(BaseModel):
-    # What the LLM produces. Totals, confidence and spread_drivers are computed in Python
-    # (from real slot data) so they can't be hallucinated.
-    items: list[EstimateItem]
-    risks: list[str] = Field(default_factory=list)
-
-
-class Leverage(str, Enum):
-    high = "high"
-    medium = "medium"
-    future = "future"
-
-
-class Opportunity(BaseModel):
-    text: str
-    leverage: Leverage
-    modules: list[str] = Field(default_factory=list)  # concrete modules the leverage reaches (grounds it)
-
-
-class Challenge(BaseModel):
-    # Not "what did we learn" but "what should we contest" — the senior-PM pushback on the premise.
-    headline: str          # 3–6 words naming the thing being challenged
-    premise: str           # the assumption the request takes for granted
-    alternative: str       # a concrete, domain-grounded alternative worth weighing
-    consequence: str       # what the current premise risks or costs
-    recommendation: str    # what to do about it before build
-
-
-class DesignDecision(BaseModel):
-    # A settled decision. why/alternative/tradeoff are filled only where there was a real fork —
-    # trivial sourcing facts stay a bare `decision` line.
-    decision: str          # what was decided
-    why: str = ""          # the rationale
-    alternative: str = ""  # what was weighed instead
-    tradeoff: str = ""     # the cost accepted for this choice
-
-
-class Brief(BaseModel):
-    # The advisory layer: what a senior consultant would add on top of the discovery.
-    problem: str = ""                                   # one-line problem statement (exec summary)
-    solution: str = ""                                  # one-line solution statement (exec summary)
-    introduces: list[str] = Field(default_factory=list)
-    challenges: list[Challenge] = Field(default_factory=list)  # premises worth contesting before build
-    complexity: Level
-    complexity_reasons: list[str] = Field(default_factory=list)  # the "because …" behind the verdict
-    cost_driver: str = ""
-    risks: list[str] = Field(default_factory=list)
-    opportunities: list[Opportunity] = Field(default_factory=list)  # ranked by leverage
-    next_steps: list[str] = Field(default_factory=list)
-    decisions: list[DesignDecision] = Field(default_factory=list)  # settled decisions, with tradeoffs
-    open_decisions: list[str] = Field(default_factory=list)  # decisions still to make
-
-
-class Priority(str, Enum):
-    must = "must"
-    should = "should"
-    could = "could"
-
-
-class Requirement(BaseModel):
-    id: str
-    requirement: str
-    priority: Priority
-
-
-class PRD(BaseModel):
-    title: str
-    summary: str = ""
-    problem: str = ""
-    goals: list[str] = Field(default_factory=list)
-    users: list[str] = Field(default_factory=list)
-    in_scope: list[str] = Field(default_factory=list)
-    out_of_scope: list[str] = Field(default_factory=list)
-    requirements: list[Requirement] = Field(default_factory=list)
-    workflow: list[str] = Field(default_factory=list)
-    business_rules: list[str] = Field(default_factory=list)
-    permissions: list[str] = Field(default_factory=list)
-    integrations: list[str] = Field(default_factory=list)
-    edge_cases: list[str] = Field(default_factory=list)
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-
-
-class ScenarioKind(str, Enum):
-    happy_path = "happy_path"
-    edge_case = "edge_case"
-    error = "error"
-    permission = "permission"
-
-
-class Scenario(BaseModel):
-    id: str
-    title: str
-    kind: ScenarioKind = ScenarioKind.happy_path
-    given: list[str] = Field(default_factory=list)
-    when: str = ""
-    then: list[str] = Field(default_factory=list)
-
-
-class Feature(BaseModel):
-    name: str
-    scenarios: list[Scenario] = Field(default_factory=list)
-
-
-class AcceptanceCriteria(BaseModel):
-    title: str
-    features: list[Feature] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-
-
-class EpicIssue(BaseModel):
-    id: str
-    title: str
-    description: str = ""
-    labels: list[str] = Field(default_factory=list)
-    depends_on: list[str] = Field(default_factory=list)
-
-
-class Epic(BaseModel):
-    title: str
-    goal: str = ""
-    business_value: str = ""
-    in_scope: list[str] = Field(default_factory=list)
-    out_of_scope: list[str] = Field(default_factory=list)
-    milestone: str = ""
-    issues: list[EpicIssue] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-
-
-class ReleaseNotes(BaseModel):
-    title: str
-    version: str = ""
-    summary: str = ""
-    highlights: list[str] = Field(default_factory=list)
-    known_limitations: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-
-
-# ── Schema metadata (slot → pillar / label) ─────────────────────────────────
-
-
-@functools.lru_cache(maxsize=1)
-def _slot_meta() -> tuple[dict, dict]:
-    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
-    return ({s["id"]: s["pillar"] for s in slots}, {s["id"]: s["label"] for s in slots})
-
-
-def _label(slot_id: str) -> str:
-    return _slot_meta()[1].get(slot_id, slot_id)
-
-
-# ── Prompt assembly ─────────────────────────────────────────────────────────
-
-
-def load_context() -> str:
-    cards = []
-    for path in sorted((ROOT / "context").glob("*.md")):
-        if path.name.startswith("_"):
-            continue
-        cards.append(f"## {path.stem}\n{path.read_text()}")
-    return "\n\n".join(cards)
-
-
-def build_prompt(name: str) -> str:
-    """Load a prompt file and inject the schema + product context."""
-    schema = (ROOT / "framework" / "model_schema.json").read_text()
-    text = (ROOT / "prompts" / name).read_text()
-    return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context())
-
-
-# ── Model call (shared) ─────────────────────────────────────────────────────
-
-
-def _first_text(resp) -> str:
-    """First text block of the response — skips thinking/tool_use blocks."""
-    for block in resp.content:
-        if getattr(block, "type", None) == "text":
-            return block.text
-    return ""
-
-
-def _extract_json(text: str) -> dict:
-    """Best-effort JSON extraction: strip a ```json fence, else slice { … }."""
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    if not text.startswith("{"):
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("no JSON object found in the reply")
-        text = text[start : end + 1]
-    return json.loads(text)
-
-
-def _complete(client: Anthropic, system: str, messages: list[dict], out_model, retries: int = 2):
-    """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
-    The nudge lives in a local copy so the caller's clean history is never polluted."""
-    attempt = messages
-    last_err = None
-    for _ in range(retries + 1):
-        resp = client.messages.create(
-            model=os.getenv("MODEL", "claude-sonnet-5"),
-            max_tokens=4000,
-            system=system,
-            messages=attempt,
-        )
-        raw = _first_text(resp)
-        try:
-            return out_model.model_validate(_extract_json(raw))
-        except (json.JSONDecodeError, ValueError, ValidationError) as e:
-            last_err = e
-            attempt = attempt + [
-                {"role": "assistant", "content": raw or "(empty)"},
-                {"role": "user", "content": f"Your reply did not match the required schema ({e}). Reply with ONLY the JSON object, no prose, no code fence."},
-            ]
-    raise RuntimeError(f"No schema-valid JSON after {retries + 1} attempts: {last_err}")
-
-
-def run(client: Anthropic, messages: list[dict], retries: int = 2) -> EngineOutput:
-    """Engine turn: request/answers → filled model."""
-    return _complete(client, build_prompt("engine.md"), messages, EngineOutput, retries)
-
-
-# ── Model persistence (the model is the product; artifacts are views of it) ──
-
-
-def _slug(text: str) -> str:
-    words = re.findall(r"[a-z0-9]+", text.lower())[:5]
-    return "-".join(words) or "discovery"
-
-
-def save_model(out: EngineOutput, slug: str) -> Path:
-    """Persist the model — the durable product. Every artifact is regenerated from this file."""
-    folder = ROOT / "out" / slug
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / "model.json"
-    path.write_text(out.model_dump_json(indent=2))
-    return path
-
-
-def load_model(path: Path) -> EngineOutput:
-    """Load a saved model so artifacts can be regenerated without redoing discovery."""
-    return EngineOutput.model_validate_json(path.read_text())
-
-
-def write_artifact(slug: str, filename: str, content: str) -> Path:
-    """Write a generated artifact next to its model in out/<slug>/."""
-    folder = ROOT / "out" / slug
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / filename
-    path.write_text(content)
-    return path
-
-
-def derive_stories(client: Anthropic, out: EngineOutput) -> Stories:
-    """Pipeline stage: a filled model → implementable user stories."""
-    system = build_prompt("stories.md")
-    user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Stories)
-
-
-def advise(client: Anthropic, out: EngineOutput) -> Brief:
-    """Finalization stage: a completed model → design considerations, risks, opportunities."""
-    system = build_prompt("brief.md")
-    user = "Completed requirements model to advise on:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Brief)
-
-
-def generate_prd(client: Anthropic, out: EngineOutput) -> PRD:
-    """Artifact generator: a model → a Product Requirements Document."""
-    system = build_prompt("prd.md")
-    user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], PRD)
-
-
-def generate_criteria(client: Anthropic, out: EngineOutput) -> AcceptanceCriteria:
-    """Artifact generator: a model → Given/When/Then acceptance criteria (the recette checklist)."""
-    system = build_prompt("criteria.md")
-    user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria)
-
-
-def generate_epic(client: Anthropic, out: EngineOutput) -> Epic:
-    """Artifact generator: a model → a delivery epic (work breakdown into trackable issues)."""
-    system = build_prompt("epic.md")
-    user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Epic)
-
-
-def generate_release(client: Anthropic, out: EngineOutput, version: str = "") -> ReleaseNotes:
-    """Artifact generator: a model → client-facing release notes. The caller may stamp a version."""
-    system = build_prompt("release.md")
-    user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json(indent=2)
-    notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes)
-    if version:
-        notes.version = version
-    return notes
-
-
-def soft_slots(out: EngineOutput) -> list[str]:
-    """Slots that still carry real uncertainty AND move the solution — the objective drivers of
-    the estimate spread. Soft = medium/high impact and (low completeness or not yet explicit)."""
-    soft = []
-    for slot_id, s in out.model.items():
-        if s.impact in (Impact.medium, Impact.high) and (
-            s.completeness < SOFT_COMPLETENESS or s.confidence is not Confidence.explicit
-        ):
-            soft.append(slot_id)
-    return soft
-
-
-def estimate_confidence(n_soft: int) -> str:
-    """Estimate confidence derived from how many high-impact slots are still soft."""
-    if n_soft <= 1:
-        return "high"
-    if n_soft <= 3:
-        return "medium"
-    return "low"
-
-
-def estimate(client: Anthropic, out: EngineOutput, stories: Stories) -> tuple[EstimateDraft, list[str], str]:
-    """Pipeline stage: stories + the model's soft slots → a day-based estimate.
-    Returns (draft, soft_slots, confidence) — the latter two are Python-authoritative."""
-    soft = soft_slots(out)
-    system = build_prompt("estimate.md")
-    user = (
-        "User stories to estimate:\n"
-        + stories.model_dump_json(indent=2)
-        + "\n\nUnresolved (soft) slots — widen the range for any story that depends on one:\n"
-        + (", ".join(soft) if soft else "(none — the model is solid)")
-    )
-    draft = _complete(client, system, [{"role": "user", "content": user}], EstimateDraft)
-    return draft, soft, estimate_confidence(len(soft))
-
-
-# ── Rendering ───────────────────────────────────────────────────────────────
-
-
 def _wrap(text: str, indent: str = "  ", width: int = 80) -> str:
     return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
-
 
 def _bullet(text: str, marker: str = "•", indent: str = "  ", width: int = 80) -> str:
     return textwrap.fill(
         text, width=width, initial_indent=f"{indent}{marker} ", subsequent_indent=f"{indent}  "
     )
 
-
 def _labeled(label: str, text: str, lw: int = 9, width: int = 80, indent: str = "  ") -> str:
     prefix = f"{indent}{label:<{lw}} "
     return textwrap.fill(text, width=width, initial_indent=prefix, subsequent_indent=" " * len(prefix))
-
-
-def _is_deferred(s: Slot) -> bool:
-    """Low-impact, unfilled slots are intentionally parked, not weaknesses."""
-    return s.impact is Impact.low and s.completeness < SOFT_COMPLETENESS
-
-
-def _readiness_blockers(out: EngineOutput) -> list[str]:
-    """High-impact slots not yet explicitly confirmed — what stands between here and build."""
-    return [sid for sid, s in out.model.items() if s.impact is Impact.high and s.confidence is not Confidence.explicit]
-
-
-def _state_of(s: Slot) -> str:
-    if s.confidence is Confidence.explicit:
-        return "confirmed"
-    if s.confidence is Confidence.inferred:
-        return "inferred"
-    return "unknown"
-
 
 def render_understanding(out: EngineOutput) -> None:
     print("UNDERSTANDING")
@@ -488,7 +119,6 @@ def render_understanding(out: EngineOutput) -> None:
         names = [_label(sid) for sid, s in out.model.items() if _state_of(s) == state]
         if names:
             print(textwrap.fill(" · ".join(names), width=80, initial_indent=f"  {label}   ", subsequent_indent=" " * 15))
-
 
 def render_readiness(out: EngineOutput) -> None:
     print("READY FOR IMPLEMENTATION?")
@@ -505,7 +135,6 @@ def render_readiness(out: EngineOutput) -> None:
     if gaps:
         print(_labeled("Remaining gaps", ", ".join(gaps), lw=20))
 
-
 def render_turn(out: EngineOutput) -> None:
     """Lightweight per-turn view: what's understood + what's being asked."""
     print()
@@ -518,7 +147,6 @@ def render_turn(out: EngineOutput) -> None:
         for i, q in enumerate(out.questions, 1):
             print(f"  {i}. {q.q}")
             print(f"     → {_label(q.slot)}")
-
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:
     """The deliverable: a two-tier solution assessment — an executive summary a PM reads in seconds,
@@ -605,7 +233,6 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     print()
     render_readiness(out)
 
-
 def render_stories(s: Stories) -> None:
     print("\n=== USER STORIES ===")
     for st in s.stories:
@@ -616,7 +243,6 @@ def render_stories(s: Stories) -> None:
             print(f"  ✓ {ac}")
         if st.slots:
             print(f"  ↳ from: {', '.join(st.slots)}")
-
 
 def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> None:
     total_low = sum(i.days_low for i in draft.items)
@@ -634,7 +260,6 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
         print("Risks / unknowns:")
         for r in draft.risks:
             print(f"  - {r}")
-
 
 def prd_markdown(prd: PRD) -> str:
     """Render a PRD as a clean, shareable Markdown document."""
@@ -678,14 +303,12 @@ def prd_markdown(prd: PRD) -> str:
 
     return "\n".join(out).rstrip() + "\n"
 
-
 _KIND_TAG = {
     ScenarioKind.happy_path: "Happy path",
     ScenarioKind.edge_case: "Edge case",
     ScenarioKind.error: "Error",
     ScenarioKind.permission: "Permission",
 }
-
 
 def criteria_markdown(ac: AcceptanceCriteria) -> str:
     """Render acceptance criteria as a Given/When/Then Markdown checklist for recette."""
@@ -708,7 +331,6 @@ def criteria_markdown(ac: AcceptanceCriteria) -> str:
         out += ["## Open questions", "", *[f"- {q}" for q in ac.open_questions], ""]
 
     return "\n".join(out).rstrip() + "\n"
-
 
 def epic_markdown(epic: Epic) -> str:
     """Render a delivery epic as Markdown: goal, scope, then a checklist of trackable issues."""
@@ -745,159 +367,6 @@ def epic_markdown(epic: Epic) -> str:
 
     return "\n".join(out).rstrip() + "\n"
 
-
-EPIC_EXPORT_FORMAT = "product-copilot-epic"
-EPIC_EXPORT_VERSION = 1
-
-
-def epic_export(epic: Epic) -> dict:
-    """A tool-neutral, importable view of an epic — maps cleanly onto GitHub or GitLab issues.
-
-    A stable, versioned envelope an importer (or an n8n flow) can validate and feed to either
-    tracker's API. The epic becomes a tracking issue / GitLab epic; each issue keeps its labels,
-    the shared milestone, and `depends_on` as issue refs so relationships can be wired after create.
-    """
-    description = "\n\n".join(
-        part
-        for part in [
-            epic.goal,
-            f"**Business value:** {epic.business_value}" if epic.business_value else "",
-            ("**In scope:**\n" + "\n".join(f"- {i}" for i in epic.in_scope)) if epic.in_scope else "",
-            ("**Out of scope:**\n" + "\n".join(f"- {i}" for i in epic.out_of_scope)) if epic.out_of_scope else "",
-        ]
-        if part
-    )
-    return {
-        "format": EPIC_EXPORT_FORMAT,
-        "version": EPIC_EXPORT_VERSION,
-        "epic": {
-            "title": epic.title,
-            "description": description,
-            "labels": ["epic"],
-            "milestone": epic.milestone,
-        },
-        "issues": [
-            {
-                "ref": issue.id,
-                "title": issue.title,
-                "description": issue.description,
-                "labels": issue.labels,
-                "milestone": epic.milestone,
-                "depends_on": issue.depends_on,
-            }
-            for issue in epic.issues
-        ],
-        "open_questions": epic.open_questions,
-    }
-
-
-def epic_export_json(epic: Epic) -> str:
-    return json.dumps(epic_export(epic), indent=2) + "\n"
-
-
-def to_github(export: dict, slug: str) -> dict:
-    """Adapter: neutral epic export → a GitHub issue-creation plan (pure, no network).
-
-    An automation (e.g. an n8n flow) creates the child issues first, then the tracking issue.
-    GitHub has no native epic or issue dependency, so we degrade honestly: the epic becomes a
-    tracking issue with a task list, and `depends_on` is stated in each issue body. Every issue
-    carries an idempotency label (`pc-epic:<slug>`) so a re-run can find-then-skip existing issues
-    instead of duplicating. `milestone` is a name — the automation resolves it to GitHub's numeric id.
-    """
-    label = f"pc-epic:{slug}"
-    title_by_ref = {i["ref"]: i["title"] for i in export["issues"]}
-    epic_title = export["epic"]["title"]
-
-    def child_body(issue: dict) -> str:
-        parts = [issue["description"]] if issue["description"] else []
-        deps = [title_by_ref.get(ref, ref) for ref in issue.get("depends_on", [])]
-        if deps:
-            parts.append("**Depends on:** " + ", ".join(deps))
-        parts.append(f"_Part of epic: {epic_title}_")
-        return "\n\n".join(parts)
-
-    task_list = "\n".join(f"- [ ] {i['title']}" for i in export["issues"])
-    tracking_body = (export["epic"]["description"] + "\n\n### Issues\n\n" + task_list).strip()
-
-    return {
-        "target": "github",
-        "idempotency_label": label,
-        "tracking_issue": {
-            "title": f"Epic: {epic_title}",
-            "body": tracking_body,
-            "labels": export["epic"]["labels"] + [label],
-            "milestone": export["epic"]["milestone"],
-        },
-        "issues": [
-            {
-                "ref": issue["ref"],
-                "title": issue["title"],
-                "body": child_body(issue),
-                "labels": issue["labels"] + [label],
-                "milestone": issue["milestone"],
-            }
-            for issue in export["issues"]
-        ],
-    }
-
-
-def to_github_json(epic: Epic, slug: str) -> str:
-    return json.dumps(to_github(epic_export(epic), slug), indent=2) + "\n"
-
-
-def to_gitlab(export: dict, slug: str) -> dict:
-    """Adapter: neutral epic export → a GitLab issue-creation plan (pure, no network).
-
-    GitLab maps more faithfully than GitHub: `depends_on` becomes structured issue `links`
-    (`blocks`) an automation wires after create — not body text. Native Epics are Premium-only, so
-    for portability the epic is a tracking issue with a task list on any tier. Each issue carries the
-    `pc-epic:<slug>` idempotency label; `milestone` is a name the automation resolves to its id.
-    """
-    label = f"pc-epic:{slug}"
-    epic_title = export["epic"]["title"]
-
-    def child_description(issue: dict) -> str:
-        parts = [issue["description"]] if issue["description"] else []
-        parts.append(f"_Part of epic: {epic_title}_")
-        return "\n\n".join(parts)
-
-    task_list = "\n".join(f"- [ ] {i['title']}" for i in export["issues"])
-    tracking_description = (export["epic"]["description"] + "\n\n### Issues\n\n" + task_list).strip()
-
-    # depends_on: the dependency blocks the dependent issue. Wire as GitLab issue links after create.
-    links = [
-        {"source_ref": ref, "target_ref": issue["ref"], "type": "blocks"}
-        for issue in export["issues"]
-        for ref in issue.get("depends_on", [])
-    ]
-
-    return {
-        "target": "gitlab",
-        "idempotency_label": label,
-        "tracking_issue": {
-            "title": f"Epic: {epic_title}",
-            "description": tracking_description,
-            "labels": export["epic"]["labels"] + [label],
-            "milestone": export["epic"]["milestone"],
-        },
-        "issues": [
-            {
-                "ref": issue["ref"],
-                "title": issue["title"],
-                "description": child_description(issue),
-                "labels": issue["labels"] + [label],
-                "milestone": issue["milestone"],
-            }
-            for issue in export["issues"]
-        ],
-        "links": links,
-    }
-
-
-def to_gitlab_json(epic: Epic, slug: str) -> str:
-    return json.dumps(to_gitlab(epic_export(epic), slug), indent=2) + "\n"
-
-
 def release_markdown(rn: ReleaseNotes) -> str:
     """Render client-facing release notes as a clean, shareable Markdown announcement."""
     heading = f"# {rn.title}" + (f" — {rn.version}" if rn.version else "")
@@ -914,10 +383,6 @@ def release_markdown(rn: ReleaseNotes) -> str:
     section("Before you start", [f"- {n}" for n in rn.notes])
 
     return "\n".join(out).rstrip() + "\n"
-
-
-# ── Multi-turn loop ─────────────────────────────────────────────────────────
-
 
 def converse(client: Anthropic, request: str) -> EngineOutput | None:
     """Fill the model, ask, feed answers back, until no high-value question remains.
@@ -959,17 +424,12 @@ def converse(client: Anthropic, request: str) -> EngineOutput | None:
 
     return out
 
-
-# ── Entry point ─────────────────────────────────────────────────────────────
-
-
 def _flag_value(args: list[str], name: str) -> str | None:
     if name in args:
         i = args.index(name)
         if i + 1 < len(args):
             return args[i + 1]
     return None
-
 
 def main() -> None:
     args = sys.argv[1:]
@@ -1062,7 +522,6 @@ def main() -> None:
         path = write_artifact(slug, "release-notes.md", markdown)
         print(markdown)
         print(f"\nWrote release notes → {path}")
-
 
 if __name__ == "__main__":
     main()

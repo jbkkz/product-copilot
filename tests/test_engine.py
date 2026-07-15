@@ -45,7 +45,6 @@ from src.engine import (
     to_gitlab,
     write_artifact,
 )
-import src.engine as engine
 
 
 def slot(completeness, confidence, impact):
@@ -470,8 +469,10 @@ def test_load_context_includes_real_cards_and_skips_underscore():
 
 
 def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
-    # NOTE: references engine.ROOT — this monkeypatch target moves to paths.ROOT in commit 1.
-    monkeypatch.setattr(engine, "ROOT", tmp_path)
+    # load_context reads ROOT from its own module (core.llm after the split).
+    from product_copilot.core import llm
+
+    monkeypatch.setattr(llm, "ROOT", tmp_path)
     (tmp_path / "context").mkdir()
     (tmp_path / "context" / "_only_template.md").write_text("skip me")
     assert load_context() == ""
