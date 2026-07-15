@@ -92,7 +92,7 @@ none of the engine's internals leak through.
 ## Example
 
 ```bash
-python src/engine.py "We'd like to set up a leave approval system."
+pc discover "We'd like to set up a leave approval system."
 ```
 
 From that one sentence, on a platform whose context says *"approval usually hides a balance check
@@ -119,7 +119,7 @@ Each of these — plus user stories, an estimate, acceptance criteria and releas
 from the same `model.json`. That's the whole idea:
 
 ```bash
-python src/engine.py --from examples/leave-approval/model.json --prd    # regenerate prd.md
+pc prd examples/leave-approval/model.json    # regenerate prd.md from the saved model
 ```
 
 ---
@@ -139,17 +139,29 @@ estimated from the product context, so the engine is only as sharp as the contex
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .              # installs deps + the `pc` command
 cp .env.example .env          # set ANTHROPIC_API_KEY
-python src/engine.py examples/case1_leave.md
+pc discover examples/case1_leave.md
 ```
 
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
-answers back in — then writes `out/<slug>/model.json` and produces the brief. Add `--prd`,
-`--stories`, `--estimate`, `--criteria`, `--epic`, `--epic-json` (a tool-neutral,
-GitHub/GitLab-importable export), `--epic-github` / `--epic-gitlab` (ready-to-run tracker issue
-plans), or `--release` to generate more artifacts; `--from out/<slug>/model.json` regenerates any of
-them without redoing discovery.
+answers back in — then writes `out/<slug>/model.json` and produces the solution assessment.
+Regenerate any deliverable from a saved model without redoing discovery:
+
+```bash
+pc prd   out/<slug>/model.json                       # also: stories · estimate · criteria · release · brief
+pc epic  out/<slug>/model.json --github --gitlab     # + a tool-neutral epic.json and tracker issue plans
+```
+
+### Two interfaces, one engine
+
+The product is the engine; the interfaces are thin layers over the same `product_copilot` core.
+
+- **Terminal** — `pc <command>` (or `python pc.py <command>` with no install).
+- **Claude Code** — `/pc-discover`, `/pc-status`, `/pc-generate`, `/pc-help` wrap the same CLI.
+
+The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
+unchanged.
 
 ---
 
@@ -180,8 +192,11 @@ Better context → sharper impact estimates → better questions. Files prefixed
 - Tracker adapters — idempotent, n8n-ready issue-creation plans for GitHub (`epic.github.json`) and
   GitLab (`epic.gitlab.json`, with structured issue links)
 - The model as a durable product (`model.json`), regenerable via `--from`
+- Two interfaces over one presentation-free engine — a `pc` subcommand CLI and Claude Code slash
+  commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
 
 **Upcoming**
+- An HTTP API / MCP façade — another thin layer over the same core (for n8n and future web UIs)
 - Jira adapter, alongside GitHub and GitLab
 - Delivery integrations — authenticated push (via n8n), Notion and Confluence
 - Context tooling — validation and assisted generation of product context cards

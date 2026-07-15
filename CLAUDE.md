@@ -14,21 +14,49 @@ output — is in English.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # installs deps + the `pc` command (needs pip>=21.3 / setuptools>=61)
 cp .env.example .env      # then set ANTHROPIC_API_KEY (MODEL defaults to claude-sonnet-5)
-python src/engine.py "We'd like to set up a leave approval system."
-python src/engine.py examples/case1_leave.md   # a file path is read as the request; otherwise the arg is the request itself
-python src/engine.py --once examples/case1_leave.md   # single pass, no interactive loop
+
+pc discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json
+pc status  out/<slug>/model.json                              # understanding checklist + readiness
+pc prd     out/<slug>/model.json                              # regenerate any artifact from a saved model
 ```
 
-Run the tests with `.venv/bin/python -m pytest tests/ -q` (pure-logic units, no API calls). The whole
-runner is `src/engine.py`; there's no build step. A complete worked example lives in
+`pc` is the modern subcommand CLI: `discover`, `status`, `brief`, `prd`, `stories`, `estimate`,
+`criteria`, `epic` (`--json/--github/--gitlab`), `release`. Without an install, `python pc.py <cmd>`
+(a repo-root launcher that puts `src/` on the path) is equivalent — this is what the Claude Code
+`/pc-*` commands call. The **legacy flag CLI is preserved**: `python src/engine.py "…" [--once]
+[--prd] [--stories] …` and `python src/engine.py --from out/<slug>/model.json --prd` still work
+identically (`src/engine.py` is now a backward-compat shim).
+
+Run the tests with `.venv/bin/python -m pytest tests/ -q` (pure-logic + offline CLI units via an
+injected fake client, no API calls); there's no build step. A complete worked example lives in
 `examples/leave-approval/` (request → model.json → brief → PRD).
 
 ## Architecture
 
 The engine is a **single Anthropic call** (per turn) whose intelligence lives entirely in assembled
-prompt data, not in Python. `src/engine.py` is a thin runner:
+prompt data, not in Python. The code is the `product_copilot` package (under `src/`); the historical
+`src/engine.py` is now a backward-compat shim re-exporting it. The layers form a DAG — **`core/`
+never prints and never reads argv; `render/` turns data into strings; `cli.py` is the only layer that
+touches argv/stdout/TTY** — so every interface (terminal `pc`, the Claude Code `/pc-*` wrappers in
+`.claude/commands/`, and later an API or MCP) is a thin layer over the same core, never a second
+implementation:
+
+```
+product_copilot/
+  paths.py         ROOT — single source of truth for asset/output resolution
+  core/            the engine (presentation-free)
+    contracts.py     Pydantic models + enums          llm.py         prompt assembly + _complete
+    analysis.py      Python-authoritative model logic  discovery.py   run() (the engine turn)
+    persistence.py   save/load_model, write_artifact   adapters.py    epic_export + GitHub/GitLab
+    generators.py    advise, derive_stories, estimate, generate_*
+  render/            views (data → str/stdout, no side effects)
+    markdown.py      *_markdown                         terminal.py    render_*
+  cli.py           argparse `pc` subcommands (app()) + the legacy flag main()
+```
+
+The runner is a thin dispatch:
 
 1. `build_prompt(name)` loads a prompt file (`engine.md`, `stories.md`, `estimate.md`, `brief.md`)
    and substitutes two placeholders:
@@ -111,10 +139,12 @@ via `prd_markdown()` + `write_artifact()`), `criteria.md`/`AcceptanceCriteria`/`
 `depends_on` → `out/<slug>/epic.md` via `epic_markdown()`),
 `release.md`/`ReleaseNotes`/`generate_release()` (client-facing release notes → `out/<slug>/release-notes.md`
 via `release_markdown()`; `generate_release()` takes an optional `version` the CLI stamps from
-`--release [version]`). Adding one (test plan, more exports) = those four pieces, plus a `--flag` in
-`main()`. Any generator whose text is user-facing must carry the **Voice** rule (no slot ids /
-percentages / confidence labels in prose). CLI flags: `--stories`, `--estimate`, `--prd`, `--criteria`,
-`--epic`, `--release`.
+`--release [version]`). Adding one (test plan, more exports) = those four pieces (in `core/generators.py`
++ `render/markdown.py`), plus wiring in `cli.py`: a `pc` subcommand in `_build_parser()` and a legacy
+`--flag` in `main()`. Any generator whose text is user-facing must carry the **Voice** rule (no slot
+ids / percentages / confidence labels in prose). `pc` subcommands: `discover`, `status`, `brief`,
+`prd`, `stories`, `estimate`, `criteria`, `epic`, `release`; legacy flags: `--stories`, `--estimate`,
+`--prd`, `--criteria`, `--epic`, `--release`.
 
 A generator can also have **more than one writer** on the same contract — a second *view* of the same
 LLM output, no extra model call. `Epic` has several: `epic_markdown()` (human) and `epic_export_json()`
