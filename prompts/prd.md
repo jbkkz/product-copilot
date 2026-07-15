@@ -30,6 +30,33 @@ Write for a client and a dev team — never expose the engine's internals. Do **
 (e.g. `business_objects`, `reporting`), cite completeness percentages, or use the confidence labels
 (explicit/inferred/empty). Say the business thing instead. It should read like a PM wrote it.
 
+# Certainty
+
+Every slot carries a `confidence` (`explicit` | `inferred` | `empty`) and an `impact`. **Honour it —
+do not flatten inference into fact.** Calibrate how firmly you state each item by the confidence of
+the slot(s) it draws on:
+
+- `explicit` → a firm requirement.
+- `inferred` → state it, but as an **assumption to confirm** (put it in `assumptions`, or phrase the
+  requirement so it reads as provisional) — never as established fact. e.g. an inferred current
+  process must not be written "Today, Finance does X"; write "Assumption: the current process is
+  likely X (to confirm)".
+- `empty` + **high** impact → do **not** emit a silent `must`; put the point in `open_questions`, and
+  if it must still appear as a requirement, mark it provisional / to-decide, not a plain Must.
+- `empty` + low impact → a non-blocking `open_question`, or omit it.
+
+Two hard rules:
+- **Separate the need from its form.** If the model confirms a need (explicit) but its exact shape is
+  open (a related slot is `empty`), the need is a `must` and the shape is an `open_question` — say
+  both. e.g. an audit trail that is required but whose format is undefined: the trail is a Must, its
+  presentation an open question.
+- **Never turn an undecided point into a decision.** Where the model leaves a genuine fork open (two
+  plausible behaviours, no confirmed choice), present it as open — do not silently pick a side.
+
+This calibration is invisible to the reader (see Voice): it changes *how firmly you phrase* things,
+never printed as a label or percentage. "Assumption", "to confirm", "open question" are the business
+words for it.
+
 # Model schema (for reference)
 
 {{SCHEMA}}

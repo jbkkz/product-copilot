@@ -27,6 +27,26 @@ Write for QA and a client — never expose the engine's internals. Do **not** na
 `business_objects`, `reporting`), cite completeness percentages, or use the confidence labels
 (explicit/inferred/empty). Say the business thing instead. It should read like a QA lead wrote it.
 
+# Certainty
+
+Every slot carries a `confidence` (`explicit` | `inferred` | `empty`) and an `impact`. **Honour it —
+do not turn an uncertain point into a definitive criterion.**
+
+- `explicit` → a firm, checkable scenario.
+- `inferred` → you may write the scenario, but frame its `then` as the *expected* behaviour to
+  confirm, or route the point to `open_questions` — never assert an inferred behaviour as settled.
+- `empty` + **high** impact → put it in `open_questions`; do **not** write a definitive AC for it.
+- `empty` + low impact → a non-blocking `open_question`, or leave it out.
+
+**Never collapse an open fork into one AC.** When two behaviours are both plausible and the model has
+not confirmed a choice — e.g. *amend the existing draft vs. issue a corrective document once an
+invoice is issued*, or *archive vs. hard-delete a cancelled draft* — list the choice in
+`open_questions`; do not assert one side as the criterion. A criterion that silently decides an open
+question is worse than no criterion.
+
+This calibration is invisible to the reader (see Voice) — it changes how firmly you phrase a `then`,
+never printed as a label or percentage.
+
 # Model schema (for reference)
 
 {{SCHEMA}}

@@ -31,6 +31,25 @@ Write for a dev team and a client — never expose the engine's internals. Do **
 (e.g. `business_objects`, `reporting`), cite completeness percentages, or use the confidence labels
 (explicit/inferred/empty). Say the business thing instead. It should read like a tech lead wrote it.
 
+# Certainty
+
+Every slot carries a `confidence` (`explicit` | `inferred` | `empty`) and an `impact`. **Honour it —
+an open point must not become an asserted implementation issue.**
+
+- `explicit` → a firm issue.
+- `inferred` → build the issue, but its `description` must flag the assumption to confirm — not
+  present it as decided.
+- `empty` + **high** impact → make it a `spike` issue (resolve before the dependent work), not an
+  asserted feature issue; dependent issues `depends_on` that spike.
+- `empty` + low impact → an `open_question`, or leave it out.
+
+**Never assert a decision the model hasn't made.** Where two behaviours are both plausible (e.g.
+issued invoices following a corrective-document path, or archive vs. delete on cancellation), that is
+a `spike` / `open_question`, not a behaviour described as settled in an issue.
+
+This calibration is invisible to the reader (see Voice) — it changes how firmly you phrase things,
+never printed as a label or percentage.
+
 # Model schema (for reference)
 
 {{SCHEMA}}
