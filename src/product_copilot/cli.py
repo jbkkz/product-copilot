@@ -114,9 +114,9 @@ def main() -> None:
     if not out:
         return
 
-    # The discovery brief is the default deliverable (skipped on a quick --once pass).
+    # The solution assessment is the default deliverable (skipped on a quick --once pass).
     if not quick:
-        print("\nGenerating the discovery brief…")
+        print("\nGenerating the solution assessment…")
         render_brief(out, advise(client, out))
 
     # Delivery pipeline. --estimate implies stories (it estimates them).

@@ -4,9 +4,9 @@
 #   vhs demo.tape             # → writes demo.gif
 #
 # Dependency-free on purpose: it shows the input request and the resulting
-# discovery brief straight from the committed example files — no Python,
+# solution assessment straight from the committed example files — no Python,
 # virtualenv, or API call — so it records identically on any machine.
-# (To re-generate the brief itself: python src/engine.py --from examples/leave-approval/model.json)
+# (To re-generate the assessment itself: pc brief examples/leave-approval/model.json)
 
 Output demo.gif
 
@@ -30,6 +30,6 @@ Type "cat examples/leave-approval/request.md"
 Enter
 Sleep 2s
 
-Type "cat examples/leave-approval/discovery-brief.txt"
+Type "cat examples/leave-approval/solution-assessment.txt"
 Enter
 Sleep 6s

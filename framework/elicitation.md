@@ -68,8 +68,8 @@ Everything is a render of the same model. While the discovery is still open, eac
 **discovery status** (per-pillar progress, a readiness verdict) and the **priority questions** —
 ordered by information value, each with the reason it's being asked.
 
-When nothing high-value is left to ask, it produces the deliverable: a **discovery brief**. Alongside
-the objective and the assumptions still to confirm, the brief adds a consultant's read — what the
+When nothing high-value is left to ask, it produces the deliverable: a **solution assessment**. Alongside
+the objective and the assumptions still to confirm, the assessment adds a consultant's read — what the
 feature introduces, its likely complexity and main cost driver, and the risks and reuse
 opportunities worth weighing before the build. Slots parked as low-impact are listed as *deferred*
 rather than shown as gaps.

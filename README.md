@@ -21,8 +21,8 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
                          │
     ┌─────────┬──────────┼──────────┬───────────────┐
     ▼         ▼          ▼          ▼               ▼
-Discovery    PRD    User stories  Estimate   More artifacts
-  brief
+Solution     PRD    User stories  Estimate   More artifacts
+assessment
 ```
 
 ---
@@ -98,7 +98,7 @@ pc discover "We'd like to set up a leave approval system."
 From that one sentence, on a platform whose context says *"approval usually hides a balance check
 and a multi-level circuit"*, the engine asks the few questions that matter — the multi-level circuit,
 the per-client variation, the balance rule — and leaves the low-stakes ones (reporting) alone. Each
-answer refines the model until nothing high-value is left to ask, then the brief is produced.
+answer refines the model until nothing high-value is left to ask, then the solution assessment is produced.
 
 ---
 

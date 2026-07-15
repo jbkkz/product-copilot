@@ -20,15 +20,18 @@ the same `model.json` — that's the point: the model is the product, everything
 
 ## Reproduce it
 
+Each command regenerates one view from the model — no discovery needed. Output lands in
+`out/leave-approval/` (it doesn't overwrite the files you're reading here):
+
 ```bash
-python src/engine.py --from examples/leave-approval/model.json             # regenerate the assessment
-python src/engine.py --from examples/leave-approval/model.json --prd       # regenerate the PRD
-python src/engine.py --from examples/leave-approval/model.json --criteria  # regenerate the criteria
-python src/engine.py --from examples/leave-approval/model.json --epic       # regenerate the epic
-python src/engine.py --from examples/leave-approval/model.json --epic-json      # neutral GitHub/GitLab export
-python src/engine.py --from examples/leave-approval/model.json --release v1.0   # regenerate the release notes
-python src/engine.py --from examples/leave-approval/model.json --epic-github    # GitHub issue-creation plan
-python src/engine.py --from examples/leave-approval/model.json --epic-gitlab    # GitLab plan (issue links)
+pc brief    examples/leave-approval/model.json                          # the solution assessment
+pc prd      examples/leave-approval/model.json                          # the PRD
+pc criteria examples/leave-approval/model.json                          # the acceptance criteria
+pc epic     examples/leave-approval/model.json --json --github --gitlab # epic.md + neutral export + tracker plans
+pc release  examples/leave-approval/model.json v1.0                     # the release notes
+pc stories  examples/leave-approval/model.json                          # user stories (also: pc estimate)
 ```
+
+The legacy flag CLI still works too, e.g. `python src/engine.py --from examples/leave-approval/model.json --prd`.
 
 The `model.json` here was produced by a real interactive discovery from `request.md`.
