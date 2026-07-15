@@ -47,6 +47,19 @@ question is worse than no criterion.
 This calibration is invisible to the reader (see Voice) — it changes how firmly you phrase a `then`,
 never printed as a label or percentage.
 
+# Reasoning in the model
+
+The model may carry a reasoning layer beside the slots:
+
+- `decisions`: settled choices (`why` / `alternative` / `tradeoff`) — write criteria for the decided
+  path; you may note the tradeoff, but don't re-open a settled decision.
+- `challenges`: premises the client has **not** resolved (`premise` / `alternative` / `consequence` /
+  `recommendation`). Each is **open** — list it in `open_questions`, presenting the alternative; do
+  **not** write a definitive AC that silently picks one side. A criterion that decides an open
+  question is a guess, not a spec.
+
+If these lists are empty, ignore this section.
+
 # Model schema (for reference)
 
 {{SCHEMA}}

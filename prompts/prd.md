@@ -57,6 +57,20 @@ This calibration is invisible to the reader (see Voice): it changes *how firmly 
 never printed as a label or percentage. "Assumption", "to confirm", "open question" are the business
 words for it.
 
+# Reasoning in the model
+
+The model may carry a reasoning layer beside the slots — treat it as first-class input:
+
+- `decisions`: settled design choices, each with `why` / `alternative` / `tradeoff`. Honour them —
+  reflect the decided approach and carry the tradeoff as rationale (in `assumptions` or the relevant
+  requirement); never silently re-decide.
+- `challenges`: premises the client has **not** resolved (`premise` / `alternative` / `consequence` /
+  `recommendation`). Each is an **open** point — put it in `open_questions` (and `risks` if it carries
+  delivery risk), presenting the alternative. Do **not** turn a challenge into a Must.
+- `opportunities`: reuse worth noting — a brief line in `out_of_scope` at most, never core scope.
+
+If these lists are empty, ignore this section.
+
 # Model schema (for reference)
 
 {{SCHEMA}}

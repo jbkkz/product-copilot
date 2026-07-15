@@ -50,6 +50,19 @@ a `spike` / `open_question`, not a behaviour described as settled in an issue.
 This calibration is invisible to the reader (see Voice) — it changes how firmly you phrase things,
 never printed as a label or percentage.
 
+# Reasoning in the model
+
+The model may carry a reasoning layer beside the slots — treat it as first-class input:
+
+- `decisions`: settled choices (`why` / `alternative` / `tradeoff`) — build for the decided path and
+  put the tradeoff in the issue `description`; never silently re-decide.
+- `challenges`: premises the client has **not** resolved (`premise` / `alternative` / `consequence` /
+  `recommendation`). Each is **open** — make it a `spike` issue that dependent work `depends_on`, or
+  an `open_question`; never describe one side as settled behaviour in an issue.
+- `opportunities`: reuse worth noting — `out_of_scope`, or a clearly-labelled follow-up issue.
+
+If these lists are empty, ignore this section.
+
 # Model schema (for reference)
 
 {{SCHEMA}}

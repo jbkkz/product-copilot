@@ -75,6 +75,14 @@ def _flag_value(args: list[str], name: str) -> str | None:
     return None
 
 
+def _absorb_reasoning(out: EngineOutput, brief) -> None:
+    """Persist the assessment's reasoning into the model so every generator inherits it,
+    not just the facts. Called wherever advise() runs, before the model is saved."""
+    out.decisions = brief.decisions
+    out.challenges = brief.challenges
+    out.opportunities = brief.opportunities
+
+
 def main() -> None:
     args = sys.argv[1:]
     flags = {a for a in args if a.startswith("--")}
@@ -117,7 +125,10 @@ def main() -> None:
     # The solution assessment is the default deliverable (skipped on a quick --once pass).
     if not quick:
         print("\nGenerating the solution assessment…")
-        render_brief(out, advise(client, out))
+        brief = advise(client, out)
+        _absorb_reasoning(out, brief)  # bake the reasoning into the model
+        save_model(out, slug)          # re-save enriched (backfills the --from path too)
+        render_brief(out, brief)
 
     # Delivery pipeline. --estimate implies stories (it estimates them).
     if "--stories" in flags or "--estimate" in flags:
@@ -200,10 +211,12 @@ def _cmd_discover(a, client) -> None:
         out = converse(client, request)
     if not out:
         return
-    print(f"\nSaved model → {save_model(out, slug)}")
     if not quick:
         print("\nGenerating the solution assessment…")
-        render_brief(out, advise(client, out))
+        brief = advise(client, out)
+        _absorb_reasoning(out, brief)  # bake the reasoning into the model before saving
+        render_brief(out, brief)
+    print(f"\nSaved model → {save_model(out, slug)}")
 
 
 def _cmd_status(a, client) -> None:
@@ -213,8 +226,11 @@ def _cmd_status(a, client) -> None:
 
 def _cmd_brief(a, client) -> None:
     client = client or Anthropic()
-    out, _ = _load(a.model)
-    render_brief(out, advise(client, out))
+    out, slug = _load(a.model)
+    brief = advise(client, out)
+    _absorb_reasoning(out, brief)
+    save_model(out, slug)  # backfill: persist the reasoning back into the saved model
+    render_brief(out, brief)
 
 
 def _cmd_prd(a, client) -> None:

@@ -28,6 +28,18 @@ Where two behaviours are both plausible and unconfirmed (e.g. amend a draft vs. 
 document once issued), state the open choice rather than silently picking one. Never print confidence
 labels or percentages — "to confirm" and "to decide" are the business words.
 
+# Reasoning in the model
+
+The model may carry a reasoning layer beside the slots:
+
+- `decisions`: settled choices with a `tradeoff` — reflect the decided approach in the acceptance
+  criteria; carry the tradeoff where it matters.
+- `challenges`: premises the client has **not** resolved — for the relevant story, add a "⚠ To decide
+  before build: …" acceptance line presenting the alternative; never pick a side silently.
+- `opportunities`: out of scope for stories; ignore.
+
+If these lists are empty, ignore this section.
+
 # Model schema (for slot ids)
 
 {{SCHEMA}}

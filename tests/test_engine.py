@@ -536,6 +536,26 @@ def test_pc_brief_uses_injected_client():
         assert "SOLUTION ASSESSMENT" in text
 
 
+def test_pc_brief_persists_reasoning_into_model():
+    # Keystone: advise()'s reasoning is absorbed into the model and saved (backfill),
+    # so downstream generators inherit it instead of it being regenerated and discarded.
+    with _model_in_out("_clitest_brief_persist") as p:
+        brief_json = json.dumps({
+            "complexity": "high",
+            "decisions": [{"decision": "draft-first", "tradeoff": "review step"}],
+            "challenges": [{
+                "headline": "Archive vs delete", "premise": "pr",
+                "alternative": "al", "consequence": "co", "recommendation": "re",
+            }],
+            "opportunities": [{"text": "reuse engine", "leverage": "high", "modules": ["Invoicing"]}],
+        })
+        _run_app(["brief", str(p)], client=FakeClient(brief_json))
+        reloaded = load_model(p)  # the saved model now carries the reasoning
+        assert reloaded.challenges[0].headline == "Archive vs delete"
+        assert reloaded.decisions[0].decision == "draft-first"
+        assert reloaded.opportunities[0].modules == ["Invoicing"]
+
+
 def test_pc_stories_renders():
     with _model_in_out("_clitest_stories") as p:
         text = _run_app(["stories", str(p)], client=FakeClient(json.dumps({"stories": [{"id": "S1", "title": "T"}]})))

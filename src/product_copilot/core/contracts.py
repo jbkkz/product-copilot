@@ -53,6 +53,13 @@ class EngineOutput(BaseModel):
     model: dict[str, Slot]
     questions: list[Question] = Field(default_factory=list)
     summary: Summary
+    # The reasoning layer — persisted so generators inherit it, not just the facts.
+    # Filled at discovery finalization by absorbing advise()'s Brief. These types are
+    # defined below (Brief section); forward-referenced here, resolved by
+    # EngineOutput.model_rebuild() at the end of this module.
+    decisions: list[DesignDecision] = Field(default_factory=list)
+    challenges: list[Challenge] = Field(default_factory=list)
+    opportunities: list[Opportunity] = Field(default_factory=list)
 
 
 class Story(BaseModel):
@@ -223,3 +230,7 @@ class ReleaseNotes(BaseModel):
     highlights: list[str] = Field(default_factory=list)
     known_limitations: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+# EngineOutput's reasoning fields forward-reference the types defined above; resolve them.
+EngineOutput.model_rebuild()
