@@ -11,9 +11,11 @@ Explain Product Copilot to the user, concisely:
   it. Claude Code is only one interface over that engine — the same core also
   runs from a terminal (`pc …` / `python pc.py …`) and, later, an API. These
   slash commands are thin wrappers; they never do the reasoning themselves.
-- **The flow:** `/pc-discover <request>` → a saved model → `/pc-status <model>`
-  to inspect it → `/pc-generate <model> <artifact…>` to produce a PRD, user
-  stories, an estimate, acceptance criteria, a delivery epic (+ GitHub/GitLab
-  plans), release notes, or the solution assessment (brief).
+- **The flow:** `/pc-discover <request>` runs discovery as a **turn-by-turn
+  conversation** — the engine asks the high-value questions, you answer here, and
+  it refines the model each turn until it converges → a saved model →
+  `/pc-status <model>` to inspect it → `/pc-generate <model> <artifact…>` to
+  produce a PRD, user stories, an estimate, acceptance criteria, a delivery epic
+  (+ GitHub/GitLab plans), release notes, or the solution assessment (brief).
 
 Then run `.venv/bin/python pc.py --help` and show the live list of CLI commands.

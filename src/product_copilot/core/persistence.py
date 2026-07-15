@@ -33,3 +33,14 @@ def write_artifact(slug: str, filename: str, content: str) -> Path:
     path = folder / filename
     path.write_text(content)
     return path
+
+
+def save_request(slug: str, request: str) -> Path:
+    """Persist the original request beside the model so a discovery turn can resume statelessly."""
+    return write_artifact(slug, "request.txt", request)
+
+
+def load_request(model_path: Path) -> str:
+    """The original request saved next to a model (empty string if none)."""
+    p = model_path.parent / "request.txt"
+    return p.read_text() if p.exists() else ""

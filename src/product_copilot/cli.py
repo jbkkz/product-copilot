@@ -9,12 +9,14 @@ from dotenv import load_dotenv
 
 from product_copilot.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from product_copilot.core.contracts import EngineOutput
-from product_copilot.core.discovery import run
+from product_copilot.core.discovery import answer_turn, run
 from product_copilot.core.generators import (
     advise, derive_stories, estimate, generate_criteria, generate_epic,
     generate_prd, generate_release,
 )
-from product_copilot.core.persistence import _slug, load_model, save_model, write_artifact
+from product_copilot.core.persistence import (
+    _slug, load_model, load_request, save_model, save_request, write_artifact,
+)
 from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (
     render_brief, render_estimate, render_stories, render_turn,
@@ -211,12 +213,27 @@ def _cmd_discover(a, client) -> None:
         out = converse(client, request)
     if not out:
         return
+    save_request(slug, request)  # so `pc answer` can resume this discovery statelessly
     if not quick:
         print("\nGenerating the solution assessment…")
         brief = advise(client, out)
         _absorb_reasoning(out, brief)  # bake the reasoning into the model before saving
         render_brief(out, brief)
     print(f"\nSaved model → {save_model(out, slug)}")
+    if quick and out.questions:
+        print(f'\n→ Answer and refine: pc answer out/{slug}/model.json "<your answers>"')
+
+
+def _cmd_answer(a, client) -> None:
+    client = client or Anthropic()
+    out, slug = _load(a.model)
+    out = answer_turn(client, out, load_request(Path(a.model)), a.answers)
+    render_turn(out)
+    print(f"\nSaved model → {save_model(out, slug)}")
+    if not out.questions:
+        print("\n✅ Discovery converged — run `pc brief` for the assessment.")
+    else:
+        print(f'\n→ Keep going: pc answer {a.model} "<your answers>"')
 
 
 def _cmd_status(a, client) -> None:
@@ -298,6 +315,8 @@ def _build_parser() -> argparse.ArgumentParser:
             extra(sp)
         sp.set_defaults(func=func)
 
+    model_cmd("answer", "feed the client's answers back and refine the model one more turn",
+              _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
     model_cmd("status", "show the understanding checklist + open questions", _cmd_status)
     model_cmd("brief", "generate the solution assessment", _cmd_brief)
     model_cmd("prd", "generate the PRD", _cmd_prd)

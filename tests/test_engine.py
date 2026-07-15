@@ -602,5 +602,27 @@ def test_pc_discover_once_saves_model():
     try:
         _run_app(["discover", "clitest discover probe xyz", "--once"], client=FakeClient(_ENGINE_REPLY))
         assert (folder / "model.json").exists()
+        assert (folder / "request.txt").exists()  # saved so `pc answer` can resume
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def test_pc_answer_refines_the_model():
+    # A stateless discovery turn: answers + the current model → a refined model.
+    with _model_in_out("_clitest_answer") as p:
+        (p.parent / "request.txt").write_text("original leave-approval request")
+        turn2 = json.dumps({
+            "model": {"real_problem": {"completeness": 95, "confidence": "explicit", "impact": "high"}},
+            "questions": [],
+            "summary": {},
+        })
+        fake = FakeClient(turn2)
+        _run_app(["answer", str(p), "The approver is HR, and the circuit is per-client."], client=fake)
+        # the answers + the prior model reached the engine turn
+        sent = fake.calls[0]["messages"]
+        assert "The approver is HR" in sent[-1]["content"]
+        assert "real_problem" in sent[1]["content"]  # prior model carried as assistant turn
+        # and the saved model is refined (inferred/80 → explicit/95)
+        reloaded = load_model(p)
+        assert reloaded.model["real_problem"].completeness == 95
+        assert reloaded.model["real_problem"].confidence.value == "explicit"
