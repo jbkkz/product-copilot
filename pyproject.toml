@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "product-copilot"
+version = "0.3.0"
+description = "A requirements engine that turns a vague client request into a structured solution model ready for dev."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+pc = "product_copilot.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["product_copilot*"]

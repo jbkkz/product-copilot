@@ -5,7 +5,7 @@ from pydantic import ValidationError
 import io
 import json
 import shutil
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 
 from src.engine import (
     PRD,
@@ -45,6 +45,8 @@ from src.engine import (
     to_gitlab,
     write_artifact,
 )
+from product_copilot.cli import _build_parser, app
+from product_copilot.paths import ROOT
 
 
 def slot(completeness, confidence, impact):
@@ -476,3 +478,109 @@ def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
     (tmp_path / "context").mkdir()
     (tmp_path / "context" / "_only_template.md").write_text("skip me")
     assert load_context() == ""
+
+
+# ── The `pc` subcommand CLI ───────────────────────────────────────────────────
+# The modern surface is a thin layer over the same core; app() takes an injected
+# client so API-backed verbs run offline against a FakeClient.
+
+
+@contextmanager
+def _model_in_out(slug):
+    """A real out/<slug>/model.json the model-taking subcommands can load."""
+    p = save_model(out({"real_problem": slot(80, "explicit", "high")}), slug)
+    try:
+        yield p
+    finally:
+        shutil.rmtree(p.parent, ignore_errors=True)
+
+
+def _run_app(argv, client=None):
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        app(argv, client=client)
+    return buf.getvalue()
+
+
+def test_pc_parser_binds_every_subcommand():
+    cases = {
+        ("discover", "req"): "_cmd_discover",
+        ("status", "m.json"): "_cmd_status",
+        ("brief", "m.json"): "_cmd_brief",
+        ("prd", "m.json"): "_cmd_prd",
+        ("stories", "m.json"): "_cmd_stories",
+        ("estimate", "m.json"): "_cmd_estimate",
+        ("criteria", "m.json"): "_cmd_criteria",
+        ("epic", "m.json"): "_cmd_epic",
+        ("release", "m.json"): "_cmd_release",
+    }
+    for argv, fname in cases.items():
+        assert _build_parser().parse_args(list(argv)).func.__name__ == fname
+    assert _build_parser().parse_args(["epic", "m", "--github", "--gitlab"]).github
+    assert _build_parser().parse_args(["release", "m", "v1.0"]).version == "v1.0"
+
+
+def test_pc_unknown_command_errors():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["bogus"])
+
+
+def test_pc_status_runs_offline():
+    with _model_in_out("_clitest_status") as p:
+        assert "UNDERSTANDING" in _run_app(["status", str(p)])  # no client built
+
+
+def test_pc_brief_uses_injected_client():
+    with _model_in_out("_clitest_brief") as p:
+        text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
+        assert "SOLUTION ASSESSMENT" in text
+
+
+def test_pc_stories_renders():
+    with _model_in_out("_clitest_stories") as p:
+        text = _run_app(["stories", str(p)], client=FakeClient(json.dumps({"stories": [{"id": "S1", "title": "T"}]})))
+        assert "=== USER STORIES ===" in text and "[S1] T" in text
+
+
+def test_pc_estimate_renders():
+    with _model_in_out("_clitest_estimate") as p:
+        fake = FakeClient(
+            json.dumps({"stories": [{"id": "S1", "title": "T"}]}),
+            json.dumps({"items": [{"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]}),
+        )
+        assert "=== ESTIMATE" in _run_app(["estimate", str(p)], client=fake)
+
+
+def test_pc_prd_writes_artifact():
+    with _model_in_out("_clitest_prd") as p:
+        _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X"})))
+        assert (p.parent / "prd.md").read_text().startswith("# X")
+
+
+def test_pc_criteria_writes_artifact():
+    with _model_in_out("_clitest_criteria") as p:
+        _run_app(["criteria", str(p)], client=FakeClient(json.dumps({"title": "X"})))
+        assert (p.parent / "acceptance-criteria.md").exists()
+
+
+def test_pc_epic_writes_all_views():
+    with _model_in_out("_clitest_epic") as p:
+        _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps({"title": "X"})))
+        for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
+            assert (p.parent / name).exists()
+
+
+def test_pc_release_stamps_version():
+    with _model_in_out("_clitest_release") as p:
+        _run_app(["release", str(p), "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
+        assert "v1.0" in (p.parent / "release-notes.md").read_text()
+
+
+def test_pc_discover_once_saves_model():
+    slug = "clitest-discover-probe-xyz"
+    folder = ROOT / "out" / slug
+    try:
+        _run_app(["discover", "clitest discover probe xyz", "--once"], client=FakeClient(_ENGINE_REPLY))
+        assert (folder / "model.json").exists()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)

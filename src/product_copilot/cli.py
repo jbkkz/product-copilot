@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -165,3 +166,142 @@ def main() -> None:
         path = write_artifact(slug, "release-notes.md", markdown)
         print(markdown)
         print(f"\nWrote release notes → {path}")
+
+
+# ── Subcommand CLI (`pc`) ─────────────────────────────────────────────────────
+# The modern surface. A thin layer over the same core the legacy flag CLI above
+# uses: each handler parses, calls core, renders, writes — no business logic here.
+# `app()` takes an optional client so tests can inject a stub; only verbs that hit
+# the API build one, so `pc status` runs fully offline.
+
+
+def _load(model_path: str) -> tuple[EngineOutput, str]:
+    """Load a saved model and recover its slug (the out/<slug>/ folder name)."""
+    path = Path(model_path)
+    return load_model(path), path.parent.name
+
+
+def _emit(slug: str, filename: str, markdown: str, label: str) -> None:
+    path = write_artifact(slug, filename, markdown)
+    print(markdown)
+    print(f"\nWrote {label} → {path}")
+
+
+def _cmd_discover(a, client) -> None:
+    client = client or Anthropic()
+    is_file = Path(a.request).exists()
+    request = Path(a.request).read_text() if is_file else a.request
+    slug = _slug(Path(a.request).stem if is_file else request)
+    quick = a.once or not sys.stdin.isatty()
+    if quick:
+        out = run(client, [{"role": "user", "content": request}])
+        render_turn(out)
+    else:
+        out = converse(client, request)
+    if not out:
+        return
+    print(f"\nSaved model → {save_model(out, slug)}")
+    if not quick:
+        print("\nGenerating the solution assessment…")
+        render_brief(out, advise(client, out))
+
+
+def _cmd_status(a, client) -> None:
+    out, _ = _load(a.model)
+    render_turn(out)
+
+
+def _cmd_brief(a, client) -> None:
+    client = client or Anthropic()
+    out, _ = _load(a.model)
+    render_brief(out, advise(client, out))
+
+
+def _cmd_prd(a, client) -> None:
+    client = client or Anthropic()
+    out, slug = _load(a.model)
+    _emit(slug, "prd.md", prd_markdown(generate_prd(client, out)), "PRD")
+
+
+def _cmd_stories(a, client) -> None:
+    client = client or Anthropic()
+    out, _ = _load(a.model)
+    render_stories(derive_stories(client, out))
+
+
+def _cmd_estimate(a, client) -> None:
+    client = client or Anthropic()
+    out, _ = _load(a.model)
+    stories = derive_stories(client, out)
+    render_stories(stories)
+    draft, soft, confidence = estimate(client, out, stories)
+    render_estimate(draft, soft, confidence)
+
+
+def _cmd_criteria(a, client) -> None:
+    client = client or Anthropic()
+    out, slug = _load(a.model)
+    _emit(slug, "acceptance-criteria.md", criteria_markdown(generate_criteria(client, out)), "acceptance criteria")
+
+
+def _cmd_epic(a, client) -> None:
+    client = client or Anthropic()
+    out, slug = _load(a.model)
+    epic = generate_epic(client, out)  # one model call; every view renders from it
+    _emit(slug, "epic.md", epic_markdown(epic), "epic")
+    if a.json:
+        print(f"Wrote neutral epic export → {write_artifact(slug, 'epic.json', epic_export_json(epic))}")
+    if a.github:
+        print(f"Wrote GitHub issue-creation plan → {write_artifact(slug, 'epic.github.json', to_github_json(epic, slug))}")
+    if a.gitlab:
+        print(f"Wrote GitLab issue-creation plan → {write_artifact(slug, 'epic.gitlab.json', to_gitlab_json(epic, slug))}")
+
+
+def _cmd_release(a, client) -> None:
+    client = client or Anthropic()
+    out, slug = _load(a.model)
+    _emit(slug, "release-notes.md", release_markdown(generate_release(client, out, a.version)), "release notes")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="pc",
+        description="Product Copilot — turns a vague request into a structured solution model.",
+    )
+    sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
+
+    d = sub.add_parser("discover", help="run discovery on a request (a string or a file path)")
+    d.add_argument("request", help="the client request, or a path to a file containing it")
+    d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
+    d.set_defaults(func=_cmd_discover)
+
+    def model_cmd(name: str, help_: str, func, extra=None):
+        sp = sub.add_parser(name, help=help_)
+        sp.add_argument("model", help="path to a saved out/<slug>/model.json")
+        if extra:
+            extra(sp)
+        sp.set_defaults(func=func)
+
+    model_cmd("status", "show the understanding checklist + open questions", _cmd_status)
+    model_cmd("brief", "generate the solution assessment", _cmd_brief)
+    model_cmd("prd", "generate the PRD", _cmd_prd)
+    model_cmd("stories", "derive user stories", _cmd_stories)
+    model_cmd("estimate", "derive stories and estimate them (day ranges)", _cmd_estimate)
+    model_cmd("criteria", "generate Given/When/Then acceptance criteria", _cmd_criteria)
+
+    def epic_flags(sp):
+        sp.add_argument("--json", action="store_true", help="also write the neutral epic.json export")
+        sp.add_argument("--github", action="store_true", help="also write a GitHub issue-creation plan")
+        sp.add_argument("--gitlab", action="store_true", help="also write a GitLab issue-creation plan")
+
+    model_cmd("epic", "generate the delivery epic (+ optional tracker plans)", _cmd_epic, epic_flags)
+    model_cmd("release", "generate client-facing release notes", _cmd_release,
+              lambda sp: sp.add_argument("version", nargs="?", default="", help="optional version label to stamp"))
+
+    return p
+
+
+def app(argv: list[str] | None = None, client: Anthropic | None = None) -> None:
+    """Entry point for the `pc` command and `python -m product_copilot`."""
+    args = _build_parser().parse_args(argv)
+    args.func(args, client)
