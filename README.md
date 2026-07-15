@@ -137,8 +137,9 @@ estimated from the product context, so the engine is only as sharp as the contex
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .              # installs deps + the `pc` command
-cp .env.example .env          # set ANTHROPIC_API_KEY
+pip install -U pip setuptools   # a fresh venv may ship a pip too old for editable installs
+pip install -e .                # installs deps + the `pc` command
+cp .env.example .env            # set ANTHROPIC_API_KEY
 pc discover examples/case1_leave.md
 ```
 
