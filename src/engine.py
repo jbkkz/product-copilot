@@ -13,8 +13,9 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from product_copilot.paths import ROOT
+
 load_dotenv()
-ROOT = Path(__file__).resolve().parent.parent
 MAX_TURNS = 8
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
 
