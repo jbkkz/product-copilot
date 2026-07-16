@@ -152,6 +152,7 @@ uv run pc discover examples/case1_leave.md # first run resolves deps; later runs
 <details><summary>Or the classic pip + venv install</summary>
 
 ```bash
+git clone https://github.com/jbkkz/product-copilot && cd product-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools   # a fresh venv may ship a pip too old for editable installs
 pip install -e .                # installs deps + the `pc` command
