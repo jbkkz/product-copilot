@@ -23,8 +23,11 @@ pc status  out/<slug>/model.json                              # understanding ch
 pc prd     out/<slug>/model.json                              # regenerate any artifact from a saved model
 ```
 
-`pc` is the modern subcommand CLI: `discover`, `status`, `brief`, `prd`, `stories`, `estimate`,
-`criteria`, `epic` (`--json/--github/--gitlab`), `release`. Without an install, `python pc.py <cmd>`
+`pc` is the modern subcommand CLI: `discover`, `status`, `impact`, `brief`, `prd`, `stories`,
+`estimate`, `criteria`, `epic` (`--json/--github/--gitlab`), `release`. `pc impact <model> [slots…]`
+is a pure offline query over the dependency DAG (no API call): the blast radius of a change (the
+decisions to re-validate + artifacts that go stale), or the full map with no slots. Without an
+install, `python pc.py <cmd>`
 (a repo-root launcher that puts `src/` on the path) is equivalent — this is what the Claude Code
 `/pc-*` commands call. The **legacy flag CLI is preserved**: `python src/engine.py "…" [--once]
 [--prd] [--stories] …` and `python src/engine.py --from out/<slug>/model.json --prd` still work
@@ -52,6 +55,7 @@ product_copilot/
     analysis.py      Python-authoritative model logic  discovery.py   run() (the engine turn)
     persistence.py   save/load_model, write_artifact   adapters.py    epic_export + GitHub/GitLab
     generators.py    advise, derive_stories, estimate, generate_*
+    dependencies.py  the dependency DAG: propagate / diff_models / stale_on_disk (impact propagation)
   render/            views (data → str/stdout, no side effects)
     markdown.py      *_markdown                         terminal.py    render_*
   cli.py           argparse `pc` subcommands (app()) + the legacy flag main()
@@ -131,6 +135,16 @@ Discovery persists the model to `out/<slug>/model.json` (`save_model()`) — the
 Everything else is a **generator**: a pure function `model → artifact`. `--from out/<slug>/model.json`
 reloads a saved model and regenerates any artifact without redoing discovery (`load_model()`).
 
+Because artifacts are views of the model, they can go **stale** when the model moves — and the model
+knows what rests on what. `core/dependencies.py` makes the dependency DAG explicit: a `DesignDecision`
+records the slot ids it was `derived_from` (filled by `advise()`); a static `ARTIFACT_SLOTS` map records
+which slots each buildable artifact consumes (the assessment/brief is deliberately excluded — it is the
+live analysis layer, not a downstream deliverable). `propagate(model, slots)` returns the blast radius
+(decisions to re-validate + artifacts to regenerate); `diff_models(old, new)` is the material change
+between two versions (value/confidence/impact — not completeness noise); `stale_on_disk()` intersects
+that with the files actually present in `out/<slug>/`. `pc impact` surfaces the forward view on demand;
+`pc answer` runs the diff automatically each turn and warns which generated files no longer match.
+
 Each generator is the same shape — **prompt + Pydantic contract + generator fn + writer**:
 `brief.md`/`Brief`/`advise()`, `stories.md`/`Stories`/`derive_stories()`,
 `estimate.md`/`EstimateDraft`/`estimate()`, `prd.md`/`PRD`/`generate_prd()` (writes `out/<slug>/prd.md`
@@ -143,9 +157,10 @@ via `release_markdown()`; `generate_release()` takes an optional `version` the C
 `--release [version]`). Adding one (test plan, more exports) = those four pieces (in `core/generators.py`
 + `render/markdown.py`), plus wiring in `cli.py`: a `pc` subcommand in `_build_parser()` and a legacy
 `--flag` in `main()`. Any generator whose text is user-facing must carry the **Voice** rule (no slot
-ids / percentages / confidence labels in prose). `pc` subcommands: `discover`, `status`, `brief`,
-`prd`, `stories`, `estimate`, `criteria`, `epic`, `release`; legacy flags: `--stories`, `--estimate`,
-`--prd`, `--criteria`, `--epic`, `--release`.
+ids / percentages / confidence labels in prose). `pc` subcommands: `discover`, `status`, `impact`,
+`brief`, `prd`, `stories`, `estimate`, `criteria`, `epic`, `release`; legacy flags: `--stories`,
+`--estimate`, `--prd`, `--criteria`, `--epic`, `--release`. (`impact` is a pure query, not a generator,
+so it is a `pc`-only verb — no artifact, no legacy flag.)
 
 A generator can also have **more than one writer** on the same contract — a second *view* of the same
 LLM output, no extra model call. `Epic` has several: `epic_markdown()` (human) and `epic_export_json()`
