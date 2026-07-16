@@ -131,6 +131,11 @@ It decides what to ask with one rule: **information value = uncertainty × impac
 just because something is unknown — it asks when an answer would change what you build. Impact is
 estimated from the product context, so the engine is only as sharp as the context you give it.
 
+The model is not a flat snapshot: its parts rest on each other. A design decision records the facts
+it was **derived from**; each artifact records the slots it **consumes**. So a change knows its blast
+radius — `pc impact` shows what a revisited slot would invalidate, and a discovery turn that moves the
+model warns you which already-generated files no longer match it.
+
 ---
 
 ## Quickstart
@@ -148,8 +153,9 @@ answers back in — then writes `out/<slug>/model.json` and produces the solutio
 Regenerate any deliverable from a saved model without redoing discovery:
 
 ```bash
-pc prd   out/<slug>/model.json                       # also: stories · estimate · criteria · release · brief
-pc epic  out/<slug>/model.json --github --gitlab     # + a tool-neutral epic.json and tracker issue plans
+pc prd    out/<slug>/model.json                      # also: stories · estimate · criteria · release · brief
+pc epic   out/<slug>/model.json --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
+pc impact out/<slug>/model.json permissions          # what rests on a slot: decisions + artifacts that go stale
 ```
 
 ### Two interfaces, one engine
@@ -191,6 +197,8 @@ Better context → sharper impact estimates → better questions. Files prefixed
 - Tracker adapters — idempotent, n8n-ready issue-creation plans for GitHub (`epic.github.json`) and
   GitLab (`epic.gitlab.json`, with structured issue links)
 - The model as a durable product (`model.json`), regenerable via `--from`
+- A dependency graph over the model — `pc impact` shows a change's blast radius, and a discovery turn
+  flags the already-generated artifacts a change makes stale
 - Two interfaces over one presentation-free engine — a `pc` subcommand CLI and Claude Code slash
   commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
 
