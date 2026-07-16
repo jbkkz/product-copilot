@@ -4,7 +4,8 @@
     "ask_when": "information_value is high",
     "do_not_ask_when": "slot is empty but impact is low",
     "uncertainty": "derived from completeness (0-100) and confidence (explicit|inferred|empty)",
-    "impact": "how much this slot changes the shape/cost of the solution; estimated using the product context (context/*.md)"
+    "impact": "how much this slot changes the shape/cost of the solution; estimated using the product context (context/*.md)",
+    "impact_is_dynamic": "impact_default is only a BASELINE. Raise a slot's impact above its default when the request or context names a driver for it (a slot's impact_signals list the triggers). A compliance/audit/traceability/regulatory need named anywhere — success_metrics, constraints, the request — makes the slots that serve it (reporting=auditability, permissions, constraints) high-impact, whatever their default."
   },
   "pillars": {
     "why": "Why? The real problem and the measure of success.",
@@ -25,7 +26,7 @@
     { "id": "config_vs_custom","pillar": "how",     "impact_default": "high",   "label": "Config vs customization", "probe": "Hardcoded, configurable, client-specific, or reusable for all? (configurable platforms only)", "optional": true },
     { "id": "constraints",    "pillar": "how",      "impact_default": "medium", "label": "Constraints",             "probe": "Deadline, dependencies, regulatory, budget?" },
     { "id": "edge_cases",     "pillar": "validate", "impact_default": "medium", "label": "Edge cases",              "probe": "What if empty / multiple / concurrent / retroactive / cancelled?" },
-    { "id": "reporting",      "pillar": "validate", "impact_default": "low",    "label": "Reporting & visibility",  "probe": "Filter, export, dashboard, audit of changes?" },
+    { "id": "reporting",      "pillar": "validate", "impact_default": "low",    "label": "Reporting & visibility",  "probe": "Filter, export, dashboard, audit of changes?", "impact_signals": "→ high when the solution must be audited, traced, or proven for compliance/regulatory reasons: an audit trail, a who-changed-what history, or a mandated export is a different build, not a nice-to-have." },
     { "id": "acceptance",     "pillar": "validate", "impact_default": "medium", "label": "Acceptance criteria",     "probe": "Which acceptance scenarios validate delivery?" },
     { "id": "risks",          "pillar": "validate", "impact_default": "medium", "label": "Risks & rollout",         "probe": "What can break, how do we roll out?" }
   ]

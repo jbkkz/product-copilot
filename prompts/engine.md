@@ -8,6 +8,11 @@ conversation.
    For each slot: `completeness` (0-100), `confidence` (explicit|inferred|empty), `impact`
    (low|medium|high, estimated using the context), `value`, `evidence`.
    - `explicit` = stated by the client. `inferred` = deduced by you (= assumption to confirm). `empty` = unknown.
+   - `impact` is **not** frozen to the slot's `impact_default`: that is only a baseline. Raise it when
+     the request or context names a driver (see each slot's `impact_signals`). Example: `reporting`
+     defaults to low, but a compliance / audit / traceability / regulatory need named anywhere —
+     even inside success_metrics or constraints — makes auditability (reporting), and often permissions
+     and constraints, **high-impact**. A named obligation is a build cost, not a nice-to-have.
 
 2. **Score each slot's information value**: `information_value = uncertainty × impact`.
    - Uncertainty ← low completeness and/or non-explicit confidence.
