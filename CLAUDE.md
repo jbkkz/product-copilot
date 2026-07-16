@@ -12,15 +12,23 @@ output — is in English.
 
 ## Run
 
+Fastest, no venv to manage — `uv run` builds the env from `pyproject.toml` on first run (installs the
+project editable, so `paths.ROOT` still resolves assets/`out/` from the repo checkout, same as a
+manual editable install):
+
+```bash
+cp .env.example .env                                          # set ANTHROPIC_API_KEY (MODEL defaults to claude-sonnet-5)
+uv run pc discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json
+uv run pc status  out/<slug>/model.json                       # understanding checklist + readiness
+uv run pc prd     out/<slug>/model.json                       # regenerate any artifact from a saved model
+```
+
+Classic pip + venv (equivalent; drop the `uv run` prefix once the venv is active):
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools   # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"         # deps + the `pc` command + pytest
-cp .env.example .env      # then set ANTHROPIC_API_KEY (MODEL defaults to claude-sonnet-5)
-
-pc discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json
-pc status  out/<slug>/model.json                              # understanding checklist + readiness
-pc prd     out/<slug>/model.json                              # regenerate any artifact from a saved model
 ```
 
 `pc` is the modern subcommand CLI: `discover`, `status`, `impact`, `brief`, `prd`, `stories`,

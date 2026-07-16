@@ -140,6 +140,17 @@ model warns you which already-generated files no longer match it.
 
 ## Quickstart
 
+**Fastest — with [uv](https://docs.astral.sh/uv/):** no virtualenv to create or activate. `uv run`
+builds the environment from `pyproject.toml` on first run, then runs the command.
+
+```bash
+git clone https://github.com/jbkkz/product-copilot && cd product-copilot
+cp .env.example .env                       # set ANTHROPIC_API_KEY
+uv run pc discover examples/case1_leave.md # first run resolves deps; later runs are instant
+```
+
+<details><summary>Or the classic pip + venv install</summary>
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools   # a fresh venv may ship a pip too old for editable installs
@@ -148,9 +159,12 @@ cp .env.example .env            # set ANTHROPIC_API_KEY
 pc discover examples/case1_leave.md
 ```
 
+</details>
+
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
 answers back in — then writes `out/<slug>/model.json` and produces the solution assessment.
-Regenerate any deliverable from a saved model without redoing discovery:
+Regenerate any deliverable from a saved model without redoing discovery (prefix each with `uv run`
+if you use uv, or activate the venv first):
 
 ```bash
 pc prd    out/<slug>/model.json                      # also: stories · estimate · criteria · release · brief
@@ -162,7 +176,8 @@ pc impact out/<slug>/model.json permissions          # what rests on a slot: dec
 
 The product is the engine; the interfaces are thin layers over the same `product_copilot` core.
 
-- **Terminal** — `pc <command>` (or `python pc.py <command>` with no install).
+- **Terminal** — `pc <command>` (or `uv run pc <command>` with no manual venv, or `python pc.py
+  <command>` with nothing installed at all).
 - **Claude Code** — `/pc-discover`, `/pc-status`, `/pc-generate`, `/pc-help` wrap the same CLI.
 
 The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
