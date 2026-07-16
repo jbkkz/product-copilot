@@ -46,6 +46,9 @@ from src.engine import (
     write_artifact,
 )
 from product_copilot.cli import _build_parser, app
+from product_copilot.core.dependencies import (
+    artifact_slots, diff_models, propagate, resolve_slots,
+)
 from product_copilot.paths import ROOT
 
 
@@ -506,6 +509,7 @@ def test_pc_parser_binds_every_subcommand():
     cases = {
         ("discover", "req"): "_cmd_discover",
         ("status", "m.json"): "_cmd_status",
+        ("impact", "m.json"): "_cmd_impact",
         ("brief", "m.json"): "_cmd_brief",
         ("prd", "m.json"): "_cmd_prd",
         ("stories", "m.json"): "_cmd_stories",
@@ -626,3 +630,91 @@ def test_pc_answer_refines_the_model():
         reloaded = load_model(p)
         assert reloaded.model["real_problem"].completeness == 95
         assert reloaded.model["real_problem"].confidence.value == "explicit"
+
+
+# ── Tier 2: the dependency DAG (impact propagation) ───────────────────────────
+# Pure logic — no API. A change to a slot propagates to the decisions that rest on
+# it and the artifacts that consume it.
+
+
+def _out_with_decisions(*decisions):
+    return EngineOutput.model_validate({
+        "model": {
+            "current_process": slot(80, "explicit", "high"),
+            "permissions": slot(60, "inferred", "high"),
+            "workflow": slot(70, "inferred", "high"),
+            "business_objects": slot(50, "inferred", "medium"),
+        },
+        "questions": [], "summary": {},
+        "decisions": [d.model_dump() for d in decisions],
+    })
+
+
+def test_propagate_flags_dependent_decisions_and_artifacts():
+    out_ = _out_with_decisions(
+        DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                       derived_from=["permissions", "workflow"]),
+        DesignDecision(decision="Amount sourced from the Contract",
+                       derived_from=["business_objects"]),
+    )
+    rep = propagate(out_, ["permissions"])
+    # only the decision resting on permissions, and it names the changed slot it rests on
+    assert [d.decision for d in rep.decisions] == ["Draft-first invoices reviewed by Finance"]
+    assert rep.decisions[0].rests_on == ["Permissions"]
+    # artifacts consuming permissions go stale; release (no permissions) does not
+    assert "prd" in rep.artifacts and "criteria" in rep.artifacts
+    assert "release" not in rep.artifacts
+    assert not rep.empty
+
+
+def test_propagate_is_empty_for_an_isolated_slot():
+    # current_process feeds no buildable artifact and no decision rests on it → safe in isolation
+    rep = propagate(_out_with_decisions(), ["current_process"])
+    assert rep.empty
+
+
+def test_resolve_slots_accepts_ids_and_label_words_and_flags_unknowns():
+    assert resolve_slots(["permissions"]) == (["permissions"], [])
+    assert resolve_slots(["permission"]) == (["permissions"], [])  # label substring
+    ids, unmatched = resolve_slots(["workflow", "zzz"])
+    assert ids == ["workflow"] and unmatched == ["zzz"]
+    # returned in schema order regardless of input order
+    assert resolve_slots(["risks", "problem"])[0] == ["problem", "risks"]
+
+
+def test_diff_models_flags_material_change_but_ignores_completeness_noise():
+    base = {"workflow": {"completeness": 60, "confidence": "inferred", "impact": "high",
+                         "value": "draft → issued", "evidence": ""}}
+    old = EngineOutput.model_validate({"model": base, "questions": [], "summary": {}})
+    # completeness alone moving is not a material change
+    bumped = json.loads(json.dumps(base)); bumped["workflow"]["completeness"] = 90
+    same = EngineOutput.model_validate({"model": bumped, "questions": [], "summary": {}})
+    assert diff_models(old, same) == []
+    # a value change is
+    changed = json.loads(json.dumps(base)); changed["workflow"]["value"] = "draft → issued → paid"
+    newv = EngineOutput.model_validate({"model": changed, "questions": [], "summary": {}})
+    assert diff_models(old, newv) == ["workflow"]
+
+
+def test_artifact_slots_reference_only_real_slot_ids():
+    from product_copilot.core.analysis import _slot_meta
+    valid = set(_slot_meta()[1])
+    for name, slots in artifact_slots().items():
+        assert slots <= valid, f"{name} references unknown slot ids: {slots - valid}"
+
+
+def test_pc_impact_reports_blast_radius_offline():
+    # No client needed — impact is a pure DAG query.
+    with _model_in_out("_clitest_impact") as p:
+        out_ = _out_with_decisions(
+            DesignDecision(decision="Draft-first invoices", derived_from=["permissions"]))
+        save_model(out_, p.parent.name)
+        text = _run_app(["impact", str(p), "permissions"])
+        assert "Draft-first invoices" in text and "prd" in text
+
+
+def test_pc_impact_no_slots_prints_the_full_map():
+    with _model_in_out("_clitest_impact_map") as p:
+        save_model(_out_with_decisions(), p.parent.name)
+        text = _run_app(["impact", str(p)])
+        assert "DEPENDENCY MAP" in text

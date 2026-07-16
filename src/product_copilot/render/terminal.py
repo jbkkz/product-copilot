@@ -182,3 +182,45 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
         print("Risks / unknowns:")
         for r in draft.risks:
             print(f"  - {r}")
+
+
+def render_impact(report) -> None:
+    """Focused propagation view: name slots, see what rests on them go stale."""
+    from product_copilot.core.dependencies import ARTIFACT_FILES
+    print("\n" + "═" * 64)
+    print("IMPACT — what rests on: " + ", ".join(report.changed))
+    print("═" * 64)
+    if report.empty:
+        print("\n  Nothing downstream depends on these — safe to revisit in isolation.")
+        return
+
+    if report.decisions:
+        print("\nDECISIONS TO RE-VALIDATE")
+        for d in report.decisions:
+            print(_bullet(d.decision))
+            print(f"    ↳ rests on: {', '.join(d.rests_on)}")
+
+    if report.artifacts:
+        print("\nARTIFACTS THAT GO STALE")
+        for name in report.artifacts:
+            f = ARTIFACT_FILES.get(name)
+            where = f" ({f})" if f else " (regenerate on demand)"
+            print(f"  • {name}{where}")
+        print("\n  → Regenerate these after confirming the change.")
+
+
+def render_dependency_map(out: EngineOutput) -> None:
+    """No-args overview: for every slot that can still move, what it would invalidate."""
+    from product_copilot.core.dependencies import propagate
+    print("\n" + "═" * 64)
+    print("DEPENDENCY MAP — change a slot, see the blast radius")
+    print("═" * 64)
+    for sid in out.model:
+        rep = propagate(out, [sid])
+        if rep.empty:
+            continue
+        print(f"\n{_label(sid)}")
+        if rep.decisions:
+            print(f"  decisions: {'; '.join(d.decision for d in rep.decisions)}")
+        if rep.artifacts:
+            print(f"  artifacts: {', '.join(rep.artifacts)}")

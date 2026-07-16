@@ -46,6 +46,10 @@ starting the build. This is a judgment, not a recap.
   behind it: `why`, the `alternative` weighed, and the `tradeoff` accepted. For a plain sourcing fact
   with no real alternative (e.g. "invoice amount comes from the Contract"), give just `decision` and
   leave the rest empty. Don't manufacture a tradeoff where there wasn't one.
+  Also give `derived_from`: the **slot ids** this decision rests on (the facts that, if they changed,
+  would force you to reopen the decision). Use ids from the schema below (e.g. `["permissions",
+  "business_rules"]`). This is the dependency edge — be precise: list only the slots the decision
+  genuinely depends on, not every slot it touches.
 - `open_decisions`: the decisions still to be made before or during build (plain strings).
 
 # Voice
@@ -90,9 +94,10 @@ Reply with **only** a valid JSON object, no surrounding text:
       "decision": "Draft-first invoices reviewed by Finance before issuance",
       "why": "Finance sign-off is required for compliance.",
       "alternative": "Immediate issuance on the triggering event.",
-      "tradeoff": "An extra approval step, in exchange for far lower compliance risk."
+      "tradeoff": "An extra approval step, in exchange for far lower compliance risk.",
+      "derived_from": ["workflow", "permissions", "business_rules"]
     },
-    { "decision": "Invoice amount sourced from the signed Contract", "why": "", "alternative": "", "tradeoff": "" }
+    { "decision": "Invoice amount sourced from the signed Contract", "why": "", "alternative": "", "tradeoff": "", "derived_from": ["business_objects"] }
   ],
   "open_decisions": ["Success metrics / KPIs", "Audit & reporting expectations"]
 }

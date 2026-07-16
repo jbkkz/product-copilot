@@ -127,6 +127,7 @@ class DesignDecision(BaseModel):
     why: str = ""          # the rationale
     alternative: str = ""  # what was weighed instead
     tradeoff: str = ""     # the cost accepted for this choice
+    derived_from: list[str] = Field(default_factory=list)  # slot ids the decision rests on (the DAG edge)
 
 
 class Brief(BaseModel):

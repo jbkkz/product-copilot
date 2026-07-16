@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from product_copilot.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from product_copilot.core.contracts import EngineOutput
+from product_copilot.core.dependencies import propagate, resolve_slots
 from product_copilot.core.discovery import answer_turn, run
 from product_copilot.core.generators import (
     advise, derive_stories, estimate, generate_criteria, generate_epic,
@@ -19,7 +20,8 @@ from product_copilot.core.persistence import (
 )
 from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (
-    render_brief, render_estimate, render_stories, render_turn,
+    render_brief, render_dependency_map, render_estimate, render_impact,
+    render_stories, render_turn,
 )
 
 load_dotenv()
@@ -241,6 +243,21 @@ def _cmd_status(a, client) -> None:
     render_turn(out)
 
 
+def _cmd_impact(a, client) -> None:
+    """Offline query over the dependency DAG — no API call. With slots, show their blast
+    radius; without, map every slot's downstream."""
+    out, _ = _load(a.model)
+    if not a.slots:
+        render_dependency_map(out)
+        return
+    resolved, unmatched = resolve_slots(a.slots)
+    if unmatched:
+        print(f"Unknown slot(s): {', '.join(unmatched)} — use a slot id or a label word "
+              f"(e.g. 'permissions', 'workflow', 'reporting').")
+    if resolved:
+        render_impact(propagate(out, resolved))
+
+
 def _cmd_brief(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
@@ -318,6 +335,9 @@ def _build_parser() -> argparse.ArgumentParser:
     model_cmd("answer", "feed the client's answers back and refine the model one more turn",
               _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
     model_cmd("status", "show the understanding checklist + open questions", _cmd_status)
+    model_cmd("impact", "show what depends on given slots (blast radius); no slots = full map",
+              _cmd_impact, lambda sp: sp.add_argument("slots", nargs="*",
+              help="slot ids or label words (e.g. permissions workflow); omit for the full map"))
     model_cmd("brief", "generate the solution assessment", _cmd_brief)
     model_cmd("prd", "generate the PRD", _cmd_prd)
     model_cmd("stories", "derive user stories", _cmd_stories)
