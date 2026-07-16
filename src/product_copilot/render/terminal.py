@@ -224,3 +224,15 @@ def render_dependency_map(out: EngineOutput) -> None:
             print(f"  decisions: {'; '.join(d.decision for d in rep.decisions)}")
         if rep.artifacts:
             print(f"  artifacts: {', '.join(rep.artifacts)}")
+
+
+def render_stale(pairs, changed_labels) -> None:
+    """After a discovery turn moved a slot, warn that already-generated artifacts are now stale."""
+    if not pairs:
+        return
+    print("\n" + "─" * 64)
+    print(f"⚠  STALE — you just changed: {', '.join(changed_labels)}")
+    print("   These already-generated artifacts no longer match the model:")
+    for _name, filename in pairs:
+        print(f"     • {filename}")
+    print("   → Regenerate them to pick up the change.")

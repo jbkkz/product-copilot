@@ -718,3 +718,35 @@ def test_pc_impact_no_slots_prints_the_full_map():
         save_model(_out_with_decisions(), p.parent.name)
         text = _run_app(["impact", str(p)])
         assert "DEPENDENCY MAP" in text
+
+
+# ── Tier 2 (B): change-detection — stale artifacts on disk ────────────────────
+
+
+def test_stale_on_disk_only_flags_present_files_that_consume_a_changed_slot():
+    from product_copilot.core.dependencies import stale_on_disk
+    out_ = _out_with_decisions()
+    # workflow is consumed by prd, stories, estimate, criteria, epic, release
+    pairs = stale_on_disk(out_, ["workflow"], present={"prd.md", "epic.md", "model.json"})
+    names = {n for n, _f in pairs}
+    assert names == {"prd", "epic"}  # only the ones with a file present
+    # stories consumes workflow but has no file → never flagged even if "present"
+    assert "stories" not in names
+
+
+def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
+    with _model_in_out("_clitest_stale") as p:
+        # a real slot an artifact consumes, and an already-generated PRD on disk
+        wf = {**slot(60, "inferred", "high"), "value": "draft → issued"}
+        save_model(out({"workflow": wf}), p.parent.name)
+        (p.parent / "request.txt").write_text("original request")
+        (p.parent / "prd.md").write_text("# stale PRD")
+        turn2 = json.dumps({
+            "model": {"workflow": {"completeness": 95, "confidence": "explicit",
+                                   "impact": "high", "value": "draft → issued → paid → archived"}},
+            "questions": [], "summary": {},
+        })
+        text = _run_app(["answer", str(p), "It also has an archived state."],
+                        client=FakeClient(turn2))
+        assert "STALE" in text and "prd.md" in text
+        assert "Workflow" in text  # the changed slot is named in the warning

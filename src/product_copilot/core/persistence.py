@@ -44,3 +44,10 @@ def load_request(model_path: Path) -> str:
     """The original request saved next to a model (empty string if none)."""
     p = model_path.parent / "request.txt"
     return p.read_text() if p.exists() else ""
+
+
+def present_artifacts(slug: str) -> set[str]:
+    """Filenames currently in out/<slug>/ — so change-detection only flags artifacts that were
+    actually generated, not the whole theoretical blast radius."""
+    folder = ROOT / "out" / slug
+    return {p.name for p in folder.iterdir() if p.is_file()} if folder.exists() else set()

@@ -112,6 +112,16 @@ def propagate(out: EngineOutput, changed: list[str]) -> ImpactReport:
     return report
 
 
+def stale_on_disk(out: EngineOutput, changed: list[str], present: set[str]) -> list[tuple[str, str]]:
+    """The subset of the blast radius that actually exists: artifacts whose slot set is touched by
+    `changed` AND whose file is currently on disk (`present` = filenames in out/<slug>/). Returns
+    [(artifact_name, filename)]. I/O stays with the caller — this is a pure filter — so the module
+    keeps no filesystem dependency. Terminal-only artifacts (no file) can't be detected as stale."""
+    hit = set(propagate(out, changed).artifacts)
+    return [(name, ARTIFACT_FILES[name]) for name in _ARTIFACT_SLOTS_RAW
+            if name in hit and ARTIFACT_FILES.get(name) in present]
+
+
 def diff_models(old: EngineOutput, new: EngineOutput) -> list[str]:
     """Slot ids that materially changed between two model versions — the trigger for staleness.
     A slot changed if its value, confidence or impact moved (completeness alone is noise)."""

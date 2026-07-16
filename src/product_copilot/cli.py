@@ -9,19 +9,20 @@ from dotenv import load_dotenv
 
 from product_copilot.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from product_copilot.core.contracts import EngineOutput
-from product_copilot.core.dependencies import propagate, resolve_slots
+from product_copilot.core.analysis import _label
+from product_copilot.core.dependencies import diff_models, propagate, resolve_slots, stale_on_disk
 from product_copilot.core.discovery import answer_turn, run
 from product_copilot.core.generators import (
     advise, derive_stories, estimate, generate_criteria, generate_epic,
     generate_prd, generate_release,
 )
 from product_copilot.core.persistence import (
-    _slug, load_model, load_request, save_model, save_request, write_artifact,
+    _slug, load_model, load_request, present_artifacts, save_model, save_request, write_artifact,
 )
 from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (
     render_brief, render_dependency_map, render_estimate, render_impact,
-    render_stories, render_turn,
+    render_stale, render_stories, render_turn,
 )
 
 load_dotenv()
@@ -228,9 +229,14 @@ def _cmd_discover(a, client) -> None:
 
 def _cmd_answer(a, client) -> None:
     client = client or Anthropic()
-    out, slug = _load(a.model)
-    out = answer_turn(client, out, load_request(Path(a.model)), a.answers)
+    before, slug = _load(a.model)
+    out = answer_turn(client, before, load_request(Path(a.model)), a.answers)
     render_turn(out)
+    # Change-detection: warn if this turn made an already-generated artifact stale.
+    changed = diff_models(before, out)
+    if changed:
+        pairs = stale_on_disk(out, changed, present_artifacts(slug))
+        render_stale(pairs, [_label(sid) for sid in changed])
     print(f"\nSaved model → {save_model(out, slug)}")
     if not out.questions:
         print("\n✅ Discovery converged — run `pc brief` for the assessment.")
