@@ -118,6 +118,7 @@ class Challenge(BaseModel):
     alternative: str       # a concrete, domain-grounded alternative worth weighing
     consequence: str       # what the current premise risks or costs
     recommendation: str    # what to do about it before build
+    contests: list[str] = Field(default_factory=list)  # slot ids whose premise this contests
 
 
 class DesignDecision(BaseModel):

@@ -90,7 +90,9 @@ The runner is a thin dispatch:
    risks, ranked Opportunities, Next steps, Ready-for-implementation with a single blocker). The
    checklist, discovery-complete %, decision states and readiness are computed **in Python**; the
    advisory `Brief` (problem, solution, introduces, `challenges` [premise/alternative/consequence/
-   recommendation], complexity + reasons, risks, opportunities ranked by `Leverage` (each naming the `modules` it
+   recommendation + `contests`, the slot ids the challenge calls into question — the DAG edge a
+   challenge carries, mirroring `derived_from` on a decision],
+   complexity + reasons, risks, opportunities ranked by `Leverage` (each naming the `modules` it
    reaches, grounded in model + context), next steps,
    `decisions` as `DesignDecision` [decision + optional why/alternative/tradeoff], open_decisions) is
    LLM-generated. The `challenges` block **contests the premise** (grounded in model + context, never
@@ -215,9 +217,13 @@ What the lens reports, and why it is built this way (`scripts/golden_lib.py`):
 - **A capture identical to HEAD is reported as "not re-captured", never as "no change"** — a false
   all-clear is the one failure mode a regression lens must not have.
 - **The assessment lens** (`--brief`, opt-in, doubles that request's calls) watches the deliverable
-  rather than the discovery state: the complexity verdict (graded like a slot) and the **challenge
-  headlines**, clustered by content-word overlap since they never repeat verbatim. A challenge a
-  majority of runs used to raise and no longer do is a strong signal on its own.
+  rather than the discovery state: the complexity verdict (graded like a slot) and the **challenges**,
+  grouped by the slot ids they contest (`Challenge.contests`, the same role `derived_from` plays for a
+  decision) — so a challenge theme is a contested slot, exactly as a question theme is a questioned
+  slot. A challenge a majority of runs used to raise and no longer do is a strong signal on its own.
+  Grouping challenges by headline wording was tried and abandoned: the engine rephrases at the concept
+  level, so "Visibility of the superseded signed copy" and "Published-document blast radius ignored"
+  are one challenge with no word in common, and word matching read that as one lost plus one gained.
 - **The slot tiers are a projection; the questions and challenges are the product.** `--questions` is
   usually what settles whether a change was an improvement or merely a movement.
 

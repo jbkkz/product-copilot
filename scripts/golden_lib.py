@@ -137,8 +137,14 @@ def stability(models: list[EngineOutput]) -> dict:
 # contested. Headlines are the assessment's equivalent of a question theme: they say what the engine
 # chose to push back on, which is the differentiator we actually care about keeping sharp.
 #
-# Headlines never repeat verbatim across runs ("Signature as billing trigger" / "Billing trigger at
-# signature"), so they are clustered by content-word overlap rather than matched exactly.
+# Challenges never repeat verbatim across runs, so they have to be grouped rather than matched. They
+# are grouped by the **slot ids they contest** (`Challenge.contests`) — the structural statement of
+# what the challenge is about. Word overlap was tried first and is not good enough: the engine
+# rephrases at the concept level, not just by reordering, and "Visibility of the superseded signed
+# copy" / "Published-document blast radius ignored" are the same challenge with no word in common.
+# Under word matching those read as one challenge lost and another gained, which is exactly the false
+# alarm this lens exists to avoid. Word overlap survives only as a fallback for captures taken before
+# `contests` existed.
 
 _STOPWORDS = {"a", "an", "the", "as", "at", "in", "on", "of", "for", "to", "and", "or", "vs", "is",
               "be", "by", "with", "not", "no", "its", "it", "this", "that", "are", "may", "can"}
@@ -151,10 +157,11 @@ def _words(headline: str) -> frozenset[str]:
 
 
 def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict[str, int]:
-    """Group headlines across runs into themes, and count how many *runs* each theme appeared in.
+    """Fallback grouping for captures taken before `contests` existed: greedy single-pass clustering
+    of headlines on Jaccard overlap of their content words, counting the runs each theme appeared in.
 
-    Greedy single-pass clustering on Jaccard overlap of content words. A run contributes at most once
-    to a theme, so the count is directly comparable to K."""
+    It only catches rewordings that reuse the same vocabulary. That limit is why challenges are keyed
+    on contested slots now — see `_challenge_themes`."""
     clusters: list[dict] = []   # {"words": frozenset, "label": str, "runs": set[int]}
     for run_idx, headlines in enumerate(per_run):
         for headline in headlines:
@@ -169,10 +176,34 @@ def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict
                     best, best_score = cluster, score
             if best is not None and best_score >= threshold:
                 best["runs"].add(run_idx)
-                best["words"] = best["words"] | words   # let the cluster absorb phrasing variants
+                best["words"] = best["words"] | words   # absorb the variant so later runs match
             else:
                 clusters.append({"words": words, "label": headline, "runs": {run_idx}})
     return {c["label"]: len(c["runs"]) for c in clusters}
+
+
+def _challenge_themes(briefs: list[Brief]) -> dict[str, int]:
+    """Group the K runs' challenges into themes and count the runs each appeared in.
+
+    Keyed on the contested slot ids where the capture has them, which makes the grouping exact. Falls
+    back to headline word overlap only when no run declared `contests` — i.e. a capture predating the
+    field. A mixed set is treated as structural: a run that named its slots is not degraded because
+    another run didn't."""
+    if not any(c.contests for b in briefs for c in b.challenges):
+        return _cluster_headlines([[c.headline for c in b.challenges] for b in briefs])
+
+    # A theme is a contested slot, exactly as a question theme is a questioned slot on the discovery
+    # side. No similarity threshold to tune, and it survives the engine naming a different set of
+    # secondary slots each run — what stays constant across runs is the slot the challenge is really
+    # about. Two distinct challenges contesting the same slot do merge; that is the same trade the
+    # question-theme lens already makes, and it reads honestly: "in a majority of runs the engine
+    # contested something about the workflow".
+    runs_per_slot: dict[str, set[int]] = {}
+    for run_idx, brief in enumerate(briefs):
+        for challenge in brief.challenges:
+            for slot_id in challenge.contests:
+                runs_per_slot.setdefault(slot_id, set()).add(run_idx)
+    return {_label(slot_id): len(runs) for slot_id, runs in runs_per_slot.items()}
 
 
 def brief_consensus(briefs: list[Brief]) -> dict:
@@ -181,11 +212,16 @@ def brief_consensus(briefs: list[Brief]) -> dict:
     challenges/risks/opportunities it tends to produce)."""
     n = len(briefs)
     complexities = [str(getattr(b.complexity, "value", b.complexity)) for b in briefs]
-    themes = _cluster_headlines([[c.headline for c in b.challenges] for b in briefs])
+    themes = _challenge_themes(briefs)
     return {
         "n": n,
         "complexity": _mode(complexities),
-        "themes": {label for label, count in themes.items() if count > n / 2},
+        # Unanimity, not a majority. Each challenge names two or three contested slots and a run
+        # raises about three challenges, so a majority bar marks nearly every slot as stable and the
+        # readout saturates — a lost challenge changes nothing because its neighbours still cover the
+        # same slots. Requiring every run to contest a slot is both more discriminating and the same
+        # bar `movements()` applies to a strong slot move.
+        "themes": {label for label, count in themes.items() if count == n},
         "all_themes": themes,
         "counts": {
             "challenges": [len(b.challenges) for b in briefs],

@@ -22,6 +22,10 @@ starting the build. This is a judgment, not a recap.
     multiplies cancellation and credit-note handling when deals change before they start").
   - `recommendation`: what to do about it before build (e.g. "validate the billing trigger with
     Finance first").
+  - `contests`: the slot ids whose current content this challenge calls into question (1–3, from the
+    schema). This is what the challenge is *about*, stated structurally rather than in prose — the
+    same role `derived_from` plays for a decision. A challenge that cannot name a slot it contests is
+    usually too vague to be worth raising.
   Ground every challenge in THIS model and the product context — never generic advice ("consider edge
   cases", "think about scale"). If the request's premises are genuinely sound, return `[]`; a forced
   challenge is worse than none.
@@ -81,7 +85,8 @@ Reply with **only** a valid JSON object, no surrounding text:
     "premise": "Stalled requests should auto-escalate to the next approver after exactly 5 business days.",
     "alternative": "Many teams prefer reminder-then-escalate, or an escalation window configurable per client.",
     "consequence": "A hard 5-day jump can bypass intended sign-off and surprise managers during busy periods.",
-    "recommendation": "Confirm whether escalation timing should be configurable before building it in."
+    "recommendation": "Confirm whether escalation timing should be configurable before building it in.",
+    "contests": ["business_rules", "config_vs_custom"]
   }],
   "complexity": "high",
   "complexity_reasons": ["configurable approval engine", "concurrency on balance revalidation", "notification routing"],

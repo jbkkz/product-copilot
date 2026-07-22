@@ -30,13 +30,15 @@ def _model(**impacts) -> EngineOutput:
                         questions=[], summary=Summary())
 
 
-def _challenge(headline):
+def _challenge(headline, contests=()):
     return Challenge(headline=headline, premise="p", alternative="a",
-                     consequence="c", recommendation="r")
+                     consequence="c", recommendation="r", contests=list(contests))
 
 
-def _brief(headlines, complexity=Level.high):
-    return Brief(challenges=[_challenge(h) for h in headlines], complexity=complexity)
+def _brief(challenges, complexity=Level.high):
+    """`challenges` is a list of headlines, or of (headline, contested slot ids) pairs."""
+    built = [_challenge(*c) if isinstance(c, tuple) else _challenge(c) for c in challenges]
+    return Brief(challenges=built, complexity=complexity)
 
 
 # ── the noise floor ──────────────────────────────────────────────────────────────────────────────
@@ -90,7 +92,8 @@ def test_no_movement_when_the_value_holds():
 # ── the assessment lens ──────────────────────────────────────────────────────────────────────────
 
 def test_headlines_cluster_across_phrasing_variants():
-    """The engine never repeats a headline verbatim, so themes are matched on content-word overlap."""
+    """The word-overlap fallback, used for captures taken before `contests` existed. It handles
+    reordering, which is the easy case."""
     clusters = _cluster_headlines([
         ["Signature as billing trigger"],
         ["Billing trigger at signature"],
@@ -99,13 +102,38 @@ def test_headlines_cluster_across_phrasing_variants():
     assert list(clusters.values()) == [3]      # one theme, seen in all three runs
 
 
-def test_a_theme_from_a_single_run_stays_below_the_majority():
-    briefs = [_brief(["Offline capability assumed"]),
-              _brief(["Offline capability assumed"]),
-              _brief(["Retention clock on delete"])]
-    themes = brief_consensus(briefs)["themes"]
-    assert "Offline capability assumed" in themes
-    assert "Retention clock on delete" not in themes
+def test_the_same_challenge_reworded_beyond_recognition_still_groups():
+    """The case that broke the first version of this lens, taken verbatim from a doc-reapproval
+    capture: three runs raised the same challenge — what happens to the published version during
+    re-approval — with almost no shared vocabulary. Word overlap read that as two challenges lost and
+    two gained. Grouping on the contested slots gets it right."""
+    briefs = [
+        _brief([("Visibility of the superseded signed copy", ["edge_cases", "permissions"])]),
+        _brief([("Published-document blast radius ignored", ["edge_cases"])]),
+        _brief([("Old version stays live mid-re-approval", ["edge_cases", "workflow"])]),
+    ]
+    con = brief_consensus(briefs)
+    assert con["all_themes"]["Edge cases"] == 3      # the slot all three runs really contested
+    assert con["themes"] == {"Edge cases"}           # the secondary slots stay below the majority
+
+
+def test_challenges_contesting_unrelated_slots_stay_apart():
+    """The grouping must not collapse everything into one theme either."""
+    briefs = [_brief([("Auto-issued invoice, no review", ["workflow"]),
+                      ("One contract, one invoice", ["business_objects"])])] * 3
+    assert len(brief_consensus(briefs)["themes"]) == 2
+
+
+def test_a_challenge_only_some_runs_raise_is_not_stable():
+    """Challenge themes need every run, not a majority: challenges name several slots each, so a
+    majority bar marks almost everything stable and the readout stops discriminating."""
+    briefs = [_brief([("Offline capability assumed", ["constraints"])]),
+              _brief([("Offline capability assumed", ["constraints"])]),
+              _brief([("Retention clock on delete", ["business_rules"])])]
+    assert brief_consensus(briefs)["themes"] == set()
+
+    everywhere = [_brief([("Offline capability assumed", ["constraints"])])] * 3
+    assert brief_consensus(everywhere)["themes"] == {"Constraints"}
 
 
 def test_a_challenge_the_engine_stopped_raising_is_reported():
