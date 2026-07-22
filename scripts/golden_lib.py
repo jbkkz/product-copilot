@@ -116,14 +116,21 @@ def stability(models: list[EngineOutput]) -> dict:
 
 
 def movements(old: list[EngineOutput], new: list[EngineOutput]) -> dict:
-    """Changes between two K-run baselines that clear the noise floor. A slot dimension is reported
-    only if the OLD baseline was unanimous on it (so it's a reliable reference) and the NEW consensus
-    clearly moved to a different value (majority of new runs). Everything else is noise and stays
-    silent. Also reports stable question themes that appeared or disappeared."""
+    """Changes between two K-run baselines that clear the noise floor, split by how much they can be
+    trusted. Both tiers need the OLD baseline unanimous on that dimension (a reliable reference):
+
+    - **strong**: the new consensus is *also* unanimous on a different value. Every run agrees, before
+      and after — this cannot be one run's jitter.
+    - **weak**: the new consensus is only a majority. At K=3 a majority is 2 of 3, so a single run
+      flipping produces one of these. Informative in aggregate, not on its own.
+
+    Reading only the strong tier is the default; the weak tier is worth watching when several land on
+    the same slot or the same request. Also reports stable question themes that appeared or vanished.
+    """
     co, cn = consensus(old), consensus(new)
     n_new = cn["n"]
     majority = n_new // 2 + 1
-    moved = []
+    strong, weak = [], []
     for sid, ometa in co["slots"].items():
         nmeta = cn["slots"].get(sid)
         if not nmeta:
@@ -131,16 +138,17 @@ def movements(old: list[EngineOutput], new: list[EngineOutput]) -> dict:
         for dim in ("impact", "state"):
             o_val, o_agree = ometa[dim]
             n_val, n_agree = nmeta[dim]
-            reliable = o_agree == co["n"]           # old baseline rock-stable on this dimension
-            clear = n_val != o_val and n_agree >= majority
-            if reliable and clear:
-                moved.append({
-                    "slot": _label(sid), "dim": dim,
-                    "from": o_val, "to": n_val,
-                    "old_agree": o_agree, "new_agree": n_agree, "n": n_new,
-                })
+            if o_agree != co["n"] or n_val == o_val:   # unreliable reference, or nothing moved
+                continue
+            if n_agree < majority:                     # the new runs don't even agree — pure noise
+                continue
+            entry = {"slot": _label(sid), "dim": dim, "from": o_val, "to": n_val,
+                     "old_agree": o_agree, "new_agree": n_agree, "n": n_new}
+            (strong if n_agree == n_new else weak).append(entry)
     return {
-        "moved": moved,
+        "strong": strong,
+        "weak": weak,
+        "moved": strong + weak,   # kept for callers that want the union
         "themes_added": sorted(cn["themes"] - co["themes"]),
         "themes_removed": sorted(co["themes"] - cn["themes"]),
     }
