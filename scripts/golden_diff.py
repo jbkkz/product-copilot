@@ -27,8 +27,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from golden_lib import (GOLDEN, REPO, load_runs, movements, runs_path,  # noqa: E402
-                        stability)
+from golden_lib import (GOLDEN, REPO, brief_movements, load_briefs,  # noqa: E402
+                        load_runs, movements, runs_path, stability)
 
 
 def _head_version(rel_path: str) -> str | None:
@@ -87,7 +87,36 @@ def diff_one(slug: str) -> str:
         print(f"  questions  + stable theme(s): {', '.join(m['themes_added'])}")
     if m["themes_removed"]:
         print(f"  questions  − stable theme(s): {', '.join(m['themes_removed'])}")
-    return "moved" if m["strong"] else "weak"
+
+    strong = bool(m["strong"])
+    old_briefs, new_briefs = load_briefs(old_text), load_briefs(path.read_text())
+    if old_briefs and new_briefs:
+        strong = _show_assessment(old_briefs, new_briefs) or strong
+    return "moved" if strong else "weak"
+
+
+def _show_assessment(old_briefs: list, new_briefs: list) -> bool:
+    """Print what moved in the assessment. Returns True if a *strong* signal was found there.
+
+    A lost challenge theme counts as strong on its own: the engine used to contest that premise in a
+    majority of runs and stopped. On the deliverable, losing a challenge is the regression that
+    matters most — sharper questions are worth little if the pushback quietly disappears."""
+    b = brief_movements(old_briefs, new_briefs)
+    strong = False
+    if b["complexity"]:
+        c = b["complexity"]
+        tier = "strong" if c["strong"] else "weak"
+        strong = strong or c["strong"]
+        print(f"  assessment {tier} complexity {c['from']}→{c['to']}"
+              f"   (was {c['old_agree']}/{c['n']}, now {c['new_agree']}/{c['n']})")
+    if b["themes_removed"]:
+        strong = True
+        print(f"  assessment − challenge(s) no longer raised: {'; '.join(b['themes_removed'])}")
+    if b["themes_added"]:
+        print(f"  assessment + challenge(s) now raised: {'; '.join(b['themes_added'])}")
+    if not (b["complexity"] or b["themes_added"] or b["themes_removed"]):
+        print("  assessment · verdict and challenges unchanged")
+    return strong
 
 
 def questions_one(slug: str) -> None:
@@ -102,12 +131,17 @@ def questions_one(slug: str) -> None:
     if not path.exists() or old_text is None:
         print(f"\n{slug}\n  ! need both a working-tree capture and a HEAD baseline")
         return
-    for title, models in (("HEAD", load_runs(old_text)), ("working tree", load_runs(path.read_text()))):
+    new_text = path.read_text()
+    for title, text in (("HEAD", old_text), ("working tree", new_text)):
         print(f"\n{slug} — {title}")
-        for i, m in enumerate(models, 1):
+        for i, m in enumerate(load_runs(text), 1):
             print(f"  run {i}")
             for q in m.questions:
                 print(f"    [{q.slot}] {q.q}")
+        for i, b in enumerate(load_briefs(text), 1):
+            print(f"  run {i} — challenges")
+            for c in b.challenges:
+                print(f"    ‹{c.headline}› {c.premise}")
 
 
 def main(argv: list[str]) -> int:

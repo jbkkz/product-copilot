@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from product_copilot.core.analysis import _label, _state_of  # noqa: E402
-from product_copilot.core.contracts import EngineOutput  # noqa: E402
+from product_copilot.core.contracts import Brief, EngineOutput  # noqa: E402
 
 GOLDEN = REPO / "fixtures" / "golden"
 REQUESTS = GOLDEN / "requests.md"
@@ -48,10 +48,16 @@ def runs_path(slug: str) -> Path:
     return GOLDEN / f"{slug}.runs.json"
 
 
-def dump_runs(slug: str, request: str, models: list[EngineOutput]) -> Path:
-    """Persist the K captured models for one request as a single JSON envelope."""
+def dump_runs(slug: str, request: str, models: list[EngineOutput],
+              briefs: list[Brief] | None = None) -> Path:
+    """Persist the K captured models for one request as a single JSON envelope.
+
+    ``briefs`` is optional and captured only for the requests we watch the *assessment* on — it costs
+    a second API call per run, so it is opt-in rather than the default (see ``golden_run --brief``)."""
     import json
     payload = {"request": request, "runs": [m.model_dump() for m in models]}
+    if briefs is not None:
+        payload["briefs"] = [b.model_dump() for b in briefs]
     path = runs_path(slug)
     path.write_text(json.dumps(payload, indent=2))
     return path
@@ -62,6 +68,13 @@ def load_runs(text: str) -> list[EngineOutput]:
     import json
     payload = json.loads(text)
     return [EngineOutput.model_validate(r) for r in payload["runs"]]
+
+
+def load_briefs(text: str) -> list[Brief]:
+    """The assessments captured alongside the models, or [] if this request doesn't watch them."""
+    import json
+    payload = json.loads(text)
+    return [Brief.model_validate(b) for b in payload.get("briefs", [])]
 
 
 def _mode(values: list) -> tuple[object, int]:
@@ -113,6 +126,94 @@ def stability(models: list[EngineOutput]) -> dict:
                 jitter[dim] += 1
     return {"n": n, "unanimous": unan, "jitter": jitter,
             "themes": sorted(con["themes"]), "total_slots": len(con["slots"])}
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The assessment lens
+#
+# Discovery is watched through slots and question themes; the *assessment* is the deliverable, and it
+# is mostly prose. Two things in it are comparable across runs: the `complexity` verdict (categorical,
+# so consensus applies directly) and the **challenge headlines** — 3–6 words naming the premise being
+# contested. Headlines are the assessment's equivalent of a question theme: they say what the engine
+# chose to push back on, which is the differentiator we actually care about keeping sharp.
+#
+# Headlines never repeat verbatim across runs ("Signature as billing trigger" / "Billing trigger at
+# signature"), so they are clustered by content-word overlap rather than matched exactly.
+
+_STOPWORDS = {"a", "an", "the", "as", "at", "in", "on", "of", "for", "to", "and", "or", "vs", "is",
+              "be", "by", "with", "not", "no", "its", "it", "this", "that", "are", "may", "can"}
+
+
+def _words(headline: str) -> frozenset[str]:
+    """Content words of a headline, lowercased — the key a cluster is matched on."""
+    raw = "".join(c.lower() if c.isalnum() or c.isspace() else " " for c in headline).split()
+    return frozenset(w for w in raw if w not in _STOPWORDS and len(w) > 2)
+
+
+def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict[str, int]:
+    """Group headlines across runs into themes, and count how many *runs* each theme appeared in.
+
+    Greedy single-pass clustering on Jaccard overlap of content words. A run contributes at most once
+    to a theme, so the count is directly comparable to K."""
+    clusters: list[dict] = []   # {"words": frozenset, "label": str, "runs": set[int]}
+    for run_idx, headlines in enumerate(per_run):
+        for headline in headlines:
+            words = _words(headline)
+            if not words:
+                continue
+            best, best_score = None, 0.0
+            for cluster in clusters:
+                union = words | cluster["words"]
+                score = len(words & cluster["words"]) / len(union) if union else 0.0
+                if score > best_score:
+                    best, best_score = cluster, score
+            if best is not None and best_score >= threshold:
+                best["runs"].add(run_idx)
+                best["words"] = best["words"] | words   # let the cluster absorb phrasing variants
+            else:
+                clusters.append({"words": words, "label": headline, "runs": {run_idx}})
+    return {c["label"]: len(c["runs"]) for c in clusters}
+
+
+def brief_consensus(briefs: list[Brief]) -> dict:
+    """Per-request consensus over K assessments: the modal complexity verdict with its agreement
+    count, the challenge themes that a majority of runs raised, and the shape of the output (how many
+    challenges/risks/opportunities it tends to produce)."""
+    n = len(briefs)
+    complexities = [str(getattr(b.complexity, "value", b.complexity)) for b in briefs]
+    themes = _cluster_headlines([[c.headline for c in b.challenges] for b in briefs])
+    return {
+        "n": n,
+        "complexity": _mode(complexities),
+        "themes": {label for label, count in themes.items() if count > n / 2},
+        "all_themes": themes,
+        "counts": {
+            "challenges": [len(b.challenges) for b in briefs],
+            "risks": [len(b.risks) for b in briefs],
+            "opportunities": [len(b.opportunities) for b in briefs],
+            "open_decisions": [len(b.open_decisions) for b in briefs],
+        },
+    }
+
+
+def brief_movements(old: list[Brief], new: list[Brief]) -> dict:
+    """What changed between two K-run assessment baselines. The complexity verdict is graded strong /
+    weak on the same rule as a slot (strong = unanimous before *and* after). Challenge themes are
+    reported as gained or lost — a theme the engine used to raise in a majority of runs and no longer
+    does is the assessment's version of a regression, and the one this lens exists to catch."""
+    co, cn = brief_consensus(old), brief_consensus(new)
+    o_val, o_agree = co["complexity"]
+    n_val, n_agree = cn["complexity"]
+    verdict = None
+    if o_agree == co["n"] and n_val != o_val and n_agree > cn["n"] / 2:
+        verdict = {"from": o_val, "to": n_val, "old_agree": o_agree,
+                   "new_agree": n_agree, "n": cn["n"], "strong": n_agree == cn["n"]}
+    return {
+        "complexity": verdict,
+        "themes_added": sorted(cn["themes"] - co["themes"]),
+        "themes_removed": sorted(co["themes"] - cn["themes"]),
+        "old_counts": co["counts"], "new_counts": cn["counts"],
+    }
 
 
 def movements(old: list[EngineOutput], new: list[EngineOutput]) -> dict:
