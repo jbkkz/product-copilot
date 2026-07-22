@@ -1,0 +1,150 @@
+{
+  "model": {
+    "problem": {
+      "completeness": 30,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Managers need to correct or update contractual documents after signature, without a full re-issuance from scratch — but the underlying trigger (data error vs. genuine contract change vs. renegotiation) is not stated.",
+      "evidence": "'we'd like managers to edit and re-approve documents after they've already been signed'"
+    },
+    "current_process": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "high",
+      "value": "",
+      "evidence": "No mention of how post-signature changes are handled today (manual re-signature outside system? not possible at all?)."
+    },
+    "success_metrics": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "",
+      "evidence": "Not mentioned."
+    },
+    "actors": {
+      "completeness": 40,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Managers edit and re-approve; unclear if manager is also the sole approver or if a separate/higher approval level is required.",
+      "evidence": "'managers to edit and re-approve'"
+    },
+    "business_objects": {
+      "completeness": 20,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "'Documents' likely means Contracts (possibly Invoices or other signed artifacts) — but the platform models Contract and Amendment as distinct entities with distinct lifecycles.",
+      "evidence": "Domain notes: Contract (draft→signed→active→ended) vs Amendment (draft→issued) are separate objects."
+    },
+    "business_rules": {
+      "completeness": 10,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Unclear which fields/conditions may be edited post-signature, whether there's a time window, and whether the rule differs by contract type or client.",
+      "evidence": "Context: 'modify the contract' almost always means 'issue an amendment', not patch a field."
+    },
+    "workflow": {
+      "completeness": 20,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Likely: editing a signed document should spawn a new versioned amendment (draft→issued) that reopens signature, rather than an in-place edit of the signed original.",
+      "evidence": "Domain notes: editing an issued amendment is 'a new versioned document, not an edit... re-opens signature and can re-trigger downstream automation.'"
+    },
+    "integrations": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "high",
+      "value": "",
+      "evidence": "Signature is an event other modules subscribe to (invoicing, notifications); re-approval after edit could re-fire these — risk of duplicate downstream actions."
+    },
+    "permissions": {
+      "completeness": 20,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Managers can edit; approver identity, and whether HR/admin also need edit/view rights, is undefined.",
+      "evidence": "Only 'managers' named; approval circuits are typically multi-level and client-specific in this platform."
+    },
+    "config_vs_custom": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "",
+      "evidence": "Approval circuits are configurable per client in this platform; unclear if re-approval circuit should be too."
+    },
+    "constraints": {
+      "completeness": 10,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Signed contracts have legal weight (French labor law); modifying them post-signature likely requires a traceable, versioned document rather than silent editing.",
+      "evidence": "Context: French labor law / GDPR on HR data; invoicing follows legal numbering rules."
+    },
+    "edge_cases": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "",
+      "evidence": "Not addressed: concurrent edits, rejection of re-approval, retroactive effect, documents already downstream-processed (e.g., invoiced)."
+    },
+    "reporting": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "high",
+      "value": "Audit trail of who edited/approved what and when is very likely required given contractual/legal nature of the documents.",
+      "evidence": "impact_signals: regulatory/legal documents + re-approval implies a compliance-grade change history is needed, not just a status field."
+    },
+    "acceptance": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "",
+      "evidence": "Not stated."
+    },
+    "risks": {
+      "completeness": 0,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "",
+      "evidence": "Not stated — main risk is duplicate/incorrect downstream triggers (invoicing, notifications) upon re-approval."
+    }
+  },
+  "questions": [
+    {
+      "q": "When you say 'documents,' are these Contracts, or could they also include Invoices or other signed artifacts? And should an edit-after-signature produce a new Amendment (versioned, re-signed) rather than modify the original in place?",
+      "slot": "business_objects",
+      "why": "uncertainty × impact: the platform treats Contract and Amendment as distinct entities with different lifecycles — this decision defines the entire data model and build, not just a UI edit."
+    },
+    {
+      "q": "Once a document is signed, other processes (invoicing, notifications, other systems) may already be subscribed to that signature event. If a manager edits and re-approves, should those downstream processes re-fire, stay untouched, or be manually reconciled?",
+      "slot": "integrations",
+      "why": "uncertainty × impact: re-triggering signature-linked automation risks duplicate invoices/notifications; this determines idempotency handling and error recovery design."
+    },
+    {
+      "q": "Who re-approves the edited document — the same manager who edited it, a higher-level approver, or does this depend on client/contract type?",
+      "slot": "permissions",
+      "why": "uncertainty × impact: self-approval vs. multi-level circuit changes the approval workflow shape and whether it needs to be configurable per client."
+    },
+    {
+      "q": "Are there restrictions on what can be edited post-signature (e.g., only certain fields, within a time window, only for certain contract states), or can any signed field be reopened?",
+      "slot": "business_rules",
+      "why": "uncertainty × impact: unrestricted editing of a legally signed contract is a very different (and riskier) build than a bounded correction workflow."
+    },
+    {
+      "q": "Is a full audit trail (who changed what, when, previous vs. new values) required for these edits, e.g. for legal/labor-law compliance?",
+      "slot": "reporting",
+      "why": "uncertainty × impact: legal documents under French labor law likely require traceable history, which is a distinct build (versioning + audit log) rather than a simple status change."
+    }
+  ],
+  "summary": {
+    "objective": "Allow managers to modify a signed document and have it re-approved, while preserving legal validity and traceability of the change.",
+    "scope": "Likely involves introducing (or reusing) an Amendment-style versioned lifecycle on top of the signed Contract: editing spawns a new draft version, which goes through re-approval/re-signature, with the original signed version preserved for audit purposes. May require rules on what/when can be edited, updated permissions for approval, and safeguards on downstream systems (invoicing, notifications) that already reacted to the original signature.",
+    "assumptions": [
+      "'Documents' refers to Contracts (possibly extending to Amendments), not Invoices.",
+      "Editing after signature should create a new versioned document (amendment-style) rather than mutate the signed original in place.",
+      "An audit trail of edits/approvals is required due to the legal/contractual nature of the documents.",
+      "Downstream automation tied to the original signature event needs explicit handling (re-fire, suppress, or reconcile) to avoid duplication."
+    ],
+    "blind_spot": "The request sounds like a simple 'allow edit + re-approve' toggle, but in this platform a signed Contract is not meant to be edited in place — it's meant to be amended via a new versioned document that reopens signature and can re-trigger every downstream process (invoicing, notifications, other integrations) that subscribed to the original signature. Without clarifying this, the team risks building a silent edit that breaks legal traceability and double-fires automation."
+  },
+  "decisions": [],
+  "challenges": [],
+  "opportunities": []
+}

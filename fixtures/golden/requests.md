@@ -40,3 +40,8 @@ request: Let users edit the reported totals and export the figures for the finan
 form: one-shot-app
 card: event-ops
 request: We need an app for staff to check attendees in at the venue entrance on the event day.
+
+### doc-reapproval
+form: mutate-signed-artifact
+card: document-management
+request: We'd like managers to edit and re-approve documents after they've already been signed.
