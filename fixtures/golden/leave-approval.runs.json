@@ -1,0 +1,457 @@
+{
+  "request": "We'd like managers to approve employee leave requests, with an escalation if the manager is away.",
+  "runs": [
+    {
+      "model": {
+        "problem": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Avoid leave requests stalling when the manager is unavailable, ensuring timely approval/rejection.",
+          "evidence": "Client asks for escalation 'if manager is away' \u2014 the stated ask is a workaround for a blocking approval chain."
+        },
+        "current_process": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Platform already has absence management; unclear if single-level manager approval already exists or this is net-new."
+        },
+        "success_metrics": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "No SLA or turnaround target mentioned."
+        },
+        "actors": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Employee (requester), Manager (approver), Escalation target (unspecified: backup manager, skip-level, HR).",
+          "evidence": "Explicit: manager approves. Escalation implies a second actor not named."
+        },
+        "business_objects": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Leave/Absence request, employee-manager hierarchy, leave balance/quota.",
+          "evidence": "Context: 'approval' almost always hides a balance/quota check."
+        },
+        "business_rules": {
+          "completeness": 15,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Core ambiguity: what defines 'manager is away' (calendar entry, OOO flag, manual delegation) and after what delay escalation fires."
+        },
+        "workflow": {
+          "completeness": 25,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Submitted \u2192 pending manager approval \u2192 (if away) escalated \u2192 approved/rejected.",
+          "evidence": "Escalation is a state transition; trigger type (timeout vs event) not specified."
+        },
+        "integrations": {
+          "completeness": 15,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "Likely notification to manager and escalation target.",
+          "evidence": "Not stated who is notified or via which channel."
+        },
+        "permissions": {
+          "completeness": 15,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Approval circuits/permissions are shared across modules; escalation target's rights (full approve vs view-only) undefined."
+        },
+        "config_vs_custom": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Approval circuits and notification routing are client-specific per platform context; escalation logic may vary by client/country."
+        },
+        "constraints": {
+          "completeness": 20,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "French labor law governs leave balances (paid leave/RTT); GDPR on HR data.",
+          "evidence": "Context card notes regulatory constraints on absence management."
+        },
+        "edge_cases": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not addressed: manager returns mid-escalation, no backup defined, multiple simultaneous requests, chained escalations."
+        },
+        "reporting": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "low",
+          "value": "",
+          "evidence": "No audit/compliance requirement named explicitly for this feature."
+        },
+        "acceptance": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not defined."
+        },
+        "risks": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not addressed: risk of double-approval, escalation loops, or missed notifications."
+        }
+      },
+      "questions": [
+        {
+          "q": "What exactly defines 'manager is away' \u2014 an out-of-office flag, an approved leave request on their own calendar, or a manually designated delegate \u2014 and after how long (or what event) does escalation trigger?",
+          "slot": "business_rules",
+          "why": "High impact/high uncertainty: this single rule determines the entire trigger logic and whether it's timeout-based (async, needs a pending state) or event-based (manager's own leave approval)."
+        },
+        {
+          "q": "Who is the escalation target \u2014 a specific backup manager, the manager's own manager (skip-level), or HR/admin \u2014 and can this differ by team, department or country?",
+          "slot": "actors",
+          "why": "High impact/high uncertainty: changes data model (need a delegate/hierarchy field) and whether the rule is configurable per client."
+        },
+        {
+          "q": "Should escalation happen automatically after a fixed delay (e.g. 48h no response) even without an explicit 'away' signal, or only when the manager is explicitly marked unavailable?",
+          "slot": "workflow",
+          "why": "High impact: determines sync vs async design \u2014 a timeout-based escalation needs a scheduler/queue and a visible pending state, a signal-based one is a simple conditional reroute."
+        },
+        {
+          "q": "Does a leave approval workflow already exist today (single-level manager approval), or is this the first version of approval for leave requests?",
+          "slot": "current_process",
+          "why": "High impact/high uncertainty: determines whether this is a new feature or a modification of shared approval-circuit logic used elsewhere in the platform."
+        },
+        {
+          "q": "When escalated, does the backup approver get full approve/reject rights (including visibility of the employee's balance/history), or only a limited action?",
+          "slot": "permissions",
+          "why": "High impact: permissions and approval circuits are shared across modules \u2014 an oversight here typically surfaces late, at acceptance testing."
+        }
+      ],
+      "summary": {
+        "objective": "Ensure employee leave requests are approved without being blocked when the direct manager is unavailable, by adding an escalation path to the approval circuit.",
+        "scope": "Likely: extend the leave/absence approval workflow with an 'away' detection rule, an escalation state, a designated fallback approver, and related notifications \u2014 reusing the platform's existing approval-circuit and balance/quota mechanisms.",
+        "assumptions": [
+          "A basic manager-approval flow for leave requests already exists and this adds escalation to it.",
+          "Escalation target is likely a skip-level manager, backup, or HR, though not specified.",
+          "The 'away' condition will be inferred from the manager's own calendar/leave status unless told otherwise.",
+          "Escalation logic may need to be configurable per client/country like other approval circuits."
+        ],
+        "blind_spot": "The trigger for 'manager is away' and its timing (event-based vs delay-based) is undefined \u2014 this decides whether the build is a simple conditional reroute or a queued/async mechanism with a pending state, retries and rollback handling, which is a materially different level of effort."
+      },
+      "decisions": [],
+      "challenges": [],
+      "opportunities": []
+    },
+    {
+      "model": {
+        "problem": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Leave approval stalls when the manager is unavailable, causing delay or employee frustration; escalation is meant to unblock this.",
+          "evidence": "\"with an escalation if the manager is away\" implies the core problem is blocked/delayed approvals, not the approval mechanism itself."
+        },
+        "current_process": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Likely a single-level manager approval already exists (absence management is a built feature) but with no fallback when the manager is unavailable.",
+          "evidence": "Context: 'Major features: absence management' already exists on the platform; request only adds escalation, suggesting base approval already works."
+        },
+        "success_metrics": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "actors": {
+          "completeness": 50,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Employee (requester), Manager (primary approver), an unnamed escalation approver (delegate, skip-level manager, or HR?).",
+          "evidence": "Request names 'manager' explicitly; escalation target is not specified."
+        },
+        "business_objects": {
+          "completeness": 50,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Leave/Absence request, Employee, Manager hierarchy, possibly a Delegate/Backup-approver record, and leave Balance/Quota.",
+          "evidence": "Context: existing entities Employee, Leave/Absence; approval almost always hides a balance/quota check per domain notes."
+        },
+        "business_rules": {
+          "completeness": 15,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Undefined: how is 'manager away' detected (explicit OOO flag/calendar, a designated backup, or a timeout with no action)? Also unclear whether quota/balance is checked before/at approval.",
+          "evidence": "Context trap: 'approval almost always hides a balance/quota check + a multi-level circuit'; request gives no detection mechanism for 'away'."
+        },
+        "workflow": {
+          "completeness": 25,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Likely: submitted -> pending manager approval -> (if away) escalated -> pending escalation approver -> approved/rejected. Timing of escalation trigger and whether original manager can still act post-escalation is unclear.",
+          "evidence": "No states, transition timing, or race-condition handling given in the request."
+        },
+        "integrations": {
+          "completeness": 15,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Notifications likely needed to employee, manager, and escalation approver at each state change; channel and exact trigger events unspecified.",
+          "evidence": "Context trap: 'notify' implies who/when/channel, none of which are stated."
+        },
+        "permissions": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "Unclear who can approve after escalation, whether original manager retains visibility/veto, and who can configure escalation targets.",
+          "evidence": "Context: 'permissions are forgotten until acceptance testing'; not addressed in request."
+        },
+        "config_vs_custom": {
+          "completeness": 10,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Likely needs to be configurable per client (or even per country, given labor-law variance) rather than a single hardcoded escalation rule.",
+          "evidence": "Context: 'approval circuits' and 'business rules' are explicitly client-specific configurables on this platform; French labor law is a named regulatory constraint."
+        },
+        "constraints": {
+          "completeness": 25,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "French labor law governs paid leave/RTT approval timelines; no explicit deadline or budget constraint given.",
+          "evidence": "Context: 'Regulatory: French labor law (paid leave, RTT)'."
+        },
+        "edge_cases": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not addressed: escalation target also away, concurrent multi-level escalation, employee cancels while pending, retroactive leave."
+        },
+        "reporting": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "low",
+          "value": "",
+          "evidence": "No compliance/audit requirement explicitly named yet for this feature."
+        },
+        "acceptance": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "risks": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        }
+      },
+      "questions": [
+        {
+          "q": "How exactly should 'the manager is away' be detected: an explicit out-of-office/calendar flag, a pre-designated backup approver, or an automatic timeout after N days with no response?",
+          "slot": "business_rules",
+          "why": "High impact x high uncertainty: this decides whether escalation is event-driven (immediate, synchronous) or time-based (async, requires a scheduler/timeout job) - a fundamentally different build."
+        },
+        {
+          "q": "Who is the escalation approver - a manually designated backup, the manager's own manager (skip-level), or HR - and can this differ by team/client/country?",
+          "slot": "actors",
+          "why": "High impact x high uncertainty: determines the approval hierarchy model and whether it must be configurable per client, per the platform's client-specific approval-circuit pattern."
+        },
+        {
+          "q": "Should the escalation setup (who escalates to whom, after how long) be configurable per client/team, or is a single global rule acceptable for now?",
+          "slot": "config_vs_custom",
+          "why": "High impact x high uncertainty: this is a configurable multi-client platform where approval circuits are named as client-specific; building it hardcoded now risks costly rework."
+        },
+        {
+          "q": "Once escalated, does the original manager keep the ability to approve/reject, or is authority fully transferred to the escalation approver?",
+          "slot": "workflow",
+          "why": "High impact x high uncertainty: affects concurrency handling (two people racing to act) and UI/permission design for the pending state."
+        },
+        {
+          "q": "How will you know this is working - e.g. reduced approval delay, fewer stuck requests - and is any audit trail of who approved/escalated required for HR compliance?",
+          "slot": "success_metrics",
+          "why": "Medium impact x high uncertainty: clarifies acceptance criteria and whether reporting/audit needs to be elevated to high-impact given HR/GDPR context."
+        }
+      ],
+      "summary": {
+        "objective": "Ensure employee leave requests are never stuck waiting on an absent manager, by adding an escalation path to the existing manager-approval process.",
+        "scope": "Extend the current leave/absence approval workflow with: (1) a mechanism to detect manager unavailability, (2) an escalation transition to a secondary approver, (3) associated notifications, and (4) permission rules for who can act at each stage. Likely touches the existing approval-circuit engine shared across modules.",
+        "assumptions": [
+          "A basic manager-approval flow for leave already exists and only escalation is being added.",
+          "The escalation approver is not yet defined (backup, skip-level manager, or HR).",
+          "'Manager away' will be detected via an explicit flag/calendar or a timeout, not yet specified.",
+          "Escalation rules should be configurable per client/team given the platform's config-driven approval circuits.",
+          "French labor law and existing balance/quota checks still apply on top of the escalation logic."
+        ],
+        "blind_spot": "The word 'escalation' hides a trigger-detection problem (how do we know the manager is away: calendar flag vs. timeout) and a concurrency problem (can the original manager still act after escalation fires). Building the wrong trigger type (sync vs. async/timeout-based) is the single biggest cost driver here, and it's not addressed by the request at all."
+      },
+      "decisions": [],
+      "challenges": [],
+      "opportunities": []
+    },
+    {
+      "model": {
+        "problem": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Leave requests currently stall or have no fallback when the assigned manager is unavailable, delaying employee leave processing.",
+          "evidence": "'approval... with an escalation if the manager is away' implies a blocking gap in the current approval chain."
+        },
+        "current_process": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Manager-based approval likely already exists (absence management is a built feature); escalation path is the missing piece.",
+          "evidence": "Context: 'Major features: absence management' already built \u2014 request only adds escalation."
+        },
+        "success_metrics": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "actors": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Employee (requester), Manager (primary approver) are explicit. Escalation approver identity (skip-level manager, HR, or designated backup) is undefined.",
+          "evidence": "'managers to approve... escalation if the manager is away' names two roles but not the escalation actor."
+        },
+        "business_objects": {
+          "completeness": 50,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Leave/Absence request object linked to Employee and an approving Manager; likely needs an 'escalated-to' reference field.",
+          "evidence": "Context: Leave/Absence and Employee are existing core objects with approval circuits."
+        },
+        "business_rules": {
+          "completeness": 15,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Approval almost certainly involves an existing balance/quota check. Escalation trigger condition (how 'away' is detected) and escalation target rule are undefined.",
+          "evidence": "Context trap: 'approval almost always hides a balance/quota check + a multi-level circuit'."
+        },
+        "workflow": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Likely states: pending -> approved/rejected, plus a new 'escalated' state and transition; timing of escalation (immediate vs timeout) is unknown.",
+          "evidence": "Request implies a new lifecycle branch but doesn't specify trigger timing."
+        },
+        "integrations": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "Escalation and approval events likely need notifications, but recipients and channel are unspecified.",
+          "evidence": "Context trap: 'notify' implies who/when/which channel \u2014 not stated in request."
+        },
+        "permissions": {
+          "completeness": 20,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "Unclear whether the original manager retains approval rights after escalation, and what the escalation approver can see or do.",
+          "evidence": "Context: 'permissions are forgotten until acceptance testing'; approval circuits are shared/cross-cutting."
+        },
+        "config_vs_custom": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Platform is configurable multi-client; approval circuits are listed as client-specific config \u2014 escalation rule scope unknown."
+        },
+        "constraints": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "French labor law (paid leave, RTT) and GDPR on HR data apply, as with all absence handling.",
+          "evidence": "Context: 'Regulatory: French labor law..., GDPR on HR data'."
+        },
+        "edge_cases": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "Unaddressed: escalation target also away, manager returns mid-escalation, concurrent/overlapping requests, no escalation target configured.",
+          "evidence": "Not mentioned in request; inferred from domain pattern of multi-level circuits."
+        },
+        "reporting": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "HR data is GDPR-sensitive and labor-law governed; a lightweight audit of who approved/escalated is plausible even if not explicitly requested."
+        },
+        "acceptance": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "risks": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        }
+      },
+      "questions": [
+        {
+          "q": "How should the system detect that a manager is 'away' \u2014 their own approved leave/absence entry, an out-of-office flag, or a manual delegation they set themselves?",
+          "slot": "business_rules",
+          "why": "uncertainty x impact: high \u2014 this defines the escalation trigger itself; without it, the workflow, integrations, and edge cases can't be built. Detection method changes whether it's automatic (event-driven) or manual (delegation-based)."
+        },
+        {
+          "q": "Who is the escalation approver \u2014 a fixed skip-level manager, HR, or a manager-configured delegate \u2014 and can this vary by department, contract, or client?",
+          "slot": "actors",
+          "why": "uncertainty x impact: high \u2014 determines the approval circuit shape and whether it needs to be configurable per client/team, a recurring trap in this platform."
+        },
+        {
+          "q": "Is escalation triggered immediately when the manager is marked away, or only after a timeout with no response \u2014 and does the original manager retain approval rights once escalated?",
+          "slot": "workflow",
+          "why": "uncertainty x impact: high \u2014 timing (event-driven vs delayed/async) and concurrent-approval rights change the state machine, notification logic, and error handling entirely."
+        },
+        {
+          "q": "Should this escalation rule be a global default, or configurable per team/department/client (like other approval circuits on this platform)?",
+          "slot": "config_vs_custom",
+          "why": "uncertainty x impact: high \u2014 approval circuits are explicitly client-specific configuration in this platform; building it hardcoded vs configurable is a fundamentally different scope."
+        },
+        {
+          "q": "Who needs to be notified at each step (employee, original manager, escalation approver, HR) and through which channel (email, in-app, both)?",
+          "slot": "integrations",
+          "why": "uncertainty x impact: medium-high \u2014 'notify' is named as a recurring trap requiring explicit who/when/channel; affects build scope for the notification layer."
+        }
+      ],
+      "summary": {
+        "objective": "Ensure employee leave requests are never stuck waiting on an unavailable manager, by adding an automatic escalation path to the existing manager-approval workflow.",
+        "scope": "Extend the existing Leave/Absence approval circuit with: (1) a way to detect a manager is away, (2) an escalation transition/state routing the request to a designated approver, (3) notifications to relevant parties, and (4) permission rules for who can act on an escalated request. Likely reuses the existing balance/quota check and multi-level circuit infrastructure already in the platform.",
+        "assumptions": [
+          "Manager-based leave approval already exists; only escalation logic is new.",
+          "The escalation approver is likely a skip-level manager or HR, though not yet confirmed.",
+          "Escalation is probably triggered by the manager's own recorded absence/leave, reusing existing HR data.",
+          "The rule may need to be configurable per team, department, or client rather than a single global rule.",
+          "Standard French labor law and GDPR constraints apply as with existing absence data."
+        ],
+        "blind_spot": "The request assumes 'escalation if the manager is away' is a simple fallback, but it hides three undecided design choices that change the build: (1) how 'away' is detected (data-driven vs manual delegation), (2) who exactly the escalation lands on and whether that's configurable per team/client, and (3) whether the original manager can still approve after escalation fires \u2014 get this wrong and requests could be double-approved, orphaned, or stuck if the escalation target is also away."
+      },
+      "decisions": [],
+      "challenges": [],
+      "opportunities": []
+    }
+  ]
+}

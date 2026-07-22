@@ -1,10 +1,11 @@
 # Golden requests
 
 A fixed set of discovery inputs used to watch the engine for regressions. Each block below is one
-discovery run: `golden_run.py` reads this file, runs a single-pass discovery per block, and saves the
-resulting model to `fixtures/golden/<slug>.json`. `golden_diff.py` then compares a fresh run against
-the committed model and surfaces only the structural signal (per-slot impact/confidence, discovery
-completeness, question themes).
+request: `golden_run.py` reads this file, runs a single-pass discovery **K times** per block (K=3 by
+default) and saves all K models to `fixtures/golden/<slug>.runs.json`. `golden_diff.py` then compares
+a fresh K-run capture against the committed one and reports a slot as *moved* only when the change
+clears the measured noise floor — the engine is non-deterministic and the model family exposes no
+sampling controls, so a single capture can't be pinned, only sampled. See `scripts/golden_lib.py`.
 
 The set is deliberately small and diverse: **one request per problem *form***, so a change to a prompt
 or a context card that shifts how the engine reasons about a form shows up on the request that
