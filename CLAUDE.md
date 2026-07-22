@@ -187,11 +187,55 @@ plan. `to_gitlab(export, slug)` (`--epic-gitlab` → `epic.gitlab.json`) is the 
 `depends_on` to a structured `links` array (`blocks`) instead of body text — GitLab has native issue
 links. Adding Jira = another pure `to_<tracker>()` adapter + `--flag`.
 
+## The golden harness (measuring a prompt or context-card change)
+
+Behavior is tuned by editing assets, and the engine is non-deterministic with no sampling controls
+available on the model family in use — so "did this edit help?" cannot be answered by looking at one
+run. `scripts/` holds a regression lens built around that constraint:
+
+```bash
+python scripts/golden_run.py [<slug>…] [--brief]   # re-capture the K-run baseline (K=3, GOLDEN_K)
+python scripts/golden_diff.py [<slug>…]            # what moved, above the noise floor
+python scripts/golden_diff.py <slug> --questions   # the questions & challenges themselves, old vs new
+```
+
+`fixtures/golden/requests.md` is the fixed request set — one request per problem *form*. Each is
+captured K times into `fixtures/golden/<slug>.runs.json`; the committed version is the baseline and
+the working tree is the candidate. Workflow: edit an asset → `golden_run` → `golden_diff` → commit the
+new baseline if the change is intended.
+
+What the lens reports, and why it is built this way (`scripts/golden_lib.py`):
+
+- **Consensus over K runs, not a single capture.** A slot dimension is only a usable reference if all
+  K runs agree on it; the per-request *noise floor* (how many slots are unanimous) is printed on a
+  fresh capture so you know how much signal that request can carry.
+- **Strong vs weak moves.** Strong = unanimous before *and* after; weak = a bare majority, which at
+  K=3 is one run flipping. Act on strong, watch weak only in aggregate. This distinction matters:
+  without it the lens reports jitter as signal.
+- **A capture identical to HEAD is reported as "not re-captured", never as "no change"** — a false
+  all-clear is the one failure mode a regression lens must not have.
+- **The assessment lens** (`--brief`, opt-in, doubles that request's calls) watches the deliverable
+  rather than the discovery state: the complexity verdict (graded like a slot) and the **challenge
+  headlines**, clustered by content-word overlap since they never repeat verbatim. A challenge a
+  majority of runs used to raise and no longer do is a strong signal on its own.
+- **The slot tiers are a projection; the questions and challenges are the product.** `--questions` is
+  usually what settles whether a change was an improvement or merely a movement.
+
+Its own logic is unit-tested in `tests/test_golden_lib.py` (no API calls). Cost: K calls per request,
+doubled under `--brief` — a full six-request cycle is 18, so re-capture the targeted request first
+and the full set only before committing a baseline.
+
+**Known limit:** `load_context()` concatenates every card for every request, so each new context card
+dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost `doc-reapproval`
+its sharpest question (supersession, 3/3 runs → 1/3, displaced by that card's audit-trail emphasis).
+A second such instance would justify routing cards by relevance instead of loading them all.
+
 ## Extending
 
 - **New client/product context:** copy `context/_template.md` to `context/<name>.md` and fill it. It
   is picked up automatically (non-`_` prefix). Better context cards → better impact estimates → better
-  questions.
+  questions. Measure the change through the golden harness above — a card helps its target request and
+  can quietly cost a neighbour.
 - **`config_vs_custom` slot** is `optional: true` — the platform edge (hardcoded / configurable /
   per-client / reusable-for-all). On for configurable multi-client platforms, off for one-shot apps.
 - `framework/elicitation.md` is the human-readable spec of the framework; `model_schema.json` is the
