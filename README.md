@@ -201,6 +201,26 @@ context/
 
 Better context → sharper impact estimates → better questions. Files prefixed with `_` are ignored.
 
+### Knowing whether a card helped
+
+Behavior here is tuned by editing Markdown, and the engine is non-deterministic — so "did that card
+make the engine sharper?" is a real question, and one run can't answer it. A small harness does:
+
+```bash
+python scripts/golden_run.py <slug>          # capture a fixed request K times (K=3)
+python scripts/golden_diff.py                # what moved, above the measured noise floor
+python scripts/golden_diff.py <slug> --questions   # the questions and challenges themselves
+```
+
+A fixed request set (one per problem *form*) is captured K times and compared against the committed
+baseline. A change is reported only when the runs agreed before *and* after — anything that flickers
+run-to-run is noise and stays silent. `--brief` extends this to the assessment itself, tracking the
+complexity verdict and which premises the engine chose to contest.
+
+It measures movement, not improvement — the questions are what tell you the direction. When the
+finance card landed, the engine stopped asking *"what exactly are these totals?"* and started asking
+*"a traceable adjustment entry, or an override?"*. That's the read that matters.
+
 ---
 
 ## Roadmap
@@ -217,6 +237,8 @@ Better context → sharper impact estimates → better questions. Files prefixed
   flags the already-generated artifacts a change makes stale
 - Two interfaces over one presentation-free engine — a `pc` subcommand CLI and Claude Code slash
   commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
+- A regression harness for prompt and context changes — consensus over repeated runs, so a real effect
+  is separable from sampling noise, on the discovery *and* on the assessment
 
 **Upcoming**
 - An HTTP API / MCP façade — another thin layer over the same core (for n8n and future web UIs)
