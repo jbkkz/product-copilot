@@ -4,10 +4,160 @@
     {
       "model": {
         "problem": {
+          "completeness": 15,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Likely: current totals don't reflect corrections/manual adjustments needed before finance can trust or export the numbers.",
+          "evidence": "Request implies totals as displayed are not yet 'right' and must be editable before export."
+        },
+        "current_process": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "success_metrics": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "actors": {
+          "completeness": 20,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Someone (controller/analyst?) edits totals; 'the finance team' receives the export \u2014 but who edits vs who approves vs who exports is undefined.",
+          "evidence": "'Let users edit... export... for the finance team' names an audience, not a role structure."
+        },
+        "business_objects": {
+          "completeness": 30,
+          "confidence": "explicit",
+          "impact": "medium",
+          "value": "Reported totals (derived figures, likely Line Item/Report aggregates) and an export artifact of 'the figures'.",
+          "evidence": "'reported totals' and 'figures' named explicitly."
+        },
+        "business_rules": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Not stated whether an edit is an adjustment entry or a direct override \u2014 this is the central unresolved decision."
+        },
+        "workflow": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "No mention of period status (open/in-review/closed) or whether closed periods can be touched."
+        },
+        "integrations": {
+          "completeness": 10,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Export destination is 'the finance team' \u2014 format, schema, rounding and reproducibility unspecified.",
+          "evidence": "'export the figures for the finance team' \u2014 target named, contract undefined."
+        },
+        "permissions": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "No mention of who may edit vs approve vs export; domain requires segregation of duties."
+        },
+        "config_vs_custom": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "constraints": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Financial-reporting domain implies accounting standards, retention and auditability constraints even though unmentioned."
+        },
+        "edge_cases": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "reporting": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "Editing a reported total without a visible audit trail is exactly the trap the domain flags \u2014 'who changed what, why' is a hard requirement here, not optional."
+        },
+        "acceptance": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        },
+        "risks": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": ""
+        }
+      },
+      "questions": [
+        {
+          "q": "When a user 'edits' a total, do you want a traceable adjustment entry (a new line that makes the sum work, fully auditable) or a direct override that replaces the derived value?",
+          "slot": "business_rules",
+          "why": "uncertainty (empty) x impact (high): these are two different builds \u2014 one preserves reconciliation to source data, the other silently decouples the report from it. This is the core blind spot of the request."
+        },
+        {
+          "q": "Are these totals in open periods only, or can they belong to a closed/filed period? If closed, should edits be blocked and routed through a restatement or next-period adjustment instead?",
+          "slot": "workflow",
+          "why": "uncertainty (empty) x impact (high): 'edit' means something different before vs after close; skipping this produces a tool that can corrupt filed figures."
+        },
+        {
+          "q": "Who is allowed to edit a total, who approves that edit, and who can close a period \u2014 are these meant to be different people (segregation of duties)?",
+          "slot": "permissions",
+          "why": "uncertainty (empty) x impact (high): financial domain typically requires editor != approver != closer; permissions are usually forgotten until audit/acceptance."
+        },
+        {
+          "q": "What does 'export for the finance team' target \u2014 an accounting system, a bank/tax file, or a spreadsheet handed over manually? Is there a required format, field set or rounding convention?",
+          "slot": "integrations",
+          "why": "uncertainty (inferred, low completeness) x impact (high): export is a contract with a consumer; the wrong format/rounding gets rejected downstream, and this shapes the whole export build."
+        },
+        {
+          "q": "Do you need a visible audit trail (who changed which figure, when, previous vs new value) for compliance/audit purposes?",
+          "slot": "reporting",
+          "why": "uncertainty (empty) x impact (high): financial figures are audited by nature; retrofitting an audit trail later is expensive, so it must be scoped now."
+        }
+      ],
+      "summary": {
+        "objective": "Enable authorized users to correct/edit reported financial totals and export the resulting figures to the finance team, in a way that keeps the report reconcilable and auditable.",
+        "scope": "Likely includes: an edit mechanism for totals (adjustment entry or override \u2014 to be decided), a period-status check governing what can still be edited, role-based permissions for edit/approve/export, an export mechanism to a finance-team-consumable format, and an audit trail of changes.",
+        "assumptions": [
+          "Editing a total is meant to happen via a traceable adjustment, not a silent override (to be confirmed).",
+          "Some totals may belong to already-closed periods, requiring a restatement path rather than direct editing.",
+          "The finance team receiving the export needs a specific, agreed format rather than a generic dump.",
+          "Different people are expected to edit, approve, and close periods (segregation of duties)."
+        ],
+        "blind_spot": "The request treats 'edit a total' as a simple write, but a reported total is a derived value: editing it must be either a traceable adjustment entry or an explicit override, and the client has not said which \u2014 this single decision determines whether the report stays reconcilable to its source data or silently diverges from it, and it also determines what the export can honestly claim to represent."
+      },
+      "decisions": [],
+      "challenges": [],
+      "opportunities": []
+    },
+    {
+      "model": {
+        "problem": {
           "completeness": 30,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Finance team needs a way to correct reported figures and get them into a usable output \u2014 but 'edit' and 'export' are framed as simple actions, which they rarely are in a derived-figure system.",
+          "value": "Finance needs a way to correct or refine figures before sending them downstream, and to hand the finance team a usable export.",
           "evidence": "\"Let users edit the reported totals and export the figures for the finance team.\""
         },
         "current_process": {
@@ -18,440 +168,601 @@
           "evidence": ""
         },
         "success_metrics": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": ""
-        },
-        "actors": {
-          "completeness": 40,
-          "confidence": "explicit",
-          "impact": "high",
-          "value": "'Users' edit totals; 'finance team' consumes the export. Roles (contributor vs controller vs approver vs auditor) not distinguished.",
-          "evidence": "\"users edit\" / \"finance team\""
-        },
-        "business_objects": {
-          "completeness": 30,
-          "confidence": "inferred",
-          "impact": "high",
-          "value": "Likely: Reporting Period, Line Item/Entry, Account, Report, Export, Adjustment \u2014 but 'total' is a derived aggregate, not a stored field.",
-          "evidence": "domain note: totals are aggregated along period \u00d7 account \u00d7 entity"
-        },
-        "business_rules": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "Unknown whether an 'edit' produces an auditable adjustment entry or overwrites the derived value directly (override).",
-          "evidence": ""
-        },
-        "workflow": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "Unknown whether editing is allowed only in open/in-review periods, or whether closed periods require restatement/reopening.",
-          "evidence": ""
-        },
-        "integrations": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "Export target/format/consumer unspecified \u2014 could be accounting system, spreadsheet, or bank file, each with its own schema and rounding rules.",
-          "evidence": ""
-        },
-        "permissions": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "Unknown who may edit vs adjust vs close vs export \u2014 segregation of duties is a standing finance requirement.",
-          "evidence": ""
-        },
-        "config_vs_custom": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "Export formats and adjustment approval circuits are typically client-specific on this platform.",
-          "evidence": "context: client-specific export formats, adjustment approval circuits"
-        },
-        "constraints": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": ""
-        },
-        "edge_cases": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "Closed-period edits, concurrent edits, retroactive corrections, rounding vs aggregation mismatches not addressed.",
-          "evidence": ""
-        },
-        "reporting": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "Financial reporting inherently requires an audit trail of who changed which figure, when, and why \u2014 a domain-standard compliance need, not optional.",
-          "evidence": "context: \"auditability of who changed which figure and why\", \"an audit trail on every figure that moved\""
-        },
-        "acceptance": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": ""
-        },
-        "risks": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "Risk that an override decouples the report from its source entries, or that export mismatches break downstream reconciliation.",
-          "evidence": ""
-        }
-      },
-      "questions": [
-        {
-          "q": "When a user 'edits' a reported total, should this create a traceable adjustment entry (a new line that makes the sum work, kept separate from raw actuals) or should it overwrite the derived value directly (an override)?",
-          "slot": "business_rules",
-          "why": "uncertainty \u00d7 impact: this is the single fork that decides the data model and audit story \u2014 an override without a visible marker silently breaks reconciliation with source data, which the domain explicitly flags as a recurring trap."
-        },
-        {
-          "q": "Can totals be edited in a closed period, or only in open/in-review periods \u2014 and if a closed figure needs correcting, is that a restatement/next-period adjustment rather than an edit?",
-          "slot": "workflow",
-          "why": "uncertainty \u00d7 impact: closed periods are meant to be frozen; allowing free edits there invalidates prior exports and filings, so the lifecycle boundary changes what 'edit' is even allowed to mean."
-        },
-        {
-          "q": "Who exactly may edit a total, who may approve that edit, and who may close the period \u2014 are these meant to be different people (segregation of duties)?",
-          "slot": "permissions",
-          "why": "uncertainty \u00d7 impact: finance domains typically require the adjuster and the closer to be different roles; skipping this is routinely caught late at acceptance testing and forces a permissions rework."
-        },
-        {
-          "q": "What is the export's destination and contract \u2014 which system/format (accounting package, bank file, spreadsheet), what field set, rounding convention, and does a past export need to stay retrievable exactly as sent?",
-          "slot": "integrations",
-          "why": "uncertainty \u00d7 impact: export is described as a contract with a downstream consumer, not a file dump \u2014 the wrong assumption here causes rejected imports or figures that don't tie out to the penny."
-        },
-        {
-          "q": "Does every edit and export need to be logged with who/when/previous-vs-new-value (audit trail), and is that trail itself something auditors will need to inspect?",
-          "slot": "reporting",
-          "why": "uncertainty \u00d7 impact: an audit trail is a hard requirement in this domain and expensive to retrofit \u2014 worth confirming scope now rather than after build."
-        }
-      ],
-      "summary": {
-        "objective": "Allow authorized users to correct reported financial totals and give the finance team a reliable export of the resulting figures.",
-        "scope": "Likely involves: an adjustment (or override) mechanism on derived totals, period-lifecycle-aware edit rules (open vs closed), role-based edit/approve/close/export rights, an audit trail of changes, and a formatted, reproducible export to a named downstream consumer.",
-        "assumptions": [
-          "Editing a total should produce an auditable adjustment entry rather than a silent override, per domain norms.",
-          "Edits are likely restricted once a period is closed, requiring restatement instead of direct mutation.",
-          "The export has a specific downstream consumer (accounting system, spreadsheet, or filing) with its own format and rounding rules.",
-          "Different roles should exist for editing, approving, and closing to preserve segregation of duties.",
-          "An audit trail of who changed which figure and why is required, not optional."
-        ],
-        "blind_spot": "The request treats 'edit the total' as a simple field update, but a reported total is a derived aggregate \u2014 the real decision is adjustment vs override, and getting this wrong quietly decouples the report from its own source data, undermining the very reconciliation finance relies on."
-      },
-      "decisions": [],
-      "challenges": [],
-      "opportunities": []
-    },
-    {
-      "model": {
-        "problem": {
-          "completeness": 20,
-          "confidence": "inferred",
-          "impact": "medium",
-          "value": "Likely need: correct/adjust figures before finalizing a report, or let finance override a wrong aggregation before sending it out.",
-          "evidence": "'edit the reported totals' implies current totals are sometimes wrong or need manual correction."
-        },
-        "current_process": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "low",
-          "value": "",
-          "evidence": "Not mentioned \u2014 no indication of how totals are corrected today (spreadsheet patch, email to controller, etc.)."
-        },
-        "success_metrics": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": "Not mentioned."
-        },
-        "actors": {
-          "completeness": 30,
-          "confidence": "inferred",
-          "impact": "high",
-          "value": "Some 'user' role edits totals; a distinct 'finance team' receives the export. Roles for who edits vs who approves vs who exports are undifferentiated.",
-          "evidence": "'let users edit... export... for the finance team'."
-        },
-        "business_objects": {
-          "completeness": 40,
-          "confidence": "inferred",
-          "impact": "medium",
-          "value": "Reported Total (derived from Line Items/Entries along period\u00d7account\u00d7entity) and an Export artifact for finance.",
-          "evidence": "'reported totals' and 'figures' referenced directly."
-        },
-        "business_rules": {
-          "completeness": 10,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "No indication whether an edit is a traceable adjustment entry or a raw override of the derived value \u2014 the domain's #1 trap."
-        },
-        "workflow": {
-          "completeness": 10,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "No mention of period state (open/in-review/closed) \u2014 editing an open period and editing a closed one are different builds (restatement vs direct edit)."
-        },
-        "integrations": {
-          "completeness": 20,
-          "confidence": "inferred",
-          "impact": "high",
-          "value": "Export target = 'the finance team' \u2014 unclear if this is a file download, an email attachment, or a feed into another system, and in what format.",
-          "evidence": "'export the figures for the finance team' names a recipient but no format/channel/consumer contract."
-        },
-        "permissions": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "No mention of who may edit vs. approve vs. export vs. merely view \u2014 segregation of duties is a named domain risk (editor should not also approve close)."
-        },
-        "config_vs_custom": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "Platform is multi-client/configurable; chart of accounts, export field mapping and adjustment approval circuits are typically client-specific \u2014 not addressed."
-        },
-        "constraints": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": "No deadline, regulatory, or dependency constraint stated, though financial reporting implies auditability obligations by default."
-        },
-        "edge_cases": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "Editing totals in a closed period, concurrent edits, and re-export after a change are unaddressed \u2014 each has a defined-but-unstated correct behavior in this domain."
-        },
-        "reporting": {
-          "completeness": 10,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "Financial figures require an audit trail (who changed what, why, previous vs new value) as a hard requirement in this domain \u2014 not stated but implicitly mandatory."
-        },
-        "acceptance": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": "Not mentioned."
-        },
-        "risks": {
           "completeness": 10,
           "confidence": "inferred",
           "impact": "medium",
-          "value": "Chief risk: an unmarked override silently decouples the report from its underlying entries, breaking reconciliation and audit at review time.",
-          "evidence": "Derived from domain trap on adjustment vs. override."
-        }
-      },
-      "questions": [
-        {
-          "q": "When a user 'edits' a total, should the system create a traceable adjustment entry (new line, attributed, reversible) that keeps the total reconciled with its source data, or should it overwrite the derived value directly?",
-          "slot": "business_rules",
-          "why": "uncertainty \u00d7 impact: this is the single decision that determines the data model, the audit story, and whether the report can ever be reconciled back to source \u2014 the domain's classic trap, currently unaddressed."
-        },
-        {
-          "q": "Can totals be edited only while the reporting period is open/in-review, or must edits also be possible after the period is closed (via restatement), and if so who can reopen a closed period, if anyone?",
-          "slot": "workflow",
-          "why": "uncertainty \u00d7 impact: closed-period edit semantics change entirely (direct edit vs. next-period adjustment vs. controlled reopen) and this isn't addressed at all."
-        },
-        {
-          "q": "Who is allowed to edit a total, who must approve that edit, and who receives/triggers the export \u2014 are edit, approval, and export necessarily separate roles (segregation of duties)?",
-          "slot": "permissions",
-          "why": "uncertainty \u00d7 impact: financial domains typically require the editor of a figure not be the approver of its close; undefined roles risk a rebuild at acceptance."
-        },
-        {
-          "q": "What exactly does 'export for the finance team' mean \u2014 a downloadable file (which format/columns/rounding convention), an automated feed into another system, or a retained point-in-time snapshot that must remain reproducible even after later figure changes?",
-          "slot": "integrations",
-          "why": "uncertainty \u00d7 impact: export is described in the domain as a contract with a downstream consumer, not a file dump \u2014 the wrong assumption here breaks reconciliation and consumer validation."
-        },
-        {
-          "q": "Does every edit to a total need to be logged with who changed it, when, previous vs. new value, and reason \u2014 i.e. is an audit trail a compliance requirement here?",
-          "slot": "reporting",
-          "why": "uncertainty \u00d7 impact: an audit trail is described as a hard, not-a-nice-to-have requirement in financial reporting; retrofitting it after build is expensive."
-        }
-      ],
-      "summary": {
-        "objective": "Allow authorized users to correct reported figures and give the finance team a reliable exported view of those figures.",
-        "scope": "Likely includes: an edit mechanism for totals (adjustment entry vs. override \u2014 to be decided), respect for the reporting-period lifecycle (open vs. closed), role-based permissions for edit/approve/export, an export mechanism with a defined format/channel for finance, and an audit trail of changes to figures.",
-        "assumptions": [
-          "Editing a total should be implemented as a traceable adjustment rather than a silent overwrite, to preserve reconciliation with source data (to confirm).",
-          "Totals can only be freely edited while their reporting period is open or in-review; closed periods require a restatement/adjustment path rather than direct edit (to confirm).",
-          "The 'finance team' is an internal recipient of a formatted export (file or feed), not simply a read-only screen viewer (to confirm).",
-          "Some segregation of duties exists between the person editing a total and the person approving/closing the period (to confirm)."
-        ],
-        "blind_spot": "The request treats 'edit the total' as a simple field change, but a reported total is a derived aggregation, not a stored value \u2014 editing it without defining adjustment-vs-override semantics, period-lock rules, and an audit trail will produce a report that silently stops tying back to its own source data, which is discovered only at audit or reconciliation time."
-      },
-      "decisions": [],
-      "challenges": [],
-      "opportunities": []
-    },
-    {
-      "model": {
-        "problem": {
-          "completeness": 30,
-          "confidence": "inferred",
-          "impact": "high",
-          "value": "Finance needs a controlled way to correct reported figures that don't match operational reality, and to hand off reliable numbers to the finance team/accounting system.",
-          "evidence": "\"Let users edit the reported totals and export the figures for the finance team\" \u2014 no stated pain point, but the domain implies correction + handoff need."
-        },
-        "current_process": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": "Not mentioned \u2014 unknown whether corrections today happen via spreadsheet, support ticket, or not at all."
-        },
-        "success_metrics": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "",
-          "evidence": "No success criteria stated."
+          "value": "Finance team receives figures they can act on / file without manual rework.",
+          "evidence": "implied by 'export the figures for the finance team'"
         },
         "actors": {
           "completeness": 20,
           "confidence": "inferred",
           "impact": "high",
-          "value": "\"Users\" likely means controller/analyst (edits) and finance manager (approves/exports); auditor may need read-only visibility.",
-          "evidence": "\"Let users edit ... and export ... for the finance team\" \u2014 role names not specified, only implied by domain."
+          "value": "Likely a controller/analyst edits, a finance manager approves, finance team consumes the export; auditor may need read access.",
+          "evidence": "context roles; request only says 'users'"
         },
         "business_objects": {
           "completeness": 30,
           "confidence": "inferred",
           "impact": "medium",
-          "value": "Reported totals = derived Line Items aggregated by Period x Account x Cost Center; export produces a Report/Export snapshot.",
-          "evidence": "\"reported totals\" and \"figures\" map to the domain's Line Item / Report / Export objects."
+          "value": "Reported Total (derived from Line Items), Reporting Period, Export artifact.",
+          "evidence": "\"reported totals\", \"export the figures\""
         },
         "business_rules": {
           "completeness": 5,
           "confidence": "empty",
           "impact": "high",
-          "value": "Unresolved: is editing a total an adjustment entry (traceable, additive) or an override (replaces the derived value)? Rule may also vary by account/period state.",
-          "evidence": "\"Let users edit the reported totals\" \u2014 the request treats this as a simple write, which the domain flags as never simple."
+          "value": "Unclear whether 'editing a total' means posting an adjustment entry (traceable, reversible) or overriding the derived value (decouples report from source).",
+          "evidence": "\"edit the reported totals\" \u2014 no mechanism specified"
         },
         "workflow": {
-          "completeness": 5,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Unknown whether edits are allowed only in open/in-review periods, or also require a restatement path once a period is closed.",
-          "evidence": "No mention of period state; domain treats closed-period editing as a fundamentally different flow (restatement vs adjustment)."
+          "value": "Not stated whether edits apply only to open periods, or whether closed-period corrections must go through restatement/next-period adjustment.",
+          "evidence": "no mention of period state"
         },
         "integrations": {
           "completeness": 15,
-          "confidence": "inferred",
+          "confidence": "empty",
           "impact": "high",
-          "value": "Export target assumed to be an accounting system or spreadsheet for \"the finance team\"; format/field mapping/rounding convention unknown.",
-          "evidence": "\"export the figures for the finance team\" \u2014 destination named loosely, no format/contract specified."
+          "value": "Export destination/consumer (accounting package, spreadsheet, bank) and its format/schema unspecified.",
+          "evidence": "\"export the figures for the finance team\" \u2014 no format or system named"
         },
         "permissions": {
           "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Unclear who may edit vs. approve vs. close vs. merely view \u2014 segregation of duties is a named domain constraint.",
-          "evidence": "\"users\" is undifferentiated; domain requires distinct edit/adjust/close/see rights, often scoped by entity."
+          "value": "Who may edit vs. approve vs. close vs. merely view is undefined; segregation of duties matters for financial data.",
+          "evidence": "\"let users edit\" \u2014 'users' undifferentiated"
         },
         "config_vs_custom": {
-          "completeness": 0,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Chart of accounts, cut-off/FX conventions and export field mapping are typically client-specific.",
-          "evidence": "Not addressed; platform context flags these as configurable per client."
+          "value": "Whether export format/fields and adjustment approval circuit are client-specific or standard is unknown.",
+          "evidence": "platform context: export formats are client-specific"
         },
         "constraints": {
           "completeness": 10,
-          "confidence": "inferred",
-          "impact": "high",
-          "value": "Likely regulatory pressure: audit trail on any figure change, segregation of duties between adjuster and closer.",
-          "evidence": "\"finance team\" + \"reported totals\" in this domain implies auditability and compliance obligations even though not explicitly requested."
-        },
-        "edge_cases": {
-          "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Editing a figure already exported/published; rounding vs aggregation mismatch; multi-currency FX date; retroactive correction across periods.",
-          "evidence": "Not addressed, but flagged repeatedly as recurring traps in this domain."
+          "value": "Regulatory retention / audit obligations likely apply given financial data, not yet confirmed.",
+          "evidence": "domain: accounting standards, statutory retention"
+        },
+        "edge_cases": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "Editing figures in a closed period, rounding vs. aggregation mismatch, re-export after a figure changes \u2014 none addressed.",
+          "evidence": "none named in request"
         },
         "reporting": {
-          "completeness": 10,
-          "confidence": "inferred",
+          "completeness": 5,
+          "confidence": "empty",
           "impact": "high",
-          "value": "An audit trail (who edited what, when, adjustment vs override, previous vs new value) is required, not optional, given finance/compliance context.",
-          "evidence": "Domain note: \"an audit trail on every figure that moved\" is a hard requirement for financial reporting \u2014 raises this slot above its default 'low' impact."
+          "value": "An audit trail (who edited what, when, previous vs new value) is very likely required given this is financial data destined for finance/audit use.",
+          "evidence": "financial-reporting domain default + 'edit totals' implies traceability need"
         },
         "acceptance": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
           "value": "",
-          "evidence": "Not stated."
+          "evidence": ""
         },
         "risks": {
-          "completeness": 0,
+          "completeness": 5,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Main risk: a report silently stops tying back to its source data if overrides aren't visibly marked, or a closed period is mutated without control.",
-          "evidence": "Inferred from domain traps around override vs adjustment and period close."
+          "value": "Risk that an override silently decouples the report from its source data, or that an export is regenerated instead of retrieved, breaking reproducibility.",
+          "evidence": "domain trap: 'edit the total' hides adjustment vs override"
         }
       },
       "questions": [
         {
-          "q": "When a user 'edits a total', should the system create a traceable adjustment entry (a new line that makes the sum add up) or an override (replacing the derived value outright)?",
+          "q": "When a user 'edits' a total, should this create a traceable adjustment entry (a new line that makes the sum add up, fully auditable) or directly override the derived value (which then may no longer match its underlying entries)?",
           "slot": "business_rules",
-          "why": "uncertainty (empty) x high impact: this decides the entire data model and audit story - an override that silently disagrees with its own source data is a very different (and riskier) build than an adjustment."
+          "why": "high impact \u00d7 near-total uncertainty: these are two different data models and audit postures \u2014 the single biggest driver of build shape here."
         },
         {
-          "q": "Can totals be edited once their reporting period is closed, or does a correction after close have to go through a restatement / next-period adjustment instead?",
+          "q": "Can totals be edited in any period, or only while the period is open \u2014 and if a closed period needs correcting, should that go through a restatement / next-period adjustment instead of a direct edit?",
           "slot": "workflow",
-          "why": "uncertainty (empty) x high impact: closed-period edits are normally forbidden or re-routed - this changes the lifecycle and what 're-opening a period' even means."
+          "why": "high impact: closed-period mutability is a hard rule in this domain; getting it wrong breaks period integrity and prior exports."
         },
         {
-          "q": "Who exactly may edit a figure, who may approve/close a period, and who is read-only (e.g. auditor)? Are these different people by design?",
+          "q": "Who exactly may edit a total, who must approve the edit, and who may close the period \u2014 are these meant to be different people (segregation of duties)?",
           "slot": "permissions",
-          "why": "uncertainty (empty) x high impact: segregation of duties is a named compliance constraint in this domain - conflating edit/approve/close rights is the most common gap found at acceptance."
+          "why": "high impact, currently empty: financial data typically requires split rights; retrofitting permission separation later is costly."
         },
         {
-          "q": "What is the export actually feeding - a specific accounting system, a bank/tax filing, or a spreadsheet for humans - and does it need a fixed format/field mapping the receiver validates?",
+          "q": "What is the export for \u2014 a specific accounting system, a bank, a filing, or a spreadsheet for humans \u2014 and does it need an exact format/field set, and to remain reproducible (versioned/retained) after being sent?",
           "slot": "integrations",
-          "why": "uncertainty (inferred, low completeness) x high impact: export is a contract, not a file dump; the target dictates format, rounding, and whether it must be versioned/reproducible after the fact."
+          "why": "high impact: export is a contract with a downstream consumer, not a file dump; format mismatch or non-reproducibility causes rejected or untrustworthy filings."
         },
         {
-          "q": "Does every figure change need a full audit trail (who, when, old vs new value, reason) to satisfy an internal or external audit?",
+          "q": "Does this edit/export need a full audit trail (who changed what, when, old vs new value) for compliance or audit purposes?",
           "slot": "reporting",
-          "why": "uncertainty (inferred) x high impact: this domain treats the audit trail as a hard requirement - confirming it now avoids an expensive retrofit later."
+          "why": "impact_signals raise this to high: financial figures reviewed by finance/audit almost always require traceability, and it's expensive to retrofit."
         }
       ],
       "summary": {
-        "objective": "Allow authorized finance users to correct reported totals in a controlled, traceable way, and produce a reliable export of the figures for the finance team.",
-        "scope": "Likely includes: an adjustment-entry mechanism (not a direct field edit) tied to specific line items/accounts/periods, an audit trail of who changed what and why, permission separation between editor/approver/closer, and an export step with an agreed format/target system, versioned and retained for reproducibility.",
+        "objective": "Allow authorized users to correct reported financial totals and give the finance team a reliable export of the figures.",
+        "scope": "Likely includes: a mechanism to change a reported total (adjustment entry or override \u2014 TBD), a period-aware edit rule (open vs closed), role-based permissions for edit/approve/export, an export pipeline to a defined downstream format, and an audit trail of changes.",
         "assumptions": [
-          "\"Edit the total\" means recording a traceable adjustment entry rather than overwriting the derived value directly.",
-          "\"Users\" refers to controller/analyst (editor) and finance manager (approver), with an auditor role having read-only access.",
-          "Editing is only permitted in open/in-review periods; closed periods require a restatement or next-period adjustment.",
-          "The export targets an accounting system or a finance-team spreadsheet, requiring an agreed format and being versioned/retained once sent.",
-          "An audit trail on every figure change is required for compliance, even though not explicitly requested."
+          "A controller/analyst edits figures, a finance manager approves, and the finance team consumes the export (roles not yet confirmed).",
+          "The 'reported totals' are derived from underlying entries in a Reporting Period, per this platform's standard model.",
+          "Editing a total will need to be either a traceable adjustment or a flagged override \u2014 not a silent field change.",
+          "Export targets a specific downstream consumer/system whose format is not yet identified.",
+          "An audit trail of edits is expected given the financial/compliance context."
         ],
-        "blind_spot": "The request treats 'edit the total' as a simple write, but in this domain a reported total is a derived value: editing it is either an adjustment (traceable, additive) or an override (replaces and decouples the figure from its own source data) - two fundamentally different builds. Left unresolved, the default risk is an override with no visible marker, producing a report that silently stops tying back to the underlying data - exactly the failure mode auditors catch."
+        "blind_spot": "The request treats 'edit the total' as a simple field change and 'export' as a simple file, but in this domain a total is a derived value: editing it is either an auditable adjustment or a silent override that decouples the report from its source data \u2014 and the export is a versioned contract with a downstream consumer, not a regenerate-on-demand download. Building the wrong one of these pairs is the main risk."
       },
       "decisions": [],
       "challenges": [],
       "opportunities": []
+    },
+    {
+      "model": {
+        "problem": {
+          "completeness": 30,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Finance needs to correct/adjust reported figures that don't match reality, and get a usable export for downstream consumption.",
+          "evidence": "\"edit the reported totals and export the figures\" \u2014 no stated root cause (error correction? reconciliation? restatement?)"
+        },
+        "current_process": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not mentioned \u2014 unknown whether totals are today edited manually, in Excel, or not editable at all."
+        },
+        "success_metrics": {
+          "completeness": 10,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Figures ties back to source data after edit; export accepted without rejection by the consuming system.",
+          "evidence": "Implicit in \"export the figures for the finance team\" \u2014 no explicit acceptance criteria given."
+        },
+        "actors": {
+          "completeness": 25,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "\"Users\" likely = controller/analyst (editor) and finance manager (approver); finance team = export recipient.",
+          "evidence": "\"users\" is generic in the request; role granularity not specified."
+        },
+        "business_objects": {
+          "completeness": 40,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Reporting Period, Line Item/Entry, Report (derived total), Export.",
+          "evidence": "\"reported totals\" and \"figures\" map to the domain's Line Item/Report/Export objects."
+        },
+        "business_rules": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "\"Edit the reported totals\" doesn't say whether this is an adjustment entry (traceable, additive) or a direct override (replaces the derived value) \u2014 the two are different builds with different audit consequences."
+        },
+        "workflow": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "No mention of period state (open/closed) \u2014 closed-period edits normally require a restatement path, not a direct edit."
+        },
+        "integrations": {
+          "completeness": 20,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Export destined for \"the finance team\" \u2014 format/consumer unspecified (accounting package? spreadsheet? filing?).",
+          "evidence": "\"export the figures for the finance team\" names a recipient but not a system, format, or whether it must be reproducible after the fact."
+        },
+        "permissions": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "No indication of who may edit vs. approve vs. export vs. close \u2014 segregation of duties is a standing constraint in this domain."
+        },
+        "config_vs_custom": {
+          "completeness": 10,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Unclear whether the edit rule / export format is standard across clients or client-specific (chart of accounts, export mapping)."
+        },
+        "constraints": {
+          "completeness": 10,
+          "confidence": "inferred",
+          "impact": "high",
+          "value": "Likely subject to accounting/audit standards (traceability of any figure change, segregation of duties).",
+          "evidence": "Domain default: financial reporting carries regulatory/audit obligations even when not stated."
+        },
+        "edge_cases": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Not addressed: editing a closed period, rounding vs. aggregation mismatch, re-export after a figure changes."
+        },
+        "reporting": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": "An edit to a reported total is exactly the kind of change that needs a visible audit trail (who changed what, why, when) \u2014 compliance-driven, not optional."
+        },
+        "acceptance": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "No acceptance scenario stated yet."
+        },
+        "risks": {
+          "completeness": 10,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Main risk: a silent override that decouples the report from its source data, or an export the accounting system rejects.",
+          "evidence": "Derived from domain traps around override vs adjustment and export-as-contract."
+        }
+      },
+      "questions": [
+        {
+          "q": "When a user 'edits a total', should this create a traceable adjustment entry that keeps the figure reconciled with its source data, or does it replace the derived value outright (an override)?",
+          "slot": "business_rules",
+          "why": "high impact \u00d7 empty: these are two different builds \u2014 one preserves reconciliation and auditability, the other silently breaks the tie-back to source data. This is the core ambiguity in the request."
+        },
+        {
+          "q": "Who exactly may edit a total, who may approve/close the period, and who may export \u2014 are these the same person or must they be separated?",
+          "slot": "permissions",
+          "why": "high impact \u00d7 empty: segregation of duties (editor \u2260 approver) is a standing requirement in financial reporting; getting this wrong fails audit later."
+        },
+        {
+          "q": "Can totals be edited in a closed period, or does a correction there require a restatement / adjustment in the next open period instead?",
+          "slot": "workflow",
+          "why": "high impact \u00d7 empty: closed periods are normally frozen; \"edit the figures\" means something entirely different before vs. after close."
+        },
+        {
+          "q": "What is the export's destination and contract \u2014 which system/format does the finance team expect (accounting package, fixed template, spreadsheet), and must a past export remain retrievable exactly as sent?",
+          "slot": "integrations",
+          "why": "high impact \u00d7 partial: export is a contract with a downstream consumer, not a file dump; format/rounding/versioning mismatches get rejected or cause reconciliation issues."
+        },
+        {
+          "q": "Does every change to a total need a visible audit trail (who changed it, when, previous vs. new value) accessible to an auditor or compliance officer?",
+          "slot": "reporting",
+          "why": "high impact \u00d7 empty: financial figures are audit-sensitive by default; retrofitting an audit trail after build is expensive."
+        }
+      ],
+      "summary": {
+        "objective": "Allow authorized finance users to correct reported totals and produce a reliable export of the figures for the finance team.",
+        "scope": "Likely includes: a defined edit mechanism (adjustment entry vs. override) with attribution and audit trail; period-aware editing rules (open vs. closed, restatement path); role-based permissions separating editing, approval and export; and a formally specified export (format, field mapping, rounding, versioning/retention) matching the consuming system's requirements.",
+        "assumptions": [
+          "The editors of totals are controllers/analysts, with a finance manager approving; 'the finance team' is the export recipient.",
+          "Business objects involved: Reporting Period, Line Item/Entry, Report, Export.",
+          "The platform's standard audit trail and period-close mechanics apply unless told otherwise.",
+          "Editing figures in an already-closed period is out of scope for a direct edit and instead follows a restatement/adjustment flow."
+        ],
+        "blind_spot": "\"Edit the reported totals\" reads as a simple field edit, but a total is a derived value: the real choice is between a traceable adjustment (keeps the report tied to its source data) and an override (silently decouples it) \u2014 and whether this is even allowed once the period is closed. Left unaddressed, this produces a report that no longer reconciles and an export the finance team can't trust or reproduce after the fact."
+      },
+      "decisions": [],
+      "challenges": [],
+      "opportunities": []
+    }
+  ],
+  "briefs": [
+    {
+      "problem": "Reported financial totals sometimes need correction before finance can trust or export them, and there's currently no defined, reconcilable way to make that correction.",
+      "solution": "A controlled mechanism to adjust or correct reported totals and export the resulting figures to the finance team, with role-based approval and an audit trail.",
+      "introduces": [
+        "an adjustment-entry (or override) layer sitting on top of the derived aggregation engine",
+        "period-lifecycle enforcement gating what can still be touched (open vs. closed)",
+        "a segregation-of-duties permission model (editor / approver / exporter / closer)",
+        "a change audit trail on every figure that moves",
+        "an export contract with versioned, reproducible snapshots for the finance consumer"
+      ],
+      "challenges": [
+        {
+          "headline": "'Edit a total' as a simple write",
+          "premise": "The request frames correcting a total as an edit action a user performs on a field.",
+          "alternative": "In financial reporting, a total is a derived aggregate; corrections are normally posted as adjustment entries (new, attributed, reversible lines) rather than direct overwrites of the number.",
+          "consequence": "Building a direct-override path is faster to ship but permanently decouples the report from its own source data \u2014 the number on screen stops tying back to the entries underneath it, which is exactly the failure mode auditors look for.",
+          "recommendation": "Default to the adjustment-entry model unless Finance explicitly confirms overrides are acceptable, and get that confirmation in writing before estimating.",
+          "contests": [
+            "business_rules",
+            "workflow"
+          ]
+        },
+        {
+          "headline": "No stated period boundary",
+          "premise": "The request doesn't say whether editable totals belong only to open periods or can include closed/filed ones.",
+          "alternative": "Standard practice is to freeze a period at close and route any later correction through a restatement or a next-period adjustment, never a mutation of the closed figure.",
+          "consequence": "Without this gate, the tool as literally requested could let someone silently rewrite a figure that's already been filed or exported \u2014 a compliance incident, not a bug.",
+          "recommendation": "Model period status explicitly (open / in-review / closed) and block direct edits on closed periods before any UI work starts.",
+          "contests": [
+            "workflow",
+            "constraints"
+          ]
+        },
+        {
+          "headline": "Single undefined 'user' edits and exports",
+          "premise": "The request talks about 'users' editing totals and 'the finance team' receiving an export, without separating who may adjust, approve, or send figures out.",
+          "alternative": "Financial-reporting domains typically require segregation of duties: the person who posts an adjustment is not the one who approves the close or triggers the export.",
+          "consequence": "If one role can adjust and export unchecked, the feature becomes a single point of failure for both fraud risk and audit findings \u2014 and permissions are notoriously found missing at acceptance testing, not before.",
+          "recommendation": "Define the three roles (adjust / approve / export) and confirm whether they must be distinct people before building the permission model.",
+          "contests": [
+            "permissions",
+            "actors"
+          ]
+        }
+      ],
+      "complexity": "high",
+      "complexity_reasons": [
+        "adjustment logic must sit correctly on top of an existing derived-aggregation layer without breaking reconciliation",
+        "period lifecycle (open/in-review/closed/restatement) adds state-machine complexity most requests this size skip",
+        "segregation-of-duties permissions and an unforgeable audit trail are both hard requirements, not additions",
+        "export must be a versioned, reproducible contract with a downstream consumer, not a simple file dump"
+      ],
+      "cost_driver": "the adjustment/audit-trail layer that must keep the reported total reconcilable to its source entries after every change",
+      "risks": [
+        "The aggregation layer is cross-cutting in this domain \u2014 any change to how a figure can be edited ripples into every report, dashboard and export built on it.",
+        "No audit trail is currently defined; retrofitting one after the edit mechanism ships is expensive and may block an audit already in progress.",
+        "If closed-period handling isn't nailed down, the build risks allowing corruption of already-filed figures.",
+        "Undefined roles risk delivering a tool where one user can both adjust and export a figure \u2014 a segregation-of-duties gap auditors will flag.",
+        "The export target and format are unspecified; building to a generic 'export' assumption risks rejection once the real consumer's schema is known."
+      ],
+      "opportunities": [
+        {
+          "text": "Build the adjustment mechanism (amount, account, period, author, reason, approval) as a reusable engine rather than a one-off feature \u2014 the same shape will be needed for any future correction workflow on derived figures.",
+          "leverage": "high",
+          "modules": [
+            "Financial Reporting"
+          ]
+        },
+        {
+          "text": "Generalize the audit trail (who changed what, when, previous vs new value) so it can be reused across other modules that already need traceability, such as contract amendments or document versioning.",
+          "leverage": "future",
+          "modules": [
+            "Contracts",
+            "Document Management"
+          ]
+        },
+        {
+          "text": "Treat the export as a versioned artifact with its own retention, matching the pattern already needed for reproducible financial exports.",
+          "leverage": "medium",
+          "modules": [
+            "Financial Reporting"
+          ]
+        }
+      ],
+      "next_steps": [
+        "Confirm with Finance whether corrections must be adjustment entries or whether direct overrides are ever acceptable.",
+        "Define the period lifecycle (open/in-review/closed) and lock down what happens to figures after close.",
+        "Map out the three roles (adjust / approve / export) and confirm whether segregation of duties is mandatory.",
+        "Get the actual export target and required format/schema from the finance team before building the export mechanism."
+      ],
+      "decisions": [],
+      "open_decisions": [
+        "Adjustment entry vs. direct override for editing totals",
+        "Whether closed periods can be touched, and via what restatement path",
+        "Role separation for edit / approve / export / close",
+        "Export destination, format and rounding convention",
+        "Audit trail scope and retention requirements"
+      ]
+    },
+    {
+      "problem": "Finance needs a controlled way to correct derived reporting figures and hand off numbers the finance team can trust and file, but no mechanism, ownership or audit posture is defined yet.",
+      "solution": "A permissioned way to adjust or override reported totals, period-aware, with a versioned export pipeline to a downstream finance consumer.",
+      "introduces": [
+        "an adjustment-vs-override engine that changes how totals reconcile to source data",
+        "period-lifecycle enforcement (open vs closed) gating what can be edited",
+        "a segregation-of-duties permission model (edit / approve / close / view)",
+        "a versioned, retained export pipeline distinct from ad-hoc file generation",
+        "a figure-level audit trail feeding compliance and reconciliation needs"
+      ],
+      "challenges": [
+        {
+          "headline": "\"Edit the total\" as a field write",
+          "premise": "The request asks to 'let users edit the reported totals' as if a total were a normal editable field.",
+          "alternative": "In this domain a total is derived from underlying entries; the two real options are a traceable adjustment entry (new line, reversible, auditable) or an override (replaces the derived value and silently disagrees with its own source data).",
+          "consequence": "Building a direct-override UI first is the fastest path to a report that no longer ties back to its own data \u2014 exactly the failure auditors look for.",
+          "recommendation": "Force this decision with Finance before any data modeling: adjustment entry vs override, and if override is ever allowed, require a visible 'overridden by/why' marker.",
+          "contests": [
+            "business_rules",
+            "workflow"
+          ]
+        },
+        {
+          "headline": "Export as a simple download",
+          "premise": "The request treats 'export the figures for the finance team' as a one-off file generation step.",
+          "alternative": "An export in this domain is a contract with a downstream consumer (accounting system, bank, filing, or spreadsheet) with an agreed format, rounding convention and schema, and it must remain reproducible after the fact \u2014 not regenerated on demand.",
+          "consequence": "If exports aren't versioned and retained, a later figure correction silently invalidates a report finance already filed or sent, with no way to prove what was actually submitted.",
+          "recommendation": "Identify the actual downstream consumer and its format requirements now, and decide whether exports are versioned artifacts or live regenerations before building the pipeline.",
+          "contests": [
+            "integrations",
+            "reporting"
+          ]
+        },
+        {
+          "headline": "Undifferentiated 'users' can edit",
+          "premise": "The request says 'let users edit,' with no distinction between who edits, who approves, and who closes the period.",
+          "alternative": "Financial reporting typically requires segregation of duties: the person adjusting a figure should not be the one who approves the period close.",
+          "consequence": "Without this split, the build fails compliance review later and permissions get retrofitted under pressure \u2014 the classic late-discovered gap in this kind of system.",
+          "recommendation": "Define the edit/approve/close/view permission matrix explicitly with Finance before touching the workflow build.",
+          "contests": [
+            "permissions",
+            "actors"
+          ]
+        }
+      ],
+      "complexity": "high",
+      "complexity_reasons": [
+        "adjustment-vs-override choice reshapes the core data model, not just a UI form",
+        "period-close lifecycle must gate editability and route corrections to restatement",
+        "segregation-of-duties permissions cut across edit/approve/close/view",
+        "export must be a versioned, reproducible contract with an unspecified downstream system"
+      ],
+      "cost_driver": "the adjustment-vs-override mechanism and the audit trail it requires",
+      "risks": [
+        "An override built without a visible marker decouples the report from its source entries, undermining audit trust silently.",
+        "An export that regenerates on demand instead of retrieving a retained snapshot breaks reproducibility for anything already filed or sent.",
+        "Missing segregation of duties (editor vs approver vs closer) is a common compliance gap discovered only at acceptance testing.",
+        "The aggregation layer is cross-cutting in this platform \u2014 any rule chosen here (cut-off, rounding) ripples into every other report and export built on it."
+      ],
+      "opportunities": [
+        {
+          "text": "Model the adjustment as a first-class, approvable object now \u2014 it's the same shape as any correction workflow this platform will need later.",
+          "leverage": "high",
+          "modules": [
+            "Reporting Period",
+            "Adjustment",
+            "Budget vs. Actual"
+          ]
+        },
+        {
+          "text": "Build the export as a versioned, retained artifact from day one rather than a generated file \u2014 reusable pattern for every future downstream consumer.",
+          "leverage": "medium",
+          "modules": [
+            "Export"
+          ]
+        },
+        {
+          "text": "Generalize the figure-change audit trail so it can back reconciliation and audit requests across all financial entities, not just this one edit path.",
+          "leverage": "future",
+          "modules": [
+            "Line Item",
+            "Adjustment",
+            "Reporting Period"
+          ]
+        }
+      ],
+      "next_steps": [
+        "Confirm with Finance whether editing a total should be an adjustment entry or an override, and settle the visible-marker rule if override is ever permitted.",
+        "Define whether edits are restricted to open periods, with closed-period corrections routed through restatement.",
+        "Identify the actual export destination and its format/schema requirements, and decide if exports must be versioned and retained.",
+        "Draft the permission matrix (who edits, approves, closes, views) with segregation of duties before workflow build starts."
+      ],
+      "decisions": [
+        {
+          "decision": "Reported totals are derived from underlying Line Items within a Reporting Period.",
+          "why": "",
+          "alternative": "",
+          "tradeoff": "",
+          "derived_from": [
+            "business_objects"
+          ]
+        }
+      ],
+      "open_decisions": [
+        "Adjustment entry vs. override mechanism for editing totals",
+        "Whether edits are allowed only in open periods or require restatement for closed ones",
+        "Permission matrix and segregation of duties for edit/approve/close/view",
+        "Export destination, format, and reproducibility (versioned/retained vs. regenerated)",
+        "Scope and depth of the audit trail required for compliance",
+        "Success metrics for what 'usable without manual rework' means to the finance team"
+      ]
+    },
+    {
+      "problem": "Finance can't trust that a reported total still reconciles with the data behind it, and has no reliable way to hand that number to a downstream system.",
+      "solution": "A way for authorized finance users to correct reported figures and produce a formal export, as requested \u2014 but the request itself doesn't yet say how the correction should behave or what the export must satisfy.",
+      "introduces": [
+        "an adjustment/override engine for derived totals, distinct from a plain field edit",
+        "a period-lifecycle state machine (open/closed/restatement) governing when a figure may change",
+        "a segregation-of-duties permission model (editor, approver, exporter as distinct rights)",
+        "an export-as-contract subsystem (format, rounding convention, versioning, retention of what was actually sent)",
+        "a cross-cutting audit trail on every figure change, built for audit-time scrutiny not just internal QA"
+      ],
+      "challenges": [
+        {
+          "headline": "\"Edit the total\" isn't defined",
+          "premise": "The request treats editing a reported total as a simple field change.",
+          "alternative": "A total is a derived value; correcting it is either a traceable adjustment entry (report stays reconciled) or an override (report silently disagrees with its own source data) \u2014 two different builds.",
+          "consequence": "Building a generic edit form without settling this produces a report that looks editable but quietly stops tying back to the underlying entries, which is exactly the failure mode auditors look for.",
+          "recommendation": "Workshop the edit semantics with Finance before writing any schema \u2014 decide adjustment vs. override explicitly, per figure type if needed.",
+          "contests": [
+            "business_rules",
+            "workflow"
+          ]
+        },
+        {
+          "headline": "Export treated as a file dump",
+          "premise": "\"Export the figures for the finance team\" is scoped as if any export format will do.",
+          "alternative": "In this domain an export is a contract with a specific downstream consumer (accounting package, bank, filing) with its own format, rounding and validation rules, and it must remain reproducible after the fact, not just regenerable.",
+          "consequence": "Building a generic export risks rejection by the real consuming system, and if figures change later, an unversioned export can't be proven to match what was actually sent.",
+          "recommendation": "Get the actual destination system and its format/field spec from Finance before building the export logic, and decide whether past exports must be retained as immutable snapshots.",
+          "contests": [
+            "integrations",
+            "business_objects"
+          ]
+        },
+        {
+          "headline": "Root cause is assumed, not confirmed",
+          "premise": "The request is read as generic error-correction, but nothing confirms whether this is fixing mistakes, formalizing a manual reconciliation habit, or handling post-close restatement.",
+          "alternative": "These are different problems: error correction wants a simple traceable fix; restatement wants a next-period adjustment path; reconciliation wants comparison tooling against the source system, not an edit form at all.",
+          "consequence": "Scoping the wrong one means either overbuilding an adjustment engine nobody uses that way, or missing the actual controls (e.g. period-close protection) Finance needs.",
+          "recommendation": "Find out how totals are corrected today (Excel? nothing? another module?) before committing to a build shape.",
+          "contests": [
+            "problem",
+            "current_process"
+          ]
+        }
+      ],
+      "complexity": "high",
+      "complexity_reasons": [
+        "adjustment-vs-override semantics require a new correction model layered on the derived-figure engine",
+        "period-close state machine with a restatement/next-period path",
+        "export must be versioned and retained, not just generated on demand",
+        "segregation-of-duties permissions likely stretch the existing role framework"
+      ],
+      "cost_driver": "the traceable adjustment engine and its audit trail",
+      "risks": [
+        "An override path built without visible attribution silently breaks reconciliation \u2014 the most damaging outcome in this domain.",
+        "The existing permission framework may not natively support the editor/approver/exporter separation this domain requires.",
+        "Building the export before the real consuming system's format is confirmed risks a rejected or unusable file.",
+        "Skipping period-close semantics lets someone mutate a filed, already-exported figure with no restatement trail."
+      ],
+      "opportunities": [
+        {
+          "text": "A generalized adjustment-entry model (amount, account, period, author, reason, approval) could serve any figure correction across reporting structures, not just this one.",
+          "leverage": "high",
+          "modules": [
+            "Financial Reporting"
+          ]
+        },
+        {
+          "text": "A versioned, retained export mechanism (snapshot-on-send, reproducible later) is reusable wherever this platform emits a formal file to an external consumer.",
+          "leverage": "future",
+          "modules": [
+            "Financial Reporting",
+            "Invoicing"
+          ]
+        },
+        {
+          "text": "The audit-trail pattern (who changed what, when, previous vs. new value) already matters elsewhere in this platform and could be built as a shared service.",
+          "leverage": "future",
+          "modules": [
+            "Financial Reporting",
+            "Contracts"
+          ]
+        }
+      ],
+      "next_steps": [
+        "Confirm with Finance whether corrections should be adjustment entries or overrides, and whether that varies by account or figure type.",
+        "Identify the real downstream consumer of the export and get its format/field/rounding requirements before building.",
+        "Define the period-close and restatement rules with Finance, including who may re-open a closed period.",
+        "Map out the segregation-of-duties matrix (edit / approve / close / export) before finalizing permissions."
+      ],
+      "decisions": [],
+      "open_decisions": [
+        "Adjustment vs. override semantics for figure correction",
+        "Export destination system and its exact format contract",
+        "Whether closed-period figures can ever be directly edited or only restated",
+        "Segregation-of-duties matrix for edit/approve/export/close",
+        "Root cause behind the request (error correction vs. reconciliation vs. restatement)"
+      ]
     }
   ]
 }
