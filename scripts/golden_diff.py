@@ -141,7 +141,12 @@ def questions_one(slug: str) -> None:
         for i, b in enumerate(load_briefs(text), 1):
             print(f"  run {i} — challenges")
             for c in b.challenges:
+                # headline+premise names the contest; alternative+recommendation are what separate a
+                # real architect's pushback from a bare observation — show them so a prompt edit can be
+                # judged on the half of the challenge that actually carries the domain grounding.
                 print(f"    ‹{c.headline}› {c.premise}")
+                print(f"        alt: {c.alternative}")
+                print(f"        rec: {c.recommendation}")
 
 
 def main(argv: list[str]) -> int:
