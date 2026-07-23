@@ -203,9 +203,19 @@ def _emit(slug: str, filename: str, markdown: str, label: str) -> None:
     print(f"\nWrote {label} → {path}")
 
 
+def _is_file_arg(arg: str) -> bool:
+    """True if arg names an existing file. A real request string is longer than the OS filename
+    limit, which makes Path.exists() *raise* instead of returning False — treat that as 'not a file'
+    so the request is used as text, which is the whole point of the discover command."""
+    try:
+        return Path(arg).exists()
+    except OSError:
+        return False
+
+
 def _cmd_discover(a, client) -> None:
     client = client or Anthropic()
-    is_file = Path(a.request).exists()
+    is_file = _is_file_arg(a.request)
     request = Path(a.request).read_text() if is_file else a.request
     slug = _slug(Path(a.request).stem if is_file else request)
     quick = a.once or not sys.stdin.isatty()

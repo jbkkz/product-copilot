@@ -45,7 +45,7 @@ from src.engine import (
     to_gitlab,
     write_artifact,
 )
-from product_copilot.cli import _build_parser, app
+from product_copilot.cli import _build_parser, _is_file_arg, app
 from product_copilot.core.dependencies import (
     artifact_slots, diff_models, propagate, resolve_slots,
 )
@@ -612,6 +612,13 @@ def test_pc_discover_once_saves_model():
         assert (folder / "request.txt").exists()  # saved so `pc answer` can resume
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def test_discover_file_check_survives_a_real_length_request():
+    # A real client request is a paragraph — longer than the OS filename limit. The file-vs-text
+    # heuristic must treat that as text, not crash (Path.exists() raises OSError above the limit).
+    long_request = "When a contract is signed we want everything to reconcile. " * 20
+    assert _is_file_arg(long_request) is False
 
 
 def test_pc_answer_refines_the_model():
