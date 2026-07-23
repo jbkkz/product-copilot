@@ -407,7 +407,10 @@ def test_run_returns_engine_output_and_wires_schema_and_context():
     result = run(fake, [{"role": "user", "content": "leave approval"}])
     assert isinstance(result, EngineOutput)
     assert result.model["real_problem"].completeness == 80
-    system = fake.calls[0]["system"]
+    # system is a cache-controlled text block so its stable prefix is cached across calls.
+    block = fake.calls[0]["system"][0]
+    assert block["cache_control"] == {"type": "ephemeral"}
+    system = block["text"]
     assert "slots" in system              # framework/model_schema.json injected ({{SCHEMA}})
     assert "## b2b-platform" in system    # context card injected ({{CONTEXT}})
 

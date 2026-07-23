@@ -57,7 +57,11 @@ def _complete(client: Anthropic, system: str, messages: list[dict], out_model, r
         resp = client.messages.create(
             model=os.getenv("MODEL", "claude-sonnet-5"),
             max_tokens=4000,
-            system=system,
+            # The system prompt (template + schema + every context card) is byte-identical
+            # across the calls of a session — the K runs of a golden capture, the up-to-8 turns
+            # of converse(), each JSON retry. Caching its prefix makes those repeats cost ~0.1x
+            # input instead of full price. No effect on output, so baselines are unaffected.
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=attempt,
         )
         raw = _first_text(resp)
