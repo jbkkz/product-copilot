@@ -204,9 +204,12 @@ def _emit(slug: str, filename: str, markdown: str, label: str) -> None:
 
 
 def _is_file_arg(arg: str) -> bool:
-    """True if arg names an existing file. A real request string is longer than the OS filename
-    limit, which makes Path.exists() *raise* instead of returning False — treat that as 'not a file'
-    so the request is used as text, which is the whole point of the discover command."""
+    """True if arg names an existing file. Two pathlib traps to sidestep: a blank string makes
+    Path("") resolve to the current directory (`.`), which *exists* and then blows up on read_text;
+    and a request longer than the OS filename limit makes Path.exists() *raise* instead of returning
+    False. Both must read as 'not a file' so the request is used as text — the point of discover."""
+    if not arg.strip():
+        return False
     try:
         return Path(arg).exists()
     except OSError:
@@ -214,6 +217,10 @@ def _is_file_arg(arg: str) -> bool:
 
 
 def _cmd_discover(a, client) -> None:
+    if not a.request or not a.request.strip():
+        print("discover needs a request: a sentence describing what to build, or a path to a file "
+              "containing one.", file=sys.stderr)
+        raise SystemExit(2)
     client = client or Anthropic()
     is_file = _is_file_arg(a.request)
     request = Path(a.request).read_text() if is_file else a.request

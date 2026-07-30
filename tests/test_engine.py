@@ -621,6 +621,21 @@ def test_discover_file_check_survives_a_real_length_request():
     assert _is_file_arg(long_request) is False
 
 
+def test_discover_file_check_rejects_blank_arg():
+    # Path("") resolves to the current directory, which exists — so a naive .exists() check would
+    # treat a blank request as a readable file and then blow up on read_text. Blank must read as text.
+    assert _is_file_arg("") is False
+    assert _is_file_arg("   \n\t ") is False
+
+
+def test_pc_discover_rejects_empty_request():
+    # An empty/whitespace request should fail fast with a clear message, not crash or fire an
+    # empty-content API call. The FakeClient would raise if reached — SystemExit means we never did.
+    for blank in ("", "   "):
+        with pytest.raises(SystemExit):
+            _run_app(["discover", blank], client=FakeClient(_ENGINE_REPLY))
+
+
 def test_pc_answer_refines_the_model():
     # A stateless discovery turn: answers + the current model → a refined model.
     with _model_in_out("_clitest_answer") as p:
