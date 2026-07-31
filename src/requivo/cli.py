@@ -1,42 +1,40 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
 import textwrap
 from pathlib import Path
 
-from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
-from requivo.core.analysis import _label
+from requivo.core.analysis import _label, _readiness_blockers
+from requivo.core.context import available_cards
 from requivo.core.contracts import EngineOutput
-from requivo.core.dependencies import diff_models, propagate, resolve_slots, stale_on_disk
-from requivo.core.discovery import answer_turn, run
-from requivo.core.generators import (
+from requivo.core.dependencies import propagate, resolve_slots
+from requivo.core.errors import RequivoError, SessionNotFoundError
+from requivo.core.persistence import _slug, load_model, save_model, write_artifact
+from requivo.deterministic import register as register_deterministic
+from requivo.paths import DEMO
+from requivo.providers.anthropic import (
+    EngineError,
     advise,
+    answer_turn,
+    current_model_name,
     derive_stories,
     estimate,
     generate_criteria,
     generate_epic,
     generate_prd,
     generate_release,
+    new_client,
+    run,
+    track_usage,
 )
-from requivo.core.llm import EngineError, available_cards, current_model_name, track_usage
-from requivo.core.persistence import (
-    _slug,
-    load_model,
-    load_request,
-    present_artifacts,
-    resolve_slug,
-    save_model,
-    save_request,
-    save_session,
-    session_cards,
-    write_artifact,
-)
-from requivo.paths import DEMO
 from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import (
     render_brief,
@@ -48,6 +46,8 @@ from requivo.render.terminal import (
     render_turn,
     render_usage,
 )
+from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
+from requivo.services.sessions import SessionService
 
 load_dotenv()
 
@@ -55,7 +55,7 @@ load_dotenv()
 MAX_TURNS = 8
 
 
-def converse(client: Anthropic, request: str, only: list[str] | None = None) -> EngineOutput | None:
+def converse(client, request: str, only: list[str] | None = None) -> EngineOutput | None:
     """Fill the model, ask, feed answers back, until no high-value question remains.
     Returns the final model (None if the user stopped early). Finalization (brief, save) is
     handled by the caller so the interactive and --from paths share it. `only` restricts the context
@@ -132,7 +132,7 @@ def _run_legacy() -> None:
         release_version = ""
     consumed = {from_path, release_version}
     positional = [a for a in args if not a.startswith("--") and a not in consumed]
-    client = Anthropic()
+    client = new_client()
 
     if from_path:
         # Regenerate artifacts from a saved model — no discovery.
@@ -225,24 +225,6 @@ def _run_legacy() -> None:
 # the API build one, so `requivo status` runs fully offline.
 
 
-def _load(model_path: str) -> tuple[EngineOutput, str]:
-    """Load a saved model and recover its slug (the out/<slug>/ folder name)."""
-    path = Path(model_path)
-    return load_model(path), path.parent.name
-
-
-def _cards(model_path: str) -> list[str] | None:
-    """The context-card selection recorded for this model's discovery (None == all cards). Threaded
-    into every generator so an artifact is grounded in the same cards discovery used."""
-    return session_cards(Path(model_path))
-
-
-def _emit(slug: str, filename: str, markdown: str, label: str) -> None:
-    path = write_artifact(slug, filename, markdown)
-    print(markdown)
-    print(f"\nWrote {label} → {path}")
-
-
 def _is_file_arg(arg: str) -> bool:
     """True if arg names an existing file. Two pathlib traps to sidestep: a blank string makes
     Path("") resolve to the current directory (`.`), which *exists* and then blows up on read_text;
@@ -273,7 +255,7 @@ def _cmd_discover(a, client) -> None:
         print("discover needs a request: a sentence describing what to build, or a path to a file "
               "containing one.", file=sys.stderr)
         raise SystemExit(2)
-    client = client or Anthropic()
+    client = client or new_client()
     is_file = _is_file_arg(a.request)
     request = Path(a.request).read_text() if is_file else a.request
 
@@ -295,43 +277,87 @@ def _cmd_discover(a, client) -> None:
         out = converse(client, request, only=only)
     if not out:
         return
-    # Collision-safe now that we're about to write: keep the clean slug unless a different request
-    # already owns out/<slug>/ (then a short hash suffix).
-    slug = resolve_slug(_slug(Path(a.request).stem if is_file else request), request)
-    save_request(slug, request)  # so `requivo answer` can resume this discovery statelessly
-    # Provenance sidecar: pins the engine version, Claude model and context-card selection so the run
-    # is reproducible and `requivo answer` / generators reuse the same cards (only == None means all).
-    save_session(slug, request=request, model_name=current_model_name(), context_cards=only)
+    brief = None
     if not quick:
         print("\nGenerating the solution assessment…")
         brief = advise(client, out, only=only)
-        _absorb_reasoning(out, brief)  # bake the reasoning into the model before saving
+        _absorb_reasoning(out, brief)  # bake the reasoning into the model before it is applied
+    # The provider's model is a *proposal* — it flows through the SAME validated apply path as a
+    # Claude Code proposal (SessionService.update_model), writing the canonical `.requivo/sessions/`
+    # store. There is no second save path.
+    svc = SessionService()
+    meta = svc.create_session(request, context_cards=only,
+                              slug=(Path(a.request).stem if is_file else None),
+                              provider="anthropic", model_name=current_model_name())
+    svc.update_model(meta.slug, out.model_dump_json())
+    if brief is not None:
         render_brief(out, brief)
-    print(f"\nSaved model → {save_model(out, slug)}")
+    print(f"\nSaved session → {store.canonical_dir(meta.slug)}")
     if quick and out.questions:
-        print(f'\n→ Answer and refine: requivo answer out/{slug}/model.json "<your answers>"')
+        print(f'\n→ Answer and refine: requivo answer {meta.slug} "<your answers>"')
 
 
 def _cmd_answer(a, client) -> None:
-    client = client or Anthropic()
-    before, slug = _load(a.model)
-    only = session_cards(Path(a.model))  # reuse the discovery's card selection (None == all)
-    out = answer_turn(client, before, load_request(Path(a.model)), a.answers, only=only)
+    client = client or new_client()
+    svc = SessionService()
+    slug = svc.resolve_slug(a.model)
+    if not svc.exists(slug):
+        raise SessionNotFoundError(f"no session '{slug}' to answer", details={"slug": slug})
+    before = svc.load_model(slug)
+    only = svc.cards(slug)
+    out = answer_turn(client, before, svc.request_text(slug), a.answers, only=only)
     render_turn(out)
-    # Change-detection: warn if this turn made an already-generated artifact stale.
-    changed = diff_models(before, out)
-    if changed:
-        pairs = stale_on_disk(out, changed, present_artifacts(slug))
-        render_stale(pairs, [_label(sid) for sid in changed])
-    print(f"\nSaved model → {save_model(out, slug)}")
+    # The refined model goes through the same validated apply path — which migrates a legacy session,
+    # diffs against the prior revision, and flags any generated artifact that just went stale.
+    result = svc.update_model(slug, out.model_dump_json())
+    if result.stale_artifacts:
+        pairs = [(t, ARTIFACT_FILENAMES[t]) for t in result.stale_artifacts]
+        render_stale(pairs, [_label(sid) for sid in result.changed_slots])
+    print(f"\nSaved session → {store.canonical_dir(slug)}")
     if not out.questions:
-        print("\n✅ Discovery converged — run `requivo brief` for the assessment.")
+        print(f"\n✅ Discovery converged — run `requivo brief {slug}` for the assessment.")
     else:
-        print(f'\n→ Keep going: requivo answer {a.model} "<your answers>"')
+        print(f'\n→ Keep going: requivo answer {slug} "<your answers>"')
+
+
+def _resolve_ref(ref: str) -> tuple[EngineOutput, str]:
+    """Resolve a reference to (model, slug). Accepts a model.json path (legacy or direct) OR a session
+    slug in the canonical/legacy store — so the read verbs work both on a raw file and on a session."""
+    p = Path(ref)
+    if p.is_file():
+        return load_model(p), p.parent.name
+    svc = SessionService()
+    if svc.exists(ref):
+        return svc.load_model(ref), svc.resolve_slug(ref)
+    raise SessionNotFoundError(f"no model file or session found for '{ref}'", details={"ref": ref})
+
+
+def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
+    """(model, machine status). Readiness is always computed; revision + artifact freshness are added
+    when the reference resolves to a canonical session."""
+    out, slug = _resolve_ref(ref)
+    blockers = _readiness_blockers(out)
+    payload: dict = {
+        "slug": slug,
+        "readiness": {"ready": not blockers,
+                      "blocking_slots": [{"slot": s, "label": _label(s)} for s in blockers]},
+    }
+    if store.session_exists(slug):
+        meta = store.read_meta(slug)
+        payload["revision"] = meta.current_revision
+        payload["artifacts"] = {
+            t: {"revision": st.revision, "filename": st.filename,
+                "stale": st.stale or st.revision != meta.current_revision}
+            for t, st in meta.artifact_status.items()
+        }
+    return out, payload
 
 
 def _cmd_status(a, client) -> None:
-    out, _ = _load(a.model)
+    out, payload = _status_payload(a.model)
+    if getattr(a, "json", False):
+        print(json.dumps(payload, indent=2))
+        return
     render_turn(out)
 
 
@@ -387,7 +413,7 @@ def _cmd_demo(a, client) -> None:
 def _cmd_impact(a, client) -> None:
     """Offline query over the dependency DAG — no API call. With slots, show their blast
     radius; without, map every slot's downstream."""
-    out, _ = _load(a.model)
+    out, _ = _resolve_ref(a.model)
     if not a.slots:
         render_dependency_map(out)
         return
@@ -399,62 +425,84 @@ def _cmd_impact(a, client) -> None:
         render_impact(propagate(out, resolved))
 
 
+# Provider-backed generators. Each resolves a session (slug or model.json path), reasons via the
+# provider, and saves the artifact into the canonical store through ArtifactService — the same place
+# the deterministic `artifact save` verb writes, and never the legacy `out/`. A legacy session is
+# migrated on this first artifact write.
+
+
+def _generator_session(a, client) -> tuple[object, EngineOutput, str, list[str] | None]:
+    """Shared preamble for the provider generators: (client, model, slug, cards). Ensures the session
+    is canonical so the produced artifact is tracked in `.requivo/sessions/`."""
+    client = client or new_client()
+    svc = SessionService()
+    slug = svc.resolve_slug(a.model)
+    if not svc.exists(slug):
+        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+    out = svc.load_model(slug)
+    cards = svc.cards(slug)
+    svc.ensure_canonical(slug)  # migrate a legacy session before writing its first artifact
+    return client, out, slug, cards
+
+
+def _save_artifact(slug: str, artifact_type: str, markdown: str, label: str) -> None:
+    print(markdown)
+    st = ArtifactService().save(slug, artifact_type, markdown)
+    print(f"\nWrote {label} → {store.canonical_dir(slug) / 'artifacts' / st.filename}")
+
+
 def _cmd_brief(a, client) -> None:
-    client = client or Anthropic()
-    out, slug = _load(a.model)
-    brief = advise(client, out, only=_cards(a.model))
+    client, out, slug, cards = _generator_session(a, client)
+    brief = advise(client, out, only=cards)
     _absorb_reasoning(out, brief)
-    save_model(out, slug)  # backfill: persist the reasoning back into the saved model
+    # Backfilling the reasoning into the model is a model change — it goes through the apply path,
+    # so downstream generators inherit the reasoning from a proper new revision.
+    SessionService().update_model(slug, out.model_dump_json())
     render_brief(out, brief)
 
 
 def _cmd_prd(a, client) -> None:
-    client = client or Anthropic()
-    out, slug = _load(a.model)
-    _emit(slug, "prd.md", prd_markdown(generate_prd(client, out, only=_cards(a.model))), "PRD")
+    client, out, slug, cards = _generator_session(a, client)
+    _save_artifact(slug, "prd", prd_markdown(generate_prd(client, out, only=cards)), "PRD")
 
 
 def _cmd_stories(a, client) -> None:
-    client = client or Anthropic()
-    out, _ = _load(a.model)
-    render_stories(derive_stories(client, out, only=_cards(a.model)))
+    client, out, slug, cards = _generator_session(a, client)
+    render_stories(derive_stories(client, out, only=cards))  # terminal-only view (no saved artifact)
 
 
 def _cmd_estimate(a, client) -> None:
-    client = client or Anthropic()
-    out, _ = _load(a.model)
-    only = _cards(a.model)
-    stories = derive_stories(client, out, only=only)
+    client, out, slug, cards = _generator_session(a, client)
+    stories = derive_stories(client, out, only=cards)
     render_stories(stories)
-    draft, soft, confidence = estimate(client, out, stories, only=only)
+    draft, soft, confidence = estimate(client, out, stories, only=cards)
     render_estimate(draft, soft, confidence)
 
 
 def _cmd_criteria(a, client) -> None:
-    client = client or Anthropic()
-    out, slug = _load(a.model)
-    _emit(slug, "acceptance-criteria.md",
-          criteria_markdown(generate_criteria(client, out, only=_cards(a.model))), "acceptance criteria")
+    client, out, slug, cards = _generator_session(a, client)
+    _save_artifact(slug, "criteria",
+                   criteria_markdown(generate_criteria(client, out, only=cards)), "acceptance criteria")
 
 
 def _cmd_epic(a, client) -> None:
-    client = client or Anthropic()
-    out, slug = _load(a.model)
-    epic = generate_epic(client, out, only=_cards(a.model))  # one model call; every view renders from it
-    _emit(slug, "epic.md", epic_markdown(epic), "epic")
+    client, out, slug, cards = _generator_session(a, client)
+    epic = generate_epic(client, out, only=cards)  # one model call; every view renders from it
+    _save_artifact(slug, "epic", epic_markdown(epic), "epic")
     if a.json:
-        print(f"Wrote neutral epic export → {write_artifact(slug, 'epic.json', epic_export_json(epic))}")
+        print(f"Wrote neutral epic export → {store.write_artifact_file(slug, 'epic.json', epic_export_json(epic))}")
     if a.github:
-        print(f"Wrote GitHub issue-creation plan → {write_artifact(slug, 'epic.github.json', to_github_json(epic, slug))}")
+        print(f"Wrote GitHub issue-creation plan → "
+              f"{store.write_artifact_file(slug, 'epic.github.json', to_github_json(epic, slug))}")
     if a.gitlab:
-        print(f"Wrote GitLab issue-creation plan → {write_artifact(slug, 'epic.gitlab.json', to_gitlab_json(epic, slug))}")
+        print(f"Wrote GitLab issue-creation plan → "
+              f"{store.write_artifact_file(slug, 'epic.gitlab.json', to_gitlab_json(epic, slug))}")
 
 
 def _cmd_release(a, client) -> None:
-    client = client or Anthropic()
-    out, slug = _load(a.model)
-    _emit(slug, "release-notes.md",
-          release_markdown(generate_release(client, out, a.version, only=_cards(a.model))), "release notes")
+    client, out, slug, cards = _generator_session(a, client)
+    _save_artifact(slug, "release",
+                   release_markdown(generate_release(client, out, a.version, only=cards)), "release notes")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -462,7 +510,13 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="requivo",
         description="Requivo — turns a vague request into a structured solution model.",
     )
+    p.add_argument("--workspace", metavar="DIR",
+                   help="workspace root for sessions (default: cwd). Sessions live in "
+                        "<workspace>/.requivo/sessions/. Place before the command.")
     sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
+
+    # The deterministic surface (doctor / session / model / artifact) — no LLM, no API key.
+    register_deterministic(sub)
 
     d = sub.add_parser("discover", help="run discovery on a request (a string or a file path)")
     d.add_argument("request", help="the client request, or a path to a file containing it")
@@ -478,14 +532,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     def model_cmd(name: str, help_: str, func, extra=None):
         sp = sub.add_parser(name, help=help_)
-        sp.add_argument("model", help="path to a saved out/<slug>/model.json")
+        sp.add_argument("model", help="a session slug, or a path to a saved model.json")
         if extra:
             extra(sp)
         sp.set_defaults(func=func)
 
     model_cmd("answer", "feed the client's answers back and refine the model one more turn",
               _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
-    model_cmd("status", "show the understanding checklist + open questions", _cmd_status)
+    model_cmd("status", "show the understanding checklist + open questions", _cmd_status,
+              lambda sp: sp.add_argument("--json", action="store_true", help="emit a machine status snapshot"))
     model_cmd("impact", "show what depends on given slots (blast radius); no slots = full map",
               _cmd_impact, lambda sp: sp.add_argument("slots", nargs="*",
               help="slot ids or label words (e.g. permissions workflow); omit for the full map"))
@@ -507,18 +562,26 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def app(argv: list[str] | None = None, client: Anthropic | None = None) -> None:
+def app(argv: list[str] | None = None, client=None) -> None:
     """Entry point for the `requivo` command (and its `pc` alias, and `python -m requivo`)."""
     args = _build_parser().parse_args(argv)
+    # A global --workspace redirects where sessions are read/written, for the duration of this run.
+    if getattr(args, "workspace", None):
+        os.environ["REQUIVO_WORKSPACE"] = args.workspace
+    want_json = getattr(args, "json", False)
     # Track the run's API footprint and print it after the command. Offline verbs make no call, so
     # the ledger stays empty and render_usage() prints nothing.
     with track_usage() as ledger:
         try:
             args.func(args, client)
-        except EngineError as e:
-            # A clean, expected failure (API down, truncated reply) — no traceback. Still print the
-            # usage of whatever the run spent before failing.
+        except RequivoError as e:
+            # Every clean, expected failure — a core validation/session error OR a provider transport
+            # error (EngineError is a RequivoError) — surfaces without a traceback. With --json the
+            # caller (e.g. Claude Code) gets the structured envelope; otherwise a one-line message.
             render_usage(ledger)
-            print(f"\n{e}", file=sys.stderr)
+            if want_json:
+                print(json.dumps(e.to_dict(), indent=2))
+            else:
+                print(f"\n{e}", file=sys.stderr)
             raise SystemExit(1) from None
     render_usage(ledger)

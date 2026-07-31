@@ -29,6 +29,7 @@ from requivo.core.analysis import (
     estimate_confidence,
     soft_slots,
 )
+from requivo.core.context import build_prompt, load_context
 from requivo.core.contracts import (
     PRD,
     SOFT_COMPLETENESS,
@@ -59,8 +60,11 @@ from requivo.core.contracts import (
     Story,
     Summary,
 )
-from requivo.core.discovery import run
-from requivo.core.generators import (
+from requivo.core.persistence import _slug, load_model, save_model, write_artifact
+from requivo.providers.anthropic import (
+    _complete,
+    _extract_json,
+    _response_text,
     advise,
     derive_stories,
     estimate,
@@ -68,9 +72,8 @@ from requivo.core.generators import (
     generate_epic,
     generate_prd,
     generate_release,
+    run,
 )
-from requivo.core.llm import _complete, _extract_json, _response_text, build_prompt, load_context
-from requivo.core.persistence import _slug, load_model, save_model, write_artifact
 from requivo.render.markdown import _KIND_TAG, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import (
     STATE_ROWS,

@@ -42,6 +42,42 @@ uv run requivo demo        # or, with nothing installed:  python requivo.py demo
 
 ---
 
+## Three surfaces, one engine
+
+Requivo is a deterministic core with interchangeable reasoners on top. The **model** — the validated,
+versioned session — is the single source of truth; every surface is a thin layer over the same core.
+
+```
+                    Requivo Core
+               validated session model
+                 /        |         \
+                /         |          \
+       Claude Code       CLI      Future Web
+           |              |
+   Claude reasoning   deterministic tools
+```
+
+- **Requivo Core** — validated requirements model + deterministic impact engine. No LLM, no provider,
+  no network. It validates proposals, versions sessions, computes readiness, and detects what goes stale.
+- **Requivo for Claude Code** — use your existing Claude Code session for the reasoning and dialogue.
+  Claude proposes a model; the CLI validates and applies it. **You do not need an Anthropic API key to
+  use Requivo inside Claude Code.** See [`plugins/claude-code/`](plugins/claude-code/).
+- **Requivo CLI** — inspect, validate, version and export sessions locally: `requivo doctor`,
+  `requivo session init`, `requivo model validate|apply|diff`, `requivo status`, `requivo impact`,
+  `requivo artifact save`. All deterministic, all offline.
+- **Anthropic provider** — the optional API-powered automation: `requivo discover request.md --provider
+  anthropic`. Install with `pip install 'requivo[anthropic]'`. Same core, same validation, same session
+  format — just a different reasoner.
+
+A session created by any surface is readable by the others (and by the future Web UI): they share one
+model, one validation, one apply path — there is no fork.
+
+Sessions are written to `.requivo/sessions/<slug>/` under your workspace (versioned metadata, the model,
+its revision history, and generated artifacts). Legacy `out/<slug>/` sessions are read-only and migrated
+into the new layout on first change (or in bulk with `requivo session migrate`).
+
+---
+
 ```
                  Customer request
                          │

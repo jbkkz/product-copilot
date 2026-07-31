@@ -10,12 +10,12 @@ import pytest
 from pydantic import ValidationError
 
 from requivo.cli import _build_parser, _is_file_arg, app
+from requivo.core import persistence as store
 from requivo.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
-from requivo.core.discovery import answer_turn
-from requivo.core.generators import advise
-from requivo.core.llm import EngineError, _complete, _response_text, current_model_name
 from requivo.core.persistence import _atomic_write, load_session, save_session, session_cards
 from requivo.paths import output_root
+from requivo.providers.anthropic import EngineError, _complete, _response_text, advise, answer_turn, current_model_name
+from requivo.services.artifacts import ArtifactService
 from src.engine import (
     PRD,
     AcceptanceCriteria,
@@ -53,6 +53,14 @@ from src.engine import (
     to_gitlab,
     write_artifact,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workspace(tmp_path, monkeypatch):
+    """Every test in this module writes sessions/artifacts into an isolated temp workspace, never the
+    real repo. Points both the canonical root (.requivo/sessions) and the legacy root (out/) at tmp."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("REQUIVO_OUTPUT_DIR", str(tmp_path / "out"))
 
 
 def slot(completeness, confidence, impact):
@@ -588,9 +596,9 @@ def test_load_context_includes_real_cards_and_skips_underscore():
 
 
 def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
-    # load_context reads the CONTEXT anchor from its own module (core.llm); point it at an empty dir,
+    # load_context reads the CONTEXT anchor from its own module (core.context); point it at an empty dir,
     # and point the user-cards dir at a nonexistent path so the machine's real one can't leak in.
-    from requivo.core import llm
+    from requivo.core import context as llm
 
     ctx_dir = tmp_path / "context"
     ctx_dir.mkdir()
@@ -603,7 +611,7 @@ def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
 def test_user_context_cards_merge_and_override_bundled(tmp_path, monkeypatch):
     # A pip-installed user extends discovery by dropping cards in REQUIVO_CONTEXT_DIR: new stems are added,
     # and a stem matching a bundled card overrides it (tweak a built-in without editing the package).
-    from requivo.core import llm
+    from requivo.core import context as llm
 
     bundled = tmp_path / "bundled"
     bundled.mkdir()
@@ -632,12 +640,15 @@ def test_user_context_cards_merge_and_override_bundled(tmp_path, monkeypatch):
 
 @contextmanager
 def _model_in_out(slug):
-    """A real out/<slug>/model.json the model-taking subcommands can load."""
-    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
+    """A canonical .requivo/sessions/<slug>/ session with a model the subcommands can load and mutate.
+    Yields the path to model.json (the subcommands accept a slug OR a model.json path)."""
+    store.create_session(slug, f"request for {slug}")
+    store.save_revision(slug, out({"problem": slot(80, "explicit", "high")}))
+    p = store.canonical_dir(slug) / "model.json"
     try:
         yield p
     finally:
-        shutil.rmtree(p.parent, ignore_errors=True)
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
 
 
 def _run_app(argv, client=None):
@@ -745,37 +756,36 @@ def test_pc_estimate_renders():
 def test_pc_prd_writes_artifact():
     with _model_in_out("_clitest_prd") as p:
         _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X"})))
-        assert (p.parent / "prd.md").read_text().startswith("# X")
+        assert (p.parent / "artifacts" / "prd.md").read_text().startswith("# X")
 
 
 def test_pc_criteria_writes_artifact():
     with _model_in_out("_clitest_criteria") as p:
         _run_app(["criteria", str(p)], client=FakeClient(json.dumps({"title": "X"})))
-        assert (p.parent / "acceptance-criteria.md").exists()
+        assert (p.parent / "artifacts" / "acceptance-criteria.md").exists()
 
 
 def test_pc_epic_writes_all_views():
     with _model_in_out("_clitest_epic") as p:
         _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps({"title": "X"})))
         for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
-            assert (p.parent / name).exists()
+            assert (p.parent / "artifacts" / name).exists()
 
 
 def test_pc_release_stamps_version():
     with _model_in_out("_clitest_release") as p:
         _run_app(["release", str(p), "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
-        assert "v1.0" in (p.parent / "release-notes.md").read_text()
+        assert "v1.0" in (p.parent / "artifacts" / "release-notes.md").read_text()
 
 
 def test_pc_discover_once_saves_model():
     slug = "clitest-discover-probe-xyz"
-    folder = output_root() /  slug
-    try:
-        _run_app(["discover", "clitest discover probe xyz", "--once"], client=FakeClient(_ENGINE_REPLY))
-        assert (folder / "model.json").exists()
-        assert (folder / "request.txt").exists()  # saved so `requivo answer` can resume
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
+    _run_app(["discover", "clitest discover probe xyz", "--once"], client=FakeClient(_ENGINE_REPLY))
+    folder = store.canonical_dir(slug)
+    assert (folder / "model.json").exists()
+    assert (folder / "request.md").exists()   # saved so `requivo answer` can resume
+    assert store.read_meta(slug).current_revision == 1
+    assert store.read_meta(slug).provider == "anthropic"
 
 
 def test_discover_file_check_survives_a_real_length_request():
@@ -803,7 +813,6 @@ def test_pc_discover_rejects_empty_request():
 def test_pc_answer_refines_the_model():
     # A stateless discovery turn: answers + the current model → a refined model.
     with _model_in_out("_clitest_answer") as p:
-        (p.parent / "request.txt").write_text("original leave-approval request")
         turn2 = json.dumps({
             "model": full_slots(problem=slot(95, "explicit", "high")),
             "questions": [],
@@ -913,14 +922,14 @@ def test_pc_impact_reports_blast_radius_offline():
     with _model_in_out("_clitest_impact") as p:
         out_ = _out_with_decisions(
             DesignDecision(decision="Draft-first invoices", derived_from=["permissions"]))
-        save_model(out_, p.parent.name)
+        store.save_revision(p.parent.name, out_)
         text = _run_app(["impact", str(p), "permissions"])
         assert "Draft-first invoices" in text and "prd" in text
 
 
 def test_pc_impact_no_slots_prints_the_full_map():
     with _model_in_out("_clitest_impact_map") as p:
-        save_model(_out_with_decisions(), p.parent.name)
+        store.save_revision(p.parent.name, _out_with_decisions())
         text = _run_app(["impact", str(p)])
         assert "DEPENDENCY MAP" in text
 
@@ -941,11 +950,11 @@ def test_stale_on_disk_only_flags_present_files_that_consume_a_changed_slot():
 
 def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
     with _model_in_out("_clitest_stale") as p:
-        # a real slot an artifact consumes, and an already-generated PRD on disk
+        slug = p.parent.name
+        # a real slot an artifact consumes, and an already-generated PRD tracked in the session
         wf = {**slot(60, "inferred", "high"), "value": "draft → issued"}
-        save_model(out({"workflow": wf}), p.parent.name)
-        (p.parent / "request.txt").write_text("original request")
-        (p.parent / "prd.md").write_text("# stale PRD")
+        store.save_revision(slug, out({"workflow": wf}))
+        ArtifactService().save(slug, "prd", "# stale PRD")  # generated at the current revision
         turn2 = json.dumps({
             "model": full_slots(workflow={"completeness": 95, "confidence": "explicit",
                                           "impact": "high", "value": "draft → issued → paid → archived"}),
@@ -961,7 +970,7 @@ def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
 # Tokens are ground truth from the response; cost is a labelled estimate. The ledger accumulates
 # per-call usage; the renderer turns it into a line; the CLI prints it after an API-backed command.
 
-from requivo.core.llm import CallRecord, UsageLedger, track_usage  # noqa: E402
+from requivo.providers.anthropic import CallRecord, UsageLedger, track_usage  # noqa: E402
 from requivo.render.terminal import render_usage  # noqa: E402
 
 
@@ -1096,7 +1105,7 @@ def test_prd_markdown_escapes_pipes_in_table_cells():
 
 
 def test_available_cards_lists_real_non_underscore_cards():
-    from requivo.core.llm import available_cards
+    from requivo.core.context import available_cards
 
     cards = available_cards()
     assert "b2b-platform" in cards and "financial-reporting" in cards
@@ -1104,7 +1113,7 @@ def test_available_cards_lists_real_non_underscore_cards():
 
 
 def test_load_context_only_filters_to_selected_cards():
-    from requivo.core.llm import load_context
+    from requivo.core.context import load_context
 
     ctx = load_context(only=["b2b-platform"])
     assert "## b2b-platform" in ctx

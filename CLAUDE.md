@@ -52,34 +52,54 @@ conflation → epic + criteria).
 
 ## Architecture
 
-The engine is a **single Anthropic call** (per turn) whose intelligence lives entirely in assembled
-prompt data, not in Python. The code is the `requivo` package (under `src/`); the historical
-`src/engine.py` is now a backward-compat shim re-exporting it. The layers form a DAG — **`core/`
-never prints and never reads argv; `render/` turns data into strings; `cli.py` is the only layer that
-touches argv/stdout/TTY** — so every interface (terminal `pc`, the Claude Code `/pc-*` wrappers in
-`.claude/commands/`, and later an API or MCP) is a thin layer over the same core, never a second
-implementation:
+The reasoning is a **single LLM call** (per turn) whose intelligence lives entirely in assembled prompt
+data, not in Python — but that call lives in a **provider**, never in the core. The code is the `requivo`
+package (under `src/`); the historical `src/engine.py` is now a backward-compat shim re-exporting it.
+The layers form a strict DAG:
+
+- **`core/`** — the deterministic engine. Never prints, never reads argv, **never calls an LLM, never
+  imports a provider** (guarded by `tests/test_boundaries.py`). It validates, versions, and reasons over
+  the model; it never *produces* one.
+- **`providers/`** — the only place an LLM is called. `anthropic.py` (behind the optional
+  `requivo[anthropic]` extra) turns a request into a model and a model into an artifact. The Claude Code
+  surface is a *second* provider that lives outside Python: Claude reasons, the deterministic CLI applies.
+- **`services/`** — the application seam. `SessionService.update_model` is the single validated apply
+  path (validate → diff → propagate → revision → stale-flag) shared by the CLI, the provider, and Claude
+  Code. There is no second apply implementation.
+- **`render/`** turns data into strings; **`cli.py` + `deterministic.py`** are the only layers that touch
+  argv/stdout/TTY.
+
+So every interface (the terminal `requivo`/`pc` CLI, the Claude Code plugin under `plugins/claude-code/`,
+and later an API or Web UI) is a thin layer over the same core — never a second implementation.
 
 Bundled assets (`prompts/`, `framework/`, `context/`, plus the `requivo demo` payload) live **inside the
-package** at `src/requivo/assets/`, so they ship in the wheel and a `pip install` works
-outside the clone. Throughout this doc, `prompts/…`, `framework/…` and `context/…` are shorthand for
-that location. Generated output goes to `./out` under the caller's working directory (overridable via
-`REQUIVO_OUTPUT_DIR`), never inside the install. `paths.py` exposes both: `ASSETS`/`PROMPTS`/`FRAMEWORK`/
-`CONTEXT`/`DEMO` (read-only, resolved from the package) and `output_root()` (writable, cwd-based).
+package** at `src/requivo/assets/`, so they ship in the wheel and a `pip install` works outside the clone.
+Sessions are written to `.requivo/sessions/<slug>/` under the caller's **workspace** (cwd, or
+`--workspace`/`REQUIVO_WORKSPACE`), never inside the install; the legacy `./out` root (`output_root()`,
+`REQUIVO_OUTPUT_DIR`) is read-only and migrated on first mutation. `paths.py` exposes the three roots:
+`ASSETS` (read-only package data), `workspace_root()`/`session_root()` (canonical writable), and
+`output_root()` (legacy).
 
 ```
 requivo/
-  paths.py         ASSETS + output_root() — read-only package data vs writable cwd/out
+  paths.py         ASSETS (read-only) + workspace_root()/session_root() (canonical) + output_root() (legacy)
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
-  core/            the engine (presentation-free)
-    contracts.py     Pydantic models + enums          llm.py         prompt assembly + _complete
-    analysis.py      Python-authoritative model logic  discovery.py   run() (the engine turn)
-    persistence.py   save/load_model, write_artifact   adapters.py    epic_export + GitHub/GitLab
-    generators.py    advise, derive_stories, estimate, generate_*
+  core/            the deterministic engine — no LLM, no provider, no argv/stdout
+    contracts.py     Pydantic models + enums           context.py     card + prompt assembly (no LLM)
+    analysis.py      readiness / soft slots / blockers  validation.py  validate_proposal → structured errors
+    persistence.py   session store: .requivo layout, revisions, migrate_legacy, atomic writes
+    errors.py        RequivoError hierarchy (+ .to_dict() JSON envelope)
     dependencies.py  the dependency DAG: propagate / diff_models / stale_on_disk (impact propagation)
-  render/            views (data → str/stdout, no side effects)
+    adapters.py      epic_export + GitHub/GitLab tracker plans
+  providers/       the only LLM callers
+    base.py          ReasoningProvider protocol         anthropic.py   client + _complete + discovery/generators + ledger
+  services/        the shared apply/artifact seam
+    sessions.py      SessionService (create / update_model / diff / status)   artifacts.py  ArtifactService
+  render/          views (data → str/stdout, no side effects)
     markdown.py      *_markdown                         terminal.py    render_*
-  cli.py           argparse `pc` subcommands (app()) + the legacy flag main()
+  cli.py           the `requivo`/`pc` CLI: provider verbs (discover/answer/generators) + legacy flag main()
+  deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact
+plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shipped in the wheel
 ```
 
 The runner is a thin dispatch:

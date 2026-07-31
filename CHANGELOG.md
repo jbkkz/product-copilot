@@ -4,6 +4,42 @@ All notable changes to Requivo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Architectural refactor into **three surfaces over one engine** — Core, CLI, and Claude Code — in
+preparation for a future Web UI. No product behaviour changed; the model format is unchanged.
+
+### Added
+- **Requivo for Claude Code** — a plugin (`plugins/claude-code/`) with six skills (`/requivo-discover`,
+  `/requivo-answer`, `/requivo-status`, `/requivo-brief`, `/requivo-prd`, `/requivo-impact`). Claude Code
+  does the reasoning with your existing session; the deterministic CLI validates and applies. **No
+  Anthropic API key required.**
+- **Deterministic CLI surface** (no LLM, no key): `requivo doctor`, `requivo schema`, `requivo context`,
+  `requivo session init|list|show|migrate|export|import`, `requivo model show|validate|apply|diff`,
+  `requivo artifact save|list|show`, plus `--json` on the machine-readable verbs and a `--workspace`
+  global. `status` and `impact` now accept a session slug as well as a model path.
+- **Versioned session format** at `.requivo/sessions/<slug>/` — `session.json` (metadata + provenance +
+  artifact status), `model.json`, `revisions/NNNN-model.json` (history), `request.md`, and `artifacts/`.
+  Writes are atomic; a `migrate_session()` version frontier guards forward compatibility.
+- **Structured error hierarchy** (`RequivoError` + `code`/`message`/`path`/`details`), serialized as a
+  JSON envelope on `--json` failures so Claude Code and the future Web can act on the `code`.
+- **Application services** (`SessionService`, `ArtifactService`) — the single validated apply path shared
+  by the CLI, the Anthropic provider, and Claude Code. A proposal from any source flows through the same
+  validate → diff → propagate → revision → stale-flag pipeline.
+
+### Changed
+- **`requivo.core` is now provider-free** (guarded by a test): the Anthropic client, the single-call
+  loop, the usage ledger, and all discovery/generation moved to `requivo.providers.anthropic`.
+- **`anthropic` is now an optional extra.** Core, the deterministic CLI, and the Claude Code plugin
+  install and run without the SDK; `pip install 'requivo[anthropic]'` adds the API-powered mode.
+- The modern `requivo`/`pc` subcommand CLI (discover, answer, generators) now writes the canonical
+  `.requivo/sessions/` store through the services; legacy `out/<slug>/` sessions are read-only and
+  migrated on first change (or in bulk via `requivo session migrate`).
+
+### Compatibility
+- The legacy flag CLI (`python src/engine.py "…" --prd`) and the `src.engine` re-export shim are
+  preserved. The `pc` alias is unchanged. `model.json` format is unchanged.
+
 ## [0.7.0] - 2026-07-31
 
 **First release under the name Requivo, and the first published to PyPI** (`pip install requivo`).

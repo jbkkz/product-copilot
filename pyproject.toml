@@ -24,14 +24,17 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Core has no LLM dependency: the deterministic engine + CLI + the Claude Code plugin all run with
+# just these. The Anthropic SDK is an optional extra (below) — only the API-powered CLI mode needs it.
 dependencies = [
-    "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
+anthropic = ["anthropic>=0.40.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0", "httpx"]
 
 [project.urls]
 Homepage = "https://github.com/jbkkz/requivo"
@@ -64,7 +67,11 @@ extend-exclude = ["out"]
 # E501 (line width) is intentionally off: the codebase uses deliberate alignment and long,
 # self-contained strings; CI-lint is here to catch bugs, not to police width.
 select = ["E", "F", "I", "W", "UP", "B"]
-ignore = ["E501"]
+# E501 (line width): off — deliberate alignment + long self-contained strings.
+# UP045 (Optional[X] → X | None): off — the project targets Python 3.9, where Pydantic must *evaluate*
+# model-field annotations at class-definition time, and `X | None` raises TypeError there (unlike
+# deferred function annotations). Pydantic model fields therefore use `Optional[X]` by necessity.
+ignore = ["E501", "UP045"]
 
 [tool.ruff.lint.isort]
 # Keep the codebase's compact import style: pack sorted members onto as few lines as fit the width,

@@ -40,8 +40,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from golden_lib import GOLDEN, REPO, REQUESTS, K, brief_consensus, dump_runs, parse_requests, stability  # noqa: E402
 
 sys.path.insert(0, str(REPO / "src"))
-from requivo.core.discovery import run  # noqa: E402
-from requivo.core.generators import advise  # noqa: E402
+from requivo.providers.anthropic import advise, run  # noqa: E402
 
 load_dotenv()
 

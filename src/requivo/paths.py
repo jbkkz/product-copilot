@@ -29,10 +29,29 @@ CONTEXT = ASSETS / "context"
 DEMO = ASSETS / "demo"
 
 
+def workspace_root() -> Path:
+    """The user's working area — where sessions are written. Defaults to the current working
+    directory; override with `REQUIVO_WORKSPACE` (the CLI's `--workspace` sets this env for the run).
+    Never inside the installed package. Evaluated per call so a `cd`/env change takes effect without
+    reimporting. Distinct from `ASSETS` (read-only package data): assets are read, the workspace is
+    written."""
+    override = os.getenv("REQUIVO_WORKSPACE")
+    return Path(override) if override else Path.cwd()
+
+
+def session_root() -> Path:
+    """Canonical home for sessions: `<workspace>/.requivo/sessions/`. Each session is a `<slug>/`
+    directory under here (session.json + model.json + revisions/ + request.md + artifacts/). This is
+    where all *new* data is written; the legacy `output_root()` (`./out`) is read-only and migrated on
+    first mutation."""
+    return workspace_root() / ".requivo" / "sessions"
+
+
 def output_root() -> Path:
-    """Directory for generated models/artifacts. Defaults to `./out` under the caller's working
-    directory (never inside the installed package); override with `REQUIVO_OUTPUT_DIR`. Evaluated per call
-    so a `cd` or an env change takes effect without reimporting."""
+    """**Legacy** directory for generated models/artifacts (`./out`), from before the versioned
+    `.requivo/sessions/` layout. Still read for backward compatibility and used by the pre-refactor
+    provider CLI path; new sessions are written under `session_root()`. Override with
+    `REQUIVO_OUTPUT_DIR`. Evaluated per call."""
     override = os.getenv("REQUIVO_OUTPUT_DIR")
     return Path(override) if override else Path.cwd() / "out"
 

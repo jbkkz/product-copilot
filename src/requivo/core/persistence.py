@@ -3,14 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from requivo import __version__
 from requivo.core.contracts import EngineOutput
-from requivo.paths import output_root
+from requivo.core.errors import InvalidSessionError, SessionNotFoundError
+from requivo.paths import output_root, session_root
 
 SESSION_FORMAT_VERSION = 1
+# The framework's slot schema version. Bumped when the slot vocabulary changes shape; recorded on
+# every session so a future reader knows which schema a model was authored against.
+SCHEMA_VERSION = 1
 
 
 def _atomic_write(path: Path, content: str) -> Path:
@@ -115,3 +123,250 @@ def present_artifacts(slug: str) -> set[str]:
     actually generated, not the whole theoretical blast radius."""
     folder = output_root() / slug
     return {p.name for p in folder.iterdir() if p.is_file()} if folder.exists() else set()
+
+
+# ── Canonical session store (.requivo/sessions/<slug>/) ────────────────────────
+# The versioned, forward-compatible layout: a session is a directory holding session.json (the
+# metadata + provenance), request.md, model.json (the current model), revisions/NNNN-model.json (the
+# history, one file per applied revision), and artifacts/ (generated views, each tied to the revision
+# it was produced from). Every write is atomic; a revision is preserved before the model is replaced.
+# Legacy `out/<slug>/` sessions are read-only and copied in here on first mutation (`migrate_legacy`).
+
+
+class ArtifactStatus(BaseModel):
+    """Per-artifact provenance in session.json: which model revision produced it, its file, when it
+    was written, and whether the model has since moved past that revision (stale)."""
+    revision: int
+    filename: str
+    updated_at: str
+    stale: bool = False
+
+
+class SessionMeta(BaseModel):
+    """The versioned session metadata (`session.json`). `extra="ignore"` keeps an older reader from
+    choking on a field a newer Requivo added; `migrate_session()` is the explicit version frontier."""
+    model_config = ConfigDict(extra="ignore")
+
+    format_version: int = SESSION_FORMAT_VERSION
+    requivo_version: str = __version__
+    session_id: str
+    slug: str
+    created_at: str
+    updated_at: str
+    provider: Optional[str] = None          # "anthropic", "claude-code", or None (informational)
+    model_name: Optional[str] = None        # the reasoning model, when a provider set one
+    context_cards: Optional[list[str]] = None  # the card selection; None == all cards
+    request_hash: str = ""               # "sha256:…" of the originating request
+    schema_version: int = SCHEMA_VERSION
+    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    current_revision: int = 0            # 0 == session created but no model applied yet
+    artifact_status: dict[str, ArtifactStatus] = Field(default_factory=dict)
+
+
+def _now() -> str:
+    """UTC, second precision, Z-suffixed — one timestamp format across the whole session file."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _hash(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def canonical_dir(slug: str) -> Path:
+    """The canonical session directory `<workspace>/.requivo/sessions/<slug>/`."""
+    return session_root() / slug
+
+
+def legacy_dir(slug: str) -> Path:
+    """The legacy `out/<slug>/` directory — read-only, migrated on first mutation."""
+    return output_root() / slug
+
+
+def session_exists(slug: str) -> bool:
+    return (canonical_dir(slug) / "session.json").exists()
+
+
+def legacy_exists(slug: str) -> bool:
+    return (legacy_dir(slug) / "model.json").exists()
+
+
+def write_meta(slug: str, meta: SessionMeta) -> Path:
+    d = canonical_dir(slug)
+    d.mkdir(parents=True, exist_ok=True)
+    return _atomic_write(d / "session.json", meta.model_dump_json(indent=2))
+
+
+def migrate_session(data: dict) -> SessionMeta:
+    """The version frontier: turn a raw session.json dict into a `SessionMeta`, upgrading old formats.
+    Only v1 exists today, but the boundary is explicit — a session written by a *newer* Requivo is
+    rejected clearly rather than silently mis-read."""
+    fv = data.get("format_version", SESSION_FORMAT_VERSION)
+    if fv > SESSION_FORMAT_VERSION:
+        raise InvalidSessionError(
+            f"session format v{fv} is newer than this Requivo understands (v{SESSION_FORMAT_VERSION}) "
+            "— upgrade requivo.",
+            details={"format_version": fv},
+        )
+    return SessionMeta.model_validate(data)
+
+
+def read_meta(slug: str) -> SessionMeta:
+    p = canonical_dir(slug) / "session.json"
+    if not p.exists():
+        raise SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
+    try:
+        return migrate_session(json.loads(p.read_text()))
+    except (OSError, json.JSONDecodeError) as e:
+        raise InvalidSessionError(f"session '{slug}' has an unreadable session.json: {e}",
+                                  details={"slug": slug}) from e
+
+
+def create_session(slug: str, request: str, *, provider: str | None = None,
+                   model_name: str | None = None, context_cards: list[str] | None = None) -> SessionMeta:
+    """Create a fresh session directory from a request — no model yet (current_revision 0). The
+    model is applied later via `save_revision` (deterministic `model apply`, or a provider turn)."""
+    d = canonical_dir(slug)
+    (d / "revisions").mkdir(parents=True, exist_ok=True)
+    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    now = _now()
+    meta = SessionMeta(
+        session_id=uuid.uuid4().hex, slug=slug, created_at=now, updated_at=now,
+        provider=provider, model_name=model_name, context_cards=context_cards,
+        request_hash=_hash(request),
+    )
+    _atomic_write(d / "request.md", request)
+    write_meta(slug, meta)
+    return meta
+
+
+def save_revision(slug: str, model: EngineOutput) -> tuple[int, SessionMeta]:
+    """Persist a new model revision: write model.json AND revisions/NNNN-model.json (the prior model
+    is already frozen in an earlier revision file), then bump current_revision + updated_at. Returns
+    (new_revision, updated_meta)."""
+    meta = read_meta(slug)  # raises SessionNotFoundError if the session isn't there
+    d = canonical_dir(slug)
+    (d / "revisions").mkdir(parents=True, exist_ok=True)
+    rev = meta.current_revision + 1
+    payload = model.model_dump_json(indent=2)
+    _atomic_write(d / "model.json", payload)
+    _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+    meta.current_revision = rev
+    meta.updated_at = _now()
+    write_meta(slug, meta)
+    return rev, meta
+
+
+def load_session_model(slug: str) -> EngineOutput:
+    """The current model of a canonical session."""
+    p = canonical_dir(slug) / "model.json"
+    if not p.exists():
+        raise SessionNotFoundError(
+            f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
+    return EngineOutput.model_validate_json(p.read_text())
+
+
+def load_revision_model(slug: str, revision: int) -> EngineOutput:
+    """A historical model revision — the basis for `impact` since a given point."""
+    p = canonical_dir(slug) / "revisions" / f"{revision:04d}-model.json"
+    if not p.exists():
+        raise SessionNotFoundError(
+            f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
+    return EngineOutput.model_validate_json(p.read_text())
+
+
+def session_request(slug: str) -> str:
+    p = canonical_dir(slug) / "request.md"
+    return p.read_text() if p.exists() else ""
+
+
+def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
+                          source_revision: int) -> ArtifactStatus:
+    """Write an artifact under artifacts/ and record its provenance (source revision) in session.json."""
+    d = canonical_dir(slug)
+    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    _atomic_write(d / "artifacts" / filename, content)
+    meta = read_meta(slug)
+    st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=False)
+    meta.artifact_status[artifact_type] = st
+    meta.updated_at = _now()
+    write_meta(slug, meta)
+    return st
+
+
+def write_artifact_file(slug: str, filename: str, content: str) -> Path:
+    """Write a raw file into a session's artifacts/ directory (no status tracking) — for the neutral
+    epic exports (epic.json / epic.github.json / …) that are extra views of one generated artifact."""
+    d = canonical_dir(slug)
+    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    return _atomic_write(d / "artifacts" / filename, content)
+
+
+def session_artifact_files(slug: str) -> set[str]:
+    """Filenames currently under artifacts/ — the on-disk set change-detection intersects with the
+    blast radius (only artifacts that were actually generated can go stale)."""
+    d = canonical_dir(slug) / "artifacts"
+    return {p.name for p in d.iterdir() if p.is_file()} if d.exists() else set()
+
+
+def list_session_slugs() -> list[str]:
+    """Slugs of all canonical sessions, sorted — the backbone of `session list`."""
+    root = session_root()
+    if not root.exists():
+        return []
+    return sorted(p.name for p in root.iterdir() if (p / "session.json").exists())
+
+
+def migrate_legacy(slug: str) -> SessionMeta:
+    """Copy a legacy `out/<slug>/` session into the canonical store, **preserving the originals**.
+
+    Called on the first mutation of a legacy session (never a bulk sweep). The existing model becomes
+    revision 1; provenance is recovered from the old session.json where present; known artifact files
+    are copied into artifacts/ and recorded at revision 1. The legacy directory is left untouched."""
+    from requivo.core.dependencies import ARTIFACT_FILES  # local import avoids a load-time cycle
+
+    src = legacy_dir(slug)
+    if not (src / "model.json").exists():
+        raise SessionNotFoundError(f"no legacy session '{slug}' under {output_root()}",
+                                   details={"slug": slug})
+    request = ""
+    for name in ("request.md", "request.txt"):
+        if (src / name).exists():
+            request = (src / name).read_text()
+            break
+    old: dict = {}
+    if (src / "session.json").exists():
+        try:
+            old = json.loads((src / "session.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            old = {}
+
+    d = canonical_dir(slug)
+    (d / "revisions").mkdir(parents=True, exist_ok=True)
+    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    now = _now()
+    if request:
+        req_hash = _hash(request)
+    else:
+        # Fall back to the legacy session.json's hash, normalising a bare hex digest to "sha256:…".
+        legacy_hash = str(old.get("request_sha256", ""))
+        req_hash = legacy_hash if legacy_hash.startswith("sha256:") or not legacy_hash else "sha256:" + legacy_hash
+    meta = SessionMeta(
+        session_id=uuid.uuid5(uuid.NAMESPACE_URL, f"requivo:legacy:{slug}").hex,
+        slug=slug, created_at=old.get("created_at", now), updated_at=now,
+        provider=old.get("provider"), model_name=old.get("model_name"),
+        context_cards=old.get("context_cards"), request_hash=req_hash, current_revision=0,
+    )
+    if request:
+        _atomic_write(d / "request.md", request)
+    write_meta(slug, meta)  # so save_revision can read/update it
+
+    model = EngineOutput.model_validate_json((src / "model.json").read_text())
+    rev, _ = save_revision(slug, model)  # existing model → revision 1
+
+    filename_to_type = {fn: t for t, fn in ARTIFACT_FILES.items() if fn}
+    for fn, atype in filename_to_type.items():
+        legacy_file = src / fn
+        if legacy_file.exists():
+            content = legacy_file.read_text()
+            save_session_artifact(slug, atype, fn, content, source_revision=rev)
+    return read_meta(slug)

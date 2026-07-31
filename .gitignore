@@ -1,6 +1,7 @@
 .env
 CLAUDE.local.md
 out/
+.requivo/
 __pycache__/
 *.pyc
 .venv/
