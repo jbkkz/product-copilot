@@ -31,10 +31,13 @@ pip install -U pip setuptools   # a fresh venv often ships pip < 21.3, too old f
 pip install -e ".[dev]"         # deps + the `pc` command + pytest
 ```
 
-`pc` is the modern subcommand CLI: `discover`, `status`, `impact`, `brief`, `prd`, `stories`,
-`estimate`, `criteria`, `epic` (`--json/--github/--gitlab`), `release`. `pc impact <model> [slots…]`
-is a pure offline query over the dependency DAG (no API call): the blast radius of a change (the
-decisions to re-validate + artifacts that go stale), or the full map with no slots. Without an
+`pc` is the modern subcommand CLI: `discover`, `demo`, `status`, `impact`, `brief`, `prd`, `stories`,
+`estimate`, `criteria`, `epic` (`--json/--github/--gitlab`), `release`. `pc demo` replays the
+event-checkin example from its saved outputs — no API key, no arguments, no network (status rendered
+live from the model, assessment read from disk) — the zero-friction way to feel the product. `pc
+impact <model> [slots…]` is a pure offline query over the dependency DAG (no API call): the blast
+radius of a change (the decisions to re-validate + artifacts that go stale), or the full map with no
+slots. Without an
 install, `python pc.py <cmd>`
 (a repo-root launcher that puts `src/` on the path) is equivalent — this is what the Claude Code
 `/pc-*` commands call. The **legacy flag CLI is preserved**: `python src/engine.py "…" [--once]

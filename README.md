@@ -146,11 +146,18 @@ model warns you which already-generated files no longer match it.
 
 ## Quickstart
 
-**Fastest — with [uv](https://docs.astral.sh/uv/):** no virtualenv to create or activate. `uv run`
-builds the environment from `pyproject.toml` on first run, then runs the command.
+**See it first — no API key, no setup.** `pc demo` replays a real run from saved output: the messy
+client request, the questions the engine raised, the solution assessment it produced.
 
 ```bash
 git clone https://github.com/jbkkz/product-copilot && cd product-copilot
+uv run pc demo        # or: python pc.py demo  (nothing installed) · pc demo (after an install)
+```
+
+**Then run your own — with [uv](https://docs.astral.sh/uv/):** no virtualenv to create or activate.
+`uv run` builds the environment from `pyproject.toml` on first run, then runs the command.
+
+```bash
 cp .env.example .env                       # set ANTHROPIC_API_KEY
 uv run pc discover examples/case1_leave.md # first run resolves deps; later runs are instant
 ```
@@ -189,6 +196,28 @@ The product is the engine; the interfaces are thin layers over the same `product
 
 The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
 unchanged.
+
+---
+
+## Before you rely on it
+
+- **What leaves your machine.** Each discovery or generation turn sends, as one Anthropic API call:
+  your request text, the framework schema, and **every** card in `context/` (the system prompt), to
+  the Claude model named by `MODEL` (default `claude-sonnet-5`). Nothing else is transmitted; this
+  project stores nothing beyond `out/` on your own disk, and has no telemetry. `pc demo`, `pc status`
+  and `pc impact` make **no** network call at all.
+- **Cost.** A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The
+  system prompt is prompt-cached across a session, so the repeated calls of a run are cheap.
+  *(Precise per-run token and cost reporting is on the roadmap.)*
+- **Models.** Developed and measured against `claude-sonnet-5`; any current Claude model works via the
+  `MODEL` env var.
+- **Known limits.** Output is **non-deterministic** — the golden harness measures change above a noise
+  floor rather than asserting exact text. Every context card is loaded for every request, so cards can
+  dilute one another (see [Knowing whether a card helped](#knowing-whether-a-card-helped)). The model
+  can simply be wrong.
+- **Not professional advice.** When the engine flags a legal, tax, or regulatory exposure (e.g. the
+  disguised-employment risk in the event example), that is a prompt to get **expert review** — never a
+  substitute for it. Nothing it produces is legal, financial, or compliance advice.
 
 ---
 

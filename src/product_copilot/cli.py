@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+import textwrap
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -30,6 +32,7 @@ from product_copilot.core.persistence import (
     save_request,
     write_artifact,
 )
+from product_copilot.paths import ROOT
 from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (
     render_brief,
@@ -282,6 +285,53 @@ def _cmd_status(a, client) -> None:
     render_turn(out)
 
 
+DEMO_SLUG = "event-checkin-reconciliation"
+
+
+def _fenced_text(markdown: str) -> str:
+    """Pull the terminal output back out of a saved assessment's ```text … ``` block, so the demo
+    shows the clean assessment rather than the markdown wrapper. Falls back to the whole text."""
+    m = re.search(r"```text\s*\n(.*?)```", markdown, re.DOTALL)
+    return m.group(1).rstrip() if m else markdown.strip()
+
+
+def _cmd_demo(a, client) -> None:
+    """A no-API-key walkthrough of a real run, replayed from the saved event-check-in example.
+
+    A visitor shouldn't need a key, a clone, and a venv before feeling what the product does. This
+    renders the understanding + questions LIVE from the saved model (pure Python, proving the engine
+    runs offline) and shows the assessment it produced — the differentiator — from disk. No network."""
+    demo = ROOT / "examples" / DEMO_SLUG
+    request = (demo / "request.md").read_text().strip()
+    out = load_model(demo / "model.json")
+    assessment = _fenced_text((demo / "solution-assessment.md").read_text())
+
+    bar = "═" * 72
+    print(bar)
+    print("  PRODUCT COPILOT — DEMO   (no API key needed)")
+    print("  A real run, replayed from saved output: this is what the engine made")
+    print("  of the messy request below — nothing is called.")
+    print(bar)
+
+    print("\n\n① THE REQUEST  — a rambling, multi-feature client email\n")
+    print(textwrap.indent(request, "  "))
+
+    print("\n\n② WHAT THE ENGINE MADE OF IT  — computed live from the saved model, no API\n")
+    render_turn(out)
+
+    print("\n\n③ THE SOLUTION ASSESSMENT  — a judgment, not a recap (the differentiator)\n")
+    print(assessment)
+
+    print("\n\n" + bar)
+    print("  ④ EVERYTHING ELSE IS A VIEW OF THE SAME MODEL")
+    print("     Regenerated from this one model.json, no re-discovery:")
+    for name in ("epic.md", "acceptance-criteria.md"):
+        if (demo / name).exists():
+            print(f"       • examples/{DEMO_SLUG}/{name}")
+    print('\n  Your turn:   pc discover "<your own request>"')
+    print(bar)
+
+
 def _cmd_impact(a, client) -> None:
     """Offline query over the dependency DAG — no API call. With slots, show their blast
     radius; without, map every slot's downstream."""
@@ -363,6 +413,9 @@ def _build_parser() -> argparse.ArgumentParser:
     d.add_argument("request", help="the client request, or a path to a file containing it")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
     d.set_defaults(func=_cmd_discover)
+
+    demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
+    demo.set_defaults(func=_cmd_demo)
 
     def model_cmd(name: str, help_: str, func, extra=None):
         sp = sub.add_parser(name, help=help_)

@@ -21,6 +21,13 @@ A robustness-and-packaging pass, closing gaps an external code review surfaced.
   schema doesn't define — both self-healing through the discovery retry loop.
 
 ### Added
+- **`pc demo`** — a no-API-key, no-argument, no-network walkthrough that replays the event-check-in
+  example from its saved outputs: the messy request, the questions the engine raised (rendered live
+  from the saved model), and the solution assessment it produced. The zero-friction way to feel the
+  product before installing a key.
+- **README "Before you rely on it"** section: what leaves your machine, cost shape, models tested,
+  known limits (non-determinism, all-cards-loaded), and an explicit no-professional-advice note. The
+  quickstart now leads with `pc demo`.
 - **Continuous integration** (`.github/workflows/ci.yml`): `ruff` lint plus the test suite across
   Python 3.9–3.13 on every push and pull request.
 - **Ruff configuration** and richer packaging metadata (keywords, classifiers, `dev` extra now includes

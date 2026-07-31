@@ -642,6 +642,17 @@ def test_pc_status_runs_offline():
         assert "UNDERSTANDING" in _run_app(["status", str(p)])  # no client built
 
 
+def test_pc_demo_runs_offline_from_saved_example():
+    # The activation path: a visitor runs `pc demo` with no key, no args, no network, and sees a
+    # real run end to end. No client is passed and none is built.
+    text = _run_app(["demo"])  # client=None
+    assert "PRODUCT COPILOT — DEMO" in text
+    assert "freelancers to check guests in" in text     # the real request is shown
+    assert "UNDERSTANDING" in text                       # status rendered live from the saved model
+    assert "SOLUTION ASSESSMENT" in text                 # the assessment (the differentiator)
+    assert "event-checkin-reconciliation/epic.md" in text  # the other artifacts are pointed to
+
+
 def test_pc_brief_uses_injected_client():
     with _model_in_out("_clitest_brief") as p:
         text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
