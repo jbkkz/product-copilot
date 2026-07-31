@@ -26,6 +26,10 @@ preparation for a future Web UI. No product behaviour changed; the model format 
 - **Application services** (`SessionService`, `ArtifactService`) — the single validated apply path shared
   by the CLI, the Anthropic provider, and Claude Code. A proposal from any source flows through the same
   validate → diff → propagate → revision → stale-flag pipeline.
+- **Reasoning invalidation.** `propagate()` now also reports the **challenges** whose premise a changed
+  slot contests (via `contests`), symmetrically to decisions (`derived_from`). When a change unseats a
+  decision or premise the saved **assessment** rests on, that assessment is flagged stale — `model apply`
+  reports `invalidated_decisions`/`invalidated_challenges`, and `impact` shows *Premises to re-examine*.
 
 ### Changed
 - **`requivo.core` is now provider-free** (guarded by a test): the Anthropic client, the single-call

@@ -86,19 +86,34 @@ class DecisionImpact:
 
 
 @dataclass
+class ChallengeImpact:
+    headline: str
+    rests_on: list[str]  # labels of the changed slots whose premise this challenge contests
+
+
+@dataclass
 class ImpactReport:
     changed: list[str]  # labels of the slots in question
     decisions: list[DecisionImpact] = field(default_factory=list)
+    challenges: list[ChallengeImpact] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)  # artifact names whose slot set is touched
 
     @property
+    def reasoning_hit(self) -> bool:
+        """True if the change unseats a piece of baked-in reasoning (a decision or a challenge) — the
+        signal that the saved assessment, which renders that reasoning, no longer holds."""
+        return bool(self.decisions or self.challenges)
+
+    @property
     def empty(self) -> bool:
-        return not self.decisions and not self.artifacts
+        return not self.decisions and not self.challenges and not self.artifacts
 
 
 def propagate(out: EngineOutput, changed: list[str]) -> ImpactReport:
-    """Given slot ids that changed (or are being probed), report what rests on them:
-    the design decisions to re-validate and the artifacts that go stale."""
+    """Given slot ids that changed (or are being probed), report what rests on them: the design
+    decisions to re-validate, the challenges whose premise is now in question, and the artifacts that
+    go stale. Decisions rest on slots via `derived_from`; challenges contest slots via `contests` —
+    the same DAG edge, the other direction of reasoning."""
     changed_set = set(changed)
     report = ImpactReport(changed=[_label(sid) for sid in changed])
 
@@ -106,6 +121,11 @@ def propagate(out: EngineOutput, changed: list[str]) -> ImpactReport:
         hit = [sid for sid in d.derived_from if sid in changed_set]
         if hit:
             report.decisions.append(DecisionImpact(d.decision, [_label(sid) for sid in hit]))
+
+    for c in out.challenges:
+        hit = [sid for sid in c.contests if sid in changed_set]
+        if hit:
+            report.challenges.append(ChallengeImpact(c.headline, [_label(sid) for sid in hit]))
 
     amap = artifact_slots()
     report.artifacts = [name for name in _ARTIFACT_SLOTS_RAW if amap[name] & changed_set]

@@ -218,6 +218,12 @@ def render_impact(report) -> None:
             print(_bullet(d.decision))
             print(f"    ↳ rests on: {', '.join(d.rests_on)}")
 
+    if report.challenges:
+        print("\nPREMISES TO RE-EXAMINE")
+        for c in report.challenges:
+            print(_bullet(c.headline))
+            print(f"    ↳ contests: {', '.join(c.rests_on)}")
+
     if report.artifacts:
         print("\nARTIFACTS THAT GO STALE")
         for name in report.artifacts:
@@ -240,6 +246,8 @@ def render_dependency_map(out: EngineOutput) -> None:
         print(f"\n{_label(sid)}")
         if rep.decisions:
             print(f"  decisions: {'; '.join(d.decision for d in rep.decisions)}")
+        if rep.challenges:
+            print(f"  challenges: {'; '.join(c.headline for c in rep.challenges)}")
         if rep.artifacts:
             print(f"  artifacts: {', '.join(rep.artifacts)}")
 

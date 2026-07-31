@@ -313,6 +313,11 @@ def _cmd_answer(a, client) -> None:
     if result.stale_artifacts:
         pairs = [(t, ARTIFACT_FILENAMES[t]) for t in result.stale_artifacts]
         render_stale(pairs, [_label(sid) for sid in result.changed_slots])
+    n_reasoning = len(result.invalidated_decisions) + len(result.invalidated_challenges)
+    if n_reasoning:
+        print(f"\n⚠  This change unseats {n_reasoning} piece(s) of the assessment's reasoning "
+              f"({len(result.invalidated_decisions)} decision(s), {len(result.invalidated_challenges)} "
+              f"premise(s)) — regenerate the brief to refresh it.")
     print(f"\nSaved session → {store.canonical_dir(slug)}")
     if not out.questions:
         print(f"\n✅ Discovery converged — run `requivo brief {slug}` for the assessment.")

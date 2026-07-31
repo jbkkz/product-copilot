@@ -158,6 +158,48 @@ def test_apply_flags_generated_artifact_stale(workspace):
     assert art.list("s")["prd"]["stale"] is True
 
 
+def _with_reasoning(model: dict) -> dict:
+    """A full model that also carries baked-in reasoning: a decision on `permissions`, a challenge
+    contesting `workflow`."""
+    model["decisions"] = [{"decision": "Draft-first", "derived_from": ["permissions"]}]
+    model["challenges"] = [{
+        "headline": "Archive vs delete", "premise": "p", "alternative": "a",
+        "consequence": "c", "recommendation": "r", "contests": ["workflow"],
+    }]
+    return model
+
+
+def test_propagate_reports_challenges_via_contests():
+    from requivo.core.dependencies import propagate
+    out = EngineOutput.model_validate(_with_reasoning(_full_model()))
+    hit = propagate(out, ["workflow"])
+    assert [c.headline for c in hit.challenges] == ["Archive vs delete"]
+    assert hit.reasoning_hit is True
+    # A change that touches neither derived_from nor contests unseats no reasoning.
+    miss = propagate(out, ["success_metrics"])
+    assert not miss.challenges and not miss.decisions and not miss.reasoning_hit
+
+
+def test_apply_flags_assessment_stale_when_reasoning_is_unseated(workspace):
+    svc = SessionService()
+    art = ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _with_reasoning(_full_model()))
+    art.save("s", "brief", "# Assessment\n")  # the saved assessment renders that reasoning
+    assert art.list("s")["brief"]["stale"] is False
+
+    # Change `workflow` — a challenge contests it → the assessment on disk no longer holds.
+    changed = _with_reasoning(_full_model())
+    changed["model"]["workflow"] = _slot(80, "explicit", "high", "new flow")
+    result = svc.update_model("s", changed)
+    assert "Archive vs delete" in result.invalidated_challenges
+    assert "brief" in result.stale_artifacts
+    assert art.list("s")["brief"]["stale"] is True
+    # The decision (on `permissions`) was untouched, so it is not reported.
+    assert result.invalidated_decisions == []
+    assert "invalidated_challenges" in result.to_dict()
+
+
 def test_update_missing_session_raises(workspace):
     with pytest.raises(SessionNotFoundError):
         SessionService().update_model("ghost", _full_model())

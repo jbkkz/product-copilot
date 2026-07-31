@@ -37,6 +37,7 @@ class UpdateResult:
     revision: int
     changed_slots: list[str]                      # slot ids that materially moved
     invalidated_decisions: list[str] = field(default_factory=list)  # decision text needing re-validation
+    invalidated_challenges: list[str] = field(default_factory=list)  # challenge headlines now in question
     stale_artifacts: list[str] = field(default_factory=list)        # artifact types now out of date
     readiness: Readiness = field(default_factory=lambda: Readiness(False, []))
 
@@ -46,6 +47,7 @@ class UpdateResult:
             "revision": self.revision,
             "changed_slots": self.changed_slots,
             "invalidated_decisions": self.invalidated_decisions,
+            "invalidated_challenges": self.invalidated_challenges,
             "stale_artifacts": self.stale_artifacts,
             "readiness": self.readiness.to_dict(),
         }
@@ -171,13 +173,26 @@ class SessionService:
         # A first model (no prior) counts every present slot as changed, so the whole blast radius is
         # reported; otherwise only the slots that materially moved.
         changed = diff_models(current, new) if current is not None else list(new.model.keys())
-        report = propagate(new, changed)
-        invalidated = [d.decision for d in report.decisions]
+        # Check the change against the model that carries the *established* reasoning — the current one
+        # on disk (a refinement turn often drops decisions/challenges from its reply). Its baked-in
+        # reasoning is what the change threatens; the artifact map is static, so the basis is neutral there.
+        basis = current if (current is not None and (current.decisions or current.challenges)) else new
+        report = propagate(basis, changed)
+        invalidated_decisions = [d.decision for d in report.decisions]
+        invalidated_challenges = [c.headline for c in report.challenges]
+
+        def _resolve_stale(generated: set[str]) -> list[str]:
+            stale = [t for t in report.artifacts if t in generated]
+            # The saved assessment *renders* the reasoning — if the change unseats a decision or a
+            # challenge it rests on, the assessment on disk no longer holds, even though the assessment
+            # is deliberately outside the static artifact→slot map (it is the live analysis layer).
+            if report.reasoning_hit and "brief" in generated and "brief" not in stale:
+                stale.append("brief")
+            return stale
 
         if apply:
             revision, meta = store.save_revision(slug, new)
-            # Only artifacts that were actually generated can go stale — flag those in the blast radius.
-            stale = [t for t in report.artifacts if t in meta.artifact_status]
+            stale = _resolve_stale(set(meta.artifact_status))
             if stale:
                 for t in stale:
                     meta.artifact_status[t].stale = True
@@ -185,14 +200,14 @@ class SessionService:
         else:
             meta = store.read_meta(slug) if store.session_exists(slug) else None
             revision = (meta.current_revision + 1) if meta else 1
-            generated = set(meta.artifact_status) if meta else set()
-            stale = [t for t in report.artifacts if t in generated]
+            stale = _resolve_stale(set(meta.artifact_status) if meta else set())
 
         return UpdateResult(
             status="applied" if apply else "planned",
             revision=revision,
             changed_slots=changed,
-            invalidated_decisions=invalidated,
+            invalidated_decisions=invalidated_decisions,
+            invalidated_challenges=invalidated_challenges,
             stale_artifacts=stale,
             readiness=_readiness(new),
         )

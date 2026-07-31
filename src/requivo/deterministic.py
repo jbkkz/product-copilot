@@ -308,6 +308,8 @@ def _cmd_model_apply(a, client) -> None:
     print(f"   changed slots: {', '.join(result.changed_slots) or '(none)'}")
     if result.invalidated_decisions:
         print(f"   decisions to re-validate: {len(result.invalidated_decisions)}")
+    if result.invalidated_challenges:
+        print(f"   premises to re-examine: {len(result.invalidated_challenges)}")
     if result.stale_artifacts:
         print(f"   now stale: {', '.join(result.stale_artifacts)}")
     rd = result.readiness

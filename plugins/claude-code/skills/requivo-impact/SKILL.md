@@ -22,8 +22,10 @@ requivo status <slug> --json         # artifacts flagged stale carry a source re
 
 ## Relay
 Present, in plain language:
-- the **decisions to re-validate** (they rested on a changed slot),
-- the **artifacts that go stale** and should be regenerated (`/requivo-prd`, `/requivo-brief`, …),
+- the **decisions to re-validate** (they rested on a changed slot via `derived_from`),
+- the **premises to re-examine** (challenges that contest a changed slot via `contests`),
+- the **artifacts that go stale** and should be regenerated (`/requivo-prd`, `/requivo-brief`, …) — the
+  saved assessment goes stale whenever a decision or premise it rests on is unseated,
 - and recommend **only the necessary** regenerations — not everything.
 
 Do not invent dependencies the command did not report; the DAG is authoritative.
