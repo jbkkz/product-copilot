@@ -123,9 +123,12 @@ instead of silently mis-rendering. The field is literally named `model` (Pydanti
 
 **The slot vocabulary is enforced, in two layers** (`schema_slot_ids()` is the single source, read
 from `model_schema.json`):
-- *Vocabulary* — `EngineOutput` rejects **unknown** slot ids always (a typo/hallucination can never
-  sit in the model unseen by the schema-driven views). Completeness is *not* checked here, so internal
-  partial projections (diff/propagate) stay constructable.
+- *Vocabulary* — `EngineOutput` rejects **unknown** slot ids always — both in the model and in the
+  slot each `Question` targets (a typo/hallucination can never sit unseen by the schema-driven views,
+  nor point a question at a slot that doesn't exist). Completeness is *not* checked here, so internal
+  partial projections (diff/propagate) stay constructable. `questions` is also capped at **6**
+  (`Field(max_length=6)`) — the prompt says 3–6 and the stop signal is `[]`; the cap makes it an
+  invariant, not a suggestion.
 - *Completeness* — the discovery boundary (`run()`, via a `validate` hook on `_complete()`) requires
   the **full required slot set**. It rides the same retry loop, so a model that omits a slot is nudged
   to re-emit it rather than failing — safe on a non-deterministic model. This closes the north-star

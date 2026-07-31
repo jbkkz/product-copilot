@@ -16,6 +16,9 @@ A robustness-and-packaging pass, closing gaps an external code review surfaced.
   required set (self-healing through the existing retry loop), readiness reasons over the schema (a
   missing high-impact slot is a blocker, not invisible), and `diff_models()` walks the union of keys so
   a removed slot registers as a change.
+- **Output invariants the prompt only suggested are now enforced in the contract.** `EngineOutput`
+  caps `questions` at 6 (the prompt asks for 3–6) and rejects any question that targets a slot the
+  schema doesn't define — both self-healing through the discovery retry loop.
 
 ### Added
 - **Continuous integration** (`.github/workflows/ci.yml`): `ruff` lint plus the test suite across

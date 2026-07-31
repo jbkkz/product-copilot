@@ -160,6 +160,29 @@ def test_output_allows_a_partial_but_known_model():
     assert set(part.model) == {"workflow"}
 
 
+def _q(slot_id, i=0):
+    return {"q": f"question {i}", "slot": slot_id, "why": "uncertainty × impact"}
+
+
+def test_output_caps_questions_at_six():
+    # The engine asks at most 6, sorted by information value; a 7th means it stopped prioritising.
+    base = {"model": {"workflow": slot(60, "inferred", "high")}, "summary": {}}
+    ok = EngineOutput.model_validate({**base, "questions": [_q("workflow", i) for i in range(6)]})
+    assert len(ok.questions) == 6
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({**base, "questions": [_q("workflow", i) for i in range(7)]})
+
+
+def test_output_rejects_a_question_targeting_an_unknown_slot():
+    # A question must point at a slot the schema defines — a question about a non-existent slot is as
+    # malformed as an unknown slot in the model.
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"workflow": slot(60, "inferred", "high")},
+            "questions": [_q("not_a_slot")], "summary": {},
+        })
+
+
 # ── The driver: uncertainty × impact ─────────────────────────────────────────
 
 

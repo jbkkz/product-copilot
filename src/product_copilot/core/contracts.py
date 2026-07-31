@@ -83,7 +83,9 @@ class EngineOutput(BaseModel):
     # protected_namespaces=() lets us keep the field literally named `model`.
     model_config = ConfigDict(protected_namespaces=())
     model: dict[str, Slot]
-    questions: list[Question] = Field(default_factory=list)
+    # The engine asks at most 6 (the prompt says 3–6; the stop signal is []). The cap is an invariant,
+    # not a suggestion — a turn that floods 12 questions has stopped prioritising by information value.
+    questions: list[Question] = Field(default_factory=list, max_length=6)
     summary: Summary
     # The reasoning layer — persisted so generators inherit it, not just the facts.
     # Filled at discovery finalization by absorbing advise()'s Brief. These types are
@@ -94,14 +96,19 @@ class EngineOutput(BaseModel):
     opportunities: list[Opportunity] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _reject_unknown_slots(self):
-        # A slot id the schema doesn't define is never valid — a hallucinated or typo'd key that
-        # would otherwise sit in the model unseen by every schema-driven view. Completeness (the full
+    def _validate_slot_vocabulary(self):
+        # Every slot id the output names — in the model AND in the questions it targets — must be one
+        # the schema defines. A hallucinated or typo'd key would otherwise sit unseen by every
+        # schema-driven view, or point a question at a slot that doesn't exist. Completeness (the full
         # required set) is enforced at the discovery boundary, not here, so internal partial
         # projections (diff/propagate) stay constructable; the vocabulary check is safe everywhere.
-        bad = unknown_slots(set(self.model))
-        if bad:
-            raise ValueError(f"unknown slots (not in schema): {bad}")
+        bad_model = unknown_slots(set(self.model))
+        if bad_model:
+            raise ValueError(f"unknown slots (not in schema): {bad_model}")
+        allowed, _ = schema_slot_ids()
+        bad_questions = sorted({q.slot for q in self.questions if q.slot not in allowed})
+        if bad_questions:
+            raise ValueError(f"questions target unknown slots (not in schema): {bad_questions}")
         return self
 
 
