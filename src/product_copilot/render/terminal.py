@@ -4,6 +4,7 @@ import textwrap
 
 from product_copilot.core.analysis import _label, _readiness_blockers, _state_of
 from product_copilot.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
+from product_copilot.core.llm import PRICING_AS_OF, UsageLedger
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),
@@ -63,6 +64,26 @@ def render_turn(out: EngineOutput) -> None:
         for i, q in enumerate(out.questions, 1):
             print(f"  {i}. {q.q}")
             print(f"     → {_label(q.slot)}")
+
+
+def render_usage(ledger: UsageLedger) -> None:
+    """One-glance API footprint of the run: calls, tokens (cached vs full-price), latency, and a
+    labelled cost *estimate*. Prints nothing when no API call was made (offline verbs)."""
+    processed = ledger.input_tokens + ledger.cache_read_tokens + ledger.cache_write_tokens
+    if not ledger.calls or processed + ledger.output_tokens == 0:
+        return  # no call, or usage absent (e.g. an offline test fake) — nothing worth printing
+    print("\nAPI USAGE  (this run)")
+    print(f"  {'Calls':<11} {len(ledger.calls)}")
+    cached = f"  ({ledger.cache_read_tokens:,} served from cache)" if ledger.cache_read_tokens else ""
+    print(f"  {'Input':<11} {processed:,} tokens{cached}")
+    print(f"  {'Output':<11} {ledger.output_tokens:,} tokens")
+    print(f"  {'Latency':<11} {ledger.latency_ms / 1000:.1f} s")
+    cost = ledger.cost_usd()
+    model = " · ".join(ledger.models)
+    if cost is not None:
+        print(f"  {'Est. cost':<11} ~${cost:.3f}   ({model} — estimate, rates as of {PRICING_AS_OF})")
+    else:
+        print(f"  {'Est. cost':<11} n/a — no price on file for {model} (tokens above are exact)")
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:

@@ -89,7 +89,10 @@ The runner is a thin dispatch:
    `system` prompt (prompt + schema + all context cards) is passed as a single `cache_control:
    ephemeral` block, so its prefix is cached across the calls of a session (the K runs of a golden
    capture, the up-to-8 turns of `converse()`, each JSON retry) — keep it byte-identical per call, or
-   the cache is lost.
+   the cache is lost. `_complete()` also records each call's usage (tokens, cache read/write, latency,
+   attempts) into a session-scoped `UsageLedger` when one is active — `cli.py`'s `app()` opens
+   `track_usage()` around a command and `render_usage()` prints the footprint (tokens are exact; cost
+   is a labelled *estimate* from a dated `_PRICE_PER_MTOK` table — never treated as authoritative).
 3. Rendering is split: `render_turn()` is the lightweight per-turn view (a ✅/🟡/⚪ Understanding
    checklist + priority questions); `render_brief()` is the deliverable — the **SOLUTION ASSESSMENT**,
    a two-tier document in PM language (the function/contract/prompt keep the `brief` name; only the

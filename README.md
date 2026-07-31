@@ -207,8 +207,10 @@ unchanged.
   project stores nothing beyond `out/` on your own disk, and has no telemetry. `pc demo`, `pc status`
   and `pc impact` make **no** network call at all.
 - **Cost.** A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The
-  system prompt is prompt-cached across a session, so the repeated calls of a run are cheap.
-  *(Precise per-run token and cost reporting is on the roadmap.)*
+  system prompt is prompt-cached across a session, so the repeated calls of a run are cheap. Every
+  `pc` command that hits the API prints its own footprint when it finishes — calls, tokens (with the
+  cached share), latency, and an estimated cost — so you see the real number for *your* request
+  rather than guessing. (Tokens are exact; the cost is a labelled estimate from a dated rate table.)
 - **Models.** Developed and measured against `claude-sonnet-5`; any current Claude model works via the
   `MODEL` env var.
 - **Known limits.** Output is **non-deterministic** — the golden harness measures change above a noise

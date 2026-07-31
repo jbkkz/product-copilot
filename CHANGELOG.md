@@ -21,6 +21,11 @@ A robustness-and-packaging pass, closing gaps an external code review surfaced.
   schema doesn't define — both self-healing through the discovery retry loop.
 
 ### Added
+- **Per-run API usage reporting.** Every `pc` command that hits the API now prints its footprint when
+  it finishes — calls, tokens (with the cached share), latency, and an estimated cost. `_complete()`
+  records each call into a session-scoped `UsageLedger`; tokens are exact, cost is a labelled estimate
+  from a dated rate table (never presented as a bill). Offline verbs (`demo`, `status`, `impact`) print
+  nothing.
 - **`pc demo`** — a no-API-key, no-argument, no-network walkthrough that replays the event-check-in
   example from its saved outputs: the messy request, the questions the engine raised (rendered live
   from the saved model), and the solution assessment it produced. The zero-friction way to feel the

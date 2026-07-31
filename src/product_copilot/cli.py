@@ -23,6 +23,7 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
+from product_copilot.core.llm import track_usage
 from product_copilot.core.persistence import (
     _slug,
     load_model,
@@ -42,6 +43,7 @@ from product_copilot.render.terminal import (
     render_stale,
     render_stories,
     render_turn,
+    render_usage,
 )
 
 load_dotenv()
@@ -451,4 +453,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def app(argv: list[str] | None = None, client: Anthropic | None = None) -> None:
     """Entry point for the `pc` command and `python -m product_copilot`."""
     args = _build_parser().parse_args(argv)
-    args.func(args, client)
+    # Track the run's API footprint and print it after the command. Offline verbs make no call, so
+    # the ledger stays empty and render_usage() prints nothing.
+    with track_usage() as ledger:
+        args.func(args, client)
+    render_usage(ledger)
