@@ -1,0 +1,227 @@
+{
+  "model": {
+    "problem": {
+      "completeness": 80,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "No live visibility into guest approval status at the door (people slip through or get wrongly turned away); freelancer invoices don't match hours worked; contracts often unsigned before the event; finance reconciles for weeks afterward.",
+      "evidence": "'nobody has a clear view of who's actually been approved'; 'invoices never line up with hours actually worked'; 'half their contracts weren't even signed'"
+    },
+    "current_process": {
+      "completeness": 70,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Freelancers manually check guests in at the door with no live approval reference; contracts frequently unsigned pre-event; finance manually reconciles invoices vs. worked hours weeks later.",
+      "evidence": "As described in the request; no system in place today"
+    },
+    "success_metrics": {
+      "completeness": 55,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Door staff see live approval status; someone is alerted on a mismatch; reconciliation is clean at close so finance stops chasing.",
+      "evidence": "'door staff should see approval status live... alerted when there's a mismatch... reconcile cleanly'"
+    },
+    "actors": {
+      "completeness": 45,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Two actor sets: (1) attendees/guests being checked in, (2) freelancers acting as door staff whose own contracts/hours/invoices must reconcile. Finance and an unnamed alert recipient (event manager?) are downstream actors.",
+      "evidence": "'freelancers to check guests in at the door'; 'finance spends weeks reconciling'"
+    },
+    "business_objects": {
+      "completeness": 40,
+      "confidence": "inferred",
+      "impact": "medium",
+      "value": "Attendee (with approval status), Check-in event, Freelancer, Contract, Mission/shift, Hours worked, Invoice.",
+      "evidence": "Derived from request; no explicit data model stated"
+    },
+    "business_rules": {
+      "completeness": 15,
+      "confidence": "empty",
+      "impact": "high",
+      "value": "Undefined: what makes a guest 'approved' and where that status originates; what exactly constitutes a 'mismatch' (guest count vs invoice? hours vs contract terms?); whether unsigned-contract freelancers may still work the door.",
+      "evidence": "Request names the pain but not the rule that decides approval or mismatch"
+    },
+    "workflow": {
+      "completeness": 20,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Likely: guest registered/approved pre-event -> door staff check-in against approval list -> freelancer clocks in/out or hours logged -> post-event reconciliation of hours vs invoice vs signed contract -> alert on mismatch -> finance close.",
+      "evidence": "Inferred from 'live approval status', 'alerted on mismatch', 'reconcile cleanly'"
+    },
+    "integrations": {
+      "completeness": 10,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "Unclear whether approval list, freelancer contracts and invoicing come from an existing HR/contract system (b2b-platform) that must feed this event app, or are entered fresh.",
+      "evidence": "Not stated; finance reconciliation implies a source system exists somewhere"
+    },
+    "permissions": {
+      "completeness": 15,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Door staff need read access to approval status only; someone (event manager/finance) needs to see and act on mismatch alerts; finance needs reconciliation view. Exact split not stated.",
+      "evidence": "'door staff should see approval status'; 'someone should get alerted' — 'someone' undefined"
+    },
+    "config_vs_custom": {
+      "completeness": 20,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "Not stated whether this is a one-off build for this single event or the first instance of a reusable kit for recurring events.",
+      "evidence": "Event-ops context flags this as a question clients rarely raise themselves"
+    },
+    "constraints": {
+      "completeness": 60,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Event in six weeks (hard, immovable deadline); venue wifi is effectively unusable, so the check-in path must work offline.",
+      "evidence": "'It has to work at the venue where the wifi basically doesn't. Event's in six weeks.'"
+    },
+    "edge_cases": {
+      "completeness": 10,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "Not addressed: walk-ins/last-minute approvals, duplicate/re-entry scans, multiple simultaneous doors, freelancer working partial shift or leaving early, unsigned contract at go-live.",
+      "evidence": "Not mentioned; standard event-ops risk areas"
+    },
+    "reporting": {
+      "completeness": 15,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Needs an auditable trail tying guest check-ins to freelancer hours to invoice lines, since finance's core complaint is inability to reconcile after the fact — this is close to a compliance/audit need, not just a nice dashboard.",
+      "evidence": "'finance spends weeks reconciling... invoices never line up with hours actually worked' implies a mandated traceable link"
+    },
+    "acceptance": {
+      "completeness": 10,
+      "confidence": "empty",
+      "impact": "medium",
+      "value": "Not defined: what scenario proves the system works (e.g., a live rehearsal check-in matching against approval list offline, then a mismatch alert firing correctly, then a clean reconciliation report)?",
+      "evidence": "Not stated"
+    },
+    "risks": {
+      "completeness": 20,
+      "confidence": "inferred",
+      "impact": "high",
+      "value": "Six-week timeline plus offline requirement plus fixing two intertwined problems (attendee check-in AND freelancer time/invoice reconciliation) is a lot to build and rehearse; risk of scope creep if both problems are solved with equal depth.",
+      "evidence": "Fixed event date + poor connectivity + dual scope (guests + freelancer ops) stated together"
+    }
+  },
+  "questions": [
+    {
+      "q": "When you say 'alerted when there's a mismatch,' what exactly is being compared — guest check-ins against the approval list, or freelancer hours worked against contract/invoice terms (or both)? And who receives that alert?",
+      "slot": "business_rules",
+      "why": "High impact, near-empty: the word 'mismatch' covers two very different rules (attendee approval vs. freelancer billing) with different data models and different owners — building the wrong one wastes most of the six weeks."
+    },
+    {
+      "q": "Is the freelancer check-in/hours-tracking piece meant to reconcile against existing contracts and rates already in another system (e.g. an HR/contract platform), or will contracts and rates be entered fresh for this event?",
+      "slot": "integrations",
+      "why": "High impact, unaddressed: if a source-of-truth contract/invoicing system already exists, this is an integration and sync problem; if not, it's a much bigger build from scratch."
+    },
+    {
+      "q": "Is this a one-off build for this single event, or the first version of a kit you'll reuse for future events?",
+      "slot": "config_vs_custom",
+      "why": "High impact on architecture and cost: a throwaway app vs. a reusable multi-event kit changes data model, configurability effort, and what's worth investing in given six weeks."
+    },
+    {
+      "q": "For check-in itself: does the same 'approval' list also decide who is authorized to work the door (freelancer contract signed) — i.e., could an unsigned-contract freelancer still be scanning guests on the day?",
+      "slot": "business_rules",
+      "why": "High impact: the request conflates guest approval and freelancer contract status; if an unsigned freelancer can still operate, that's a compliance gap the client may not have considered."
+    },
+    {
+      "q": "On the offline requirement: do you need each door device to hold its own local snapshot of the approval list and sync check-ins later, and is a brief 'pending/unconfirmed' state on-screen acceptable during the event, or must every scan be instantly certain?",
+      "slot": "workflow",
+      "why": "High impact, high uncertainty: offline-first vs. online-only is an architecture decision, not a setting, and directly affects the failure mode at the door — the classic blind spot in event-ops builds."
+    },
+    {
+      "q": "What does 'reconcile cleanly' mean concretely for finance — a report matching hours worked per freelancer against invoiced amounts, or full approval of invoices before payment? What's the acceptance scenario that proves this works?",
+      "slot": "acceptance",
+      "why": "Medium-high impact: without a concrete acceptance definition, 'reconciles cleanly' can't be tested, and this is the metric the client explicitly cares about most for finance's sign-off."
+    }
+  ],
+  "summary": {
+    "objective": "Give door staff live, reliable visibility into guest approval status during check-in, and give finance a clean, auditable link between freelancer hours worked, signed contracts, and invoiced amounts — eliminating both wrongful admissions/rejections at the door and weeks of post-event invoice reconciliation.",
+    "scope": "Likely two connected sub-systems: (1) an offline-capable check-in app for door staff showing live attendee approval status, with local snapshot + sync given the venue's unreliable wifi; (2) a freelancer time/contract/invoice reconciliation layer that flags mismatches (hours vs. invoice vs. signed contract) and alerts a responsible person, feeding a clean reconciliation report to finance at close.",
+    "assumptions": [
+      "The 'mismatch' alert covers both guest approval mismatches and freelancer hours-vs-invoice mismatches, though the client hasn't separated these explicitly.",
+      "An existing contract/HR/invoicing system may already hold freelancer contracts and rates, needing integration rather than fresh data entry.",
+      "The check-in path must work fully offline with local data snapshots and later sync, given the stated wifi problem.",
+      "This may be a one-off build for a single event in six weeks rather than a reusable kit, though this hasn't been confirmed.",
+      "Unsigned-contract freelancers are currently allowed to work the door, which the client wants addressed but hasn't explicitly ruled on."
+    ],
+    "blind_spot": "The request bundles two structurally different problems — attendee check-in (needing offline resilience, throughput, fuzzy identification) and freelancer contract/invoice reconciliation (needing traceable hours-to-invoice linkage, likely tied to another system of record) — under one word, 'mismatch.' Building a single undifferentiated alert without first separating these two rule sets risks solving neither well within six weeks, and the unsigned-contract-freelancer-at-the-door scenario is a compliance gap nobody has explicitly decided how to handle."
+  },
+  "decisions": [
+    {
+      "decision": "The check-in path must work offline with a local device snapshot and later sync, given the venue's unreliable wifi.",
+      "why": "The venue's connectivity is explicitly stated as unusable, and check-in cannot fail at the door.",
+      "alternative": "An online-only check-in relying on live connectivity.",
+      "tradeoff": "Added complexity of local snapshot freshness and sync conflict handling, in exchange for a check-in path that survives the one moment it can't fail.",
+      "derived_from": [
+        "constraints",
+        "workflow"
+      ]
+    },
+    {
+      "decision": "The event is being treated as its own scoped build within a fixed six-week deadline.",
+      "why": "",
+      "alternative": "",
+      "tradeoff": "",
+      "derived_from": [
+        "constraints"
+      ]
+    }
+  ],
+  "challenges": [
+    {
+      "headline": "One word, two different problems",
+      "premise": "The request treats 'mismatch' as a single alert covering both guest approval and freelancer hours-vs-invoice discrepancies.",
+      "alternative": "Event-ops and back-office reconciliation are structurally different builds — different data models, different urgency (real-time at the door vs. post-event for finance), different owners (door staff vs. finance).",
+      "consequence": "Designing one undifferentiated 'mismatch' concept risks a shallow build that satisfies neither: a door alert that's too noisy to act on, and a finance report that still doesn't tie out.",
+      "recommendation": "Split into two explicit rule sets and two acceptance criteria before writing any workflow — attendee approval mismatch, and hours/contract/invoice mismatch — each with its own owner and channel.",
+      "contests": [
+        "business_rules",
+        "workflow",
+        "success_metrics"
+      ]
+    },
+    {
+      "headline": "Clocking freelancer hours is a legal tripwire",
+      "premise": "The build assumes freelancer hours can simply be tracked and reconciled against invoices like a timesheet.",
+      "alternative": "Under French labor law, freelancers who are clocked in/out and monitored like employees are a classic fact pattern for requalification as disguised employment (salariat déguisé) — freelance invoicing is normally tied to a deliverable or mission, not hours worked.",
+      "consequence": "If the app effectively timestamps freelancer arrival/departure and drives invoice amounts from those hours, the client may be building evidence against their own contractor classification.",
+      "recommendation": "Check with legal/HR before building an hours-based reconciliation — confirm whether the 'mismatch' should be against mission/deliverable terms in the contract, not clocked hours.",
+      "contests": [
+        "business_rules",
+        "business_objects"
+      ]
+    },
+    {
+      "headline": "Six weeks, two builds, no rehearsal slack",
+      "premise": "The plan treats offline check-in and freelancer/invoice reconciliation as one project deliverable on the same six-week clock.",
+      "alternative": "The event date can't move, so the check-in path — the one thing that fails visibly in front of the client — should get the depth and rehearsal time, while reconciliation could ship as a clean post-event report rather than a live alert.",
+      "consequence": "Splitting effort evenly across both risks an under-rehearsed door experience, which is the one failure mode with no second chance.",
+      "recommendation": "Sequence and scope explicitly: harden and rehearse check-in first; de-scope freelancer reconciliation to a post-event reconciliation report unless real-time alerting is proven necessary.",
+      "contests": [
+        "risks",
+        "constraints",
+        "acceptance"
+      ]
+    }
+  ],
+  "opportunities": [
+    {
+      "text": "Build the offline check-in engine (local snapshot + sync) as a reusable pattern for future events rather than a one-off, if the client runs events regularly.",
+      "leverage": "future",
+      "modules": []
+    },
+    {
+      "text": "Model the freelancer hours/contract/invoice reconciliation as an extension of the existing Mission-Contract-Invoice relationship rather than a bespoke event-specific check, so it can be reused across future freelance missions.",
+      "leverage": "medium",
+      "modules": [
+        "Mission",
+        "Contract",
+        "Invoice"
+      ]
+    }
+  ]
+}
