@@ -36,7 +36,7 @@ from product_copilot.core.persistence import (
     session_cards,
     write_artifact,
 )
-from product_copilot.paths import ROOT
+from product_copilot.paths import DEMO
 from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (
     render_brief,
@@ -351,7 +351,9 @@ def _cmd_demo(a, client) -> None:
     A visitor shouldn't need a key, a clone, and a venv before feeling what the product does. This
     renders the understanding + questions LIVE from the saved model (pure Python, proving the engine
     runs offline) and shows the assessment it produced — the differentiator — from disk. No network."""
-    demo = ROOT / "examples" / DEMO_SLUG
+    # Read from the frozen payload bundled in the package (so `pc demo` works from a wheel, no clone),
+    # but point the visitor at the browsable copy under examples/ at the repo root.
+    demo = DEMO
     request = (demo / "request.md").read_text().strip()
     out = load_model(demo / "model.json")
     assessment = _fenced_text((demo / "solution-assessment.md").read_text())

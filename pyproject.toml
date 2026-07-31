@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "product-copilot"
-version = "0.6.1"
+version = "0.6.2"
 description = "A requirements engine that turns a vague client request into a structured solution model ready for dev."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,6 +39,12 @@ pc = "product_copilot.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["product_copilot*"]
+
+[tool.setuptools.package-data]
+# Ship the engine's assets (prompts, framework schema, context cards, demo payload) inside the wheel.
+# Without this, a `pip install` outside the clone would have no prompts/schema and every command that
+# builds a prompt or reads the schema would fail. The wheel-install CI job guards this.
+product_copilot = ["assets/**/*"]
 
 [tool.ruff]
 line-length = 120

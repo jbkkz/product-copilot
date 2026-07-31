@@ -7,4 +7,4 @@ CLAUDE.md. This package is being carved out of the historical src/engine.py; tha
 module now re-exports from here for backward compatibility.
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"

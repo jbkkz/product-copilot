@@ -60,9 +60,17 @@ touches argv/stdout/TTY** — so every interface (terminal `pc`, the Claude Code
 `.claude/commands/`, and later an API or MCP) is a thin layer over the same core, never a second
 implementation:
 
+Bundled assets (`prompts/`, `framework/`, `context/`, plus the `pc demo` payload) live **inside the
+package** at `src/product_copilot/assets/`, so they ship in the wheel and a `pip install` works
+outside the clone. Throughout this doc, `prompts/…`, `framework/…` and `context/…` are shorthand for
+that location. Generated output goes to `./out` under the caller's working directory (overridable via
+`PC_OUTPUT_DIR`), never inside the install. `paths.py` exposes both: `ASSETS`/`PROMPTS`/`FRAMEWORK`/
+`CONTEXT`/`DEMO` (read-only, resolved from the package) and `output_root()` (writable, cwd-based).
+
 ```
 product_copilot/
-  paths.py         ROOT — single source of truth for asset/output resolution
+  paths.py         ASSETS + output_root() — read-only package data vs writable cwd/out
+  assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the engine (presentation-free)
     contracts.py     Pydantic models + enums          llm.py         prompt assembly + _complete
     analysis.py      Python-authoritative model logic  discovery.py   run() (the engine turn)
@@ -81,11 +89,15 @@ The runner is a thin dispatch:
    - `{{SCHEMA}}` ← `framework/model_schema.json` (the slot definitions + the driver rule)
    - `{{CONTEXT}}` ← `load_context()`, which concatenates every `context/*.md` **except** files
      whose name starts with `_` (so `_template.md` is skipped).
-2. Every model reply must be **JSON only**. `_complete()` is the shared call: `_first_text()` skips
-   non-text blocks, `_extract_json()` strips a ```json fence or slices `{ … }`, and the result is
-   validated against a Pydantic contract. On malformed/non-conformant JSON it retries (default 2×)
-   with a corrective nudge in a *local* message copy, so the caller's clean history is never
-   polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it. The
+2. Every model reply must be **JSON only**. `_complete()` is the shared call: `_response_text()`
+   concatenates the response's text blocks (skipping thinking/tool_use), `_extract_json()` strips a
+   ```json fence or slices `{ … }`, and the result is validated against a Pydantic contract. On
+   malformed/non-conformant JSON it retries (default 2×) with a corrective nudge in a *local* message
+   copy, so the caller's clean history is never polluted. Transport failures (`anthropic.APIError`)
+   and truncated replies (`stop_reason == max_tokens` with unparseable JSON) are raised as a clean
+   `EngineError` the CLI turns into a one-line message + non-zero exit — never a traceback; the ceiling
+   is `MAX_OUTPUT_TOKENS` (8k). Truncation is checked **parse-first**: a reply flagged `max_tokens`
+   whose JSON is nonetheless complete still succeeds. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it. The
    `system` prompt (prompt + schema + all context cards) is passed as a single `cache_control:
    ephemeral` block, so its prefix is cached across the calls of a session (the K runs of a golden
    capture, the up-to-8 turns of `converse()`, each JSON retry) — keep it byte-identical per call, or
@@ -269,8 +281,8 @@ selection is per-session (held constant across a run's turns) so the cached syst
 
 ## Extending
 
-- **New client/product context:** copy `context/_template.md` to `context/<name>.md` and fill it. It
-  is picked up automatically (non-`_` prefix). Better context cards → better impact estimates → better
+- **New client/product context:** copy `src/product_copilot/assets/context/_template.md` to
+  `…/context/<name>.md` and fill it. It is picked up automatically (non-`_` prefix). Better context cards → better impact estimates → better
   questions. Measure the change through the golden harness above — a card helps its target request and
   can quietly cost a neighbour.
 - **`config_vs_custom` slot** is `optional: true` — the platform edge (hardcoded / configurable /

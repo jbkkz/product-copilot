@@ -39,3 +39,39 @@ jobs:
       - run: pip install -e ".[dev]"
       # Pure-logic + offline CLI units, no API calls (a fake client is injected), so no key needed.
       - run: python -m pytest tests/ -q
+
+  wheel:
+    name: Wheel install (no clone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # Build the wheel, install it into a clean venv, and drive it from a directory that is NOT the
+      # repo — so nothing resolves via the source tree. This guards the packaging invariant: the
+      # bundled assets (prompts, schema, context cards, demo payload) must ship inside the wheel, or a
+      # real `pip install` outside the clone would break on the first command that builds a prompt.
+      - run: pip install build
+      - run: python -m build --wheel
+      - name: Install the wheel into a clean venv and exercise it outside the repo
+        run: |
+          python -m venv /tmp/cleanenv
+          /tmp/cleanenv/bin/pip install dist/*.whl
+          mkdir /tmp/workdir && cd /tmp/workdir
+          # pc demo: offline replay from the bundled payload (no API key).
+          /tmp/cleanenv/bin/pc demo | grep -q "PRODUCT COPILOT — DEMO"
+          # Schema loads and every prompt builds from the installed package (not the source tree).
+          /tmp/cleanenv/bin/python - <<'PY'
+          from product_copilot.core.contracts import schema_slot_ids
+          from product_copilot.core.llm import build_prompt, available_cards
+          allowed, _ = schema_slot_ids()
+          assert len(allowed) > 0, "schema failed to load from the installed wheel"
+          assert available_cards(), "no context cards found in the installed wheel"
+          for name in ("engine.md", "brief.md", "prd.md", "stories.md",
+                       "estimate.md", "criteria.md", "epic.md", "release.md"):
+              p = build_prompt(name)
+              assert "{{SCHEMA}}" not in p and "{{CONTEXT}}" not in p, f"{name} did not substitute"
+          print("wheel install OK:", len(allowed), "slots,", len(available_cards()), "cards, 8 prompts")
+          PY

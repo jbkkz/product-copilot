@@ -4,12 +4,12 @@ import functools
 import json
 
 from product_copilot.core.contracts import SOFT_COMPLETENESS, Confidence, EngineOutput, Impact, Slot, schema_slot_ids
-from product_copilot.paths import ROOT
+from product_copilot.paths import FRAMEWORK
 
 
 @functools.lru_cache(maxsize=1)
 def _slot_meta() -> tuple[dict, dict]:
-    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    slots = json.loads((FRAMEWORK / "model_schema.json").read_text())["slots"]
     return ({s["id"]: s["pillar"] for s in slots}, {s["id"]: s["label"] for s in slots})
 
 
@@ -17,7 +17,7 @@ def _slot_meta() -> tuple[dict, dict]:
 def _default_impacts() -> dict[str, Impact]:
     """Each slot's baseline impact from the schema — used to judge a slot the model omitted entirely
     (where there's no live impact to read)."""
-    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    slots = json.loads((FRAMEWORK / "model_schema.json").read_text())["slots"]
     return {s["id"]: Impact(s["impact_default"]) for s in slots}
 
 

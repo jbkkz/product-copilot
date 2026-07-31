@@ -15,7 +15,7 @@ from product_copilot.core.discovery import answer_turn
 from product_copilot.core.generators import advise
 from product_copilot.core.llm import EngineError, _complete, _response_text, current_model_name
 from product_copilot.core.persistence import _atomic_write, load_session, save_session, session_cards
-from product_copilot.paths import ROOT
+from product_copilot.paths import output_root
 from src.engine import (
     PRD,
     AcceptanceCriteria,
@@ -588,12 +588,13 @@ def test_load_context_includes_real_cards_and_skips_underscore():
 
 
 def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
-    # load_context reads ROOT from its own module (core.llm after the split).
+    # load_context reads the CONTEXT anchor from its own module (core.llm); point it at an empty dir.
     from product_copilot.core import llm
 
-    monkeypatch.setattr(llm, "ROOT", tmp_path)
-    (tmp_path / "context").mkdir()
-    (tmp_path / "context" / "_only_template.md").write_text("skip me")
+    ctx_dir = tmp_path / "context"
+    ctx_dir.mkdir()
+    (ctx_dir / "_only_template.md").write_text("skip me")
+    monkeypatch.setattr(llm, "CONTEXT", ctx_dir)
     assert load_context() == ""
 
 
@@ -665,6 +666,20 @@ def test_pc_brief_uses_injected_client():
         assert "SOLUTION ASSESSMENT" in text
 
 
+def test_demo_payload_matches_the_browsable_example():
+    # `pc demo` reads a frozen payload bundled in the package (so it works from a wheel); examples/
+    # holds the browsable copy at the repo root. Guard against silent drift between the two: every
+    # bundled demo file must byte-match its counterpart under examples/event-checkin-reconciliation/.
+    from product_copilot.paths import DEMO
+
+    repo_root = DEMO.parents[3]  # assets/demo → assets → product_copilot → src → repo
+    browsable = repo_root / "examples" / "event-checkin-reconciliation"
+    bundled = sorted(DEMO.glob("*"))
+    assert bundled, "demo payload is empty"
+    for f in bundled:
+        assert f.read_text() == (browsable / f.name).read_text(), f"demo payload drifted from examples/: {f.name}"
+
+
 def test_pc_brief_persists_reasoning_into_model():
     # Keystone: advise()'s reasoning is absorbed into the model and saved (backfill),
     # so downstream generators inherit it instead of it being regenerated and discarded.
@@ -727,7 +742,7 @@ def test_pc_release_stamps_version():
 
 def test_pc_discover_once_saves_model():
     slug = "clitest-discover-probe-xyz"
-    folder = ROOT / "out" / slug
+    folder = output_root() /  slug
     try:
         _run_app(["discover", "clitest discover probe xyz", "--once"], client=FakeClient(_ENGINE_REPLY))
         assert (folder / "model.json").exists()
@@ -1033,7 +1048,7 @@ def test_resolve_slug_avoids_silent_overwrite():
     from product_copilot.core.persistence import resolve_slug, save_request
 
     base = "_slugtest_collide"
-    folder = ROOT / "out" / base
+    folder = output_root() /  base
     try:
         assert resolve_slug(base, "first request") == base          # free → clean slug
         save_request(base, "first request")                         # base now owned by this request

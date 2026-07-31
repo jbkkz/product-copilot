@@ -4,6 +4,35 @@ All notable changes to Product Copilot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-31
+
+Packaging: the engine is now a self-contained, pip-installable wheel, and generated output no longer
+lands inside the install. This closes the review's top remaining gap — that installing from a wheel
+(rather than a clone) would break, because the assets lived outside the package.
+
+### Fixed
+- **Assets ship inside the wheel.** The prompts, the framework schema, the context cards and the demo
+  payload moved into the package at `src/product_copilot/assets/` and are declared as package data, so
+  a `pip install` outside the clone has everything it needs. Before, they lived at the repo root and a
+  wheel install had no prompts or schema — every command that builds a prompt would fail. Git tracked
+  the move as renames, so history is preserved.
+- **Read-only assets vs writable output are separated.** `paths.py` now exposes `ASSETS` (resolved
+  from the package location, read-only — works identically from an editable checkout or a wheel) and
+  `output_root()` (`./out` under the working directory, overridable via `PC_OUTPUT_DIR`). Generated
+  models/artifacts are never written inside a possibly read-only install.
+
+### Added
+- **Wheel-install CI job.** Builds the wheel, installs it into a clean venv, and drives `pc demo` plus
+  a schema load and all eight prompt builds from a directory that is *not* the repo — so the packaging
+  invariant (assets resolve from the installed package, not the source tree) is guarded on every push.
+- **Frozen demo payload** (`assets/demo/`) so `pc demo` runs from a wheel with no clone. A test asserts
+  it stays byte-identical to the browsable `examples/event-checkin-reconciliation/` copy, killing drift.
+
+### Changed
+- **README leads with the proof.** Reordered to open on a real before/after — a rambling client email
+  and what the engine caught in it (two systems conflated, a disguised-employment exposure, an offline
+  constraint, a buried deadline) — followed immediately by `pc demo`, before the theory and diagrams.
+
 ## [0.6.1] - 2026-07-31
 
 A boundary-hardening pass from a second external review: durable writes, run provenance, clean

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from anthropic import Anthropic, APIError
 from pydantic import ValidationError
 
-from product_copilot.paths import ROOT
+from product_copilot.paths import CONTEXT, FRAMEWORK, PROMPTS
 
 MODEL_DEFAULT = "claude-sonnet-5"
 
@@ -136,7 +136,7 @@ def _record(rec: CallRecord) -> None:
 def available_cards() -> list[str]:
     """Stems of the loadable context cards (non-`_`-prefixed), in load order — the vocabulary of the
     `--context` selector."""
-    return [p.stem for p in sorted((ROOT / "context").glob("*.md")) if not p.name.startswith("_")]
+    return [p.stem for p in sorted(CONTEXT.glob("*.md")) if not p.name.startswith("_")]
 
 
 def load_context(only: list[str] | None = None) -> str:
@@ -146,7 +146,7 @@ def load_context(only: list[str] | None = None) -> str:
     the prompt cache still holds."""
     keep = None if only is None else {c.lower() for c in only}
     cards = []
-    for path in sorted((ROOT / "context").glob("*.md")):
+    for path in sorted(CONTEXT.glob("*.md")):
         if path.name.startswith("_"):
             continue
         if keep is not None and path.stem.lower() not in keep:
@@ -157,8 +157,8 @@ def load_context(only: list[str] | None = None) -> str:
 
 def build_prompt(name: str, only: list[str] | None = None) -> str:
     """Load a prompt file and inject the schema + product context (optionally a subset of cards)."""
-    schema = (ROOT / "framework" / "model_schema.json").read_text()
-    text = (ROOT / "prompts" / name).read_text()
+    schema = (FRAMEWORK / "model_schema.json").read_text()
+    text = (PROMPTS / name).read_text()
     return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context(only))
 
 

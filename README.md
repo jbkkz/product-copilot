@@ -8,6 +8,36 @@ Built for Product Managers, Solutions Engineers and Business Analysts working on
 
 > **Product Copilot doesn't generate documents. It builds understanding.**
 
+---
+
+## See it in one look
+
+A real, rambling client email — a symptom, not a spec, with three features tangled together and a
+constraint buried at the end:
+
+> *"…we bring in freelancers to check guests in at the door, but nobody has a clear view of who's
+> actually been approved to attend… afterwards finance spends weeks reconciling because the freelancer
+> invoices never line up with the hours actually worked… We need something that ties this together…
+> It has to work at the venue where the wifi basically doesn't. Event's in six weeks."*
+
+**What Product Copilot made of it — before a line of spec was written:**
+
+- **Two systems, not one.** It refused the "tie this together" framing: live door check-in and
+  after-the-fact invoice reconciliation are separate builds, with separate data and separate owners.
+- **A disguised-employment (*salariat déguisé*) exposure** nobody wrote down — freelancers on fixed
+  hours doing core work — surfaced as a point for **legal review**, not a requirement.
+- **An unresolved offline strategy** — the venue wifi "basically doesn't" work, which decides the
+  whole architecture rather than being an edge case.
+- **A six-week deadline** the two builds now have to be **sequenced** against.
+
+See the whole run yourself — **no API key, no setup, no network:**
+
+```bash
+uv run pc demo        # or, with nothing installed:  python pc.py demo
+```
+
+---
+
 ```
                  Customer request
                          │
@@ -202,7 +232,7 @@ unchanged.
 ## Before you rely on it
 
 - **What leaves your machine.** Each discovery or generation turn sends, as one Anthropic API call:
-  your request text, the framework schema, and **every** card in `context/` (the system prompt), to
+  your request text, the framework schema, and **every** bundled context card (the system prompt), to
   the Claude model named by `MODEL` (default `claude-sonnet-5`). Nothing else is transmitted; this
   project stores nothing beyond `out/` on your own disk, and has no telemetry. `pc demo`, `pc status`
   and `pc impact` make **no** network call at all.
@@ -226,11 +256,12 @@ unchanged.
 
 ## Add your product
 
-The engine is domain-agnostic; the context makes it smart. Drop a card in `context/` describing your
-product, its entities, and its recurring traps:
+The engine is domain-agnostic; the context makes it smart. The built-in cards live in the package at
+`src/product_copilot/assets/context/`; working from a clone (or an editable `pip install -e .`), drop
+a card there describing your product, its entities, and its recurring traps:
 
 ```
-context/
+src/product_copilot/assets/context/
   hris.md        ← HR / people platforms
   crm.md         ← sales & pipeline tools
   erp.md         ← finance & operations suites
@@ -238,6 +269,8 @@ context/
 ```
 
 Better context → sharper impact estimates → better questions. Files prefixed with `_` are ignored.
+(Customising cards is a clone / editable-install workflow today; a user-level context directory for
+pip-installed setups is on the roadmap.)
 
 ### Knowing whether a card helped
 
@@ -277,8 +310,11 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
   commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
 - A regression harness for prompt and context changes — consensus over repeated runs, so a real effect
   is separable from sampling noise, on the discovery *and* on the assessment
+- A self-contained wheel — prompts, schema and context cards ship inside the package, so `pip install`
+  works outside the clone; outputs go to `./out` in your working directory, never into the install
 
 **Upcoming**
+- A user-level context directory — add product cards to a pip-installed setup without a source checkout
 - An HTTP API / MCP façade — another thin layer over the same core (for n8n and future web UIs)
 - Jira adapter, alongside GitHub and GitLab
 - Delivery integrations — authenticated push (via n8n), Notion and Confluence

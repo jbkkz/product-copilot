@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from product_copilot.paths import ROOT
+from product_copilot.paths import FRAMEWORK
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
 
@@ -16,7 +16,7 @@ def schema_slot_ids() -> tuple[frozenset[str], frozenset[str]]:
     """(allowed, required) slot ids from framework/model_schema.json. `required` excludes any slot
     flagged `optional`. Cached — the schema is read once. This is the single source of the slot
     vocabulary the model must speak; the contract and readiness both defer to it."""
-    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    slots = json.loads((FRAMEWORK / "model_schema.json").read_text())["slots"]
     allowed = frozenset(s["id"] for s in slots)
     required = frozenset(s["id"] for s in slots if not s.get("optional", False))
     return allowed, required
@@ -36,7 +36,7 @@ def unknown_slots(present: set[str]) -> list[str]:
 
 @functools.lru_cache(maxsize=1)
 def _schema_order() -> tuple[str, ...]:
-    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    slots = json.loads((FRAMEWORK / "model_schema.json").read_text())["slots"]
     return tuple(s["id"] for s in slots)
 
 

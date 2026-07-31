@@ -8,7 +8,7 @@ from pathlib import Path
 
 from product_copilot import __version__
 from product_copilot.core.contracts import EngineOutput
-from product_copilot.paths import ROOT
+from product_copilot.paths import output_root
 
 SESSION_FORMAT_VERSION = 1
 
@@ -33,7 +33,7 @@ def resolve_slug(base: str, request: str) -> str:
     different requests can share it and silently overwrite each other's out/<slug>/. Keep the clean
     slug when it's free or belongs to the *same* request (a re-run), and only fall back to a short,
     deterministic hash suffix when a *different* request already owns it: leave-approval-a3f82c."""
-    folder = ROOT / "out" / base
+    folder = output_root() / base
     if not folder.exists():
         return base
     existing = load_request(folder / "model.json")
@@ -44,7 +44,7 @@ def resolve_slug(base: str, request: str) -> str:
 
 def save_model(out: EngineOutput, slug: str) -> Path:
     """Persist the model — the durable product. Every artifact is regenerated from this file."""
-    folder = ROOT / "out" / slug
+    folder = output_root() / slug
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / "model.json", out.model_dump_json(indent=2))
 
@@ -64,7 +64,7 @@ def save_session(slug: str, *, request: str, model_name: str,
         "request_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
-    folder = ROOT / "out" / slug
+    folder = output_root() / slug
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / "session.json", json.dumps(session, indent=2))
 
@@ -94,7 +94,7 @@ def load_model(path: Path) -> EngineOutput:
 
 def write_artifact(slug: str, filename: str, content: str) -> Path:
     """Write a generated artifact next to its model in out/<slug>/."""
-    folder = ROOT / "out" / slug
+    folder = output_root() / slug
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / filename, content)
 
@@ -113,5 +113,5 @@ def load_request(model_path: Path) -> str:
 def present_artifacts(slug: str) -> set[str]:
     """Filenames currently in out/<slug>/ — so change-detection only flags artifacts that were
     actually generated, not the whole theoretical blast radius."""
-    folder = ROOT / "out" / slug
+    folder = output_root() / slug
     return {p.name for p in folder.iterdir() if p.is_file()} if folder.exists() else set()
