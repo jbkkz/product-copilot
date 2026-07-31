@@ -1,18 +1,20 @@
 """Unit tests for the pure logic — the parts that must be correct without an API call."""
-import pytest
-from pydantic import ValidationError
-
 import io
 import json
 import shutil
 from contextlib import contextmanager, redirect_stdout
 
+import pytest
+from pydantic import ValidationError
+
+from product_copilot.cli import _build_parser, _is_file_arg, app
+from product_copilot.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
+from product_copilot.paths import ROOT
 from src.engine import (
     PRD,
     AcceptanceCriteria,
     Brief,
     Challenge,
-    Confidence,
     DesignDecision,
     EngineOutput,
     Epic,
@@ -45,11 +47,6 @@ from src.engine import (
     to_gitlab,
     write_artifact,
 )
-from product_copilot.cli import _build_parser, _is_file_arg, app
-from product_copilot.core.dependencies import (
-    artifact_slots, diff_models, propagate, resolve_slots,
-)
-from product_copilot.paths import ROOT
 
 
 def slot(completeness, confidence, impact):
@@ -797,11 +794,13 @@ def test_diff_models_flags_material_change_but_ignores_completeness_noise():
                          "value": "draft → issued", "evidence": ""}}
     old = EngineOutput.model_validate({"model": base, "questions": [], "summary": {}})
     # completeness alone moving is not a material change
-    bumped = json.loads(json.dumps(base)); bumped["workflow"]["completeness"] = 90
+    bumped = json.loads(json.dumps(base))
+    bumped["workflow"]["completeness"] = 90
     same = EngineOutput.model_validate({"model": bumped, "questions": [], "summary": {}})
     assert diff_models(old, same) == []
     # a value change is
-    changed = json.loads(json.dumps(base)); changed["workflow"]["value"] = "draft → issued → paid"
+    changed = json.loads(json.dumps(base))
+    changed["workflow"]["value"] = "draft → issued → paid"
     newv = EngineOutput.model_validate({"model": changed, "questions": [], "summary": {}})
     assert diff_models(old, newv) == ["workflow"]
 

@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from product_copilot.paths import ROOT
 
-
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
 
 

@@ -10,12 +10,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from golden_lib import (_cluster_headlines, brief_consensus, brief_movements,  # noqa: E402
-                        consensus, movements, stability)
+from golden_lib import (  # noqa: E402
+    _cluster_headlines,
+    brief_consensus,
+    brief_movements,
+    consensus,
+    movements,
+    stability,
+)
 
-from src.engine import (Brief, Challenge, Confidence, EngineOutput, Impact,  # noqa: E402
-                        Level, Slot, Summary)
-
+from src.engine import Brief, Challenge, Confidence, EngineOutput, Impact, Level, Slot, Summary  # noqa: E402
 
 # ── builders ─────────────────────────────────────────────────────────────────────────────────────
 

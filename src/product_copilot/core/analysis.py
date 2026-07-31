@@ -3,9 +3,7 @@ from __future__ import annotations
 import functools
 import json
 
-from product_copilot.core.contracts import (
-    Confidence, EngineOutput, Impact, Slot, SOFT_COMPLETENESS, schema_slot_ids,
-)
+from product_copilot.core.contracts import SOFT_COMPLETENESS, Confidence, EngineOutput, Impact, Slot, schema_slot_ids
 from product_copilot.paths import ROOT
 
 

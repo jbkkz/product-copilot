@@ -27,8 +27,16 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from golden_lib import (GOLDEN, REPO, brief_movements, load_briefs,  # noqa: E402
-                        load_runs, movements, runs_path, stability)
+from golden_lib import (  # noqa: E402
+    GOLDEN,
+    REPO,
+    brief_movements,
+    load_briefs,
+    load_runs,
+    movements,
+    runs_path,
+    stability,
+)
 
 
 def _head_version(rel_path: str) -> str | None:

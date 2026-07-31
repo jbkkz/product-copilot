@@ -9,6 +9,21 @@ description = "A requirements engine that turns a vague client request into a st
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+keywords = ["requirements", "product", "llm", "anthropic", "claude", "prd", "discovery", "elicitation"]
+authors = [{ name = "jbkkz" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
@@ -16,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 pc = "product_copilot.cli:app"
@@ -24,3 +39,25 @@ pc = "product_copilot.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["product_copilot*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["out"]
+
+[tool.ruff.lint]
+# Real problems (F/B/E9), style (E/W), import order (I), modern-syntax nudges (UP).
+# E501 (line width) is intentionally off: the codebase uses deliberate alignment and long,
+# self-contained strings; CI-lint is here to catch bugs, not to police width.
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+# Keep the codebase's compact import style: pack sorted members onto as few lines as fit the width,
+# instead of exploding one-per-line on a trailing comma.
+split-on-trailing-comma = false
+
+[tool.ruff.lint.per-file-ignores]
+# Backward-compat shim: it re-exports the package surface (F401) after load_dotenv() (E402), both
+# on purpose. See the module docstring.
+"src/engine.py" = ["F401", "E402"]

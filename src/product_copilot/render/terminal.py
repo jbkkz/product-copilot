@@ -3,10 +3,7 @@ from __future__ import annotations
 import textwrap
 
 from product_copilot.core.analysis import _label, _readiness_blockers, _state_of
-from product_copilot.core.contracts import (
-    Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories,
-)
-
+from product_copilot.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),

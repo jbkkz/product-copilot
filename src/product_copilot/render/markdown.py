@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from product_copilot.core.contracts import AcceptanceCriteria, Epic, PRD, ReleaseNotes, ScenarioKind
-
+from product_copilot.core.contracts import PRD, AcceptanceCriteria, Epic, ReleaseNotes, ScenarioKind
 
 _KIND_TAG = {
     ScenarioKind.happy_path: "Happy path",
@@ -99,7 +98,7 @@ def epic_markdown(epic: Epic) -> str:
             out.append("")
             meta: list[str] = []
             if issue.labels:
-                meta.append("**Labels:** " + ", ".join(f"`{l}`" for l in issue.labels))
+                meta.append("**Labels:** " + ", ".join(f"`{lab}`" for lab in issue.labels))
             if issue.depends_on:
                 meta.append("**Depends on:** " + ", ".join(issue.depends_on))
             if meta:
@@ -125,7 +124,7 @@ def release_markdown(rn: ReleaseNotes) -> str:
     if rn.summary:
         out += [rn.summary, ""]
     section("What's new", [f"- {h}" for h in rn.highlights])
-    section("Not included yet", [f"- {l}" for l in rn.known_limitations])
+    section("Not included yet", [f"- {lim}" for lim in rn.known_limitations])
     section("Before you start", [f"- {n}" for n in rn.notes])
 
     return "\n".join(out).rstrip() + "\n"

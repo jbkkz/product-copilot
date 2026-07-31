@@ -33,12 +33,11 @@ from __future__ import annotations
 
 import sys
 
-from dotenv import load_dotenv
 from anthropic import Anthropic
+from dotenv import load_dotenv
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from golden_lib import (GOLDEN, K, REPO, REQUESTS, brief_consensus, dump_runs,  # noqa: E402
-                        parse_requests, stability)
+from golden_lib import GOLDEN, REPO, REQUESTS, K, brief_consensus, dump_runs, parse_requests, stability  # noqa: E402
 
 sys.path.insert(0, str(REPO / "src"))
 from product_copilot.core.discovery import run  # noqa: E402

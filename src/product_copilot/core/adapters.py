@@ -4,7 +4,6 @@ import json
 
 from product_copilot.core.contracts import Epic
 
-
 EPIC_EXPORT_FORMAT = "product-copilot-epic"
 
 

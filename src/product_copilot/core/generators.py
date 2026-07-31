@@ -4,7 +4,14 @@ from anthropic import Anthropic
 
 from product_copilot.core.analysis import estimate_confidence, soft_slots
 from product_copilot.core.contracts import (
-    AcceptanceCriteria, Brief, Epic, EngineOutput, EstimateDraft, PRD, ReleaseNotes, Stories,
+    PRD,
+    AcceptanceCriteria,
+    Brief,
+    EngineOutput,
+    Epic,
+    EstimateDraft,
+    ReleaseNotes,
+    Stories,
 )
 from product_copilot.core.llm import _complete, build_prompt
 
