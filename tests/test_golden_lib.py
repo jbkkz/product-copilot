@@ -25,7 +25,9 @@ def _slot(value="v", impact=Impact.medium, confidence=Confidence.explicit, compl
 
 
 def _model(**impacts) -> EngineOutput:
-    """An EngineOutput carrying the named slots at the given impacts, no questions."""
+    """An EngineOutput carrying the named slots at the given impacts, no questions. Slot names must be
+    real schema ids — the contract rejects unknown slots — so these tests use `problem`/`workflow` as
+    stand-ins; the statistical logic under test is indifferent to which id it is."""
     return EngineOutput(model={sid: _slot(impact=imp) for sid, imp in impacts.items()},
                         questions=[], summary=Summary())
 
@@ -44,16 +46,16 @@ def _brief(challenges, complexity=Level.high):
 # ── the noise floor ──────────────────────────────────────────────────────────────────────────────
 
 def test_consensus_reports_modal_value_and_agreement():
-    runs = [_model(a=Impact.high), _model(a=Impact.high), _model(a=Impact.low)]
+    runs = [_model(problem=Impact.high), _model(problem=Impact.high), _model(problem=Impact.low)]
     con = consensus(runs)
-    assert con["slots"]["a"]["impact"] == ("high", 2)   # modal value, 2 of 3 runs
+    assert con["slots"]["problem"]["impact"] == ("high", 2)   # modal value, 2 of 3 runs
     assert con["n"] == 3
 
 
 def test_stability_separates_unanimous_slots_from_jittery_ones():
-    runs = [_model(steady=Impact.high, jumpy=Impact.high),
-            _model(steady=Impact.high, jumpy=Impact.low),
-            _model(steady=Impact.high, jumpy=Impact.medium)]
+    runs = [_model(problem=Impact.high, workflow=Impact.high),
+            _model(problem=Impact.high, workflow=Impact.low),
+            _model(problem=Impact.high, workflow=Impact.medium)]
     st = stability(runs)
     assert st["unanimous"]["impact"] == 1
     assert st["jitter"]["impact"] == 1
@@ -62,8 +64,8 @@ def test_stability_separates_unanimous_slots_from_jittery_ones():
 # ── strong vs weak, the rule the whole lens rests on ─────────────────────────────────────────────
 
 def test_unanimous_before_and_after_is_a_strong_move():
-    old = [_model(a=Impact.low)] * 3
-    new = [_model(a=Impact.high)] * 3
+    old = [_model(problem=Impact.low)] * 3
+    new = [_model(problem=Impact.high)] * 3
     m = movements(old, new)
     assert len(m["strong"]) == 1 and not m["weak"]
     assert (m["strong"][0]["from"], m["strong"][0]["to"]) == ("low", "high")
@@ -71,21 +73,21 @@ def test_unanimous_before_and_after_is_a_strong_move():
 
 def test_bare_majority_is_only_a_weak_move():
     """At K=3 a majority is 2 of 3 — one run flipping. That must not read as signal."""
-    old = [_model(a=Impact.low)] * 3
-    new = [_model(a=Impact.high), _model(a=Impact.high), _model(a=Impact.low)]
+    old = [_model(problem=Impact.low)] * 3
+    new = [_model(problem=Impact.high), _model(problem=Impact.high), _model(problem=Impact.low)]
     m = movements(old, new)
     assert len(m["weak"]) == 1 and not m["strong"]
 
 
 def test_a_jittery_old_baseline_is_never_a_reference():
     """If the old runs disagreed, there is nothing reliable to have moved away from."""
-    old = [_model(a=Impact.low), _model(a=Impact.low), _model(a=Impact.high)]
-    new = [_model(a=Impact.medium)] * 3
+    old = [_model(problem=Impact.low), _model(problem=Impact.low), _model(problem=Impact.high)]
+    new = [_model(problem=Impact.medium)] * 3
     assert not movements(old, new)["moved"]
 
 
 def test_no_movement_when_the_value_holds():
-    runs = [_model(a=Impact.high)] * 3
+    runs = [_model(problem=Impact.high)] * 3
     assert not movements(runs, runs)["moved"]
 
 

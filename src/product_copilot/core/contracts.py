@@ -1,11 +1,44 @@
 from __future__ import annotations
 
+import functools
+import json
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from product_copilot.paths import ROOT
 
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+
+
+@functools.lru_cache(maxsize=1)
+def schema_slot_ids() -> tuple[frozenset[str], frozenset[str]]:
+    """(allowed, required) slot ids from framework/model_schema.json. `required` excludes any slot
+    flagged `optional`. Cached — the schema is read once. This is the single source of the slot
+    vocabulary the model must speak; the contract and readiness both defer to it."""
+    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    allowed = frozenset(s["id"] for s in slots)
+    required = frozenset(s["id"] for s in slots if not s.get("optional", False))
+    return allowed, required
+
+
+def missing_required_slots(present: set[str]) -> list[str]:
+    """Required slot ids absent from `present`, in schema order — what a complete model still owes."""
+    _, required = schema_slot_ids()
+    return [sid for sid in _schema_order() if sid in required and sid not in present]
+
+
+def unknown_slots(present: set[str]) -> list[str]:
+    """Slot ids in `present` that the schema does not define — hallucinated / typo'd keys."""
+    allowed, _ = schema_slot_ids()
+    return sorted(present - allowed)
+
+
+@functools.lru_cache(maxsize=1)
+def _schema_order() -> tuple[str, ...]:
+    slots = json.loads((ROOT / "framework" / "model_schema.json").read_text())["slots"]
+    return tuple(s["id"] for s in slots)
 
 
 class Confidence(str, Enum):
@@ -60,6 +93,17 @@ class EngineOutput(BaseModel):
     decisions: list[DesignDecision] = Field(default_factory=list)
     challenges: list[Challenge] = Field(default_factory=list)
     opportunities: list[Opportunity] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_unknown_slots(self):
+        # A slot id the schema doesn't define is never valid — a hallucinated or typo'd key that
+        # would otherwise sit in the model unseen by every schema-driven view. Completeness (the full
+        # required set) is enforced at the discovery boundary, not here, so internal partial
+        # projections (diff/propagate) stay constructable; the vocabulary check is safe everywhere.
+        bad = unknown_slots(set(self.model))
+        if bad:
+            raise ValueError(f"unknown slots (not in schema): {bad}")
+        return self
 
 
 class Story(BaseModel):

@@ -48,9 +48,14 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-def _complete(client: Anthropic, system: str, messages: list[dict], out_model, retries: int = 2):
+def _complete(client: Anthropic, system: str, messages: list[dict], out_model, retries: int = 2,
+              validate=None):
     """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
-    The nudge lives in a local copy so the caller's clean history is never polluted."""
+    The nudge lives in a local copy so the caller's clean history is never polluted.
+
+    `validate` is an optional semantic post-check `(instance) -> None` that raises `ValueError` to
+    reject an output Pydantic accepted but the caller still considers incomplete (e.g. a discovery
+    model missing required slots). It rides the same retry loop, so the model self-corrects."""
     attempt = messages
     last_err = None
     for _ in range(retries + 1):
@@ -66,7 +71,10 @@ def _complete(client: Anthropic, system: str, messages: list[dict], out_model, r
         )
         raw = _first_text(resp)
         try:
-            return out_model.model_validate(_extract_json(raw))
+            result = out_model.model_validate(_extract_json(raw))
+            if validate is not None:
+                validate(result)
+            return result
         except (json.JSONDecodeError, ValueError, ValidationError) as e:
             last_err = e
             attempt = attempt + [

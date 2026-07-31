@@ -121,6 +121,19 @@ instead of silently mis-rendering. The field is literally named `model` (Pydanti
 `protected_namespaces=()` allows it). Per-slot keys: `completeness` (0-100), `confidence`
 (explicit|inferred|empty), `impact` (low|medium|high), `value`, `evidence`.
 
+**The slot vocabulary is enforced, in two layers** (`schema_slot_ids()` is the single source, read
+from `model_schema.json`):
+- *Vocabulary* — `EngineOutput` rejects **unknown** slot ids always (a typo/hallucination can never
+  sit in the model unseen by the schema-driven views). Completeness is *not* checked here, so internal
+  partial projections (diff/propagate) stay constructable.
+- *Completeness* — the discovery boundary (`run()`, via a `validate` hook on `_complete()`) requires
+  the **full required slot set**. It rides the same retry loop, so a model that omits a slot is nudged
+  to re-emit it rather than failing — safe on a non-deterministic model. This closes the north-star
+  hole: a required slot the model dropped can no longer become invisible to readiness. As
+  defence-in-depth, `_readiness_blockers()` reasons over the *schema's* required slots (not just the
+  ones returned), treating a missing high-impact slot as a blocker; and `diff_models()` walks the
+  **union** of old/new keys so a removed slot registers as a change.
+
 ## The two core concepts
 
 - **Slots (the atomic unit).** Every requirement lives in a slot (see keys above). Slots are grouped

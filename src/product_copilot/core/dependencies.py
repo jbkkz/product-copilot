@@ -126,9 +126,12 @@ def diff_models(old: EngineOutput, new: EngineOutput) -> list[str]:
     """Slot ids that materially changed between two model versions — the trigger for staleness.
     A slot changed if its value, confidence or impact moved (completeness alone is noise)."""
     changed = []
-    for sid, new_slot in new.model.items():
+    for sid in old.model.keys() | new.model.keys():
         old_slot = old.model.get(sid)
-        if old_slot is None or (
+        new_slot = new.model.get(sid)
+        if old_slot is None or new_slot is None:  # slot appeared or disappeared between versions
+            changed.append(sid)
+        elif (
             old_slot.value.strip() != new_slot.value.strip()
             or old_slot.confidence != new_slot.confidence
             or old_slot.impact != new_slot.impact

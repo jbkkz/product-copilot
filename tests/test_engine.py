@@ -56,8 +56,26 @@ def slot(completeness, confidence, impact):
     return {"completeness": completeness, "confidence": confidence, "impact": impact}
 
 
+def full_slots(**overrides):
+    """A complete required-slot model (every required slot present, empty/low by default) with
+    per-slot overrides — mirrors what a real discovery turn emits, so models that go through run()
+    satisfy the completeness invariant."""
+    from product_copilot.core.contracts import _schema_order, schema_slot_ids
+
+    _, required = schema_slot_ids()
+    # Schema order, mirroring a real reply (the LLM emits slots in schema order; Pydantic preserves
+    # it). `required` is an unordered set, so iterate the ordered id list and keep the required ones.
+    model = {sid: slot(0, "empty", "low") for sid in _schema_order() if sid in required}
+    model.update(overrides)
+    return model
+
+
 def out(model):
-    return EngineOutput.model_validate({"model": model, "questions": [], "summary": {}})
+    # Pad to the full required slot set: a real EngineOutput always carries every slot, and the
+    # discovery boundary enforces it. Tests that care about one slot just override that one.
+    return EngineOutput.model_validate(
+        {"model": full_slots(**model), "questions": [], "summary": {}}
+    )
 
 
 # ── Characterization harness (commit 0: safety net before the refactor) ───────
@@ -125,17 +143,39 @@ def test_output_requires_model():
         EngineOutput.model_validate({"questions": [], "summary": {}})
 
 
+def test_output_rejects_unknown_slots():
+    # A slot id the schema doesn't define (typo / hallucination) is rejected at the contract, so it
+    # can never sit in the model unseen by the schema-driven views. `real_problem` is the classic typo.
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"real_problem": slot(80, "explicit", "high")},
+            "questions": [], "summary": {},
+        })
+
+
+def test_output_allows_a_partial_but_known_model():
+    # Completeness (the full required set) is enforced at the discovery boundary, NOT the contract —
+    # internal projections (diff/propagate) legitimately carry a subset of *known* slots.
+    part = EngineOutput.model_validate({
+        "model": {"workflow": slot(60, "inferred", "high")},
+        "questions": [], "summary": {},
+    })
+    assert set(part.model) == {"workflow"}
+
+
 # ── The driver: uncertainty × impact ─────────────────────────────────────────
 
 
 def test_soft_slots_are_medium_or_high_and_unresolved():
+    # Real slot ids: the model must speak the schema's vocabulary (padded slots stay empty/low → not
+    # soft). business_objects precedes business_rules in schema order, so soft comes back in that order.
     model = out({
-        "a": slot(90, "explicit", "high"),   # solid → not soft
-        "b": slot(30, "inferred", "high"),   # uncertain + high → soft
-        "c": slot(50, "inferred", "medium"), # uncertain + medium → soft
-        "d": slot(10, "empty", "low"),       # low impact → never soft
+        "problem": slot(90, "explicit", "high"),           # solid → not soft
+        "business_rules": slot(30, "inferred", "high"),    # uncertain + high → soft
+        "business_objects": slot(50, "inferred", "medium"),# uncertain + medium → soft
+        "reporting": slot(10, "empty", "low"),             # low impact → never soft
     })
-    assert soft_slots(model) == ["b", "c"]
+    assert soft_slots(model) == ["business_objects", "business_rules"]
 
 
 def test_estimate_confidence_tiers():
@@ -146,12 +186,26 @@ def test_estimate_confidence_tiers():
 
 
 def test_readiness_blockers_are_high_impact_unconfirmed():
+    # Padded slots are low-impact → never blockers; only the high-impact-unconfirmed override is.
     model = out({
-        "a": slot(90, "explicit", "high"),   # confirmed → not blocking
-        "b": slot(80, "inferred", "high"),   # high but inferred → blocker
-        "c": slot(0, "empty", "medium"),     # medium → not blocking
+        "problem": slot(90, "explicit", "high"),         # confirmed → not blocking
+        "business_rules": slot(80, "inferred", "high"),  # high but inferred → blocker
+        "success_metrics": slot(0, "empty", "medium"),   # medium → not blocking
     })
-    assert _readiness_blockers(model) == ["b"]
+    assert _readiness_blockers(model) == ["business_rules"]
+
+
+def test_readiness_flags_a_missing_high_impact_slot_as_blocker():
+    # The north-star guard: a required high-impact slot the model omitted entirely must NOT vanish
+    # from readiness. Build a model with everything explicit EXCEPT business_rules, then drop it.
+    from product_copilot.core.contracts import schema_slot_ids
+
+    _, required = schema_slot_ids()
+    model_dict = {sid: slot(90, "explicit", "high") for sid in required}
+    del model_dict["business_rules"]  # a high-impact dimension goes missing
+    model = EngineOutput.model_validate({"model": model_dict, "questions": [], "summary": {}})
+    # business_rules is absent, high-impact by default → it is still a blocker, not invisible.
+    assert "business_rules" in _readiness_blockers(model)
 
 
 def test_state_of_maps_confidence():
@@ -321,7 +375,7 @@ def test_release_markdown_omits_version_when_empty():
 
 
 def test_render_brief_titles_solution_assessment_and_shows_challenges():
-    model = {"real_problem": slot(80, "explicit", "high")}
+    model = {"problem": slot(80, "explicit", "high")}
     brief = Brief(
         problem="P",
         solution="S",
@@ -363,7 +417,7 @@ def test_render_brief_titles_solution_assessment_and_shows_challenges():
 
 
 def test_render_brief_opportunity_names_reached_modules():
-    model = {"real_problem": slot(80, "explicit", "high")}
+    model = {"problem": slot(80, "explicit", "high")}
     brief = Brief(
         problem="P",
         solution="S",
@@ -393,7 +447,9 @@ def test_render_brief_opportunity_names_reached_modules():
 
 _ENGINE_REPLY = json.dumps(
     {
-        "model": {"real_problem": {"completeness": 80, "confidence": "explicit", "impact": "high"}},
+        # A run() reply must carry the whole required slot set (the completeness invariant) — a
+        # single-slot reply would now be rejected and retried, exhausting the FakeClient.
+        "model": full_slots(problem=slot(80, "explicit", "high")),
         "questions": [],
         "summary": {"objective": "o"},
     }
@@ -406,7 +462,7 @@ def test_run_returns_engine_output_and_wires_schema_and_context():
     fake = FakeClient(_ENGINE_REPLY)
     result = run(fake, [{"role": "user", "content": "leave approval"}])
     assert isinstance(result, EngineOutput)
-    assert result.model["real_problem"].completeness == 80
+    assert result.model["problem"].completeness == 80
     # system is a cache-controlled text block so its stable prefix is cached across calls.
     block = fake.calls[0]["system"][0]
     assert block["cache_control"] == {"type": "ephemeral"}
@@ -415,14 +471,43 @@ def test_run_returns_engine_output_and_wires_schema_and_context():
     assert "## b2b-platform" in system    # context card injected ({{CONTEXT}})
 
 
+def test_run_rejects_a_model_missing_required_slots():
+    # A discovery reply missing a required slot is refused: the completeness invariant is enforced at
+    # the boundary. The FakeClient returns the same incomplete reply every retry, so run() gives up.
+    incomplete = json.dumps({
+        "model": {"problem": slot(80, "explicit", "high")},  # 1 of 15 required
+        "questions": [], "summary": {"objective": "o"},
+    })
+    fake = FakeClient(incomplete, incomplete, incomplete)  # every retry attempt
+    with pytest.raises(RuntimeError, match="missing required slots"):
+        run(fake, [{"role": "user", "content": "leave approval"}])
+
+
+def test_run_self_heals_when_a_retry_completes_the_model():
+    # The completeness check rides the existing retry loop: a first incomplete reply nudges the model,
+    # and a complete reply on the next attempt is accepted. This is why the invariant is safe to
+    # enforce on a non-deterministic model — an omission is corrected, not fatal.
+    incomplete = json.dumps({
+        "model": {"problem": slot(80, "explicit", "high")},
+        "questions": [], "summary": {"objective": "o"},
+    })
+    fake = FakeClient(incomplete, _ENGINE_REPLY)  # 1st attempt short, 2nd complete
+    result = run(fake, [{"role": "user", "content": "leave approval"}])
+    assert result.model["problem"].completeness == 80
+    assert len(fake.calls) == 2  # it took a retry
+    # the nudge names the missing slots so the model knows what to add
+    nudge = fake.calls[1]["messages"][-1]["content"]
+    assert "missing required slots" in nudge
+
+
 def test_generate_prd_from_saved_model_roundtrip(tmp_path):
     # The --from path: reload a saved model and regenerate an artifact, no discovery.
-    model = out({"real_problem": slot(80, "explicit", "high")})
+    model = out({"problem": slot(80, "explicit", "high")})
     path = tmp_path / "model.json"
     path.write_text(model.model_dump_json())
 
     loaded = load_model(path)
-    assert loaded.model["real_problem"].completeness == 80
+    assert loaded.model["problem"].completeness == 80
 
     prd = generate_prd(FakeClient(json.dumps({"title": "Leave approval"})), loaded)
     assert isinstance(prd, PRD) and prd.title == "Leave approval"
@@ -433,7 +518,7 @@ def test_generate_prd_from_saved_model_roundtrip(tmp_path):
 
 def test_derive_stories_returns_structured_stories():
     reply = json.dumps({"stories": [{"id": "S1", "title": "Submit a leave request"}]})
-    stories = derive_stories(FakeClient(reply), out({"real_problem": slot(80, "explicit", "high")}))
+    stories = derive_stories(FakeClient(reply), out({"problem": slot(80, "explicit", "high")}))
     assert isinstance(stories, Stories)
     assert [s.id for s in stories.stories] == ["S1"]
     buf = io.StringIO()
@@ -445,7 +530,7 @@ def test_derive_stories_returns_structured_stories():
 
 def test_artifact_paths_and_names():
     # Guards R1: save_model / write_artifact resolve to out/<slug>/<file> and round-trip.
-    p = save_model(out({"real_problem": slot(80, "explicit", "high")}), "_chartest_slug")
+    p = save_model(out({"problem": slot(80, "explicit", "high")}), "_chartest_slug")
     try:
         assert p.name == "model.json"
         assert p.parent.name == "_chartest_slug"
@@ -453,7 +538,7 @@ def test_artifact_paths_and_names():
         a = write_artifact("_chartest_slug", "prd.md", "# X\n")
         assert a.parent == p.parent and a.name == "prd.md"
         assert a.read_text() == "# X\n"
-        assert load_model(p).model["real_problem"].completeness == 80
+        assert load_model(p).model["problem"].completeness == 80
     finally:
         shutil.rmtree(p.parent, ignore_errors=True)
 
@@ -494,7 +579,7 @@ def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
 @contextmanager
 def _model_in_out(slug):
     """A real out/<slug>/model.json the model-taking subcommands can load."""
-    p = save_model(out({"real_problem": slot(80, "explicit", "high")}), slug)
+    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
     try:
         yield p
     finally:
@@ -641,7 +726,7 @@ def test_pc_answer_refines_the_model():
     with _model_in_out("_clitest_answer") as p:
         (p.parent / "request.txt").write_text("original leave-approval request")
         turn2 = json.dumps({
-            "model": {"real_problem": {"completeness": 95, "confidence": "explicit", "impact": "high"}},
+            "model": full_slots(problem=slot(95, "explicit", "high")),
             "questions": [],
             "summary": {},
         })
@@ -650,11 +735,11 @@ def test_pc_answer_refines_the_model():
         # the answers + the prior model reached the engine turn
         sent = fake.calls[0]["messages"]
         assert "The approver is HR" in sent[-1]["content"]
-        assert "real_problem" in sent[1]["content"]  # prior model carried as assistant turn
+        assert "problem" in sent[1]["content"]  # prior model carried as assistant turn
         # and the saved model is refined (inferred/80 → explicit/95)
         reloaded = load_model(p)
-        assert reloaded.model["real_problem"].completeness == 95
-        assert reloaded.model["real_problem"].confidence.value == "explicit"
+        assert reloaded.model["problem"].completeness == 95
+        assert reloaded.model["problem"].confidence.value == "explicit"
 
 
 # ── Tier 2: the dependency DAG (impact propagation) ───────────────────────────
@@ -721,6 +806,20 @@ def test_diff_models_flags_material_change_but_ignores_completeness_noise():
     assert diff_models(old, newv) == ["workflow"]
 
 
+def test_diff_models_flags_a_removed_slot():
+    # A slot present before and gone after must register as a change — otherwise a decision or artifact
+    # resting on it could go stale silently. (In practice the completeness invariant prevents a real
+    # discovery from dropping a slot, but the diff must not depend on that upstream guarantee.)
+    both = {"workflow": {"completeness": 60, "confidence": "inferred", "impact": "high",
+                         "value": "draft → issued", "evidence": ""},
+            "permissions": {"completeness": 70, "confidence": "explicit", "impact": "high",
+                            "value": "HR only", "evidence": ""}}
+    old = EngineOutput.model_validate({"model": both, "questions": [], "summary": {}})
+    dropped = {"workflow": both["workflow"]}  # permissions removed
+    new = EngineOutput.model_validate({"model": dropped, "questions": [], "summary": {}})
+    assert diff_models(old, new) == ["permissions"]
+
+
 def test_artifact_slots_reference_only_real_slot_ids():
     from product_copilot.core.analysis import _slot_meta
     valid = set(_slot_meta()[1])
@@ -767,8 +866,8 @@ def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
         (p.parent / "request.txt").write_text("original request")
         (p.parent / "prd.md").write_text("# stale PRD")
         turn2 = json.dumps({
-            "model": {"workflow": {"completeness": 95, "confidence": "explicit",
-                                   "impact": "high", "value": "draft → issued → paid → archived"}},
+            "model": full_slots(workflow={"completeness": 95, "confidence": "explicit",
+                                          "impact": "high", "value": "draft → issued → paid → archived"}),
             "questions": [], "summary": {},
         })
         text = _run_app(["answer", str(p), "It also has an archived state."],
