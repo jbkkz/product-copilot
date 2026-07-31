@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "requivo"
-version = "0.6.3"
+version = "0.7.0"
 description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
 readme = "README.md"
 requires-python = ">=3.9"
