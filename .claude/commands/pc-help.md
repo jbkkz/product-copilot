@@ -1,11 +1,11 @@
 ---
-description: What Product Copilot is and how to drive it from Claude Code
+description: What Requivo is and how to drive it from Claude Code
 allowed-tools: Bash(.venv/bin/python pc.py:*)
 ---
 
-Explain Product Copilot to the user, concisely:
+Explain Requivo to the user, concisely:
 
-- **The product is the engine, not these commands.** Product Copilot is a Python
+- **The product is the engine, not these commands.** Requivo is a Python
   requirements engine that turns a vague client request into a structured
   *solution model* (`out/<slug>/model.json`), then generates deliverables from
   it. Claude Code is only one interface over that engine — the same core also

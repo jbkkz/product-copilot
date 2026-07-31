@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from product_copilot.core.analysis import _label, _slot_meta
-from product_copilot.core.contracts import EngineOutput
+from requivo.core.analysis import _label, _slot_meta
+from requivo.core.contracts import EngineOutput
 
 
 def _all_slot_ids() -> set[str]:

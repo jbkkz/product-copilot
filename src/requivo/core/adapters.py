@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from product_copilot.core.contracts import Epic
+from requivo.core.contracts import Epic
 
-EPIC_EXPORT_FORMAT = "product-copilot-epic"
+EPIC_EXPORT_FORMAT = "requivo-epic"
 
 
 EPIC_EXPORT_VERSION = 1
@@ -61,10 +61,10 @@ def to_github(export: dict, slug: str) -> dict:
     An automation (e.g. an n8n flow) creates the child issues first, then the tracking issue.
     GitHub has no native epic or issue dependency, so we degrade honestly: the epic becomes a
     tracking issue with a task list, and `depends_on` is stated in each issue body. Every issue
-    carries an idempotency label (`pc-epic:<slug>`) so a re-run can find-then-skip existing issues
+    carries an idempotency label (`requivo-epic:<slug>`) so a re-run can find-then-skip existing issues
     instead of duplicating. `milestone` is a name — the automation resolves it to GitHub's numeric id.
     """
-    label = f"pc-epic:{slug}"
+    label = f"requivo-epic:{slug}"
     title_by_ref = {i["ref"]: i["title"] for i in export["issues"]}
     epic_title = export["epic"]["title"]
 
@@ -111,9 +111,9 @@ def to_gitlab(export: dict, slug: str) -> dict:
     GitLab maps more faithfully than GitHub: `depends_on` becomes structured issue `links`
     (`blocks`) an automation wires after create — not body text. Native Epics are Premium-only, so
     for portability the epic is a tracking issue with a task list on any tier. Each issue carries the
-    `pc-epic:<slug>` idempotency label; `milestone` is a name the automation resolves to its id.
+    `requivo-epic:<slug>` idempotency label; `milestone` is a name the automation resolves to its id.
     """
-    label = f"pc-epic:{slug}"
+    label = f"requivo-epic:{slug}"
     epic_title = export["epic"]["title"]
 
     def child_description(issue: dict) -> str:

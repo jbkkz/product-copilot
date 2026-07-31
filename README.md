@@ -1,12 +1,16 @@
-# Product Copilot
+# Requivo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Turn a vague client request into a buildable spec — by asking only the questions that matter.**
+> Turn vague requests into validated product decisions.
+
+Requivo builds a structured and traceable model of what is **known**, **inferred** and still
+**unknown** before generating product documentation — solution assessments, PRDs, user stories,
+acceptance criteria, estimates and epics.
 
 Built for Product Managers, Solutions Engineers and Business Analysts working on complex, configurable B2B products.
 
-> **Product Copilot doesn't generate documents. It builds understanding.**
+> **The model is the product. Documents are views of that model.**
 
 ---
 
@@ -20,7 +24,7 @@ constraint buried at the end:
 > invoices never line up with the hours actually worked… We need something that ties this together…
 > It has to work at the venue where the wifi basically doesn't. Event's in six weeks."*
 
-**What Product Copilot made of it — before a line of spec was written:**
+**What Requivo made of it — before a line of spec was written:**
 
 - **Two systems, not one.** It refused the "tie this together" framing: live door check-in and
   after-the-fact invoice reconciliation are separate builds, with separate data and separate owners.
@@ -33,7 +37,7 @@ constraint buried at the end:
 See the whole run yourself — **no API key, no setup, no network:**
 
 ```bash
-uv run pc demo        # or, with nothing installed:  python pc.py demo
+uv run requivo demo        # or, with nothing installed:  python requivo.py demo
 ```
 
 ---
@@ -61,7 +65,7 @@ Discovery tools either ask you *everything* — endless checklists no one finish
 chat that nods along and hands back your own words. Neither helps you find the question you didn't
 think to ask: the one that turns a "small feature" into a three-month build.
 
-Product Copilot asks a question only when the answer would **materially change the solution**. The
+Requivo asks a question only when the answer would **materially change the solution**. The
 rest, it infers and flags as an assumption. You spend your discovery time where it moves the needle.
 
 ### Why I built this
@@ -71,14 +75,14 @@ rest, it infers and flags as an assumption. You spend your discovery time where 
 > understanding of the real problem before development started.
 >
 > Over time, I noticed the same reasoning pattern behind good discovery work: what do we actually
-> know, what are we assuming, and what would materially change the solution? Product Copilot is my
+> know, what are we assuming, and what would materially change the solution? Requivo is my
 > attempt to formalise that process.
 
 ---
 
 ## What it does
 
-Product Copilot builds a **structured model of the solution** and refines it through a short,
+Requivo builds a **structured model of the solution** and refines it through a short,
 targeted conversation. The chat is just the interface. **The product is the model** — and every
 artifact (a solution assessment, a PRD, user stories, an estimate) is a view rendered from it.
 
@@ -120,7 +124,7 @@ none of the engine's internals leak through.
 ## Example
 
 ```bash
-pc discover "We'd like to set up a leave approval system."
+requivo discover "We'd like to set up a leave approval system."
 ```
 
 From that one sentence, on a platform whose context says *"approval usually hides a balance check
@@ -147,7 +151,7 @@ Each of these — plus user stories, an estimate, acceptance criteria and releas
 from the same `model.json`. That's the whole idea:
 
 ```bash
-pc prd examples/leave-approval/model.json    # regenerate prd.md from the saved model
+requivo prd examples/leave-approval/model.json    # regenerate prd.md from the saved model
 ```
 
 For a harder case — a rambling client email conflating three features, with a legal tripwire and a fixed
@@ -169,19 +173,19 @@ estimated from the product context, so the engine is only as sharp as the contex
 
 The model is not a flat snapshot: its parts rest on each other. A design decision records the facts
 it was **derived from**; each artifact records the slots it **consumes**. So a change knows its blast
-radius — `pc impact` shows what a revisited slot would invalidate, and a discovery turn that moves the
+radius — `requivo impact` shows what a revisited slot would invalidate, and a discovery turn that moves the
 model warns you which already-generated files no longer match it.
 
 ---
 
 ## Quickstart
 
-**See it first — no API key, no setup.** `pc demo` replays a real run from saved output: the messy
+**See it first — no API key, no setup.** `requivo demo` replays a real run from saved output: the messy
 client request, the questions the engine raised, the solution assessment it produced.
 
 ```bash
-git clone https://github.com/jbkkz/product-copilot && cd product-copilot
-uv run pc demo        # or: python pc.py demo  (nothing installed) · pc demo (after an install)
+git clone https://github.com/jbkkz/requivo && cd requivo
+uv run requivo demo        # or: python requivo.py demo  (nothing installed) · requivo demo (after an install)
 ```
 
 **Then run your own — with [uv](https://docs.astral.sh/uv/):** no virtualenv to create or activate.
@@ -189,18 +193,18 @@ uv run pc demo        # or: python pc.py demo  (nothing installed) · pc demo (a
 
 ```bash
 cp .env.example .env                       # set ANTHROPIC_API_KEY
-uv run pc discover examples/case1_leave.md # first run resolves deps; later runs are instant
+uv run requivo discover examples/case1_leave.md # first run resolves deps; later runs are instant
 ```
 
 <details><summary>Or the classic pip + venv install</summary>
 
 ```bash
-git clone https://github.com/jbkkz/product-copilot && cd product-copilot
+git clone https://github.com/jbkkz/requivo && cd requivo
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools   # a fresh venv may ship a pip too old for editable installs
-pip install -e .                # installs deps + the `pc` command
+pip install -e .                # installs deps + the `requivo` command (and the `pc` alias)
 cp .env.example .env            # set ANTHROPIC_API_KEY
-pc discover examples/case1_leave.md
+requivo discover examples/case1_leave.md
 ```
 
 </details>
@@ -211,17 +215,17 @@ Regenerate any deliverable from a saved model without redoing discovery (prefix 
 if you use uv, or activate the venv first):
 
 ```bash
-pc prd    out/<slug>/model.json                      # also: stories · estimate · criteria · release · brief
-pc epic   out/<slug>/model.json --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
-pc impact out/<slug>/model.json permissions          # what rests on a slot: decisions + artifacts that go stale
+requivo prd    out/<slug>/model.json                      # also: stories · estimate · criteria · release · brief
+requivo epic   out/<slug>/model.json --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
+requivo impact out/<slug>/model.json permissions          # what rests on a slot: decisions + artifacts that go stale
 ```
 
 ### Two interfaces, one engine
 
-The product is the engine; the interfaces are thin layers over the same `product_copilot` core.
+The product is the engine; the interfaces are thin layers over the same `requivo` core.
 
-- **Terminal** — `pc <command>` (or `uv run pc <command>` with no manual venv, or `python pc.py
-  <command>` with nothing installed at all).
+- **Terminal** — `requivo <command>` (or `uv run requivo <command>` with no manual venv, or `python
+  requivo.py <command>` with nothing installed at all). The short alias `pc` still works.
 - **Claude Code** — `/pc-discover`, `/pc-status`, `/pc-generate`, `/pc-help` wrap the same CLI.
 
 The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
@@ -233,13 +237,13 @@ unchanged.
 
 - **What leaves your machine.** Each discovery or generation turn sends, as one Anthropic API call:
   your request text, the framework schema, and **every** context card — bundled plus any in your
-  `PC_CONTEXT_DIR` — (the system prompt), to
+  `REQUIVO_CONTEXT_DIR` — (the system prompt), to
   the Claude model named by `MODEL` (default `claude-sonnet-5`). Nothing else is transmitted; this
-  project stores nothing beyond `out/` on your own disk, and has no telemetry. `pc demo`, `pc status`
-  and `pc impact` make **no** network call at all.
+  project stores nothing beyond `out/` on your own disk, and has no telemetry. `requivo demo`, `requivo status`
+  and `requivo impact` make **no** network call at all.
 - **Cost.** A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The
   system prompt is prompt-cached across a session, so the repeated calls of a run are cheap. Every
-  `pc` command that hits the API prints its own footprint when it finishes — calls, tokens (with the
+  `requivo` command that hits the API prints its own footprint when it finishes — calls, tokens (with the
   cached share), latency, and an estimated cost — so you see the real number for *your* request
   rather than guessing. (Tokens are exact; the cost is a labelled estimate from a dated rate table.)
 - **Models.** Developed and measured against `claude-sonnet-5`; any current Claude model works via the
@@ -247,7 +251,7 @@ unchanged.
 - **Known limits.** Output is **non-deterministic** — the golden harness measures change above a noise
   floor rather than asserting exact text. By default every context card is loaded for every request, so
   cards can dilute one another (see [Knowing whether a card helped](#knowing-whether-a-card-helped)) —
-  scope a session to the relevant ones with `pc discover --context b2b-platform,financial-reporting`.
+  scope a session to the relevant ones with `requivo discover --context b2b-platform,financial-reporting`.
   The model can simply be wrong.
 - **Not professional advice.** When the engine flags a legal, tax, or regulatory exposure (e.g. the
   disguised-employment risk in the event example), that is a prompt to get **expert review** — never a
@@ -258,11 +262,11 @@ unchanged.
 ## Add your product
 
 The engine is domain-agnostic; the context makes it smart. The built-in cards live in the package at
-`src/product_copilot/assets/context/`; working from a clone (or an editable `pip install -e .`), drop
+`src/requivo/assets/context/`; working from a clone (or an editable `pip install -e .`), drop
 a card there describing your product, its entities, and its recurring traps:
 
 ```
-src/product_copilot/assets/context/
+src/requivo/assets/context/
   hris.md        ← HR / people platforms
   crm.md         ← sales & pipeline tools
   erp.md         ← finance & operations suites
@@ -275,8 +279,8 @@ Better context → sharper impact estimates → better questions. Files prefixed
 package:
 
 ```bash
-export PC_CONTEXT_DIR=~/.config/product-copilot/context   # this is also the default location
-mkdir -p "$PC_CONTEXT_DIR" && $EDITOR "$PC_CONTEXT_DIR/my-product.md"
+export REQUIVO_CONTEXT_DIR=~/.config/requivo/context   # this is also the default location
+mkdir -p "$REQUIVO_CONTEXT_DIR" && $EDITOR "$REQUIVO_CONTEXT_DIR/my-product.md"
 ```
 
 User cards are merged with the built-in ones; a user card whose name matches a built-in **overrides**
@@ -314,15 +318,15 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
 - Tracker adapters — idempotent, n8n-ready issue-creation plans for GitHub (`epic.github.json`) and
   GitLab (`epic.gitlab.json`, with structured issue links)
 - The model as a durable product (`model.json`), regenerable via `--from`
-- A dependency graph over the model — `pc impact` shows a change's blast radius, and a discovery turn
+- A dependency graph over the model — `requivo impact` shows a change's blast radius, and a discovery turn
   flags the already-generated artifacts a change makes stale
-- Two interfaces over one presentation-free engine — a `pc` subcommand CLI and Claude Code slash
+- Two interfaces over one presentation-free engine — a `requivo` subcommand CLI and Claude Code slash
   commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
 - A regression harness for prompt and context changes — consensus over repeated runs, so a real effect
   is separable from sampling noise, on the discovery *and* on the assessment
 - A self-contained wheel — prompts, schema and context cards ship inside the package, so `pip install`
   works outside the clone; outputs go to `./out` in your working directory, never into the install
-- A user-level context directory (`PC_CONTEXT_DIR`) — add or override product cards on a pip-installed
+- A user-level context directory (`REQUIVO_CONTEXT_DIR`) — add or override product cards on a pip-installed
   setup without a source checkout; user cards merge with the built-ins
 
 **Upcoming**
@@ -333,9 +337,15 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
 
 **Vision**
 - A full artifact chain from a single model — the reasoning layer beneath product delivery
+- Multiple surfaces over one engine — **Requivo Core** (this engine), **Requivo for Claude Code**,
+  **Requivo Web**, and eventually **Requivo Cloud**
 
 ---
 
 ## License
 
 [MIT](LICENSE) © jbkkz
+
+---
+
+> _Requivo was previously named Product Copilot._

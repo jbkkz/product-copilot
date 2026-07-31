@@ -44,10 +44,10 @@ the split, the legal basis, and the source-of-truth question, and everything dow
 Each command regenerates one view from the model — no discovery needed:
 
 ```bash
-pc brief    examples/event-checkin-reconciliation/model.json   # the solution assessment
-pc epic     examples/event-checkin-reconciliation/model.json   # the delivery epic
-pc criteria examples/event-checkin-reconciliation/model.json   # the acceptance criteria
-pc estimate examples/event-checkin-reconciliation/model.json   # a day-range estimate (also: pc stories, pc prd)
+requivo brief    examples/event-checkin-reconciliation/model.json   # the solution assessment
+requivo epic     examples/event-checkin-reconciliation/model.json   # the delivery epic
+requivo criteria examples/event-checkin-reconciliation/model.json   # the acceptance criteria
+requivo estimate examples/event-checkin-reconciliation/model.json   # a day-range estimate (also: requivo stories, requivo prd)
 ```
 
 The `model.json` here was produced by a single discovery pass from `request.md`. The engine is

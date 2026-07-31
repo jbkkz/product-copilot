@@ -1,4 +1,4 @@
-"""Product Copilot — the requirements engine.
+"""Requivo — the requirements engine.
 
 The engine is the product; every interface (terminal CLI, and later Claude Code,
 API, web) is a thin layer over the same core. Business logic, prompts, context

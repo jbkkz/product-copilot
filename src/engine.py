@@ -1,16 +1,16 @@
 """Backward-compat shim.
 
-The engine lives in the product_copilot package now; this module re-exports its
+The engine lives in the requivo package now; this module re-exports its
 public surface so `python src/engine.py ...` and `from src.engine import ...` keep
-working. New code should import from product_copilot directly.
+working. New code should import from requivo directly.
 """
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from product_copilot.cli import MAX_TURNS, _flag_value, converse, main
-from product_copilot.core.adapters import (
+from requivo.cli import MAX_TURNS, _flag_value, converse, main
+from requivo.core.adapters import (
     EPIC_EXPORT_FORMAT,
     EPIC_EXPORT_VERSION,
     epic_export,
@@ -20,7 +20,7 @@ from product_copilot.core.adapters import (
     to_gitlab,
     to_gitlab_json,
 )
-from product_copilot.core.analysis import (
+from requivo.core.analysis import (
     _is_deferred,
     _label,
     _readiness_blockers,
@@ -29,7 +29,7 @@ from product_copilot.core.analysis import (
     estimate_confidence,
     soft_slots,
 )
-from product_copilot.core.contracts import (
+from requivo.core.contracts import (
     PRD,
     SOFT_COMPLETENESS,
     AcceptanceCriteria,
@@ -59,8 +59,8 @@ from product_copilot.core.contracts import (
     Story,
     Summary,
 )
-from product_copilot.core.discovery import run
-from product_copilot.core.generators import (
+from requivo.core.discovery import run
+from requivo.core.generators import (
     advise,
     derive_stories,
     estimate,
@@ -69,10 +69,10 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
-from product_copilot.core.llm import _complete, _extract_json, _response_text, build_prompt, load_context
-from product_copilot.core.persistence import _slug, load_model, save_model, write_artifact
-from product_copilot.render.markdown import _KIND_TAG, criteria_markdown, epic_markdown, prd_markdown, release_markdown
-from product_copilot.render.terminal import (
+from requivo.core.llm import _complete, _extract_json, _response_text, build_prompt, load_context
+from requivo.core.persistence import _slug, load_model, save_model, write_artifact
+from requivo.render.markdown import _KIND_TAG, criteria_markdown, epic_markdown, prd_markdown, release_markdown
+from requivo.render.terminal import (
     STATE_ROWS,
     _bullet,
     _labeled,

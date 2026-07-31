@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Product Copilot — Requirements Engine.** Turns a vague client request into a *structured solution
+**Requivo — Requirements Engine.** Turns a vague client request into a *structured solution
 model* ready for dev. It is **not a chatbot**: the chat is only the interface. The product is the
 **model** (a set of typed slots) and the **engine** that progressively fills it until it is precise
 enough to build from. The whole repo — code, comments, docs, prompts, context, and the engine's own
@@ -18,9 +18,9 @@ manual editable install):
 
 ```bash
 cp .env.example .env                                          # set ANTHROPIC_API_KEY (MODEL defaults to claude-sonnet-5)
-uv run pc discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json
-uv run pc status  out/<slug>/model.json                       # understanding checklist + readiness
-uv run pc prd     out/<slug>/model.json                       # regenerate any artifact from a saved model
+uv run requivo discover "We'd like to set up a leave approval system."   # discovery → out/<slug>/model.json
+uv run requivo status  out/<slug>/model.json                       # understanding checklist + readiness
+uv run requivo prd     out/<slug>/model.json                       # regenerate any artifact from a saved model
 ```
 
 Classic pip + venv (equivalent; drop the `uv run` prefix once the venv is active):
@@ -32,13 +32,13 @@ pip install -e ".[dev]"         # deps + the `pc` command + pytest
 ```
 
 `pc` is the modern subcommand CLI: `discover`, `demo`, `status`, `impact`, `brief`, `prd`, `stories`,
-`estimate`, `criteria`, `epic` (`--json/--github/--gitlab`), `release`. `pc demo` replays the
+`estimate`, `criteria`, `epic` (`--json/--github/--gitlab`), `release`. `requivo demo` replays the
 event-checkin example from its saved outputs — no API key, no arguments, no network (status rendered
 live from the model, assessment read from disk) — the zero-friction way to feel the product. `pc
 impact <model> [slots…]` is a pure offline query over the dependency DAG (no API call): the blast
 radius of a change (the decisions to re-validate + artifacts that go stale), or the full map with no
 slots. Without an
-install, `python pc.py <cmd>`
+install, `python requivo.py <cmd>`
 (a repo-root launcher that puts `src/` on the path) is equivalent — this is what the Claude Code
 `/pc-*` commands call. The **legacy flag CLI is preserved**: `python src/engine.py "…" [--once]
 [--prd] [--stories] …` and `python src/engine.py --from out/<slug>/model.json --prd` still work
@@ -53,22 +53,22 @@ conflation → epic + criteria).
 ## Architecture
 
 The engine is a **single Anthropic call** (per turn) whose intelligence lives entirely in assembled
-prompt data, not in Python. The code is the `product_copilot` package (under `src/`); the historical
+prompt data, not in Python. The code is the `requivo` package (under `src/`); the historical
 `src/engine.py` is now a backward-compat shim re-exporting it. The layers form a DAG — **`core/`
 never prints and never reads argv; `render/` turns data into strings; `cli.py` is the only layer that
 touches argv/stdout/TTY** — so every interface (terminal `pc`, the Claude Code `/pc-*` wrappers in
 `.claude/commands/`, and later an API or MCP) is a thin layer over the same core, never a second
 implementation:
 
-Bundled assets (`prompts/`, `framework/`, `context/`, plus the `pc demo` payload) live **inside the
-package** at `src/product_copilot/assets/`, so they ship in the wheel and a `pip install` works
+Bundled assets (`prompts/`, `framework/`, `context/`, plus the `requivo demo` payload) live **inside the
+package** at `src/requivo/assets/`, so they ship in the wheel and a `pip install` works
 outside the clone. Throughout this doc, `prompts/…`, `framework/…` and `context/…` are shorthand for
 that location. Generated output goes to `./out` under the caller's working directory (overridable via
-`PC_OUTPUT_DIR`), never inside the install. `paths.py` exposes both: `ASSETS`/`PROMPTS`/`FRAMEWORK`/
+`REQUIVO_OUTPUT_DIR`), never inside the install. `paths.py` exposes both: `ASSETS`/`PROMPTS`/`FRAMEWORK`/
 `CONTEXT`/`DEMO` (read-only, resolved from the package) and `output_root()` (writable, cwd-based).
 
 ```
-product_copilot/
+requivo/
   paths.py         ASSETS + output_root() — read-only package data vs writable cwd/out
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the engine (presentation-free)
@@ -192,8 +192,8 @@ which slots each buildable artifact consumes (the assessment/brief is deliberate
 live analysis layer, not a downstream deliverable). `propagate(model, slots)` returns the blast radius
 (decisions to re-validate + artifacts to regenerate); `diff_models(old, new)` is the material change
 between two versions (value/confidence/impact — not completeness noise); `stale_on_disk()` intersects
-that with the files actually present in `out/<slug>/`. `pc impact` surfaces the forward view on demand;
-`pc answer` runs the diff automatically each turn and warns which generated files no longer match.
+that with the files actually present in `out/<slug>/`. `requivo impact` surfaces the forward view on demand;
+`requivo answer` runs the diff automatically each turn and warns which generated files no longer match.
 
 Each generator is the same shape — **prompt + Pydantic contract + generator fn + writer**:
 `brief.md`/`Brief`/`advise()`, `stories.md`/`Stories`/`derive_stories()`,
@@ -223,7 +223,7 @@ renders whichever views were requested, so `--epic --epic-json --epic-github` is
 keeps the core tool-agnostic: `to_github(export, slug)` maps `epic_export()` output → a GitHub
 issue-creation plan (`out/<slug>/epic.github.json` behind `--epic-github`, via `to_github_json()`).
 GitHub has no native epic or dependency, so it degrades honestly (tracking issue + task list;
-`depends_on` stated in issue bodies) and stamps a `pc-epic:<slug>` idempotency label on every issue.
+`depends_on` stated in issue bodies) and stamps a `requivo-epic:<slug>` idempotency label on every issue.
 The authenticated push (tokens, retries) is deliberately *not* in-repo — an n8n flow consumes the
 plan. `to_gitlab(export, slug)` (`--epic-gitlab` → `epic.gitlab.json`) is the same shape but maps
 `depends_on` to a structured `links` array (`blocks`) instead of body text — GitLab has native issue
@@ -274,17 +274,17 @@ and the full set only before committing a baseline.
 **Known limit (partially mitigated):** `load_context()` concatenates every card by default, so each
 new context card dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost
 `doc-reapproval` its sharpest question (supersession, 3/3 runs → 1/3, displaced by that card's
-audit-trail emphasis). `pc discover --context <cards>` now lets a session opt into a subset
+audit-trail emphasis). `requivo discover --context <cards>` now lets a session opt into a subset
 (`load_context(only=…)`, threaded through `run()`), so a user can drop irrelevant cards manually —
 but there is still no *automatic* relevance routing, which a third such instance would justify. The
 selection is per-session (held constant across a run's turns) so the cached system prefix survives.
 
 ## Extending
 
-- **New client/product context:** copy `src/product_copilot/assets/context/_template.md` to
+- **New client/product context:** copy `src/requivo/assets/context/_template.md` to
   `…/context/<name>.md` and fill it. It is picked up automatically (non-`_` prefix). For a
-  pip-installed setup with no checkout, drop cards in `user_context_dir()` (`PC_CONTEXT_DIR`, default
-  `~/.config/product-copilot/context`) instead — `_card_paths()` in `core/llm.py` merges bundled +
+  pip-installed setup with no checkout, drop cards in `user_context_dir()` (`REQUIVO_CONTEXT_DIR`, default
+  `~/.config/requivo/context`) instead — `_card_paths()` in `core/llm.py` merges bundled +
   user cards by stem, user winning on a clash. Both feed the same `available_cards()`/`load_context()`. Better context cards → better impact estimates → better
   questions. Measure the change through the golden harness above — a card helps its target request and
   can quietly cost a neighbour.

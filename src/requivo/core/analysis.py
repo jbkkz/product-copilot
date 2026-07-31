@@ -3,8 +3,8 @@ from __future__ import annotations
 import functools
 import json
 
-from product_copilot.core.contracts import SOFT_COMPLETENESS, Confidence, EngineOutput, Impact, Slot, schema_slot_ids
-from product_copilot.paths import FRAMEWORK
+from requivo.core.contracts import SOFT_COMPLETENESS, Confidence, EngineOutput, Impact, Slot, schema_slot_ids
+from requivo.paths import FRAMEWORK
 
 
 @functools.lru_cache(maxsize=1)

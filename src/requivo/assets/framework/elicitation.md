@@ -1,6 +1,6 @@
 # The elicitation framework
 
-The framework is the core of Product Copilot. It's domain-agnostic: it encodes how an experienced
+The framework is the core of Requivo. It's domain-agnostic: it encodes how an experienced
 product person turns a vague request into a model precise enough to build from. The context cards in
 `context/` ground that method in a specific product.
 

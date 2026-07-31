@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from anthropic import Anthropic
 
-from product_copilot.core.contracts import EngineOutput, missing_required_slots
-from product_copilot.core.llm import _complete, build_prompt
+from requivo.core.contracts import EngineOutput, missing_required_slots
+from requivo.core.llm import _complete, build_prompt
 
 
 def _require_complete_model(out: EngineOutput) -> None:

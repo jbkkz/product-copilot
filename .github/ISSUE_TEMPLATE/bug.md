@@ -24,7 +24,7 @@ pc <command> …
 
 ## Environment
 
-- Product Copilot version: <!-- `pip show product-copilot`, or the git commit -->
+- Requivo version: <!-- `pip show requivo`, or the git commit -->
 - Python version: <!-- `python --version` -->
 - OS:
 - Model (`MODEL` env, or default `claude-sonnet-5`):

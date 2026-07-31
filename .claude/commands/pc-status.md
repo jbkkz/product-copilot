@@ -1,5 +1,5 @@
 ---
-description: Show a Product Copilot model's understanding checklist and readiness
+description: Show a Requivo model's understanding checklist and readiness
 argument-hint: <path to out/<slug>/model.json>
 allowed-tools: Bash(.venv/bin/python pc.py:*)
 ---

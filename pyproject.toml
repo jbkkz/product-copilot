@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "product-copilot"
+name = "requivo"
 version = "0.6.3"
-description = "A requirements engine that turns a vague client request into a structured solution model ready for dev."
+description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -33,18 +33,26 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
+[project.urls]
+Homepage = "https://github.com/jbkkz/requivo"
+Repository = "https://github.com/jbkkz/requivo"
+Changelog = "https://github.com/jbkkz/requivo/blob/main/CHANGELOG.md"
+
 [project.scripts]
-pc = "product_copilot.cli:app"
+requivo = "requivo.cli:app"
+# `pc` is a deprecated backward-compat alias for `requivo` (the project was renamed from Product
+# Copilot). It calls the exact same entry point and may be removed in a future major version.
+pc = "requivo.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["product_copilot*"]
+include = ["requivo*"]
 
 [tool.setuptools.package-data]
 # Ship the engine's assets (prompts, framework schema, context cards, demo payload) inside the wheel.
 # Without this, a `pip install` outside the clone would have no prompts/schema and every command that
 # builds a prompt or reads the schema would fail. The wheel-install CI job guards this.
-product_copilot = ["assets/**/*"]
+requivo = ["assets/**/*"]
 
 [tool.ruff]
 line-length = 120

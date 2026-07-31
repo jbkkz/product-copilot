@@ -24,12 +24,12 @@ Each command regenerates one view from the model — no discovery needed. Output
 `out/leave-approval/` (it doesn't overwrite the files you're reading here):
 
 ```bash
-pc brief    examples/leave-approval/model.json                          # the solution assessment
-pc prd      examples/leave-approval/model.json                          # the PRD
-pc criteria examples/leave-approval/model.json                          # the acceptance criteria
-pc epic     examples/leave-approval/model.json --json --github --gitlab # epic.md + neutral export + tracker plans
-pc release  examples/leave-approval/model.json v1.0                     # the release notes
-pc stories  examples/leave-approval/model.json                          # user stories (also: pc estimate)
+requivo brief    examples/leave-approval/model.json                          # the solution assessment
+requivo prd      examples/leave-approval/model.json                          # the PRD
+requivo criteria examples/leave-approval/model.json                          # the acceptance criteria
+requivo epic     examples/leave-approval/model.json --json --github --gitlab # epic.md + neutral export + tracker plans
+requivo release  examples/leave-approval/model.json v1.0                     # the release notes
+requivo stories  examples/leave-approval/model.json                          # user stories (also: requivo estimate)
 ```
 
 The legacy flag CLI still works too, e.g. `python src/engine.py --from examples/leave-approval/model.json --prd`.

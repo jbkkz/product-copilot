@@ -9,12 +9,12 @@ from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from product_copilot.core.adapters import epic_export_json, to_github_json, to_gitlab_json
-from product_copilot.core.analysis import _label
-from product_copilot.core.contracts import EngineOutput
-from product_copilot.core.dependencies import diff_models, propagate, resolve_slots, stale_on_disk
-from product_copilot.core.discovery import answer_turn, run
-from product_copilot.core.generators import (
+from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
+from requivo.core.analysis import _label
+from requivo.core.contracts import EngineOutput
+from requivo.core.dependencies import diff_models, propagate, resolve_slots, stale_on_disk
+from requivo.core.discovery import answer_turn, run
+from requivo.core.generators import (
     advise,
     derive_stories,
     estimate,
@@ -23,8 +23,8 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
-from product_copilot.core.llm import EngineError, available_cards, current_model_name, track_usage
-from product_copilot.core.persistence import (
+from requivo.core.llm import EngineError, available_cards, current_model_name, track_usage
+from requivo.core.persistence import (
     _slug,
     load_model,
     load_request,
@@ -36,9 +36,9 @@ from product_copilot.core.persistence import (
     session_cards,
     write_artifact,
 )
-from product_copilot.paths import DEMO
-from product_copilot.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
-from product_copilot.render.terminal import (
+from requivo.paths import DEMO
+from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
+from requivo.render.terminal import (
     render_brief,
     render_dependency_map,
     render_estimate,
@@ -222,7 +222,7 @@ def _run_legacy() -> None:
 # The modern surface. A thin layer over the same core the legacy flag CLI above
 # uses: each handler parses, calls core, renders, writes — no business logic here.
 # `app()` takes an optional client so tests can inject a stub; only verbs that hit
-# the API build one, so `pc status` runs fully offline.
+# the API build one, so `requivo status` runs fully offline.
 
 
 def _load(model_path: str) -> tuple[EngineOutput, str]:
@@ -298,9 +298,9 @@ def _cmd_discover(a, client) -> None:
     # Collision-safe now that we're about to write: keep the clean slug unless a different request
     # already owns out/<slug>/ (then a short hash suffix).
     slug = resolve_slug(_slug(Path(a.request).stem if is_file else request), request)
-    save_request(slug, request)  # so `pc answer` can resume this discovery statelessly
+    save_request(slug, request)  # so `requivo answer` can resume this discovery statelessly
     # Provenance sidecar: pins the engine version, Claude model and context-card selection so the run
-    # is reproducible and `pc answer` / generators reuse the same cards (only == None means all).
+    # is reproducible and `requivo answer` / generators reuse the same cards (only == None means all).
     save_session(slug, request=request, model_name=current_model_name(), context_cards=only)
     if not quick:
         print("\nGenerating the solution assessment…")
@@ -309,7 +309,7 @@ def _cmd_discover(a, client) -> None:
         render_brief(out, brief)
     print(f"\nSaved model → {save_model(out, slug)}")
     if quick and out.questions:
-        print(f'\n→ Answer and refine: pc answer out/{slug}/model.json "<your answers>"')
+        print(f'\n→ Answer and refine: requivo answer out/{slug}/model.json "<your answers>"')
 
 
 def _cmd_answer(a, client) -> None:
@@ -325,9 +325,9 @@ def _cmd_answer(a, client) -> None:
         render_stale(pairs, [_label(sid) for sid in changed])
     print(f"\nSaved model → {save_model(out, slug)}")
     if not out.questions:
-        print("\n✅ Discovery converged — run `pc brief` for the assessment.")
+        print("\n✅ Discovery converged — run `requivo brief` for the assessment.")
     else:
-        print(f'\n→ Keep going: pc answer {a.model} "<your answers>"')
+        print(f'\n→ Keep going: requivo answer {a.model} "<your answers>"')
 
 
 def _cmd_status(a, client) -> None:
@@ -351,7 +351,7 @@ def _cmd_demo(a, client) -> None:
     A visitor shouldn't need a key, a clone, and a venv before feeling what the product does. This
     renders the understanding + questions LIVE from the saved model (pure Python, proving the engine
     runs offline) and shows the assessment it produced — the differentiator — from disk. No network."""
-    # Read from the frozen payload bundled in the package (so `pc demo` works from a wheel, no clone),
+    # Read from the frozen payload bundled in the package (so `requivo demo` works from a wheel, no clone),
     # but point the visitor at the browsable copy under examples/ at the repo root.
     demo = DEMO
     request = (demo / "request.md").read_text().strip()
@@ -360,7 +360,7 @@ def _cmd_demo(a, client) -> None:
 
     bar = "═" * 72
     print(bar)
-    print("  PRODUCT COPILOT — DEMO   (no API key needed)")
+    print("  REQUIVO — DEMO   (no API key needed)")
     print("  A real run, replayed from saved output: this is what the engine made")
     print("  of the messy request below — nothing is called.")
     print(bar)
@@ -380,7 +380,7 @@ def _cmd_demo(a, client) -> None:
     for name in ("epic.md", "acceptance-criteria.md"):
         if (demo / name).exists():
             print(f"       • examples/{DEMO_SLUG}/{name}")
-    print('\n  Your turn:   pc discover "<your own request>"')
+    print('\n  Your turn:   requivo discover "<your own request>"')
     print(bar)
 
 
@@ -459,8 +459,8 @@ def _cmd_release(a, client) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="pc",
-        description="Product Copilot — turns a vague request into a structured solution model.",
+        prog="requivo",
+        description="Requivo — turns a vague request into a structured solution model.",
     )
     sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -508,7 +508,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def app(argv: list[str] | None = None, client: Anthropic | None = None) -> None:
-    """Entry point for the `pc` command and `python -m product_copilot`."""
+    """Entry point for the `requivo` command (and its `pc` alias, and `python -m requivo`)."""
     args = _build_parser().parse_args(argv)
     # Track the run's API footprint and print it after the command. Offline verbs make no call, so
     # the ledger stays empty and render_usage() prints nothing.

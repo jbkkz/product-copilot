@@ -21,8 +21,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from product_copilot.core.analysis import _label, _state_of  # noqa: E402
-from product_copilot.core.contracts import Brief, EngineOutput  # noqa: E402
+from requivo.core.analysis import _label, _state_of  # noqa: E402
+from requivo.core.contracts import Brief, EngineOutput  # noqa: E402
 
 GOLDEN = REPO / "fixtures" / "golden"
 REQUESTS = GOLDEN / "requests.md"

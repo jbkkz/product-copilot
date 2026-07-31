@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from product_copilot.paths import FRAMEWORK
+from requivo.paths import FRAMEWORK
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
 

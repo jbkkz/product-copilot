@@ -1,10 +1,10 @@
 ---
-description: Generate Product Copilot deliverables from a saved model (thin wrapper over the CLI)
+description: Generate Requivo deliverables from a saved model (thin wrapper over the CLI)
 argument-hint: <model.json> <prd|stories|estimate|criteria|epic|release|brief ...>
 allowed-tools: Bash(.venv/bin/python pc.py:*)
 ---
 
-You are a **thin wrapper** over the Product Copilot CLI. Never write a PRD, user
+You are a **thin wrapper** over the Requivo CLI. Never write a PRD, user
 stories, an epic, or any artifact yourself — each is produced by the engine from
 the model. Your job: map the requested artifacts to CLI subcommands, run them,
 and report the produced file paths.

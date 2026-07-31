@@ -6,9 +6,9 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from product_copilot import __version__
-from product_copilot.core.contracts import EngineOutput
-from product_copilot.paths import output_root
+from requivo import __version__
+from requivo.core.contracts import EngineOutput
+from requivo.paths import output_root
 
 SESSION_FORMAT_VERSION = 1
 
@@ -53,12 +53,12 @@ def save_session(slug: str, *, request: str, model_name: str,
                  context_cards: list[str] | None) -> Path:
     """Provenance sidecar for a discovery: which engine version and Claude model produced this model,
     which context cards informed it, and a hash of the originating request. Kept separate from
-    model.json (which stays a clean EngineOutput) so a run is reproducible and `pc answer` /
+    model.json (which stays a clean EngineOutput) so a run is reproducible and `requivo answer` /
     generators can reuse the *same* card selection instead of silently widening to all cards.
     `context_cards` is None when all cards were loaded (the default)."""
     session = {
         "format_version": SESSION_FORMAT_VERSION,
-        "product_copilot_version": __version__,
+        "requivo_version": __version__,
         "model_name": model_name,
         "context_cards": context_cards,
         "request_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),

@@ -12,7 +12,7 @@ from pathlib import Path
 from anthropic import Anthropic, APIError
 from pydantic import ValidationError
 
-from product_copilot.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
+from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 
 MODEL_DEFAULT = "claude-sonnet-5"
 

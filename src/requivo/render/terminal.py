@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import textwrap
 
-from product_copilot.core.analysis import _label, _readiness_blockers, _state_of
-from product_copilot.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
-from product_copilot.core.llm import PRICING_AS_OF, UsageLedger
+from requivo.core.analysis import _label, _readiness_blockers, _state_of
+from requivo.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
+from requivo.core.llm import PRICING_AS_OF, UsageLedger
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),
@@ -204,7 +204,7 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
 
 def render_impact(report) -> None:
     """Focused propagation view: name slots, see what rests on them go stale."""
-    from product_copilot.core.dependencies import ARTIFACT_FILES
+    from requivo.core.dependencies import ARTIFACT_FILES
     print("\n" + "═" * 64)
     print("IMPACT — what rests on: " + ", ".join(report.changed))
     print("═" * 64)
@@ -229,7 +229,7 @@ def render_impact(report) -> None:
 
 def render_dependency_map(out: EngineOutput) -> None:
     """No-args overview: for every slot that can still move, what it would invalidate."""
-    from product_copilot.core.dependencies import propagate
+    from requivo.core.dependencies import propagate
     print("\n" + "═" * 64)
     print("DEPENDENCY MAP — change a slot, see the blast radius")
     print("═" * 64)

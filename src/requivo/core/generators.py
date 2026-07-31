@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from anthropic import Anthropic
 
-from product_copilot.core.analysis import estimate_confidence, soft_slots
-from product_copilot.core.contracts import (
+from requivo.core.analysis import estimate_confidence, soft_slots
+from requivo.core.contracts import (
     PRD,
     AcceptanceCriteria,
     Brief,
@@ -13,7 +13,7 @@ from product_copilot.core.contracts import (
     ReleaseNotes,
     Stories,
 )
-from product_copilot.core.llm import _complete, build_prompt
+from requivo.core.llm import _complete, build_prompt
 
 # Every generator threads `only` — the context-card selection its discovery ran against, read from
 # session.json by the CLI — so an artifact is grounded in the same cards discovery used, not silently

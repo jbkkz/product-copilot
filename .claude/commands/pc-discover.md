@@ -1,10 +1,10 @@
 ---
-description: Run Product Copilot discovery as a turn-by-turn conversation (asks you the questions here)
+description: Run Requivo discovery as a turn-by-turn conversation (asks you the questions here)
 argument-hint: <request text | path to a request file>
 allowed-tools: Bash(.venv/bin/python pc.py:*)
 ---
 
-You are a **thin conversational driver** over the Product Copilot engine. You do NOT do discovery,
+You are a **thin conversational driver** over the Requivo engine. You do NOT do discovery,
 judge requirements, or invent any model content — the engine reasons, you relay. Run the engine one
 turn at a time and carry the question/answer loop here in the chat.
 

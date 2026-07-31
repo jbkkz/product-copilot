@@ -1,6 +1,6 @@
 # Security
 
-Product Copilot is an early open-source beta. This document states what the tool does with your data
+Requivo is an early open-source beta. This document states what the tool does with your data
 and how to report a problem.
 
 ## What leaves your machine
@@ -27,7 +27,7 @@ prompts state this trust boundary explicitly, so text like "ignore the above ins
 in a request is modelled as a requirement to capture, not a command to follow.
 
 This is a mitigation, not a guarantee: LLM prompt-injection defences are imperfect. Do not run
-Product Copilot on requests from a source you would not trust to read your prompts, and review
+Requivo on requests from a source you would not trust to read your prompts, and review
 generated artifacts before acting on them.
 
 ## Reporting a vulnerability

@@ -1,8 +1,22 @@
 # Changelog
 
-All notable changes to Product Copilot are recorded here. The format follows
+All notable changes to Requivo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Unreleased
+
+### Changed
+- Renamed **Product Copilot to Requivo**. New positioning: *turn vague requests into validated product
+  decisions*. The engine, model format and business behaviour are unchanged — this is a rename only.
+- Renamed the Python package from `product_copilot` to `requivo` (no compatibility shim — the project
+  has no published distribution yet, so a clean rename is preferred).
+- Added `requivo` as the **primary CLI command**; kept `pc` as a temporary backward-compatible alias
+  (same entry point) that may be removed in a future major version.
+- Renamed the environment variables `PC_OUTPUT_DIR` → `REQUIVO_OUTPUT_DIR` and `PC_CONTEXT_DIR` →
+  `REQUIVO_CONTEXT_DIR`, the default user-context directory to `~/.config/requivo/context`, the tracker
+  idempotency label to `requivo-epic:<slug>`, and the `session.json` provenance key to `requivo_version`.
+- Updated project metadata (name, description, URLs) and documentation to the Requivo identity.
 
 ## [0.6.3] - 2026-07-31
 
@@ -10,8 +24,8 @@ Closes the UX gap the 0.6.2 packaging move introduced — pip-installed users ca
 context, the last thing standing between the wheel and a first PyPI release.
 
 ### Added
-- **User-level context directory (`PC_CONTEXT_DIR`).** A pip-installed setup can be extended without a
-  source checkout: drop cards in `PC_CONTEXT_DIR` (default `~/.config/product-copilot/context`) and
+- **User-level context directory (`REQUIVO_CONTEXT_DIR`).** A pip-installed setup can be extended without a
+  source checkout: drop cards in `REQUIVO_CONTEXT_DIR` (default `~/.config/requivo/context`) and
   they merge with the bundled cards. A user card whose stem matches a built-in **overrides** it, so a
   bundled card can be tweaked without editing the package. Both feed the same `--context` selector and
   `load_context()`; with no user directory present, behaviour is byte-identical to before (so golden
@@ -25,13 +39,13 @@ lands inside the install. This closes the review's top remaining gap — that in
 
 ### Fixed
 - **Assets ship inside the wheel.** The prompts, the framework schema, the context cards and the demo
-  payload moved into the package at `src/product_copilot/assets/` and are declared as package data, so
+  payload moved into the package at `src/requivo/assets/` and are declared as package data, so
   a `pip install` outside the clone has everything it needs. Before, they lived at the repo root and a
   wheel install had no prompts or schema — every command that builds a prompt would fail. Git tracked
   the move as renames, so history is preserved.
 - **Read-only assets vs writable output are separated.** `paths.py` now exposes `ASSETS` (resolved
   from the package location, read-only — works identically from an editable checkout or a wheel) and
-  `output_root()` (`./out` under the working directory, overridable via `PC_OUTPUT_DIR`). Generated
+  `output_root()` (`./out` under the working directory, overridable via `REQUIVO_OUTPUT_DIR`). Generated
   models/artifacts are never written inside a possibly read-only install.
 
 ### Added
@@ -195,9 +209,9 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[0.6.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.6.0
-[0.5.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.5.0
-[0.4.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.4.0
-[0.3.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.3.0
-[0.2.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.2.0
-[0.1.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.1.0
+[0.6.0]: https://github.com/jbkkz/requivo/releases/tag/v0.6.0
+[0.5.0]: https://github.com/jbkkz/requivo/releases/tag/v0.5.0
+[0.4.0]: https://github.com/jbkkz/requivo/releases/tag/v0.4.0
+[0.3.0]: https://github.com/jbkkz/requivo/releases/tag/v0.3.0
+[0.2.0]: https://github.com/jbkkz/requivo/releases/tag/v0.2.0
+[0.1.0]: https://github.com/jbkkz/requivo/releases/tag/v0.1.0

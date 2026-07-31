@@ -3,12 +3,12 @@
 Two roots, deliberately separate:
 
 - **`ASSETS`** — read-only bundled data (prompts, framework, context, the demo payload). It lives
-  *inside* the package (`src/product_copilot/assets/`), so it resolves identically from an editable
+  *inside* the package (`src/requivo/assets/`), so it resolves identically from an editable
   checkout and from an installed wheel, and setuptools ships it as package data. Resolving it from
   this module's own location (not the repo root) is what makes a `pip install` work outside the clone.
 - **`output_root()`** — where generated models/artifacts are written. This must never be inside the
   package (site-packages is often read-only, and writing there would be wrong anyway), so it defaults
-  to `./out` under the current working directory and can be redirected with `PC_OUTPUT_DIR`.
+  to `./out` under the current working directory and can be redirected with `REQUIVO_OUTPUT_DIR`.
 
 Every module resolves assets and outputs through here, never through its own `__file__`.
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# src/product_copilot/paths.py → assets sit next to this file, inside the package. A normal wheel
+# src/requivo/paths.py → assets sit next to this file, inside the package. A normal wheel
 # install unpacks the package to the filesystem, so a plain Path (with .glob/.read_text) works; we
 # don't need importlib.resources' zip handling, and the wheel-install CI job proves this resolves.
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -31,16 +31,16 @@ DEMO = ASSETS / "demo"
 
 def output_root() -> Path:
     """Directory for generated models/artifacts. Defaults to `./out` under the caller's working
-    directory (never inside the installed package); override with `PC_OUTPUT_DIR`. Evaluated per call
+    directory (never inside the installed package); override with `REQUIVO_OUTPUT_DIR`. Evaluated per call
     so a `cd` or an env change takes effect without reimporting."""
-    override = os.getenv("PC_OUTPUT_DIR")
+    override = os.getenv("REQUIVO_OUTPUT_DIR")
     return Path(override) if override else Path.cwd() / "out"
 
 
 def user_context_dir() -> Path:
     """Where a user drops their own context cards, so a pip-installed setup can be extended without a
     source checkout (the bundled cards in `CONTEXT` are inside the read-only package). Defaults to
-    `~/.config/product-copilot/context`; override with `PC_CONTEXT_DIR`. May not exist — callers check.
+    `~/.config/requivo/context`; override with `REQUIVO_CONTEXT_DIR`. May not exist — callers check.
     A user card whose stem matches a bundled one overrides it (see `load_context`)."""
-    override = os.getenv("PC_CONTEXT_DIR")
-    return Path(override) if override else Path.home() / ".config" / "product-copilot" / "context"
+    override = os.getenv("REQUIVO_CONTEXT_DIR")
+    return Path(override) if override else Path.home() / ".config" / "requivo" / "context"

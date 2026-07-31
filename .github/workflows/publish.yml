@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/product-copilot
+      url: https://pypi.org/p/requivo
     permissions:
       id-token: write   # mint the OIDC token Trusted Publishing uses — this is what replaces a token
     steps:
@@ -34,6 +34,6 @@ jobs:
         run: |
           python -m venv /tmp/verifyenv
           /tmp/verifyenv/bin/pip install dist/*.whl
-          cd /tmp && /tmp/verifyenv/bin/pc demo | grep -q "PRODUCT COPILOT — DEMO"
+          cd /tmp && /tmp/verifyenv/bin/requivo demo | grep -q "REQUIVO — DEMO"
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
