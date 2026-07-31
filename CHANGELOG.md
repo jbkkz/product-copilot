@@ -4,6 +4,19 @@ All notable changes to Product Copilot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-31
+
+Closes the UX gap the 0.6.2 packaging move introduced — pip-installed users can now bring their own
+context, the last thing standing between the wheel and a first PyPI release.
+
+### Added
+- **User-level context directory (`PC_CONTEXT_DIR`).** A pip-installed setup can be extended without a
+  source checkout: drop cards in `PC_CONTEXT_DIR` (default `~/.config/product-copilot/context`) and
+  they merge with the bundled cards. A user card whose stem matches a built-in **overrides** it, so a
+  bundled card can be tweaked without editing the package. Both feed the same `--context` selector and
+  `load_context()`; with no user directory present, behaviour is byte-identical to before (so golden
+  baselines are untouched).
+
 ## [0.6.2] - 2026-07-31
 
 Packaging: the engine is now a self-contained, pip-installable wheel, and generated output no longer

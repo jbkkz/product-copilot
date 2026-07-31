@@ -588,14 +588,41 @@ def test_load_context_includes_real_cards_and_skips_underscore():
 
 
 def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
-    # load_context reads the CONTEXT anchor from its own module (core.llm); point it at an empty dir.
+    # load_context reads the CONTEXT anchor from its own module (core.llm); point it at an empty dir,
+    # and point the user-cards dir at a nonexistent path so the machine's real one can't leak in.
     from product_copilot.core import llm
 
     ctx_dir = tmp_path / "context"
     ctx_dir.mkdir()
     (ctx_dir / "_only_template.md").write_text("skip me")
     monkeypatch.setattr(llm, "CONTEXT", ctx_dir)
+    monkeypatch.setenv("PC_CONTEXT_DIR", str(tmp_path / "no-user-cards"))
     assert load_context() == ""
+
+
+def test_user_context_cards_merge_and_override_bundled(tmp_path, monkeypatch):
+    # A pip-installed user extends discovery by dropping cards in PC_CONTEXT_DIR: new stems are added,
+    # and a stem matching a bundled card overrides it (tweak a built-in without editing the package).
+    from product_copilot.core import llm
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "b2b-platform.md").write_text("BUNDLED b2b")
+    (bundled / "shared.md").write_text("BUNDLED shared")
+    monkeypatch.setattr(llm, "CONTEXT", bundled)
+
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "my-product.md").write_text("USER product")
+    (user / "shared.md").write_text("USER shared override")
+    monkeypatch.setenv("PC_CONTEXT_DIR", str(user))
+
+    assert llm.available_cards() == ["b2b-platform", "my-product", "shared"]  # merged, sorted
+    ctx = load_context()
+    assert "BUNDLED b2b" in ctx            # bundled-only card kept
+    assert "USER product" in ctx           # user-only card added
+    assert "USER shared override" in ctx   # user card wins on stem clash
+    assert "BUNDLED shared" not in ctx      # ...replacing the bundled version
 
 
 # ── The `pc` subcommand CLI ───────────────────────────────────────────────────

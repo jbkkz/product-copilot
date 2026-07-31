@@ -282,7 +282,10 @@ selection is per-session (held constant across a run's turns) so the cached syst
 ## Extending
 
 - **New client/product context:** copy `src/product_copilot/assets/context/_template.md` to
-  `…/context/<name>.md` and fill it. It is picked up automatically (non-`_` prefix). Better context cards → better impact estimates → better
+  `…/context/<name>.md` and fill it. It is picked up automatically (non-`_` prefix). For a
+  pip-installed setup with no checkout, drop cards in `user_context_dir()` (`PC_CONTEXT_DIR`, default
+  `~/.config/product-copilot/context`) instead — `_card_paths()` in `core/llm.py` merges bundled +
+  user cards by stem, user winning on a clash. Both feed the same `available_cards()`/`load_context()`. Better context cards → better impact estimates → better
   questions. Measure the change through the golden harness above — a card helps its target request and
   can quietly cost a neighbour.
 - **`config_vs_custom` slot** is `optional: true` — the platform edge (hardcoded / configurable /

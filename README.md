@@ -232,7 +232,8 @@ unchanged.
 ## Before you rely on it
 
 - **What leaves your machine.** Each discovery or generation turn sends, as one Anthropic API call:
-  your request text, the framework schema, and **every** bundled context card (the system prompt), to
+  your request text, the framework schema, and **every** context card — bundled plus any in your
+  `PC_CONTEXT_DIR` — (the system prompt), to
   the Claude model named by `MODEL` (default `claude-sonnet-5`). Nothing else is transmitted; this
   project stores nothing beyond `out/` on your own disk, and has no telemetry. `pc demo`, `pc status`
   and `pc impact` make **no** network call at all.
@@ -269,8 +270,17 @@ src/product_copilot/assets/context/
 ```
 
 Better context → sharper impact estimates → better questions. Files prefixed with `_` are ignored.
-(Customising cards is a clone / editable-install workflow today; a user-level context directory for
-pip-installed setups is on the roadmap.)
+
+**Installed via pip, no checkout?** Drop your cards in a user directory instead — no need to touch the
+package:
+
+```bash
+export PC_CONTEXT_DIR=~/.config/product-copilot/context   # this is also the default location
+mkdir -p "$PC_CONTEXT_DIR" && $EDITOR "$PC_CONTEXT_DIR/my-product.md"
+```
+
+User cards are merged with the built-in ones; a user card whose name matches a built-in **overrides**
+it, so you can tweak a bundled card without editing the package.
 
 ### Knowing whether a card helped
 
@@ -312,9 +322,10 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
   is separable from sampling noise, on the discovery *and* on the assessment
 - A self-contained wheel — prompts, schema and context cards ship inside the package, so `pip install`
   works outside the clone; outputs go to `./out` in your working directory, never into the install
+- A user-level context directory (`PC_CONTEXT_DIR`) — add or override product cards on a pip-installed
+  setup without a source checkout; user cards merge with the built-ins
 
 **Upcoming**
-- A user-level context directory — add product cards to a pip-installed setup without a source checkout
 - An HTTP API / MCP façade — another thin layer over the same core (for n8n and future web UIs)
 - Jira adapter, alongside GitHub and GitLab
 - Delivery integrations — authenticated push (via n8n), Notion and Confluence

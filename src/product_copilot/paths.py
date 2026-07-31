@@ -35,3 +35,12 @@ def output_root() -> Path:
     so a `cd` or an env change takes effect without reimporting."""
     override = os.getenv("PC_OUTPUT_DIR")
     return Path(override) if override else Path.cwd() / "out"
+
+
+def user_context_dir() -> Path:
+    """Where a user drops their own context cards, so a pip-installed setup can be extended without a
+    source checkout (the bundled cards in `CONTEXT` are inside the read-only package). Defaults to
+    `~/.config/product-copilot/context`; override with `PC_CONTEXT_DIR`. May not exist — callers check.
+    A user card whose stem matches a bundled one overrides it (see `load_context`)."""
+    override = os.getenv("PC_CONTEXT_DIR")
+    return Path(override) if override else Path.home() / ".config" / "product-copilot" / "context"

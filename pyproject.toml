@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "product-copilot"
-version = "0.6.2"
+version = "0.6.3"
 description = "A requirements engine that turns a vague client request into a structured solution model ready for dev."
 readme = "README.md"
 requires-python = ">=3.9"

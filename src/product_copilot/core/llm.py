@@ -7,11 +7,12 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from anthropic import Anthropic, APIError
 from pydantic import ValidationError
 
-from product_copilot.paths import CONTEXT, FRAMEWORK, PROMPTS
+from product_copilot.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 
 MODEL_DEFAULT = "claude-sonnet-5"
 
@@ -133,10 +134,26 @@ def _record(rec: CallRecord) -> None:
         ledger.record(rec)
 
 
+def _card_paths() -> dict[str, Path]:
+    """Loadable context cards keyed by stem: the bundled cards in the package, plus any the user drops
+    in `user_context_dir()` (so a pip-installed setup is extensible without a source checkout). A user
+    card whose stem matches a bundled one **overrides** it — you can tweak a built-in without editing
+    the package. `_`-prefixed files are skipped. Emitted in sorted-stem order so the assembled system
+    is deterministic and the prompt cache holds."""
+    paths: dict[str, Path] = {}
+    for directory in (CONTEXT, user_context_dir()):  # user dir second → its cards win on stem clash
+        if not directory.exists():
+            continue
+        for p in sorted(directory.glob("*.md")):
+            if not p.name.startswith("_"):
+                paths[p.stem] = p
+    return paths
+
+
 def available_cards() -> list[str]:
-    """Stems of the loadable context cards (non-`_`-prefixed), in load order — the vocabulary of the
+    """Stems of the loadable context cards (bundled + user), sorted — the vocabulary of the
     `--context` selector."""
-    return [p.stem for p in sorted(CONTEXT.glob("*.md")) if not p.name.startswith("_")]
+    return sorted(_card_paths())
 
 
 def load_context(only: list[str] | None = None) -> str:
@@ -145,13 +162,10 @@ def load_context(only: list[str] | None = None) -> str:
     Selection is per-session, so the assembled system stays byte-identical across a run's calls and
     the prompt cache still holds."""
     keep = None if only is None else {c.lower() for c in only}
-    cards = []
-    for path in sorted(CONTEXT.glob("*.md")):
-        if path.name.startswith("_"):
-            continue
-        if keep is not None and path.stem.lower() not in keep:
-            continue
-        cards.append(f"## {path.stem}\n{path.read_text()}")
+    paths = _card_paths()
+    cards = [f"## {stem}\n{paths[stem].read_text()}"
+             for stem in sorted(paths)
+             if keep is None or stem.lower() in keep]
     return "\n\n".join(cards)
 
 
