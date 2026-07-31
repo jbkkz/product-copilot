@@ -21,6 +21,10 @@ A robustness-and-packaging pass, closing gaps an external code review surfaced.
   schema doesn't define — both self-healing through the discovery retry loop.
 
 ### Added
+- **`pc discover --context <cards>`** — load a chosen subset of `context/*.md` for a discovery instead
+  of all of them, so irrelevant cards can't dilute impact estimation. Selection is per-session (held
+  constant across the run's turns), so the cached system prefix survives; unknown card names are warned
+  and ignored. Partially mitigates the "every card is loaded for every request" known limit.
 - **Per-run API usage reporting.** Every `pc` command that hits the API now prints its footprint when
   it finishes — calls, tokens (with the cached share), latency, and an estimated cost. `_complete()`
   records each call into a session-scoped `UsageLedger`; tokens are exact, cost is a labelled estimate
@@ -37,6 +41,14 @@ A robustness-and-packaging pass, closing gaps an external code review surfaced.
   Python 3.9–3.13 on every push and pull request.
 - **Ruff configuration** and richer packaging metadata (keywords, classifiers, `dev` extra now includes
   `ruff`) in `pyproject.toml`.
+
+### Changed
+- **Discovery no longer silently overwrites a colliding slug.** The five-word `out/<slug>/` folder is
+  kept when it's free or belongs to the same request (a re-run), but a *different* request that maps to
+  the same slug now gets a short deterministic hash suffix (`leave-approval-a3f82c`) instead of
+  clobbering the first.
+- **Markdown tables escape cell content.** The PRD requirements table now escapes `|` and flattens
+  newlines in its cells, so a requirement containing a pipe no longer breaks the table.
 
 ## [0.5.0] - 2026-07-31
 

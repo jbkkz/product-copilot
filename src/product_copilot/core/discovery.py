@@ -16,9 +16,11 @@ def _require_complete_model(out: EngineOutput) -> None:
         raise ValueError(f"model is missing required slots: {missing}. Emit every schema slot.")
 
 
-def run(client: Anthropic, messages: list[dict], retries: int = 2) -> EngineOutput:
-    """Engine turn: request/answers → filled model."""
-    return _complete(client, build_prompt("engine.md"), messages, EngineOutput, retries,
+def run(client: Anthropic, messages: list[dict], retries: int = 2,
+        only: list[str] | None = None) -> EngineOutput:
+    """Engine turn: request/answers → filled model. `only` restricts which context cards inform the
+    turn (defaults to all); keep it constant across a session's turns so the prompt cache holds."""
+    return _complete(client, build_prompt("engine.md", only), messages, EngineOutput, retries,
                      validate=_require_complete_model)
 
 

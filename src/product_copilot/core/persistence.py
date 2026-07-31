@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -10,6 +11,20 @@ from product_copilot.paths import ROOT
 def _slug(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())[:5]
     return "-".join(words) or "discovery"
+
+
+def resolve_slug(base: str, request: str) -> str:
+    """A collision-safe slug for a fresh discovery. The 5-word slug is friendly but not unique — two
+    different requests can share it and silently overwrite each other's out/<slug>/. Keep the clean
+    slug when it's free or belongs to the *same* request (a re-run), and only fall back to a short,
+    deterministic hash suffix when a *different* request already owns it: leave-approval-a3f82c."""
+    folder = ROOT / "out" / base
+    if not folder.exists():
+        return base
+    existing = load_request(folder / "model.json")
+    if existing.strip() == request.strip():
+        return base  # same discovery re-run — reuse the folder, don't proliferate
+    return f"{base}-{hashlib.sha1(request.encode('utf-8')).hexdigest()[:6]}"
 
 
 def save_model(out: EngineOutput, slug: str) -> Path:

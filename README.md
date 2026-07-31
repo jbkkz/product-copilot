@@ -214,9 +214,10 @@ unchanged.
 - **Models.** Developed and measured against `claude-sonnet-5`; any current Claude model works via the
   `MODEL` env var.
 - **Known limits.** Output is **non-deterministic** — the golden harness measures change above a noise
-  floor rather than asserting exact text. Every context card is loaded for every request, so cards can
-  dilute one another (see [Knowing whether a card helped](#knowing-whether-a-card-helped)). The model
-  can simply be wrong.
+  floor rather than asserting exact text. By default every context card is loaded for every request, so
+  cards can dilute one another (see [Knowing whether a card helped](#knowing-whether-a-card-helped)) —
+  scope a session to the relevant ones with `pc discover --context b2b-platform,financial-reporting`.
+  The model can simply be wrong.
 - **Not professional advice.** When the engine flags a legal, tax, or regulatory exposure (e.g. the
   disguised-employment risk in the event example), that is a prompt to get **expert review** — never a
   substitute for it. Nothing it produces is legal, financial, or compliance advice.

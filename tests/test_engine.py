@@ -1018,3 +1018,65 @@ def test_pc_status_reports_no_usage_offline():
     with _model_in_out("_clitest_usage") as p:
         text = _run_app(["status", str(p)])
     assert "API USAGE" not in text
+
+
+# ── Tier 4: finishing polish (slug collisions, table escaping, card selection) ─
+
+
+def test_resolve_slug_avoids_silent_overwrite():
+    from product_copilot.core.persistence import resolve_slug, save_request
+
+    base = "_slugtest_collide"
+    folder = ROOT / "out" / base
+    try:
+        assert resolve_slug(base, "first request") == base          # free → clean slug
+        save_request(base, "first request")                         # base now owned by this request
+        assert resolve_slug(base, "first request") == base          # same request re-run → reuse
+        suffixed = resolve_slug(base, "a different request entirely")
+        assert suffixed != base and suffixed.startswith(base + "-")  # collision → hash suffix
+        assert resolve_slug(base, "a different request entirely") == suffixed  # deterministic
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def test_prd_markdown_escapes_pipes_in_table_cells():
+    # A requirement containing a literal | would otherwise split the Markdown table row.
+    prd = PRD(title="X", requirements=[
+        {"id": "FR-1", "requirement": "Export as CSV | XLSX | PDF", "priority": "must"}])
+    md = prd_markdown(prd)
+    assert "| FR-1 | Export as CSV \\| XLSX \\| PDF | Must |" in md
+
+
+def test_available_cards_lists_real_non_underscore_cards():
+    from product_copilot.core.llm import available_cards
+
+    cards = available_cards()
+    assert "b2b-platform" in cards and "financial-reporting" in cards
+    assert all(not c.startswith("_") for c in cards)
+
+
+def test_load_context_only_filters_to_selected_cards():
+    from product_copilot.core.llm import load_context
+
+    ctx = load_context(only=["b2b-platform"])
+    assert "## b2b-platform" in ctx
+    assert "## financial-reporting" not in ctx  # a non-selected card is excluded
+    assert load_context() != ctx                # default still loads everything
+
+
+def test_run_restricts_context_cards_when_only_given():
+    # The --context selection threads run() → build_prompt() → load_context(): the assembled system
+    # carries only the chosen card, so it can't dilute impact estimation with the others.
+    fake = FakeClient(_ENGINE_REPLY)
+    run(fake, [{"role": "user", "content": "leave approval"}], only=["b2b-platform"])
+    system = fake.calls[0]["system"][0]["text"]
+    assert "## b2b-platform" in system
+    assert "## financial-reporting" not in system
+
+
+def test_resolve_cards_maps_stems_and_flags_unknown():
+    from product_copilot.cli import _resolve_cards
+
+    picked, unknown = _resolve_cards("b2b-platform, nope, financial-reporting")
+    assert picked == ["b2b-platform", "financial-reporting"]
+    assert unknown == ["nope"]

@@ -114,20 +114,33 @@ def _record(rec: CallRecord) -> None:
         ledger.record(rec)
 
 
-def load_context() -> str:
+def available_cards() -> list[str]:
+    """Stems of the loadable context cards (non-`_`-prefixed), in load order — the vocabulary of the
+    `--context` selector."""
+    return [p.stem for p in sorted((ROOT / "context").glob("*.md")) if not p.name.startswith("_")]
+
+
+def load_context(only: list[str] | None = None) -> str:
+    """Concatenate the context cards. `only` (card stems) restricts the set — this is how a session
+    trims irrelevant cards so they don't dilute impact estimation (every card is loaded otherwise).
+    Selection is per-session, so the assembled system stays byte-identical across a run's calls and
+    the prompt cache still holds."""
+    keep = None if only is None else {c.lower() for c in only}
     cards = []
     for path in sorted((ROOT / "context").glob("*.md")):
         if path.name.startswith("_"):
+            continue
+        if keep is not None and path.stem.lower() not in keep:
             continue
         cards.append(f"## {path.stem}\n{path.read_text()}")
     return "\n\n".join(cards)
 
 
-def build_prompt(name: str) -> str:
-    """Load a prompt file and inject the schema + product context."""
+def build_prompt(name: str, only: list[str] | None = None) -> str:
+    """Load a prompt file and inject the schema + product context (optionally a subset of cards)."""
     schema = (ROOT / "framework" / "model_schema.json").read_text()
     text = (ROOT / "prompts" / name).read_text()
-    return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context())
+    return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context(only))
 
 
 def _first_text(resp) -> str:

@@ -259,10 +259,13 @@ Its own logic is unit-tested in `tests/test_golden_lib.py` (no API calls). Cost:
 doubled under `--brief` — a full six-request cycle is 18, so re-capture the targeted request first
 and the full set only before committing a baseline.
 
-**Known limit:** `load_context()` concatenates every card for every request, so each new context card
-dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost `doc-reapproval`
-its sharpest question (supersession, 3/3 runs → 1/3, displaced by that card's audit-trail emphasis).
-A second such instance would justify routing cards by relevance instead of loading them all.
+**Known limit (partially mitigated):** `load_context()` concatenates every card by default, so each
+new context card dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost
+`doc-reapproval` its sharpest question (supersession, 3/3 runs → 1/3, displaced by that card's
+audit-trail emphasis). `pc discover --context <cards>` now lets a session opt into a subset
+(`load_context(only=…)`, threaded through `run()`), so a user can drop irrelevant cards manually —
+but there is still no *automatic* relevance routing, which a third such instance would justify. The
+selection is per-session (held constant across a run's turns) so the cached system prefix survives.
 
 ## Extending
 

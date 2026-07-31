@@ -23,12 +23,13 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
-from product_copilot.core.llm import track_usage
+from product_copilot.core.llm import available_cards, track_usage
 from product_copilot.core.persistence import (
     _slug,
     load_model,
     load_request,
     present_artifacts,
+    resolve_slug,
     save_model,
     save_request,
     write_artifact,
@@ -52,15 +53,16 @@ load_dotenv()
 MAX_TURNS = 8
 
 
-def converse(client: Anthropic, request: str) -> EngineOutput | None:
+def converse(client: Anthropic, request: str, only: list[str] | None = None) -> EngineOutput | None:
     """Fill the model, ask, feed answers back, until no high-value question remains.
     Returns the final model (None if the user stopped early). Finalization (brief, save) is
-    handled by the caller so the interactive and --from paths share it."""
+    handled by the caller so the interactive and --from paths share it. `only` restricts the context
+    cards for every turn — held constant across the loop so the cached system prefix survives."""
     messages = [{"role": "user", "content": request}]
     out = None
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n──────────── TURN {turn} ────────────")
-        out = run(client, messages)
+        out = run(client, messages, only=only)
         render_turn(out)
 
         if not out.questions:
@@ -237,6 +239,18 @@ def _is_file_arg(arg: str) -> bool:
         return False
 
 
+def _resolve_cards(spec: str) -> tuple[list[str], list[str]]:
+    """Map a comma-separated --context spec to context-card stems. Returns (picked, unknown)."""
+    avail = {c.lower(): c for c in available_cards()}
+    picked, unknown = [], []
+    for tok in spec.split(","):
+        key = tok.strip().lower()
+        if not key:
+            continue
+        (picked if key in avail else unknown).append(avail.get(key, tok.strip()))
+    return picked, unknown
+
+
 def _cmd_discover(a, client) -> None:
     if not a.request or not a.request.strip():
         print("discover needs a request: a sentence describing what to build, or a path to a file "
@@ -245,15 +259,28 @@ def _cmd_discover(a, client) -> None:
     client = client or Anthropic()
     is_file = _is_file_arg(a.request)
     request = Path(a.request).read_text() if is_file else a.request
-    slug = _slug(Path(a.request).stem if is_file else request)
+
+    only = None
+    if a.context:
+        picked, unknown = _resolve_cards(a.context)
+        if unknown:
+            print(f"Unknown context card(s): {', '.join(unknown)}. "
+                  f"Available: {', '.join(available_cards())}", file=sys.stderr)
+        if picked:  # if nothing valid was named, fall back to all cards rather than none
+            only = picked
+            print(f"Context cards: {', '.join(only)}")
+
     quick = a.once or not sys.stdin.isatty()
     if quick:
-        out = run(client, [{"role": "user", "content": request}])
+        out = run(client, [{"role": "user", "content": request}], only=only)
         render_turn(out)
     else:
-        out = converse(client, request)
+        out = converse(client, request, only=only)
     if not out:
         return
+    # Collision-safe now that we're about to write: keep the clean slug unless a different request
+    # already owns out/<slug>/ (then a short hash suffix).
+    slug = resolve_slug(_slug(Path(a.request).stem if is_file else request), request)
     save_request(slug, request)  # so `pc answer` can resume this discovery statelessly
     if not quick:
         print("\nGenerating the solution assessment…")
@@ -414,6 +441,10 @@ def _build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("discover", help="run discovery on a request (a string or a file path)")
     d.add_argument("request", help="the client request, or a path to a file containing it")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
+    d.add_argument("--context", metavar="CARDS",
+                   help="comma-separated context cards to load instead of all "
+                        "(e.g. b2b-platform,financial-reporting); sharpens discovery by dropping "
+                        "irrelevant cards. Applies to this discovery only.")
     d.set_defaults(func=_cmd_discover)
 
     demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
