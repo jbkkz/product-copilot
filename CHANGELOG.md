@@ -4,7 +4,7 @@ All notable changes to Product Copilot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-07-31
 
 A robustness-and-packaging pass, closing gaps an external code review surfaced.
 
@@ -107,6 +107,7 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
+[0.6.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jbkkz/product-copilot/releases/tag/v0.3.0
