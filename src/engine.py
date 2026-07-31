@@ -69,7 +69,7 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
-from product_copilot.core.llm import _complete, _extract_json, _first_text, build_prompt, load_context
+from product_copilot.core.llm import _complete, _extract_json, _response_text, build_prompt, load_context
 from product_copilot.core.persistence import _slug, load_model, save_model, write_artifact
 from product_copilot.render.markdown import _KIND_TAG, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from product_copilot.render.terminal import (

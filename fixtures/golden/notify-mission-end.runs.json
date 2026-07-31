@@ -7,144 +7,145 @@
           "completeness": 40,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Avoid missed handoffs at mission end: renewal, offboarding, final invoicing, and access revocation all depend on someone being alerted in time.",
-          "evidence": "Client wants notification 'about to end' \u2014 implies a lead-time trigger before mission expiry, not a same-day alert."
+          "value": "Avoid missed mission end-dates that cause late offboarding, late final invoicing, or unplanned freelancer unavailability.",
+          "evidence": "Request: 'notify the right people when a mission is about to end' \u2014 implies a current gap in visibility."
         },
         "current_process": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
           "value": "",
-          "evidence": "Not stated whether this is currently manual (calendar/spreadsheet) or absent entirely."
+          "evidence": "Not stated whether this is tracked manually today or not at all."
         },
         "success_metrics": {
-          "completeness": 0,
-          "confidence": "empty",
+          "completeness": 10,
+          "confidence": "inferred",
           "impact": "medium",
-          "value": "",
-          "evidence": "No stated measure (e.g. zero missed renewals, X days advance notice achieved)."
+          "value": "Fewer missed end-of-mission actions (renewal, final invoice, offboarding) done late.",
+          "evidence": "Implied by the request's intent, not stated explicitly."
         },
         "actors": {
           "completeness": 30,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Likely: freelancer's manager, the Client's contact (by role \u2014 operational or HR), possibly the freelancer themselves.",
-          "evidence": "Context: Client already has Contacts with roles (billing/HR/operational) \u2014 routing depends on role, not just 'the client'. 'Right people' is exactly the ambiguity the context flags."
+          "value": "Likely candidates: mission manager, HR/staffing admin, client operational contact \u2014 but 'the right people' is not defined.",
+          "evidence": "Context: Client/Contact has roles (billing, HR, operational) driving notification routing."
         },
         "business_objects": {
-          "completeness": 55,
-          "confidence": "inferred",
+          "completeness": 60,
+          "confidence": "explicit",
           "impact": "medium",
-          "value": "Mission (start/end date), Freelancer, Client, Contact \u2014 end date is the field driving the trigger.",
-          "evidence": "Domain notes: Mission has a start and end; end-of-mission is a named event in this platform."
+          "value": "Mission (Freelancer, Client, start/end dates); Client Contact with role.",
+          "evidence": "Context card: Mission linked to Freelancer and Client, has start/end; Contact carries a role."
         },
         "business_rules": {
-          "completeness": 0,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "",
-          "evidence": "No lead-time defined (7/15/30 days?), and whether it varies by client, contract type, or mission length is unknown."
+          "value": "Undefined: does 'right people' vary by client, contract, or mission type? Single recipient or role-based list?",
+          "evidence": "Context: 'notify' implies specifying who by role/contact \u2014 a recurring trap in this domain."
         },
         "workflow": {
-          "completeness": 10,
-          "confidence": "inferred",
+          "completeness": 15,
+          "confidence": "empty",
           "impact": "high",
-          "value": "A pre-end-date trigger fires once approaching the end; unclear if it recalculates on mission extension/cancellation or repeats as a reminder.",
-          "evidence": "'About to end' implies a date-based trigger, but recurrence, extension-handling and idempotency are unstated \u2014 a recurring trap per context (don't create/send twice)."
+          "value": "Unknown trigger timing: how many days before end, single alert vs. recurring reminders, and what if the mission is extended/cancelled after alert.",
+          "evidence": "Request only says 'about to end' \u2014 no lead time or recurrence specified."
         },
         "integrations": {
-          "completeness": 0,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "medium",
-          "value": "",
-          "evidence": "Channel (email/in-app) and whether this also kicks off final invoicing or offboarding automation is unstated."
+          "value": "Channel unspecified (email, in-app, external system); sync vs async unclear.",
+          "evidence": "Context: notify implies channel + timing, not stated here."
         },
         "permissions": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "Who can configure the lead time / recipients, and who can act on the notification (extend, close mission), is unstated \u2014 permissions are shared across modules here."
+          "completeness": 20,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Likely reuses existing role/permission model, but visibility of mission end data by contact role not confirmed.",
+          "evidence": "Context: permissions often forgotten until testing; routing tied to contact role."
         },
         "config_vs_custom": {
-          "completeness": 0,
-          "confidence": "empty",
-          "impact": "high",
-          "value": "",
-          "evidence": "Platform config notes: notification routing is normally client-specific \u2014 unclear if this client wants a global rule or a per-client/per-contract one."
+          "completeness": 15,
+          "confidence": "inferred",
+          "impact": "medium",
+          "value": "Notification routing rules likely need to be client-specific/configurable rather than hardcoded.",
+          "evidence": "Context: 'Client-specific: ... notification routing' is standard configurability axis."
         },
         "constraints": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "low",
           "value": "",
-          "evidence": "No deadline or dependency mentioned."
+          "evidence": "No deadline, budget or regulatory constraint mentioned."
         },
         "edge_cases": {
-          "completeness": 0,
+          "completeness": 5,
           "confidence": "empty",
           "impact": "medium",
-          "value": "",
-          "evidence": "Mission extended/cancelled after the notification fires, multiple concurrent missions per freelancer, contact with no role assigned \u2014 all unaddressed."
+          "value": "Mission extended, cancelled, or ended early after a notification was already sent; multiple missions ending same day for one freelancer.",
+          "evidence": "Not addressed in request."
         },
         "reporting": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "low",
           "value": "",
-          "evidence": "No compliance/audit obligation named for this specific feature; standard low baseline holds."
+          "evidence": "No audit/compliance need named for this specific request."
         },
         "acceptance": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
           "value": "",
-          "evidence": "No scenarios defined yet."
+          "evidence": "Not defined yet."
         },
         "risks": {
-          "completeness": 0,
-          "confidence": "empty",
+          "completeness": 5,
+          "confidence": "inferred",
           "impact": "medium",
-          "value": "",
-          "evidence": "Main risk is silent non-delivery (wrong contact, no role match) going unnoticed, or duplicate notifications if the trigger isn't idempotent."
+          "value": "Duplicate or missed notifications if mission dates change after the alert is scheduled.",
+          "evidence": "Inferred from context's idempotency/trigger traps."
         }
       },
       "questions": [
         {
-          "q": "How far before the mission end date should the notification fire, and does that lead time vary by client, contract type, or mission length (should it be configurable per client)?",
+          "q": "Who exactly counts as 'the right people' \u2014 is it a fixed role (e.g. mission manager, HR) or does it vary by client/contract, and could it include a Client Contact by role (billing/operational)?",
           "slot": "business_rules",
-          "why": "High impact, fully empty: this single rule decides the trigger logic \u2014 a fixed constant vs. a per-client configuration table are very different builds."
+          "why": "high impact \u00d7 near-zero completeness: this decides whether it's a single hardcoded recipient or a role-based, per-client routing table \u2014 a very different build."
         },
         {
-          "q": "Who exactly are 'the right people' \u2014 the freelancer's internal manager, a specific Contact role at the Client (operational/HR/billing), the freelancer themselves, or a combination depending on context?",
-          "slot": "actors",
-          "why": "High impact, only inferred: routing by Contact role vs. a flat 'notify the client' is the exact ambiguity this platform's Client/Contact model is built to avoid getting wrong."
-        },
-        {
-          "q": "Is this a one-time alert or a recurring reminder until action is taken, and what happens if the mission is extended, ended early, or cancelled after the notification already fired?",
+          "q": "How much lead time before the mission end should trigger the notification, and should it repeat (e.g. 30/15/7 days) or fire once? What happens if the mission end date changes or the mission is cancelled after the alert was scheduled?",
           "slot": "workflow",
-          "why": "High impact, low completeness: recurrence and idempotency change the trigger architecture, and mission changes after the fact risk duplicate or stale notifications."
+          "why": "high impact \u00d7 empty: timing/recurrence and re-triggering logic define the whole scheduling mechanism, not just a rule tweak."
         },
         {
-          "q": "Should this rule and its recipients be configurable per client/contract, or is a single global rule acceptable for all missions?",
+          "q": "Is this notification routing meant to be configurable per client (different recipients/rules per client or contract), or is one fixed rule fine for all clients?",
           "slot": "config_vs_custom",
-          "why": "High impact, empty: notification routing is normally client-specific on this platform \u2014 deciding this now avoids rebuilding the trigger later."
+          "why": "medium-high impact \u00d7 inferred only: platform is multi-client \u2014 getting this wrong means rebuilding for the first exception client."
         },
         {
-          "q": "Beyond notifying people, should this event also trigger anything else \u2014 final invoicing, access revocation, a renewal workflow?",
+          "q": "Which channel should the notification use (email, in-app, both), and should it be sent synchronously in real time or via a scheduled/batch job?",
           "slot": "integrations",
-          "why": "Medium-high impact, empty: end-of-mission is a named event other automations may want to subscribe to; scoping it now avoids a narrow build that blocks later automation."
+          "why": "medium impact \u00d7 empty: sync vs async and channel choice change error handling and architecture, per context's recurring trap."
+        },
+        {
+          "q": "Today, how is an approaching mission end tracked \u2014 nothing, a spreadsheet, or manual check by a manager?",
+          "slot": "current_process",
+          "why": "medium impact \u00d7 empty: clarifies whether this is a net-new feature or a digitisation of an existing habit, affecting scope and expectations."
         }
       ],
       "summary": {
-        "objective": "Automatically alert the appropriate people with enough lead time before a freelance mission ends, so renewal, offboarding, final invoicing or access revocation can happen without last-minute scrambling.",
-        "scope": "A scheduled/date-based trigger on the Mission's end date that identifies recipients (likely via Client Contact roles and/or an internal manager) and sends a notification a configurable number of days in advance; needs to handle mission changes (extension, early end, cancellation) without duplicate or stale alerts.",
+        "objective": "Automatically alert the appropriate stakeholders before a freelancer's mission ends, so renewal, final invoicing and offboarding actions happen on time.",
+        "scope": "Likely: a scheduled check on Mission end dates, a configurable recipient rule (role- and/or client-based), a notification event (email/in-app) fired at one or more lead times before end, with handling for date changes or cancellations after scheduling.",
         "assumptions": [
-          "Recipients are determined via Contact role (operational/HR) at the Client, plus possibly the freelancer's internal manager \u2014 not a single flat 'notify the client' contact.",
-          "The trigger is date-based with a lead time before the Mission's end date, not fired only on the day itself.",
-          "The notification should recalculate or be cancelled/resent if the mission's end date changes after the initial trigger was scheduled."
+          "The problem is to avoid late renewal/final-invoicing/offboarding actions due to missed mission end dates.",
+          "Recipients likely include the mission manager and/or a Client Contact by role (operational/HR), but this is unconfirmed.",
+          "Notification routing should probably be configurable per client rather than hardcoded.",
+          "Existing permission/notification-routing model can likely be reused."
         ],
-        "blind_spot": "The request names a single notification, but on this platform 'end of mission' is a shared event: the real design questions are who exactly counts as 'the right people' (role-based routing per Client Contact), whether the lead time is configurable per client/contract, and how the system avoids double-sending or missing the alert when the mission's end date moves after the reminder was already scheduled."
+        "blind_spot": "The request assumes 'the right people' is a known, fixed concept \u2014 but in this platform notification routing is typically role- and client-specific, and mission end is only a date field until someone defines the trigger timing, recurrence, and what happens when that date moves after an alert is already scheduled."
       },
       "decisions": [],
       "challenges": [],
@@ -153,149 +154,148 @@
     {
       "model": {
         "problem": {
-          "completeness": 40,
+          "completeness": 30,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Avoid missed action windows around mission end \u2014 renewal decision, final invoicing, offboarding \u2014 currently at risk of being forgotten.",
-          "evidence": "'notify the right people when a mission is about to end'"
+          "value": "Ensure timely action (renewal decision, final invoicing, offboarding) before a freelance mission lapses, by alerting the right stakeholders in advance.",
+          "evidence": "\"notify the right people when a freelancer's mission is about to end\""
         },
         "current_process": {
-          "completeness": 10,
+          "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Likely manual tracking (spreadsheet or memory) of mission end dates today; not stated.",
-          "evidence": "no as-is process described"
+          "value": "",
+          "evidence": ""
         },
         "success_metrics": {
-          "completeness": 20,
-          "confidence": "inferred",
+          "completeness": 0,
+          "confidence": "empty",
           "impact": "medium",
-          "value": "No mission lapses unnoticed; recipients act (extend/end/invoice) before or right at end date.",
-          "evidence": "implied by request intent"
+          "value": "",
+          "evidence": ""
         },
         "actors": {
-          "completeness": 25,
+          "completeness": 20,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Likely candidates: freelancer's internal manager, client contact (operational/HR role), maybe the freelancer themselves \u2014 exact set unstated.",
-          "evidence": "'the right people' \u2014 undefined; context: Client has Contacts with distinct roles"
+          "value": "Likely candidates: internal mission owner/manager, HR/staffing admin, client operational contact, possibly the freelancer themselves \u2014 but 'right people' is undefined.",
+          "evidence": "\"the right people\" \u2014 named but not specified"
         },
         "business_objects": {
-          "completeness": 55,
-          "confidence": "explicit",
+          "completeness": 40,
+          "confidence": "inferred",
           "impact": "medium",
-          "value": "Mission (start/end date), Freelancer, Client, Contact(role).",
-          "evidence": "domain model of event-ops/b2b context; mission end explicitly named"
+          "value": "Mission entity with start/end date, linked to Freelancer and Client (per platform model); end date is the trigger field.",
+          "evidence": "context: Mission linked to Freelancer and Client, has start/end"
         },
         "business_rules": {
           "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Who counts as 'right people' probably varies by client, contract type or mission category \u2014 not specified.",
-          "evidence": "context note: rules often vary by client/contract/country"
+          "value": "",
+          "evidence": ""
         },
         "workflow": {
-          "completeness": 15,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Trigger timing (N days before end?), one-shot vs recurring reminder, sync vs async dispatch \u2014 all unknown.",
-          "evidence": "context note: 'end of mission is an event that can trigger notifications'"
+          "value": "",
+          "evidence": ""
         },
         "integrations": {
-          "completeness": 15,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "Notification channel (email/in-app/webhook) and any downstream action (final invoicing, offboarding task) unspecified.",
-          "evidence": "context: end-of-mission event can trigger final invoicing/validation"
-        },
-        "permissions": {
-          "completeness": 20,
+          "completeness": 10,
           "confidence": "inferred",
           "impact": "medium",
-          "value": "Visibility of mission-end data likely restricted by role (manager vs client contact vs freelancer).",
-          "evidence": "shared approval/permission model noted in context"
+          "value": "End-of-mission may need to chain into final invoicing or offboarding validation, per platform pattern.",
+          "evidence": "context: 'End-of-mission is an event that can trigger notifications, final invoicing and validation'"
         },
-        "config_vs_custom": {
-          "completeness": 10,
+        "permissions": {
+          "completeness": 5,
           "confidence": "empty",
           "impact": "high",
-          "value": "Whether recipient list & timing are configurable per client or hardcoded is undecided.",
-          "evidence": "context: 'notification routing' is explicitly client-specific configurability"
+          "value": "",
+          "evidence": ""
+        },
+        "config_vs_custom": {
+          "completeness": 0,
+          "confidence": "empty",
+          "impact": "high",
+          "value": "",
+          "evidence": ""
         },
         "constraints": {
-          "completeness": 10,
-          "confidence": "empty",
-          "impact": "low",
-          "value": "No deadline, budget or regulatory constraint mentioned.",
-          "evidence": "none stated"
-        },
-        "edge_cases": {
-          "completeness": 10,
+          "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Mission extended, cancelled, or end date changed after notification sent \u2014 behavior undefined.",
-          "evidence": "context recurring trap: retroactive/duplicate triggers"
+          "value": "",
+          "evidence": ""
+        },
+        "edge_cases": {
+          "completeness": 5,
+          "confidence": "empty",
+          "impact": "medium",
+          "value": "Mission extended/renewed at the last minute, cancelled early, or freelancer replaced mid-mission \u2014 each could falsely trigger or suppress a notification.",
+          "evidence": "inferred from mission lifecycle volatility"
         },
         "reporting": {
-          "completeness": 10,
+          "completeness": 0,
           "confidence": "empty",
           "impact": "low",
-          "value": "No compliance/audit requirement named for this notification.",
-          "evidence": "no mention of audit/traceability"
+          "value": "",
+          "evidence": ""
         },
         "acceptance": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Not yet defined.",
+          "value": "",
           "evidence": ""
         },
         "risks": {
-          "completeness": 10,
+          "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Risk of duplicate notifications, or none sent if mission data incomplete (no end date).",
-          "evidence": "context trap: idempotency, incomplete source data"
+          "value": "",
+          "evidence": ""
         }
       },
       "questions": [
         {
-          "q": "Who exactly are 'the right people' \u2014 the freelancer's internal manager, a specific client contact (billing/HR/operational role), the freelancer themselves, or a combination \u2014 and does this change by client or contract?",
+          "q": "How many days before the mission end date should the alert fire, and does that lead time vary by client, contract, or mission type?",
           "slot": "business_rules",
-          "why": "high impact x near-empty: the notification's whole design (recipients, routing) hinges on this, and context shows recipient rules commonly vary by client/contract."
+          "why": "uncertainty \u00d7 impact: empty and high-impact \u2014 this defines the whole trigger condition; the context flags that such thresholds often vary by client/contract, which changes the data model (per-client config vs. hardcoded)."
         },
         {
-          "q": "How far before the mission end date should the notification fire (e.g. 7/14/30 days), is it a single alert or a recurring reminder until someone acts, and should it also fire again if the end date changes?",
+          "q": "Exactly who counts as 'the right people' \u2014 the internal mission owner, an HR/staffing admin, the client's contact (and which role: billing/operational/HR), the freelancer, or a combination that depends on the mission?",
+          "slot": "actors",
+          "why": "uncertainty \u00d7 impact: the request names a goal ('right people') without defining recipients \u2014 high impact because routing logic and permission scoping depend entirely on this."
+        },
+        {
+          "q": "Is this a single one-off notification, or recurring reminders (e.g. at 30/15/5 days), and through which channel (email, in-app, both)? Also, does it need to trigger anything downstream (renewal workflow, final invoicing, offboarding checklist)?",
           "slot": "workflow",
-          "why": "high impact x empty: timing and repetition define the trigger logic and whether this is a scheduled job or an event reaction \u2014 a core architecture decision."
+          "why": "uncertainty \u00d7 impact: 'notify when about to end' doesn't say if it's a single event or a cadence, nor its channel/side-effects \u2014 this changes the build from a simple scheduled email to a stateful reminder + automation chain."
         },
         {
-          "q": "Should the recipient list and trigger timing be configurable per client/contract, or is one standard rule enough for all clients today?",
+          "q": "Should the notification rule and recipient list be configurable per client/contract, or is one global rule acceptable for all missions?",
           "slot": "config_vs_custom",
-          "why": "high impact x empty: platform is multi-client and notification routing is typically client-specific \u2014 building it hardcoded now is expensive to unwind later."
+          "why": "uncertainty \u00d7 impact: platform is multi-client/configurable by design; an empty answer here risks hardcoding a rule that later needs per-client variation \u2014 high rework cost if guessed wrong."
         },
         {
-          "q": "Which channel should the notification use (email, in-app, both), and should mission-end also trigger something downstream \u2014 e.g. prompting final invoicing or an offboarding task?",
-          "slot": "integrations",
-          "why": "medium-high impact x empty: determines whether this is a standalone notification or the first domino in an automation chain (final invoice, access revocation)."
-        },
-        {
-          "q": "If the mission is extended, cancelled, or ended early after a notification was already sent, what should happen \u2014 cancel/resend, or leave it as-is?",
-          "slot": "edge_cases",
-          "why": "medium impact x empty: mission dates are known to shift; without a defined behavior this becomes a source of stale or duplicate alerts."
+          "q": "Who should be able to see or override the mission end-date and the recipient list \u2014 is this visible/editable by the client contact, or internal-only?",
+          "slot": "permissions",
+          "why": "uncertainty \u00d7 impact: notification routing touches contact roles and cross-client visibility; permissions are flagged as commonly forgotten until acceptance testing."
         }
       ],
       "summary": {
-        "objective": "Automatically alert the relevant people ahead of a freelance mission's end so that renewal, final invoicing, or offboarding actions happen on time instead of being missed.",
-        "scope": "Likely: a scheduled/event-driven check on Mission end dates, a configurable recipient rule (manager, client contact by role, freelancer), a notification dispatch (email/in-app) fired a defined window before end, and handling of date changes to avoid duplicate or stale alerts. Possibly a downstream trigger toward final invoicing or offboarding tasks.",
+        "objective": "Automatically alert the appropriate stakeholders ahead of a freelance mission's end date, so renewal, final invoicing, or offboarding actions happen on time instead of being missed.",
+        "scope": "Likely: a scheduled check on Mission end dates, a configurable lead-time rule, and a notification sent to one or more roles (internal mission owner, client contact by role, possibly the freelancer), potentially chained to downstream actions like final invoicing or an offboarding checklist.",
         "assumptions": [
-          "Recipients likely include the freelancer's internal manager and/or a client contact with an operational or HR role.",
-          "Notification is a reminder fired a fixed number of days before the mission end date.",
-          "One rule may need to vary by client/contract rather than being global.",
-          "Channel is email and/or in-app, not yet confirmed.",
-          "No explicit compliance/audit requirement drives this feature."
+          "The problem is preventing missed renewal/offboarding/invoicing actions at mission end, not just a courtesy heads-up.",
+          "Recipients likely include an internal mission owner and/or a client contact, though exact roles are unconfirmed.",
+          "The Mission entity's start/end date and its Freelancer/Client links (per platform model) are the trigger source.",
+          "End-of-mission may need to chain into invoicing or validation workflows, per the platform's existing event pattern."
         ],
-        "blind_spot": "The request assumes 'the right people' is a fixed, obvious list, but recipient identity almost certainly varies by client/contract (per the Contact-role model) and the mission end date is not stable \u2014 extensions, cancellations, and early endings will change or invalidate a rule that treats mission dates as fixed at notification time."
+        "blind_spot": "The client says 'notify the right people' as if it were a single obvious rule, but the lead time, the exact recipients (and their roles), whether it's one-off or recurring, and whether it should be configurable per client/contract are all undefined \u2014 get any of these wrong and the feature either spams the wrong people or silently notifies no one when the rule doesn't match reality."
       },
       "decisions": [],
       "challenges": [],
@@ -304,148 +304,148 @@
     {
       "model": {
         "problem": {
-          "completeness": 40,
+          "completeness": 35,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Avoid missed action windows (renewal, offboarding, final invoicing, access revocation) by warning stakeholders before a freelance mission ends.",
-          "evidence": "'notify the right people when a mission is about to end' implies a proactive alert, not a post-hoc log."
+          "value": "Avoid missions ending 'silently' \u2014 no handover, no renewal decision, no final invoice, no client visibility on mission close-out.",
+          "evidence": "Client only states the notification need, not the downstream consequence of a missed end-of-mission."
         },
         "current_process": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
           "value": "",
-          "evidence": "Not stated whether this is currently tracked manually (spreadsheet, calendar reminder) or not at all."
+          "evidence": "Not mentioned \u2014 unknown whether this is tracked manually today (spreadsheet, calendar reminders) or not at all."
         },
         "success_metrics": {
           "completeness": 10,
-          "confidence": "inferred",
+          "confidence": "empty",
           "impact": "medium",
-          "value": "Likely: zero missed end-of-mission actions (renewal decision, final invoice, access cut-off).",
-          "evidence": "Not stated explicitly; inferred from the business purpose of the alert."
+          "value": "",
+          "evidence": "No stated metric (e.g. zero missed renewals, notification sent X days ahead every time)."
         },
         "actors": {
-          "completeness": 25,
+          "completeness": 30,
           "confidence": "inferred",
           "impact": "high",
-          "value": "Candidates: freelancer's internal manager, HR/admin, client contact (operational or billing role), possibly the freelancer themselves.",
-          "evidence": "Request says 'the right people' without naming them \u2014 context notes Contact roles (billing/HR/operational) drive routing."
+          "value": "Likely candidates: freelancer's internal manager, client contact (operational or HR role), the freelancer, admin \u2014 but 'right people' is unspecified.",
+          "evidence": "Context: Client already has Contacts with distinct roles (billing/HR/operational); routing depends on role, not just client."
         },
         "business_objects": {
-          "completeness": 40,
+          "completeness": 50,
           "confidence": "inferred",
           "impact": "medium",
-          "value": "Mission (start/end date, Freelancer, Client) already exists; needs an end-date-approaching flag or scheduled check.",
-          "evidence": "Mission object with start/end already documented in the platform's data model."
+          "value": "Mission (linked to Freelancer and Client), with a start/end date; notification likely references Mission + Contact.",
+          "evidence": "Context card: Mission entity explicitly modeled with Freelancer/Client link and start/end."
         },
         "business_rules": {
           "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Unclear how many days before end counts as 'about to end', and whether that threshold varies by client, contract type, or mission length.",
-          "evidence": "No lead-time or condition given; context flags that rules routinely vary by client/contract."
+          "value": "",
+          "evidence": "Unclear how far ahead 'about to end' means, and whether that lead time or the recipient list varies by client/contract."
         },
         "workflow": {
           "completeness": 15,
-          "confidence": "inferred",
+          "confidence": "empty",
           "impact": "high",
-          "value": "Likely a scheduled/async check (e.g. daily job scanning missions nearing end) rather than a synchronous trigger \u2014 but not confirmed; also unclear if it's a one-time alert or repeating reminders until action taken.",
-          "evidence": "'About to end' implies a time-based lookahead, not an event like mission completion itself."
+          "value": "",
+          "evidence": "No detail on trigger mechanism (scheduled check vs. date-field event), nor what happens after the notification (renewal, extension, final invoicing)."
         },
         "integrations": {
           "completeness": 10,
           "confidence": "empty",
-          "impact": "high",
-          "value": "Channel(s) not specified \u2014 email, in-app notification, or both; whether it also nudges an action (e.g. renewal task, final invoice draft).",
-          "evidence": "Context: 'notify' always requires specifying who/when/channel; end-of-mission is a named trigger that can also chain to invoicing."
+          "impact": "medium",
+          "value": "",
+          "evidence": "Channel (email, in-app, both) and idempotency (don't re-notify on every check) not specified."
         },
         "permissions": {
           "completeness": 15,
-          "confidence": "inferred",
+          "confidence": "empty",
           "impact": "high",
-          "value": "Who is entitled to receive/see this alert likely depends on role and possibly client contact role \u2014 needs definition.",
-          "evidence": "Context: notification routing frequently depends on contact role, and permission rules are shared/cross-cutting."
+          "value": "",
+          "evidence": "Who may see/receive this notification is tied to the unresolved 'right people' question and to Contact roles."
         },
         "config_vs_custom": {
-          "completeness": 5,
+          "completeness": 10,
           "confidence": "empty",
           "impact": "high",
-          "value": "Unclear if the lead-time and recipient list are hardcoded or configurable per client/contract.",
-          "evidence": "Platform is configurable multi-client; notification routing and business rules are explicitly client-specific per context card."
+          "value": "",
+          "evidence": "Platform is configurable multi-client; lead time and recipient routing are prime candidates for per-client configuration rather than a hardcoded rule."
         },
         "constraints": {
-          "completeness": 10,
+          "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
-          "value": "No deadline, budget or regulatory driver mentioned.",
-          "evidence": "Not raised in the request."
+          "value": "",
+          "evidence": "No deadline or dependency stated."
         },
         "edge_cases": {
-          "completeness": 5,
-          "confidence": "empty",
-          "impact": "medium",
-          "value": "Mission extended/amended after alert sent, mission ended early/cancelled, freelancer with multiple concurrent missions, missing/incomplete contact data.",
-          "evidence": "Not addressed; inferred from typical mission lifecycle risks in context."
-        },
-        "reporting": {
           "completeness": 10,
           "confidence": "empty",
+          "impact": "medium",
+          "value": "",
+          "evidence": "Mission extended after notification sent, mission ended early/cancelled, retroactive end-date change, multiple missions ending same day \u2014 none addressed."
+        },
+        "reporting": {
+          "completeness": 0,
+          "confidence": "empty",
           "impact": "low",
-          "value": "No visibility/audit requirement mentioned for this notification.",
-          "evidence": "No compliance/audit language in the request."
+          "value": "",
+          "evidence": "No compliance/audit driver stated for this specific notification; kept low unless client ties it to contractual/legal obligations."
         },
         "acceptance": {
           "completeness": 0,
           "confidence": "empty",
           "impact": "medium",
           "value": "",
-          "evidence": "Not discussed yet."
+          "evidence": "No acceptance scenario given yet."
         },
         "risks": {
           "completeness": 5,
           "confidence": "empty",
           "impact": "medium",
-          "value": "Risk of duplicate/spam notifications if job reruns, or missed notification if contact data incomplete.",
-          "evidence": "Inferred from platform's known trap around idempotency of auto-triggers."
+          "value": "Main risk: duplicate or missed notifications if trigger/idempotency not well defined.",
+          "evidence": "Inferred from context's recurring trap on 'notify' and idempotency."
         }
       },
       "questions": [
         {
-          "q": "How many days (or what window) before mission end should the alert fire, and does that lead time vary by client, contract, or mission type?",
+          "q": "How far ahead of the mission end date should the notification fire, and does that lead time (or the rule itself) vary by client or contract?",
           "slot": "business_rules",
-          "why": "High impact, fully unknown: this threshold defines the whole trigger logic and may need per-client configuration rather than a single hardcoded rule."
+          "why": "uncertainty (empty) \u00d7 high impact: this is the core rule the whole feature hinges on, and the context flags business rules as a frequent per-client/contract variable."
         },
         {
-          "q": "Who exactly are 'the right people' \u2014 the freelancer's internal manager, a specific client contact (which role: operational/billing/HR?), the freelancer, or several of these depending on context?",
+          "q": "Who exactly are the 'right people'? The freelancer's internal manager, a specific client contact (and which role \u2014 operational, HR, billing), the freelancer themselves, or several of these depending on the case?",
           "slot": "actors",
-          "why": "High impact, largely inferred: notification routing depends on contact role per the platform's model, and picking wrong recipients means silent misses."
+          "why": "uncertainty (inferred, low completeness) \u00d7 high impact: recipient routing changes the data model (contact roles) and permissions, and is explicitly named as ambiguous in the context."
         },
         {
-          "q": "Should this be a one-time heads-up, or a recurring reminder until someone acts (e.g. renews, confirms end, or invoices), and should it also trigger any downstream action like a final-invoice draft?",
+          "q": "What should happen after the notification \u2014 is it purely informational, or does it also need to trigger a renewal/extension decision, a final-invoice preparation, or an end-of-mission validation step?",
           "slot": "workflow",
-          "why": "High impact, empty: determines whether this is a simple scheduled email or a stateful workflow tied to mission lifecycle and invoicing."
+          "why": "uncertainty (empty) \u00d7 high impact: the context notes end-of-mission is an event that commonly cascades into invoicing/validation; scoping this now avoids rebuilding the trigger later."
         },
         {
-          "q": "Should the lead-time and recipient list be configurable per client/contract, or is a single fixed rule for everyone acceptable?",
-          "slot": "config_vs_custom",
-          "why": "High impact, empty: on a multi-client configurable platform this decides between a settings screen and a hardcoded rule \u2014 very different build cost."
-        },
-        {
-          "q": "Which channel(s) should the alert use (email, in-app, both), and does each recipient type need a different channel or message?",
+          "q": "Is this check meant to run as a scheduled job (e.g. nightly scan of upcoming end dates), and how do we avoid re-notifying if the mission end date changes, the mission is extended, or ended early?",
           "slot": "integrations",
-          "why": "High impact, empty: 'notify' is ambiguous until channel and per-role message are fixed, and it affects integration work."
+          "why": "uncertainty (empty) \u00d7 medium-high impact: idempotency and trigger timing are the classic trap for 'notify when X happens' and directly affect error handling and cost."
+        },
+        {
+          "q": "Should the lead time, the recipient list, and the notification channel be configurable per client, or is one fixed rule acceptable for all clients for now?",
+          "slot": "config_vs_custom",
+          "why": "uncertainty (empty) \u00d7 high impact: platform is multi-client configurable; hardcoding this now versus later is a materially different build."
         }
       ],
       "summary": {
-        "objective": "Automatically alert the relevant stakeholders ahead of a freelance mission's end date, so renewal, offboarding, or final invoicing decisions aren't missed.",
-        "scope": "Likely: a scheduled check on Mission end dates, a configurable lead-time threshold, and a notification (email/in-app) sent to role-based recipients (manager, client contact, possibly the freelancer), potentially chaining into a renewal or final-invoice action.",
+        "objective": "Ensure the right stakeholders are alerted before a freelancer's mission ends, so renewal, extension, hand-over or final-invoicing decisions aren't missed.",
+        "scope": "Likely: a scheduled check on Mission end dates, a configurable lead-time window, and a notification sent to one or more roles (freelancer's manager, client contact by role, possibly the freelancer) via email and/or in-app, with logic to avoid duplicate notifications when the mission date changes.",
         "assumptions": [
-          "The alert fires a fixed number of days before the mission's end date (exact value unconfirmed).",
-          "Recipients are determined by role (manager, client contact, freelancer) rather than a single hardcoded address.",
-          "This is likely an asynchronous/scheduled job rather than a real-time event trigger.",
-          "Lead-time and recipients may need to be configurable per client or contract, consistent with the platform's configurability model."
+          "The notification is about an existing Mission entity linked to a Freelancer and a Client (per platform context).",
+          "The trigger is a scheduled/asynchronous check rather than a real-time event, since 'about to end' implies a lead-time window rather than the end event itself.",
+          "Recipients likely include an internal manager and/or a client contact, but the exact roles are unconfirmed.",
+          "The rule (lead time, recipients, channel) may need to vary by client or contract, consistent with the platform's configurable nature."
         ],
-        "blind_spot": "The request names the intent ('notify the right people') but not who they are, what threshold counts as 'about to end', nor whether this should vary by client \u2014 and whether the notification should also kick off a downstream action (renewal, final invoice) rather than stand alone. Building a single hardcoded alert would likely miss real client-specific routing and rule needs."
+        "blind_spot": "The request names only the notification, but end-of-mission is a cascading event in this platform (final invoicing, validation, downstream automation). Without clarifying what happens after the alert and whether the rule is configurable per client, the team risks building a one-off hardcoded email that has to be re-architected the moment a second client needs different recipients or a different lead time \u2014 or that fires twice when a mission's end date is edited."
       },
       "decisions": [],
       "challenges": [],
@@ -454,22 +454,21 @@
   ],
   "briefs": [
     {
-      "problem": "Mission end-dates aren't reliably flagged in advance, so renewal, offboarding, final invoicing and access revocation depend on someone remembering to check a calendar.",
-      "solution": "A configurable, date-based trigger that alerts the right people a set number of days before a freelance mission ends.",
+      "problem": "Approaching mission end-dates aren't surfaced to anyone in time, so renewal, final invoicing, and offboarding steps happen late or get missed.",
+      "solution": "An automated check on Mission end-dates that fires a notification to the relevant people ahead of the end date.",
       "introduces": [
-        "a scheduled/date-based trigger engine that scans Mission end dates ahead of time rather than reacting only to same-day events",
-        "Contact-role-based notification routing (resolving 'the right people' from Client Contacts rather than a flat contact)",
-        "state tracking for idempotency \u2014 recalculating or cancelling a scheduled alert when the mission's end date moves",
-        "a reusable 'approaching end-of-mission' event other automations (invoicing, access revocation, renewal) could subscribe to",
-        "a new configuration surface for lead-time and recipient rules, likely varying per client or contract"
+        "a scheduled/background job that scans Mission records for approaching end-dates",
+        "a recipient-routing rule engine (role- and/or client-specific) layered on the existing Client Contact model",
+        "state tracking to avoid duplicate or stale alerts when a mission's end date moves or the mission is cancelled",
+        "a new notification channel/config surface likely shared with other modules (Contract, Invoicing) that already route by contact role"
       ],
       "challenges": [
         {
-          "headline": "Fixed lead time, one recipient",
-          "premise": "The request implies a single notification with an implicit lead time and an implicit 'the client' as recipient.",
-          "alternative": "This platform already models Contacts by role (billing/HR/operational) and rules that vary by client/contract \u2014 lead time and recipient are almost never uniform across clients in practice.",
-          "consequence": "Hardcoding a lead time and a flat recipient means the first client who wants 30 days instead of 15, or wants the operational contact instead of HR, forces a rebuild of the trigger rather than a config change.",
-          "recommendation": "Confirm with the client whether lead time and recipient roles need to be configurable per client/contract before writing the trigger logic.",
+          "headline": "\"The right people\" is undefined",
+          "premise": "The request assumes there's a known, fixed set of people to notify when a mission is ending.",
+          "alternative": "In this platform, notification routing is typically role- and client-specific (billing/operational/HR contact, mission manager, staffing admin) and often varies by contract terms.",
+          "consequence": "Hardcoding a single recipient (e.g. mission manager only) means the first client who wants their operational contact copied forces a rebuild of the routing logic.",
+          "recommendation": "Define the recipient matrix (role \u00d7 client \u00d7 mission type) with the client before estimating, not during UAT.",
           "contests": [
             "business_rules",
             "actors",
@@ -477,257 +476,238 @@
           ]
         },
         {
-          "headline": "One-time alert assumption",
-          "premise": "The request reads as 'send a notification' \u2014 a single fire-and-forget action.",
-          "alternative": "Missions get extended, ended early or cancelled after the alert is scheduled; a real build needs to recalculate, cancel or resend, not just fire once.",
-          "consequence": "Without a defined recalculation policy, mission changes will produce duplicate alerts (annoying) or missed ones (the exact failure this feature exists to prevent), undermining the feature's own purpose.",
-          "recommendation": "Design the trigger as a recalculated schedule tied to the mission's current end date, with explicit rules for extension/cancellation, before building the notification itself.",
+          "headline": "Single implicit trigger timing",
+          "premise": "\"About to end\" is treated as one alert at one unstated lead time.",
+          "alternative": "Different downstream actions (renewal decision, final invoicing, offboarding paperwork) usually need different lead times and often a staggered sequence (e.g. 30/15/7 days), not one fire-and-forget alert.",
+          "consequence": "A single fixed-lead alert will be too early to be actionable for some teams and too late for others, and gives no defined behavior when the end date is extended, brought forward, or the mission is cancelled after the alert already fired.",
+          "recommendation": "Map each downstream action to its own required lead time and define re-evaluation/cancellation logic before building the scheduler.",
           "contests": [
             "workflow",
             "edge_cases"
           ]
         },
         {
-          "headline": "Scoped as notification-only",
-          "premise": "The request frames this purely as an alert to people.",
-          "alternative": "End-of-mission is already a named platform event other automation (final invoicing, offboarding, access revocation) will eventually want to hook into.",
-          "consequence": "Building a narrow, single-purpose notification now risks a second, separate implementation later when invoicing or offboarding automation needs the same trigger, duplicating the date-scanning logic.",
-          "recommendation": "Scope this as a generic 'mission approaching end' event with the notification as its first subscriber, even if only the notification ships now.",
+          "headline": "Notification alone may not fix the problem",
+          "premise": "The request frames this purely as 'send a notification', but the stated success metric is that renewal, final invoicing and offboarding actually happen on time.",
+          "alternative": "A notification that isn't acted on still produces a late offboarding \u2014 some teams solve this with a lightweight tracked task/checklist per mission end, with an owner and a due date, not just an email.",
+          "consequence": "Building notification-only risks meeting the letter of the request while missing the actual success criteria if alerts get lost in an inbox.",
+          "recommendation": "Confirm with the client whether they need alerting only, or a trackable end-of-mission checklist that surfaces overdue actions.",
           "contests": [
-            "integrations",
+            "problem",
+            "success_metrics",
             "workflow"
           ]
         }
       ],
       "complexity": "medium",
       "complexity_reasons": [
-        "date-based scheduling that must recalculate on mission changes, not a simple event listener",
-        "role-based recipient resolution against the Client/Contact model",
-        "idempotency handling to avoid duplicate or missed alerts",
-        "likely per-client configurability of lead time and routing"
+        "configurable per-client/per-role recipient routing rather than a single hardcoded recipient",
+        "scheduling logic that must tolerate date changes, cancellations and avoid duplicate sends",
+        "integration with the existing Client Contact role and permission model",
+        "undecided channel and sync-vs-async delivery adds design uncertainty"
       ],
-      "cost_driver": "the recalculating scheduler and its idempotency handling across mission edits (extension/cancellation)",
+      "cost_driver": "the configurable recipient-routing rule engine (role- and client-specific)",
       "risks": [
-        "The shared notification-routing framework may need extending to resolve recipients by Contact role rather than a flat client link.",
-        "Silent non-delivery if a Client has no Contact assigned the expected role, with no fallback path currently defined.",
-        "Duplicate sends if the trigger isn't rebuilt around the mission's current end date after an extension or early close.",
-        "If lead time and recipients are hardcoded now, the first client-specific request will force a rework of the trigger rather than a config change."
+        "The existing notification/permission framework may not yet support routing by contact role per client \u2014 likely needs extension, not reuse as-is.",
+        "Mission end dates can change after a reminder is scheduled; without idempotency handling this produces duplicate or missed alerts.",
+        "No current-process baseline is defined, making it hard to prove after launch that the feature actually reduced late actions.",
+        "Scope can silently grow from 'send a notification' into a full end-of-mission task-tracking workflow if success metrics aren't pinned down early."
       ],
       "opportunities": [
         {
-          "text": "Model 'approaching end-of-mission' as a first-class event with the notification as its initial subscriber, so final invoicing or offboarding can subscribe later without rebuilding the trigger.",
+          "text": "The Client Contact role-based routing built for this feature can become the shared notification-routing mechanism other modules already need (contract signature, invoice issuance).",
           "leverage": "high",
           "modules": [
+            "Missions",
+            "Contracts",
+            "Invoicing"
+          ]
+        },
+        {
+          "text": "The 'approaching deadline' scheduler pattern (scan a date, alert before it, handle date drift) mirrors contract renewal and amendment reminders and could be generalized into a reusable lifecycle-reminder engine.",
+          "leverage": "future",
+          "modules": [
+            "Missions",
+            "Contracts"
+          ]
+        }
+      ],
+      "next_steps": [
+        "Define the recipient rule (who, by role, per client/contract) with actual stakeholders before scoping the build.",
+        "Pin down lead time(s), recurrence, and behavior when the end date changes or the mission is cancelled after a reminder is scheduled.",
+        "Clarify whether the client needs alert-only or a trackable checklist tied to renewal/invoicing/offboarding completion.",
+        "Confirm notification channel and whether delivery should be synchronous or a scheduled batch job."
+      ],
+      "decisions": [
+        {
+          "decision": "Mission end-date and party data (Freelancer, Client, Contact) are sourced from the existing Mission and Client/Contact records.",
+          "why": "",
+          "alternative": "",
+          "tradeoff": "",
+          "derived_from": [
+            "business_objects"
+          ]
+        }
+      ],
+      "open_decisions": [
+        "Who exactly must be notified, and does that vary by client or contract?",
+        "Lead time(s) and recurrence for the reminder, and what happens on date change or cancellation",
+        "Notification channel and synchronous vs. asynchronous delivery",
+        "Whether the feature must track completion of the downstream actions or only alert",
+        "What today's process is (manual/spreadsheet/nothing), to set a real baseline for success metrics"
+      ]
+    },
+    {
+      "problem": "Freelance missions lapse without a reliable, proactive signal, so renewal, final invoicing, or offboarding decisions get made too late or not at all.",
+      "solution": "A scheduled alert that fires ahead of a Mission's end date and notifies the relevant stakeholders so they can act in time.",
+      "introduces": [
+        "a date-driven scheduling engine that scans Mission end dates",
+        "a configurable lead-time/recipient rule surface (likely per client or contract)",
+        "notification routing tied to Contact roles rather than a single fixed recipient",
+        "idempotency/state tracking to avoid duplicate or stale alerts when a mission is extended, cancelled, or replaced",
+        "a potential cross-module trigger into final invoicing or offboarding workflows"
+      ],
+      "challenges": [
+        {
+          "headline": "Single-fire vs. reminder cadence",
+          "premise": "The request reads as one notification when the mission is 'about to end.'",
+          "alternative": "Comparable systems in this platform (approval circuits, renewal alerts) typically use a cadence \u2014 e.g. reminders at 30/15/5 days \u2014 with escalation if no action is taken, since renewal or offboarding decisions take real time to execute.",
+          "consequence": "A one-shot alert can arrive too late for the action it's meant to trigger, or get missed entirely, defeating the stated purpose of the feature.",
+          "recommendation": "Confirm with the client whether this is a single alert or a reminder sequence before building the scheduler.",
+          "contests": [
+            "workflow",
+            "business_rules"
+          ]
+        },
+        {
+          "headline": "Hardcoded rule on a configurable platform",
+          "premise": "Lead-time and recipients are described as if one global rule will cover every mission.",
+          "alternative": "This is a multi-client configurable platform where equivalent rules (approval circuits, notification routing) already vary by client and contract; the lead-time and recipient set are likely to need the same treatment.",
+          "consequence": "Hardcoding forces a rebuild the first time a client asks for a different threshold or recipient set \u2014 expensive rework given the rule and config slots are currently completely undefined.",
+          "recommendation": "Decide explicitly whether lead-time/recipients are configurable per client before estimating the build.",
+          "contests": [
+            "config_vs_custom",
+            "business_rules"
+          ]
+        },
+        {
+          "headline": "'Right people' left undefined",
+          "premise": "The request treats the recipient list as self-evident.",
+          "alternative": "In this platform, notification routing is driven by a Contact's role (billing/operational/HR), not just 'the client' or a single internal owner \u2014 the same pattern should likely apply here.",
+          "consequence": "Guessing recipients risks notifying the wrong contact or skipping the one who actually needs to act (e.g. the billing contact for final invoicing), silently defeating the feature.",
+          "recommendation": "Map explicit recipient roles (internal mission owner, client contact by role, freelancer) with the client before implementation.",
+          "contests": [
+            "actors",
+            "permissions"
+          ]
+        }
+      ],
+      "complexity": "medium",
+      "complexity_reasons": [
+        "configurable lead-time/recipient rule engine per client",
+        "idempotency across mission extensions, cancellations and replacements",
+        "role-based notification routing shared with other modules",
+        "unclear scope on chaining into invoicing/offboarding workflows"
+      ],
+      "cost_driver": "the configurable trigger-and-recipient rule engine plus its idempotency handling across a volatile mission lifecycle",
+      "risks": [
+        "Last-minute mission renewal, cancellation or freelancer replacement can cause false or duplicate alerts without explicit idempotency rules.",
+        "Notification routing touches the shared Contact-role and permission framework \u2014 a rule change here can ripple into other modules that use the same routing.",
+        "If end-of-mission is meant to chain into final invoicing, the sync-vs-async trigger design is undecided and could expand scope significantly.",
+        "Nearly every high-impact slot (business rules, workflow, permissions, config vs custom) is currently undefined \u2014 building now risks a costly rebuild once real requirements surface."
+      ],
+      "opportunities": [
+        {
+          "text": "Generalize the 'N days before date X' scheduled-alert logic into a reusable engine for other date-driven triggers (contract renewal, document retention expiry, invoice due dates).",
+          "leverage": "medium",
+          "modules": [
+            "Contracts",
+            "Invoicing",
+            "Missions"
+          ]
+        },
+        {
+          "text": "Reuse role-based notification routing (Contact role \u2192 channel) as a shared cross-module capability rather than a one-off for missions.",
+          "leverage": "high",
+          "modules": [
+            "Client",
+            "Contact",
             "Missions",
             "Invoicing"
           ]
         },
         {
-          "text": "Build recipient resolution as a shared 'notify by Contact role' service, reusable anywhere else on the platform that currently notifies a flat client contact.",
-          "leverage": "medium",
-          "modules": [
-            "Client",
-            "Contract",
-            "Missions"
-          ]
-        },
-        {
-          "text": "Generalize the date-based lead-time scheduler so it can later serve other expiry-driven alerts (e.g. contract end, document retention) instead of being mission-specific.",
+          "text": "Hook end-of-mission into a generic downstream-automation trigger (invoicing, offboarding) rather than a bespoke chain specific to this feature.",
           "leverage": "future",
           "modules": [
-            "Contract",
-            "Missions"
+            "Missions",
+            "Invoicing"
           ]
         }
       ],
       "next_steps": [
-        "Confirm the lead time value and whether it must be configurable per client, contract type, or mission length.",
-        "Confirm exactly who 'the right people' are \u2014 which Contact role(s), and whether the freelancer's internal manager is also included.",
-        "Define the recalculation/idempotency policy for mission extension, early end and cancellation before building the trigger.",
-        "Decide whether this should be scoped as a generic end-of-mission event or a standalone notification, given likely future automation on the same trigger."
+        "Confirm the exact recipients (roles) \u2014 internal owner, client contact by role, freelancer \u2014 before designing routing.",
+        "Define the lead-time rule and whether it must be configurable per client or contract.",
+        "Decide single-fire vs. recurring reminder cadence, and the notification channel.",
+        "Scope whether this notification should trigger downstream invoicing/offboarding workflows now or remain a standalone alert for a later phase."
       ],
       "decisions": [
         {
-          "decision": "The alert fires ahead of the mission's end date (a lead-time trigger), not on the day itself.",
-          "why": "'About to end' implies enough advance notice for renewal, offboarding, final invoicing or access revocation to happen without last-minute scrambling.",
-          "alternative": "A same-day, on-the-date notification.",
-          "tradeoff": "Requires a recalculating scheduler instead of a simple same-day event listener, in exchange for actually giving people time to act.",
+          "decision": "The Mission's end date, linked to its Freelancer and Client, is the trigger source for the notification",
+          "why": "",
+          "alternative": "",
+          "tradeoff": "",
           "derived_from": [
+            "business_objects"
+          ]
+        }
+      ],
+      "open_decisions": [
+        "Lead-time rule and whether it varies by client/contract",
+        "Exact recipient roles and whether client contacts are included",
+        "Single alert vs. recurring reminder cadence and channel",
+        "Whether the alert should chain into final invoicing or offboarding workflows",
+        "Who can view or override the mission end-date and recipient list"
+      ]
+    },
+    {
+      "problem": "Freelance missions can end without anyone being prompted to decide on renewal, hand-over or final billing, because nothing currently flags an approaching end date.",
+      "solution": "A scheduled check that alerts the relevant people before a Mission's end date so a renewal, hand-over or final-invoicing decision doesn't get missed.",
+      "introduces": [
+        "a date-based scheduled trigger engine (lead-time windows, not real-time events)",
+        "idempotency/state tracking to avoid re-notifying when a mission's end date changes",
+        "contact-role-aware notification routing (reusing the Client/Contact role model)",
+        "a new per-client configuration surface for lead time, recipients and channel"
+      ],
+      "challenges": [
+        {
+          "headline": "Framed as a standalone notification",
+          "premise": "The request treats this as a self-contained alert feature.",
+          "alternative": "In this platform, end-of-mission is explicitly a cascading event \u2014 it commonly triggers final invoicing, validation and a renewal decision, not just an email.",
+          "consequence": "Shipping 'just the alert' risks a second build cycle the moment someone asks 'and then what happens' \u2014 the trigger, data model and permissions would need to be reopened.",
+          "recommendation": "Scope the post-notification actions (renewal decision, final invoice, validation) now, even if only phase 2, rather than deciding that later.",
+          "contests": [
             "problem",
             "workflow"
           ]
         },
         {
-          "decision": "Recipients are resolved via Client Contact role (and possibly the freelancer's internal manager), not a single flat client contact.",
-          "why": "The platform already models Contacts by role, and routing frequently depends on role rather than a generic client link.",
-          "alternative": "Notify a single fixed client contact regardless of role.",
-          "tradeoff": "More setup to map roles to recipients, in exchange for the alert actually reaching someone who can act on it.",
-          "derived_from": [
-            "actors",
-            "business_objects"
-          ]
-        },
-        {
-          "decision": "End date is sourced from the Mission record.",
-          "why": "",
-          "alternative": "",
-          "tradeoff": "",
-          "derived_from": [
-            "business_objects"
-          ]
-        }
-      ],
-      "open_decisions": [
-        "Exact lead-time value(s) and whether they vary by client/contract type",
-        "Whether the rule and recipients are configurable per client or global for all missions",
-        "Recurrence policy: single alert vs. repeated reminder until action is taken",
-        "Whether this event should also trigger final invoicing, access revocation or renewal workflows",
-        "Notification channel (email, in-app, both)"
-      ]
-    },
-    {
-      "problem": "Mission-end actions (renewal, final invoicing, offboarding) get missed because nothing proactively watches mission end dates today.",
-      "solution": "An automated notification that fires ahead of a freelance mission's end date to the people who need to act.",
-      "introduces": [
-        "a scheduled or event-driven watcher over Mission end dates",
-        "a recipient-routing rule engine keyed to Contact roles and possibly client/contract",
-        "notification dispatch infrastructure (channel, template, timing)",
-        "state tracking to avoid duplicate or stale alerts when a mission's end date changes",
-        "a potential automation hook into final invoicing or offboarding workflows"
-      ],
-      "challenges": [
-        {
-          "headline": "'The right people' as a fixed list",
-          "premise": "The request treats the notification recipients as a known, stable set.",
-          "alternative": "The Client/Contact model already carries distinct roles (billing, HR, operational) \u2014 recipient identity is very likely to depend on client, contract type or mission category, not be a single global rule.",
-          "consequence": "Hardcoding recipients now means every client exception becomes a support ticket or a code change later, on a platform explicitly built for client-specific notification routing.",
-          "recommendation": "Confirm with the client whether recipients vary by contract/client before designing the rule, and default to a configurable routing table rather than a fixed list.",
-          "contests": [
-            "actors",
-            "business_rules",
-            "config_vs_custom"
-          ]
-        },
-        {
-          "headline": "Fixed-offset alert ignores date drift",
-          "premise": "The notification is assumed to fire once, at a fixed window before the recorded end date.",
-          "alternative": "Mission end dates routinely move \u2014 extension, early termination, cancellation. A single alert computed once against a snapshot date will misfire or go silent when the date changes.",
-          "consequence": "Without explicit handling, a changed end date either produces a stale alert already sent for the wrong date, or no alert at all if recalculation isn't triggered.",
-          "recommendation": "Define the trigger as reactive to date changes (recompute on every Mission update), not a one-time schedule computed at creation.",
-          "contests": [
-            "workflow",
-            "edge_cases"
-          ]
-        },
-        {
-          "headline": "Notification vs automation chain",
-          "premise": "The scope loosely folds in 'possibly triggering final invoicing or offboarding' alongside the notification itself.",
-          "alternative": "A pure notification (inform a human, they act) and an automation trigger (system creates an invoice/task automatically) are different builds with different failure modes, idempotency needs and sync/async concerns.",
-          "consequence": "Scoping this as 'notification + maybe automation' risks silently growing into a multi-system trigger chain that wasn't estimated or reviewed for idempotency and rollback.",
-          "recommendation": "Decide now whether this ships as notification-only in v1, with automation explicitly deferred and separately scoped.",
-          "contests": [
-            "integrations",
-            "workflow"
-          ]
-        }
-      ],
-      "complexity": "medium",
-      "complexity_reasons": [
-        "recipient routing likely needs to be configurable per client/contract, not just per role",
-        "recompute-on-change logic to avoid duplicate/stale alerts adds real state management",
-        "unclear whether this is standalone or the first link in an automation chain (invoicing, offboarding)"
-      ],
-      "cost_driver": "the configurable recipient-routing rule (who gets notified, varying by client/contract)",
-      "risks": [
-        "Duplicate or missing alerts if mission end-date changes aren't reconciled against already-sent notifications",
-        "Hardcoding recipients now conflicts with the platform's existing pattern of client-specific notification routing, forcing rework",
-        "Visibility of mission-end data across manager, client contact and freelancer may need permission rules that don't exist yet",
-        "If downstream automation (final invoicing) gets bundled in later without being scoped now, it introduces sync/async and idempotency complexity mid-build"
-      ],
-      "opportunities": [
-        {
-          "text": "Generalize this into a reusable 'entity approaching end-date' event engine (mission end today; contract end, document retention expiry tomorrow).",
-          "leverage": "future",
-          "modules": [
-            "Missions",
-            "Contracts"
-          ]
-        },
-        {
-          "text": "Build recipient-routing-by-Contact-role as a shared notification service other modules already need (contract signature alerts, invoice due-date reminders).",
-          "leverage": "high",
-          "modules": [
-            "Missions",
-            "Contracts",
-            "Invoicing"
-          ]
-        }
-      ],
-      "next_steps": [
-        "Get the client to name the actual recipient roles per scenario (manager, billing contact, HR contact) and confirm whether this varies by client or contract.",
-        "Define the trigger model explicitly: fixed offset vs recurring reminder, and behavior when the mission end date changes after a notification has fired.",
-        "Decide whether recipient rules and timing are configurable now or hardcoded for a first client, given the platform's configurability pattern.",
-        "Scope out whether downstream automation (final invoicing, offboarding task) is in this build or a separate follow-on piece."
-      ],
-      "decisions": [
-        {
-          "decision": "Mission end date is the trigger point for the notification",
-          "why": "",
-          "alternative": "",
-          "tradeoff": "",
-          "derived_from": [
-            "business_objects",
-            "workflow"
-          ]
-        }
-      ],
-      "open_decisions": [
-        "Exact recipient list per scenario and whether it varies by client/contract",
-        "Trigger timing and whether it's a one-shot alert or recurring reminder",
-        "Behavior when mission end date is extended, shortened or cancelled after a notification was sent",
-        "Whether recipient/timing rules are configurable per client or global for now",
-        "Whether this ships as notification-only or includes a downstream automation trigger (final invoicing, offboarding)"
-      ]
-    },
-    {
-      "problem": "Freelance mission end dates pass with no proactive warning, so renewal, offboarding, access-revocation and final-invoicing decisions get missed.",
-      "solution": "A scheduled lookahead check on Mission end dates that notifies role-based recipients a configurable number of days before the mission ends.",
-      "introduces": [
-        "a recurring scheduled-job engine (lookahead scanning, not event-driven)",
-        "a configurable per-client/contract rule for lead-time and recipients",
-        "role-based recipient resolution tied to Contact roles",
-        "idempotency/state tracking to avoid duplicate or missed alerts",
-        "a potential cross-module trigger into final invoicing or a renewal task"
-      ],
-      "challenges": [
-        {
-          "headline": "Single fixed lead-time assumed",
-          "premise": "The alert fires at one fixed number of days before mission end, for every client and contract.",
-          "alternative": "The platform's own rules routinely vary by client, contract type or mission length \u2014 a staffing agency and a long-term embedded freelancer likely need different lead times.",
-          "consequence": "Hardcoding one threshold means the first client that needs a different window forces a rebuild of the trigger logic instead of a config change.",
-          "recommendation": "Confirm with the client whether lead-time needs to be configurable per client/contract before building; default to a config-driven threshold given this is a multi-client platform.",
+          "headline": "Hardcode-now, configure-later risk",
+          "premise": "The lead time and recipient list are implicitly assumed to start as one fixed rule for all clients.",
+          "alternative": "The platform already varies notification routing by client and contact role elsewhere \u2014 this rule is a strong candidate to be configurable from day one, not retrofitted.",
+          "consequence": "A hardcoded rule means the first client that needs a different lead time or recipient set forces a rebuild of the trigger and its config surface.",
+          "recommendation": "Decide config_vs_custom scope explicitly with the client before estimating, not as an afterthought.",
           "contests": [
             "business_rules",
             "config_vs_custom"
           ]
         },
         {
-          "headline": "Notification treated as terminal",
-          "premise": "A single alert email or in-app ping is assumed to solve the missed-action problem.",
-          "alternative": "The real goal is that renewal/offboarding/invoicing actually happen \u2014 an ignorable one-shot notification can fail exactly like today's silence; many teams instead track it as a task that persists or escalates until someone records a decision (renew / end / invoiced).",
-          "consequence": "Shipping a fire-and-forget notification may satisfy the literal request while leaving the underlying success metric (zero missed actions) unmet.",
-          "recommendation": "Clarify with the client whether this needs to be a tracked, escalating action rather than a plain alert \u2014 this changes the workflow, not just the copy.",
-          "contests": [
-            "workflow",
-            "success_metrics"
-          ]
-        },
-        {
-          "headline": "Recipients assumed uniform",
-          "premise": "\"The right people\" is treated as a single resolvable role list applicable to every mission.",
-          "alternative": "The platform's Contact model routes by role (billing/HR/operational), and mission category or client type may change who needs to know \u2014 plus a freelancer running several concurrent missions could generate conflicting or duplicated alerts.",
-          "consequence": "Wrong or incomplete recipients silently defeats the entire feature \u2014 the same failure mode the feature is meant to fix.",
-          "recommendation": "Map out the recipient matrix (by role, by client, by mission type) with the client before building the routing logic.",
+          "headline": "'Right people' left undefined",
+          "premise": "The request assumes recipients are self-evident ('the right people').",
+          "alternative": "Contacts already carry distinct roles (billing/HR/operational) \u2014 routing should be defined by role, not by a generic 'client contact' or 'manager'.",
+          "consequence": "Guessing recipients risks notifying the wrong role (e.g. billing instead of operational), undermining trust in the feature and potentially exposing mission data to the wrong stakeholder.",
+          "recommendation": "Map exact recipient roles (freelancer's manager, which Contact role, freelancer themselves) with the client before defining permissions.",
           "contests": [
             "actors",
             "permissions"
@@ -736,79 +716,68 @@
       ],
       "complexity": "medium",
       "complexity_reasons": [
-        "configurable lead-time and recipient rules likely needed per client/contract",
-        "idempotent scheduled job required to avoid duplicate or missed alerts on reruns",
-        "role-based recipient resolution reusing the shared Contact/permission model",
-        "possible chaining into invoicing or a renewal workflow, which is a separate build if in scope"
+        "scheduled trigger with idempotency across date edits/extensions",
+        "per-client configurable lead-time and recipient rules",
+        "reuse of contact-role routing across an unresolved permissions model",
+        "downstream workflow scope (renewal/invoicing) not yet fixed"
       ],
-      "cost_driver": "the configurable rule engine resolving lead-time and recipients per client/contract",
+      "cost_driver": "the configurable lead-time + recipient-routing rule engine, not the notification itself",
       "risks": [
-        "A naive daily job without idempotency checks can send duplicate alerts or silently skip a mission if the job fails mid-run.",
-        "Mission amendments (extended, cancelled, or ended early) after an alert fires are not yet defined \u2014 stale alerts could reach recipients about a mission that no longer ends when expected.",
-        "Notification routing shares the platform's cross-cutting permission/contact-role framework \u2014 a routing rule added here can ripple into other modules using the same machinery.",
-        "If this is meant to chain into final invoicing, it must respect Invoice's own trigger and idempotency rules, or risk double-drafting or acting before the mission truly ends.",
-        "Incomplete or missing contact data (no billing/operational contact on file) could silently suppress the alert for exactly the missions most at risk."
+        "No baseline current process means success can't be measured against anything concrete yet.",
+        "Duplicate or missed notifications if mission end-date edits/extensions aren't handled idempotently.",
+        "Permission model for contact-role routing may need extending beyond what exists today.",
+        "Scope creep risk: what looks like a simple email can silently grow into renewal/invoicing automation mid-build."
       ],
       "opportunities": [
         {
-          "text": "Generalize the scheduled lookahead + role-based notification engine as a reusable 'lifecycle deadline alert' capability.",
+          "text": "Generalize the 'N days before date X' scheduled-notification engine so it can serve any date-driven alert, not just mission end.",
           "leverage": "high",
           "modules": [
             "Missions",
-            "Contracts",
-            "Invoicing"
-          ]
-        },
-        {
-          "text": "Reuse the same engine for Contract renewal/expiry alerts, since Contracts share the same lifecycle-deadline shape as Missions.",
-          "leverage": "future",
-          "modules": [
             "Contracts"
           ]
         },
         {
-          "text": "If this later chains into final invoicing, formalize a shared 'end-of-mission' event other modules can subscribe to, rather than embedding invoicing logic in the notification job.",
-          "leverage": "medium",
+          "text": "Build recipient routing on top of the existing Contact-role model as a reusable service rather than a one-off lookup.",
+          "leverage": "high",
           "modules": [
             "Missions",
             "Invoicing"
           ]
+        },
+        {
+          "text": "Extend the same date-based alert engine later to contract renewal reminders or document retention-expiry notices.",
+          "leverage": "future",
+          "modules": [
+            "Contracts",
+            "Document Management"
+          ]
         }
       ],
       "next_steps": [
-        "Confirm the lead-time window(s) and whether they vary by client/contract/mission type before building the trigger logic.",
-        "Define the exact recipient matrix (roles, contact types, fallback when data is missing) with the client.",
-        "Decide whether this is a one-shot notification or a tracked/escalating action tied to an explicit decision.",
-        "Clarify whether this must chain into final invoicing or renewal workflows now, or is out of scope for this iteration."
+        "Confirm the exact recipient roles (manager, which Contact role, freelancer) before scoping permissions.",
+        "Decide whether lead time, recipients and channel are configurable per client now or fixed for a first release.",
+        "Clarify whether renewal, hand-over or final-invoicing actions are in scope for this phase or explicitly deferred.",
+        "Define the idempotency rule for date changes/extensions before building the scheduled check."
       ],
       "decisions": [
         {
-          "decision": "Implement as a scheduled/asynchronous lookahead job rather than a synchronous event trigger",
-          "why": "'About to end' is a time-based condition, not a discrete event like mission completion, so it requires periodic evaluation rather than an inline trigger.",
-          "alternative": "A synchronous check fired at some other event.",
-          "tradeoff": "Async scheduling adds job-scheduling and idempotency concerns, but is the only model that fits a lookahead condition.",
-          "derived_from": [
-            "workflow",
-            "business_objects"
-          ]
-        },
-        {
-          "decision": "Recipients are resolved by role rather than a single hardcoded contact",
+          "decision": "The notification is anchored to the existing Mission entity's end date, linked to its Freelancer and Client.",
           "why": "",
           "alternative": "",
           "tradeoff": "",
           "derived_from": [
-            "actors",
-            "permissions"
+            "business_objects"
           ]
         }
       ],
       "open_decisions": [
-        "Exact lead-time threshold(s) and whether configurable per client/contract",
-        "Full recipient list and role mapping, including fallback for missing contact data",
-        "Whether the alert is one-shot or a tracked/escalating task",
-        "Whether this should trigger downstream actions (final invoice draft, renewal task) or remain a standalone notification",
-        "Notification channel(s) per recipient type"
+        "Lead-time window and whether it varies by client/contract",
+        "Exact recipient roles and whether routing uses existing Contact roles",
+        "Notification channel(s) \u2014 email, in-app, or both",
+        "Idempotency/duplicate-notification handling when the end date changes",
+        "Whether post-notification actions (renewal, final invoice, validation) are in this phase's scope",
+        "Success metrics for the feature (e.g. zero missed renewals, notice sent X days ahead every time)"
       ]
     }
   ]

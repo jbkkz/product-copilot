@@ -4,6 +4,52 @@ All notable changes to Product Copilot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-07-31
+
+A boundary-hardening pass from a second external review: durable writes, run provenance, clean
+handling of API failures, and context continuity across commands. No engine-logic changes — the core
+is unchanged; this hardens what happens at the edges (disk, network, untrusted input).
+
+### Fixed
+- **Atomic model/artifact writes.** Every write (`save_model`, `write_artifact`, `session.json`) now
+  goes through a temp file + atomic rename, so an interruption can never leave a half-written JSON in
+  place of a good one. model.json is the durable product — a truncated write would be unrecoverable.
+- **API failures surface as clean messages, not tracebacks.** `client.messages.create()` was called
+  outside the retry loop's `try`, so a network drop, timeout, rate limit, or provider outage escaped
+  as a raw traceback. `_complete()` now translates any `anthropic.APIError` into an `EngineError` the
+  CLI prints as one actionable line ("… The model on disk was not modified. Retry the command."), and
+  exits non-zero. The saved model is never touched by a failed call.
+- **The output-token ceiling is raised from 4k to 8k.** A rich discovery output (full slot model +
+  questions + summary) runs right up against 4k — a simple request already spends ~3.6k output tokens
+  — so multi-feature requests were one variance spike away from silent truncation. 8k gives ~2x
+  headroom; you pay only for tokens generated, not the ceiling, so smaller outputs cost the same. (A
+  per-generator budget is a later refinement.)
+- **Genuinely truncated replies fail cleanly instead of feeding the parser garbage.** When a reply is
+  cut off at the ceiling (`stop_reason == "max_tokens"`) *and* its JSON won't parse, it's reported
+  ("narrow the request, or split it into fewer features per run") rather than retried — the same
+  ceiling would truncate again. A reply flagged `max_tokens` whose JSON is nonetheless complete still
+  succeeds (the check is parse-first), so outputs sitting right at the boundary aren't wrongly rejected.
+- **All text blocks are read, not just the first.** `_response_text()` concatenates every text block
+  of a response (skipping thinking/tool_use), so a reply split across blocks isn't silently truncated
+  to its opening fragment before JSON extraction.
+- **The `--context` selection now persists across commands.** A discovery run with a card subset saved
+  its selection nowhere, so `pc answer` and every generator (`prd`, `stories`, `brief`, …) silently
+  widened back to all cards — breaking reproducibility and re-diluting the context the run had trimmed.
+  The selection is recorded in `session.json` and threaded through `answer_turn()` and all generators.
+
+### Added
+- **Run provenance (`session.json`).** Each discovery now writes a sidecar next to `model.json`
+  recording the engine version, the Claude model, the context cards used, a SHA-256 of the request,
+  and a timestamp — so a run is reproducible and traceable, matching the "the model is a durable
+  product" thesis. `model.json` stays a clean `EngineOutput`; readers tolerate the sidecar's absence
+  (pre-0.6.1 models simply mean "all cards").
+- **Trust boundary against prompt injection.** The engine and assessment prompts now state explicitly
+  that the client request, answers, and context cards are *untrusted business data* — material to
+  model, never instructions to obey. A new `SECURITY.md` documents what leaves the machine (Anthropic
+  API only, no telemetry), the injection posture, and how to report a vulnerability.
+- **GitHub issue templates**: a *Real-world discovery feedback* template (the field signal we most
+  want — was each question useful, useless, or missing?) and a *Bug report* template.
+
 ## [0.6.0] - 2026-07-31
 
 A robustness-and-packaging pass, closing gaps an external code review surfaced.

@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
+from product_copilot import __version__
 from product_copilot.core.contracts import EngineOutput
 from product_copilot.paths import ROOT
+
+SESSION_FORMAT_VERSION = 1
+
+
+def _atomic_write(path: Path, content: str) -> Path:
+    """Write via a temp file + atomic rename, so an interruption can never leave a half-written file
+    where a good one was. model.json is the durable product — a truncated JSON would be unrecoverable,
+    and `os.replace` (via Path.replace) is atomic on the same filesystem."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+    return path
 
 
 def _slug(text: str) -> str:
@@ -31,9 +46,45 @@ def save_model(out: EngineOutput, slug: str) -> Path:
     """Persist the model — the durable product. Every artifact is regenerated from this file."""
     folder = ROOT / "out" / slug
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / "model.json"
-    path.write_text(out.model_dump_json(indent=2))
-    return path
+    return _atomic_write(folder / "model.json", out.model_dump_json(indent=2))
+
+
+def save_session(slug: str, *, request: str, model_name: str,
+                 context_cards: list[str] | None) -> Path:
+    """Provenance sidecar for a discovery: which engine version and Claude model produced this model,
+    which context cards informed it, and a hash of the originating request. Kept separate from
+    model.json (which stays a clean EngineOutput) so a run is reproducible and `pc answer` /
+    generators can reuse the *same* card selection instead of silently widening to all cards.
+    `context_cards` is None when all cards were loaded (the default)."""
+    session = {
+        "format_version": SESSION_FORMAT_VERSION,
+        "product_copilot_version": __version__,
+        "model_name": model_name,
+        "context_cards": context_cards,
+        "request_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    folder = ROOT / "out" / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    return _atomic_write(folder / "session.json", json.dumps(session, indent=2))
+
+
+def load_session(model_path: Path) -> dict:
+    """The session sidecar next to a model, or {} when absent/unreadable (pre-0.6.1 models have none,
+    so every reader must tolerate its absence)."""
+    p = model_path.parent / "session.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def session_cards(model_path: Path) -> list[str] | None:
+    """The context-card selection recorded for a discovery — None means all cards (the pre-0.6.1
+    default, and the value stored when no --context subset was given)."""
+    return load_session(model_path).get("context_cards")
 
 
 def load_model(path: Path) -> EngineOutput:
@@ -45,9 +96,7 @@ def write_artifact(slug: str, filename: str, content: str) -> Path:
     """Write a generated artifact next to its model in out/<slug>/."""
     folder = ROOT / "out" / slug
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / filename
-    path.write_text(content)
-    return path
+    return _atomic_write(folder / filename, content)
 
 
 def save_request(slug: str, request: str) -> Path:

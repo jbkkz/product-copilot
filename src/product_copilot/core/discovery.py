@@ -24,15 +24,19 @@ def run(client: Anthropic, messages: list[dict], retries: int = 2,
                      validate=_require_complete_model)
 
 
-def answer_turn(client: Anthropic, out: EngineOutput, request: str, answers: str) -> EngineOutput:
+def answer_turn(client: Anthropic, out: EngineOutput, request: str, answers: str,
+                only: list[str] | None = None) -> EngineOutput:
     """One stateless discovery turn: refine the model with new answers.
 
     The model IS the accumulated state, so a turn needs only the original request (for context),
     the current model, and the new answers — no live conversation loop. This is what lets any
-    interface (Claude Code, an API, an MCP) drive discovery turn by turn instead of a blocking TTY."""
+    interface (Claude Code, an API, an MCP) drive discovery turn by turn instead of a blocking TTY.
+
+    `only` is the context-card selection the original discovery used (from its session.json) — passing
+    it keeps a refinement turn reasoning over the same cards, not silently the full set."""
     messages = [
         {"role": "user", "content": request},
         {"role": "assistant", "content": out.model_dump_json()},
         {"role": "user", "content": "Client answers:\n" + answers},
     ]
-    return run(client, messages)
+    return run(client, messages, only=only)

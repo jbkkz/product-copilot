@@ -8,12 +8,31 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError
 from pydantic import ValidationError
 
 from product_copilot.paths import ROOT
 
 MODEL_DEFAULT = "claude-sonnet-5"
+
+# Output-token ceiling per call. Discovery emits a full slot model + questions + summary and runs
+# right up against a 4k ceiling (a simple request already spends ~3.6k output tokens), so 4k left rich
+# requests one variance spike away from truncation. 8k gives ~2x headroom; you pay only for tokens
+# generated, not the ceiling, so raising it costs nothing on smaller outputs. A per-generator budget
+# (the assessment needs less than an epic) is a later refinement — one safe ceiling first.
+MAX_OUTPUT_TOKENS = 8000
+
+
+class EngineError(RuntimeError):
+    """A clean, user-facing failure (API unavailable, output truncated). The CLI catches this and
+    prints the message without a traceback. A run that raises this never modifies the saved model —
+    the call failed before any write."""
+
+
+def current_model_name() -> str:
+    """The model id this process will call — the env override or the default. Exposed so provenance
+    (session.json) records the exact model a discovery ran against."""
+    return os.getenv("MODEL", MODEL_DEFAULT)
 
 # USD per 1M tokens (input, output), from the Anthropic pricing reference as of 2026-06-24. This
 # yields an *estimate*, never a bill: prices drift and intro rates lapse, so the renderer stamps this
@@ -143,12 +162,11 @@ def build_prompt(name: str, only: list[str] | None = None) -> str:
     return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context(only))
 
 
-def _first_text(resp) -> str:
-    """First text block of the response — skips thinking/tool_use blocks."""
-    for block in resp.content:
-        if getattr(block, "type", None) == "text":
-            return block.text
-    return ""
+def _response_text(resp) -> str:
+    """All text blocks of the response, concatenated — skips thinking/tool_use blocks. Joining
+    (rather than taking only the first) means a reply split across text blocks isn't silently
+    truncated to its opening fragment before JSON extraction."""
+    return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
 
 
 def _extract_json(text: str) -> dict:
@@ -175,21 +193,39 @@ def _complete(client: Anthropic, system: str, messages: list[dict], out_model, r
     model missing required slots). It rides the same retry loop, so the model self-corrects."""
     attempt = messages
     last_err = None
-    model = os.getenv("MODEL", MODEL_DEFAULT)
+    model = current_model_name()
     rec = CallRecord(model=model, attempts=0)
     started = time.perf_counter()
+
+    def _stop(msg: str) -> EngineError:
+        # Record the spend and stamp latency before surfacing a clean failure — a failed call still
+        # billed for whatever it consumed, and the ledger should reflect it.
+        rec.latency_ms = int((time.perf_counter() - started) * 1000)
+        _record(rec)
+        return EngineError(msg)
+
     for _ in range(retries + 1):
         rec.attempts += 1
-        resp = client.messages.create(
-            model=model,
-            max_tokens=4000,
-            # The system prompt (template + schema + every context card) is byte-identical
-            # across the calls of a session — the K runs of a golden capture, the up-to-8 turns
-            # of converse(), each JSON retry. Caching its prefix makes those repeats cost ~0.1x
-            # input instead of full price. No effect on output, so baselines are unaffected.
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            messages=attempt,
-        )
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=MAX_OUTPUT_TOKENS,
+                # The system prompt (template + schema + every context card) is byte-identical
+                # across the calls of a session — the K runs of a golden capture, the up-to-8 turns
+                # of converse(), each JSON retry. Caching its prefix makes those repeats cost ~0.1x
+                # input instead of full price. No effect on output, so baselines are unaffected.
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=attempt,
+            )
+        except APIError as e:
+            # Network drop, timeout, rate limit, provider outage — anything from the transport. Turn
+            # it into a clean, actionable message instead of a raw traceback. The saved model is
+            # untouched (nothing was written yet), so retrying the command is always safe.
+            raise _stop(
+                "Anthropic API unavailable — the request could not be completed "
+                f"({type(e).__name__}: {e}).\n"
+                "The model on disk was not modified. Retry the command in a moment."
+            ) from e
         # Accumulate usage across every attempt — a retry spends tokens too (fields absent on the
         # test fake, so default to 0 and this stays a no-op offline).
         u = getattr(resp, "usage", None)
@@ -198,7 +234,8 @@ def _complete(client: Anthropic, system: str, messages: list[dict], out_model, r
             rec.output_tokens += getattr(u, "output_tokens", 0) or 0
             rec.cache_read_tokens += getattr(u, "cache_read_input_tokens", 0) or 0
             rec.cache_write_tokens += getattr(u, "cache_creation_input_tokens", 0) or 0
-        raw = _first_text(resp)
+        raw = _response_text(resp)
+        truncated = getattr(resp, "stop_reason", None) == "max_tokens"
         try:
             result = out_model.model_validate(_extract_json(raw))
             if validate is not None:
@@ -208,6 +245,17 @@ def _complete(client: Anthropic, system: str, messages: list[dict], out_model, r
             return result
         except (json.JSONDecodeError, ValueError, ValidationError) as e:
             last_err = e
+            # A reply cut off at the token ceiling can't be salvaged by retrying (the same ceiling
+            # truncates again), so surface it as a clean, specific failure. We check this *only on a
+            # parse/validation failure*: a response can hit the ceiling yet still contain complete,
+            # valid JSON — those must succeed above, not be rejected. (Rich discovery outputs run
+            # right up against the ceiling; MAX_OUTPUT_TOKENS gives them headroom so this stays rare.)
+            if truncated:
+                raise _stop(
+                    "The model's reply was cut off at the output limit "
+                    f"(max_tokens={MAX_OUTPUT_TOKENS}) — the result would be incomplete, so it was "
+                    "discarded. Narrow the request, or split it into fewer features per run."
+                ) from e
             attempt = attempt + [
                 {"role": "assistant", "content": raw or "(empty)"},
                 {"role": "user", "content": f"Your reply did not match the required schema ({e}). Reply with ONLY the JSON object, no prose, no code fence."},

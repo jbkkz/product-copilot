@@ -4,11 +4,17 @@ import json
 import shutil
 from contextlib import contextmanager, redirect_stdout
 
+import anthropic
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from product_copilot.cli import _build_parser, _is_file_arg, app
 from product_copilot.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
+from product_copilot.core.discovery import answer_turn
+from product_copilot.core.generators import advise
+from product_copilot.core.llm import EngineError, _complete, _response_text, current_model_name
+from product_copilot.core.persistence import _atomic_write, load_session, save_session, session_cards
 from product_copilot.paths import ROOT
 from src.engine import (
     PRD,
@@ -1080,3 +1086,133 @@ def test_resolve_cards_maps_stems_and_flags_unknown():
     picked, unknown = _resolve_cards("b2b-platform, nope, financial-reporting")
     assert picked == ["b2b-platform", "financial-reporting"]
     assert unknown == ["nope"]
+
+
+# ── 0.6.1: durable writes, provenance, API-boundary robustness, context continuity ─
+
+
+def test_atomic_write_persists_content_and_leaves_no_tmp(tmp_path):
+    dest = tmp_path / "model.json"
+    _atomic_write(dest, '{"ok": true}')
+    assert dest.read_text() == '{"ok": true}'
+    # The temp sidecar is renamed onto the target, never left behind.
+    assert not (tmp_path / ".model.json.tmp").exists()
+    assert list(tmp_path.iterdir()) == [dest]
+
+
+def test_session_roundtrips_provenance_and_cards():
+    slug = "_clitest_session"
+    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
+    try:
+        save_session(slug, request="build me a thing", model_name="claude-sonnet-5",
+                     context_cards=["financial-reporting"])
+        session = load_session(p)
+        assert session["product_copilot_version"]           # stamped from the package version
+        assert session["model_name"] == "claude-sonnet-5"
+        assert session["context_cards"] == ["financial-reporting"]
+        assert len(session["request_sha256"]) == 64          # a real sha256 hex digest
+        assert session_cards(p) == ["financial-reporting"]
+    finally:
+        shutil.rmtree(p.parent, ignore_errors=True)
+
+
+def test_session_cards_is_none_without_a_session_file():
+    # Pre-0.6.1 models have no session.json — readers must tolerate its absence and mean "all cards".
+    slug = "_clitest_nosession"
+    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
+    try:
+        assert load_session(p) == {}
+        assert session_cards(p) is None
+    finally:
+        shutil.rmtree(p.parent, ignore_errors=True)
+
+
+def test_response_text_concatenates_text_blocks_and_skips_others():
+    class _Block:
+        def __init__(self, type_, text=""):
+            self.type = type_
+            self.text = text
+
+    class _Resp:
+        content = [_Block("thinking", "IGNORE"), _Block("text", "abc"), _Block("text", "def")]
+
+    assert _response_text(_Resp()) == "abcdef"
+
+
+class _RaisingClient:
+    """A client whose create() raises — to exercise the API-error boundary in _complete()."""
+
+    def __init__(self, exc):
+        self._exc = exc
+        self.messages = self
+
+    def create(self, **kwargs):
+        raise self._exc
+
+
+def test_complete_wraps_api_errors_as_a_clean_engine_error():
+    exc = anthropic.APIConnectionError(message="boom", request=httpx.Request("POST", "https://api.anthropic.com"))
+    with pytest.raises(EngineError) as ei:
+        _complete(_RaisingClient(exc), "sys", [{"role": "user", "content": "x"}], EngineOutput)
+    assert "not modified" in str(ei.value)  # the reassurance that nothing was written
+
+
+class _MaxTokensClient:
+    """Returns a reply flagged as cut off at the token ceiling (stop_reason == 'max_tokens'),
+    carrying whatever text it is given — so we can exercise both the broken- and complete-JSON cases."""
+
+    def __init__(self, text):
+        self._text = text
+        self.messages = self
+
+    def create(self, **kwargs):
+        text = self._text
+
+        class _Resp:
+            stop_reason = "max_tokens"
+            content = [_FakeBlock(text)]
+        return _Resp()
+
+
+def test_complete_rejects_a_truncated_reply_that_fails_to_parse():
+    # Genuine truncation: the JSON is cut off mid-object, so parsing fails and the ceiling is the
+    # named cause — retrying at the same ceiling wouldn't help, so it fails fast and cleanly.
+    client = _MaxTokensClient('{"model": {"problem":')
+    with pytest.raises(EngineError) as ei:
+        _complete(client, "sys", [{"role": "user", "content": "x"}], EngineOutput)
+    assert "max_tokens" in str(ei.value)
+
+
+def test_complete_accepts_a_max_tokens_reply_whose_json_is_complete():
+    # Parse-first: rich discovery outputs run right against the ceiling and can be flagged max_tokens
+    # while still carrying complete, valid JSON. That must succeed — not be rejected as truncated.
+    complete = json.dumps({"model": full_slots(problem=slot(80, "explicit", "high")),
+                           "questions": [], "summary": {}})
+    result = _complete(_MaxTokensClient(complete), "sys", [{"role": "user", "content": "x"}], EngineOutput)
+    assert result.model["problem"].completeness == 80
+
+
+def test_answer_turn_threads_the_discovery_context_cards():
+    # A refinement turn must reason over the same cards the original discovery used, not silently all.
+    fake = FakeClient(_ENGINE_REPLY)
+    answer_turn(fake, out({"problem": slot(80, "explicit", "high")}), "req", "answers",
+                only=["event-ops"])
+    system = fake.calls[0]["system"][0]["text"]
+    assert "## event-ops" in system
+    assert "## financial-reporting" not in system
+
+
+def test_generators_thread_the_context_selection():
+    # A generator grounds its artifact in the discovery's card subset, not the full set.
+    fake = FakeClient(json.dumps({"complexity": "low", "solution": "S"}))
+    advise(fake, out({"problem": slot(80, "explicit", "high")}), only=["financial-reporting"])
+    system = fake.calls[0]["system"][0]["text"]
+    assert "## financial-reporting" in system
+    assert "## b2b-platform" not in system
+
+
+def test_current_model_name_reads_env_override(monkeypatch):
+    monkeypatch.delenv("MODEL", raising=False)
+    assert current_model_name() == "claude-sonnet-5"
+    monkeypatch.setenv("MODEL", "claude-opus-4-8")
+    assert current_model_name() == "claude-opus-4-8"

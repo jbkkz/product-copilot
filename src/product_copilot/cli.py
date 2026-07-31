@@ -23,7 +23,7 @@ from product_copilot.core.generators import (
     generate_prd,
     generate_release,
 )
-from product_copilot.core.llm import available_cards, track_usage
+from product_copilot.core.llm import EngineError, available_cards, current_model_name, track_usage
 from product_copilot.core.persistence import (
     _slug,
     load_model,
@@ -32,6 +32,8 @@ from product_copilot.core.persistence import (
     resolve_slug,
     save_model,
     save_request,
+    save_session,
+    session_cards,
     write_artifact,
 )
 from product_copilot.paths import ROOT
@@ -112,6 +114,15 @@ def _absorb_reasoning(out: EngineOutput, brief) -> None:
 
 
 def main() -> None:
+    """Legacy flag CLI entry — thin wrapper turning a clean EngineError into a tidy exit."""
+    try:
+        _run_legacy()
+    except EngineError as e:
+        print(f"\n{e}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+def _run_legacy() -> None:
     args = sys.argv[1:]
     flags = {a for a in args if a.startswith("--")}
     from_path = _flag_value(args, "--from")
@@ -220,6 +231,12 @@ def _load(model_path: str) -> tuple[EngineOutput, str]:
     return load_model(path), path.parent.name
 
 
+def _cards(model_path: str) -> list[str] | None:
+    """The context-card selection recorded for this model's discovery (None == all cards). Threaded
+    into every generator so an artifact is grounded in the same cards discovery used."""
+    return session_cards(Path(model_path))
+
+
 def _emit(slug: str, filename: str, markdown: str, label: str) -> None:
     path = write_artifact(slug, filename, markdown)
     print(markdown)
@@ -282,9 +299,12 @@ def _cmd_discover(a, client) -> None:
     # already owns out/<slug>/ (then a short hash suffix).
     slug = resolve_slug(_slug(Path(a.request).stem if is_file else request), request)
     save_request(slug, request)  # so `pc answer` can resume this discovery statelessly
+    # Provenance sidecar: pins the engine version, Claude model and context-card selection so the run
+    # is reproducible and `pc answer` / generators reuse the same cards (only == None means all).
+    save_session(slug, request=request, model_name=current_model_name(), context_cards=only)
     if not quick:
         print("\nGenerating the solution assessment…")
-        brief = advise(client, out)
+        brief = advise(client, out, only=only)
         _absorb_reasoning(out, brief)  # bake the reasoning into the model before saving
         render_brief(out, brief)
     print(f"\nSaved model → {save_model(out, slug)}")
@@ -295,7 +315,8 @@ def _cmd_discover(a, client) -> None:
 def _cmd_answer(a, client) -> None:
     client = client or Anthropic()
     before, slug = _load(a.model)
-    out = answer_turn(client, before, load_request(Path(a.model)), a.answers)
+    only = session_cards(Path(a.model))  # reuse the discovery's card selection (None == all)
+    out = answer_turn(client, before, load_request(Path(a.model)), a.answers, only=only)
     render_turn(out)
     # Change-detection: warn if this turn made an already-generated artifact stale.
     changed = diff_models(before, out)
@@ -379,7 +400,7 @@ def _cmd_impact(a, client) -> None:
 def _cmd_brief(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
-    brief = advise(client, out)
+    brief = advise(client, out, only=_cards(a.model))
     _absorb_reasoning(out, brief)
     save_model(out, slug)  # backfill: persist the reasoning back into the saved model
     render_brief(out, brief)
@@ -388,34 +409,36 @@ def _cmd_brief(a, client) -> None:
 def _cmd_prd(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
-    _emit(slug, "prd.md", prd_markdown(generate_prd(client, out)), "PRD")
+    _emit(slug, "prd.md", prd_markdown(generate_prd(client, out, only=_cards(a.model))), "PRD")
 
 
 def _cmd_stories(a, client) -> None:
     client = client or Anthropic()
     out, _ = _load(a.model)
-    render_stories(derive_stories(client, out))
+    render_stories(derive_stories(client, out, only=_cards(a.model)))
 
 
 def _cmd_estimate(a, client) -> None:
     client = client or Anthropic()
     out, _ = _load(a.model)
-    stories = derive_stories(client, out)
+    only = _cards(a.model)
+    stories = derive_stories(client, out, only=only)
     render_stories(stories)
-    draft, soft, confidence = estimate(client, out, stories)
+    draft, soft, confidence = estimate(client, out, stories, only=only)
     render_estimate(draft, soft, confidence)
 
 
 def _cmd_criteria(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
-    _emit(slug, "acceptance-criteria.md", criteria_markdown(generate_criteria(client, out)), "acceptance criteria")
+    _emit(slug, "acceptance-criteria.md",
+          criteria_markdown(generate_criteria(client, out, only=_cards(a.model))), "acceptance criteria")
 
 
 def _cmd_epic(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
-    epic = generate_epic(client, out)  # one model call; every view renders from it
+    epic = generate_epic(client, out, only=_cards(a.model))  # one model call; every view renders from it
     _emit(slug, "epic.md", epic_markdown(epic), "epic")
     if a.json:
         print(f"Wrote neutral epic export → {write_artifact(slug, 'epic.json', epic_export_json(epic))}")
@@ -428,7 +451,8 @@ def _cmd_epic(a, client) -> None:
 def _cmd_release(a, client) -> None:
     client = client or Anthropic()
     out, slug = _load(a.model)
-    _emit(slug, "release-notes.md", release_markdown(generate_release(client, out, a.version)), "release notes")
+    _emit(slug, "release-notes.md",
+          release_markdown(generate_release(client, out, a.version, only=_cards(a.model))), "release notes")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -487,5 +511,12 @@ def app(argv: list[str] | None = None, client: Anthropic | None = None) -> None:
     # Track the run's API footprint and print it after the command. Offline verbs make no call, so
     # the ledger stays empty and render_usage() prints nothing.
     with track_usage() as ledger:
-        args.func(args, client)
+        try:
+            args.func(args, client)
+        except EngineError as e:
+            # A clean, expected failure (API down, truncated reply) — no traceback. Still print the
+            # usage of whatever the run spent before failing.
+            render_usage(ledger)
+            print(f"\n{e}", file=sys.stderr)
+            raise SystemExit(1) from None
     render_usage(ledger)
