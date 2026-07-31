@@ -120,6 +120,12 @@ from the same `model.json`. That's the whole idea:
 pc prd examples/leave-approval/model.json    # regenerate prd.md from the saved model
 ```
 
+For a harder case — a rambling client email conflating three features, with a legal tripwire and a fixed
+deadline buried in it — see
+[`examples/event-checkin-reconciliation/`](examples/event-checkin-reconciliation/): the assessment refuses
+the "tie this together" conflation, catches a disguised-employment (*salariat déguisé*) exposure nobody
+wrote down, and sequences the two builds against the deadline.
+
 ---
 
 ## How it works

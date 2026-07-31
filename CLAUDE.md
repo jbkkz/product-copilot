@@ -42,8 +42,10 @@ install, `python pc.py <cmd>`
 identically (`src/engine.py` is now a backward-compat shim).
 
 Run the tests with `.venv/bin/python -m pytest tests/ -q` (pure-logic + offline CLI units via an
-injected fake client, no API calls); there's no build step. A complete worked example lives in
-`examples/leave-approval/` (request → model.json → brief → PRD).
+injected fake client, no API calls); there's no build step. Two complete worked examples live under
+`examples/`: `leave-approval/` (a one-line request → model.json → brief → PRD) and
+`event-checkin-reconciliation/` (a messy multi-feature client email → the assessment that refuses its
+conflation → epic + criteria).
 
 ## Architecture
 
@@ -80,7 +82,11 @@ The runner is a thin dispatch:
    non-text blocks, `_extract_json()` strips a ```json fence or slices `{ … }`, and the result is
    validated against a Pydantic contract. On malformed/non-conformant JSON it retries (default 2×)
    with a corrective nudge in a *local* message copy, so the caller's clean history is never
-   polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it.
+   polluted. `run()`/`derive_stories()`/`estimate()`/`advise()` are thin wrappers over it. The
+   `system` prompt (prompt + schema + all context cards) is passed as a single `cache_control:
+   ephemeral` block, so its prefix is cached across the calls of a session (the K runs of a golden
+   capture, the up-to-8 turns of `converse()`, each JSON retry) — keep it byte-identical per call, or
+   the cache is lost.
 3. Rendering is split: `render_turn()` is the lightweight per-turn view (a ✅/🟡/⚪ Understanding
    checklist + priority questions); `render_brief()` is the deliverable — the **SOLUTION ASSESSMENT**,
    a two-tier document in PM language (the function/contract/prompt keep the `brief` name; only the
