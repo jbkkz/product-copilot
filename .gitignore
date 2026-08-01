@@ -1,16 +1,39 @@
+# secrets / local config
 .env
+.env.*
+!.env.example
 CLAUDE.local.md
+
+# local sessions & generated output
 out/
 .requivo/
+
+# python
 __pycache__/
 *.pyc
 .venv/
 venv/
-.DS_Store
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# logs
+*.log
 
 # packaging
 build/
 dist/
 *.egg-info/
 
+# future web surface (Node)
+node_modules/
+.next/
+
+# os / tooling
+.DS_Store
 supertool

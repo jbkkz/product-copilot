@@ -30,6 +30,14 @@ preparation for a future Web UI. No product behaviour changed; the model format 
   slot contests (via `contests`), symmetrically to decisions (`derived_from`). When a change unseats a
   decision or premise the saved **assessment** rests on, that assessment is flagged stale — `model apply`
   reports `invalidated_decisions`/`invalidated_challenges`, and `impact` shows *Premises to re-examine*.
+- **Open-source governance & distribution boundary.** `docs/open-source-strategy.md` (the Core / CLI /
+  Claude Code / Community Web / Cloud / Lab surface map, and the public-vs-private data boundary),
+  `CONTRIBUTING.md`, `TRADEMARKS.md`, `GOVERNANCE.md`, and `examples/README.md`. New GitHub templates
+  (feature request, pull request, issue-template `config.yml` routing security reports to private
+  advisories) and a Gitleaks secret-scan workflow. The README gains **Open source** and **Data and
+  privacy** sections; `.gitignore` and `.env.example` are hardened. The generator prompts
+  (stories/estimate/prd/criteria/epic/release) now carry the same untrusted-data framing already used
+  in discovery and the assessment. The license stays **MIT**; no product behaviour changed.
 
 ### Changed
 - **`requivo.core` is now provider-free** (guarded by a test): the Anthropic client, the single-call

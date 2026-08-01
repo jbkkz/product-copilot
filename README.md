@@ -378,6 +378,36 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
 
 ---
 
+## Open source
+
+Requivo Core, the CLI and the Claude Code integration are open source (MIT). The goal is to make the
+requirements *model* portable, inspectable and usable locally — without forcing anyone into a hosted
+service to get value from it.
+
+A future **Requivo Cloud** may provide managed storage, collaboration, team administration and other
+operational features. That hosted service is **not** part of this repository, and no commercial
+offering is currently promised or available. A future **Requivo Community Web** interface is intended
+to be open source and self-hostable when it exists; it does not exist yet.
+
+The full surface map — Core, CLI, Claude Code, Community Web, Cloud, and the private evaluation Lab —
+is in **[docs/open-source-strategy.md](docs/open-source-strategy.md)**. See also
+[CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [GOVERNANCE.md](GOVERNANCE.md), and
+[TRADEMARKS.md](TRADEMARKS.md) (the code is MIT; the Requivo name and identity are separate).
+
+## Data and privacy
+
+- **Local by default.** Your sessions and generated artifacts (`.requivo/`, `out/`) stay in your
+  workspace. Requivo has **no telemetry and no analytics** — it never phones home.
+- **What leaves your machine.** In the API-powered CLI mode, each run sends your request, your
+  refinement answers, the prompts, the schema, the loaded context cards, and (when regenerating) the
+  saved model to the **Anthropic API** to do the reasoning — and to no other server. In Claude Code
+  mode, the reasoning goes through your own Claude session. Either way, treat everything you type as
+  content sent to a model provider: don't paste secrets or confidential customer data unless you
+  understand that provider's data-handling policy.
+- **Not in this repository.** Real customer requests and private evaluation datasets are never
+  committed here; public examples are synthetic or anonymised. See [SECURITY.md](SECURITY.md) for the
+  full data and prompt-injection notes.
+
 ## License
 
 [MIT](LICENSE) © jbkkz
