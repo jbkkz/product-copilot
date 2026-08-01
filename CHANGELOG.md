@@ -10,6 +10,14 @@ Pre-Cloud correctness at the session boundary — the layer requivo-cloud will s
 external review's "before you connect Cloud sessions" list.
 
 ### Added
+- **`SessionRepository` storage seam.** `SessionService` and `ArtifactService` no longer touch the
+  filesystem directly — storage is injected as a `SessionRepository` (in `services/repository.py`),
+  with `FileSessionRepository` (the default) delegating to `core.persistence`. The canonical-vs-legacy
+  `out/` handling now lives inside the file repository, where it belongs. requivo-cloud can supply a
+  `PostgresSessionRepository` with the same protocol and reuse the service orchestration verbatim,
+  instead of bypassing the service or faking a filesystem. Proven by an in-memory repository the full
+  service cycle (create → apply → stale-flag → status → provenance → locking) runs against with zero
+  filesystem.
 - **Optimistic locking.** `SessionService.update_model` / `save_revision` take an optional
   `expected_revision`; a write whose expectation is stale raises `RevisionConflictError`
   (`revision_conflict`, with `expected`/`actual`) instead of silently landing on top of a concurrent

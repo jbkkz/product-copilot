@@ -16,9 +16,9 @@ from requivo.core import persistence as store
 from requivo.core.analysis import _readiness_blockers, model_status
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import diff_models, propagate
-from requivo.core.errors import SessionNotFoundError
 from requivo.core.persistence import SessionMeta
 from requivo.core.validation import validate_proposal
+from requivo.services.repository import SessionRepository, default_repository
 
 
 @dataclass
@@ -59,8 +59,13 @@ def _readiness(model: EngineOutput) -> Readiness:
 
 
 class SessionService:
-    """Create, resolve, load, and mutate sessions. Stateless — every method reads/writes the store —
-    so it is safe to construct per call (the CLI does) or hold as a singleton (a future Web app might)."""
+    """Create, resolve, load, and mutate sessions through one validated pipeline. Storage is injected
+    as a `SessionRepository` (files by default, Postgres in Cloud), so this orchestration is reused
+    verbatim across backings. Stateless beyond that handle — safe to construct per call (the CLI does)
+    or hold as a singleton (a future Web app might)."""
+
+    def __init__(self, repo: SessionRepository | None = None):
+        self.repo: SessionRepository = repo or default_repository()
 
     # ── resolution ────────────────────────────────────────────────────────────
     def resolve_slug(self, reference: str | Path) -> str:
@@ -75,18 +80,13 @@ class SessionService:
         return ref  # a bare slug
 
     def exists(self, slug: str) -> bool:
-        """True if a usable session exists under either root (canonical or legacy)."""
-        return store.session_exists(slug) or store.legacy_exists(slug)
+        """True if a usable session exists (the repository decides what backs it)."""
+        return self.repo.exists(slug)
 
     def _ensure_canonical(self, slug: str) -> None:
-        """Before any mutation, make sure the session lives in the canonical store — migrating a
-        legacy `out/<slug>/` session in place (preserving the originals) on first write."""
-        if store.session_exists(slug):
-            return
-        if store.legacy_exists(slug):
-            store.migrate_legacy(slug)
-            return
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        """Before any mutation, make sure the session is in the mutation-backed store — for a file
+        backing this migrates a legacy `out/<slug>/` session in place on first write."""
+        self.repo.ensure_writable(slug)
 
     # ── creation ──────────────────────────────────────────────────────────────
     def create_session(self, request: str, *, context_cards: list[str] | None = None,
@@ -96,10 +96,10 @@ class SessionService:
         from the request and made collision-safe against existing sessions."""
         base = slug or store._slug(request)
         chosen = self._unique_slug(base, request)
-        if store.session_exists(chosen):
-            return store.read_meta(chosen)  # idempotent: re-discovering the same request reuses it
-        return store.create_session(chosen, request, provider=provider, model_name=model_name,
-                                    context_cards=context_cards)
+        if self.repo.has_meta(chosen):
+            return self.repo.read_meta(chosen)  # idempotent: re-discovering the same request reuses it
+        return self.repo.create(chosen, request, provider=provider, model_name=model_name,
+                                context_cards=context_cards)
 
     def ensure_canonical(self, slug: str) -> None:
         """Public form of the migrate-on-first-mutation guard — call before writing an artifact to a
@@ -107,49 +107,35 @@ class SessionService:
         self._ensure_canonical(slug)
 
     def _unique_slug(self, base: str, request: str) -> str:
-        """Reuse the folder for the same request (idempotent re-init); otherwise suffix a short hash so
+        """Reuse the session for the same request (idempotent re-init); otherwise suffix a short hash so
         two different requests never collide on one slug."""
-        if not store.session_exists(base):
+        if not self.repo.has_meta(base):
             return base
-        if store.session_request(base).strip() == request.strip():
+        if self.repo.request_text(base).strip() == request.strip():
             return base
         return f"{base}-{hashlib.sha1(request.encode('utf-8')).hexdigest()[:6]}"
 
     # ── reads ─────────────────────────────────────────────────────────────────
     def meta(self, slug: str) -> SessionMeta:
-        """The session metadata, migrating a legacy session's *view* is not done here (reads stay
-        non-mutating); a legacy-only session has no canonical meta, so callers that need meta for a
-        read-only op should use `load_model` which tolerates the legacy layout."""
-        return store.read_meta(slug)
+        """The session metadata. A legacy-only session has no metadata, so callers that need it for a
+        read-only op should use `load_model`, which tolerates the legacy layout."""
+        return self.repo.read_meta(slug)
 
     def load_model(self, slug: str) -> EngineOutput:
-        """The current model. Reads the canonical store, falling back to a legacy `out/<slug>/` model
-        for read-only operations (status/impact) so they work without forcing a migration."""
-        if store.session_exists(slug):
-            return store.load_session_model(slug)
-        if store.legacy_exists(slug):
-            return EngineOutput.model_validate_json((store.legacy_dir(slug) / "model.json").read_text())
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        """The current model. Reads the mutation-backed store, falling back to a legacy `out/<slug>/`
+        model for read-only operations (status/impact) so they work without forcing a migration."""
+        return self.repo.load_model(slug)
 
     def list_sessions(self) -> list[SessionMeta]:
-        return [store.read_meta(s) for s in store.list_session_slugs()]
+        return [self.repo.read_meta(s) for s in self.repo.list_slugs()]
 
     def cards(self, slug: str) -> list[str] | None:
-        """The context-card selection recorded for a session (None == all cards) — read from canonical
-        metadata, falling back to the legacy sidecar so a not-yet-migrated session keeps its cards."""
-        if store.session_exists(slug):
-            return store.read_meta(slug).context_cards
-        if store.legacy_exists(slug):
-            return store.session_cards(store.legacy_dir(slug) / "model.json")
-        return None
+        """The context-card selection recorded for a session (None == all cards)."""
+        return self.repo.context_cards(slug)
 
     def request_text(self, slug: str) -> str:
-        """The originating request — canonical request.md, or the legacy request.txt sidecar."""
-        if store.session_exists(slug):
-            return store.session_request(slug)
-        if store.legacy_exists(slug):
-            return store.load_request(store.legacy_dir(slug) / "model.json")
-        return ""
+        """The originating request text (empty string if none)."""
+        return self.repo.request_text(slug)
 
     # ── the write path ──────────────────────────────────────────────────────────
     def diff(self, slug: str, proposal: dict | str, *, require_complete: bool = True) -> UpdateResult:
@@ -170,7 +156,7 @@ class SessionService:
         service. `provenance` records who produced the revision (provider / surface / model)."""
         new = validate_proposal(proposal, require_complete=require_complete)
         self._ensure_canonical(slug)
-        current = self.load_model(slug) if store.read_meta(slug).current_revision > 0 else None
+        current = self.load_model(slug) if self.repo.read_meta(slug).current_revision > 0 else None
         return self._plan(slug, current, new, apply=True,
                           expected_revision=expected_revision, provenance=provenance)
 
@@ -207,15 +193,15 @@ class SessionService:
             return stale
 
         if apply:
-            revision, meta = store.save_revision(
+            revision, meta = self.repo.save_revision(
                 slug, new, expected_revision=expected_revision, provenance=provenance)
             stale = _resolve_stale(set(meta.artifact_status))
             if stale:
                 for t in stale:
                     meta.artifact_status[t].stale = True
-                store.write_meta(slug, meta)
+                self.repo.write_meta(slug, meta)
         else:
-            meta = store.read_meta(slug) if store.session_exists(slug) else None
+            meta = self.repo.read_meta(slug) if self.repo.has_meta(slug) else None
             revision = (meta.current_revision + 1) if meta else 1
             stale = _resolve_stale(set(meta.artifact_status) if meta else set())
 
@@ -236,7 +222,7 @@ class SessionService:
         context) without rebuilding the presentation logic in another language. Everything here is a
         pure projection of the model plus the session metadata."""
         model = self.load_model(slug)
-        meta = store.read_meta(slug) if store.session_exists(slug) else None
+        meta = self.repo.read_meta(slug) if self.repo.has_meta(slug) else None
         artifacts = {}
         if meta:
             for t, st in meta.artifact_status.items():

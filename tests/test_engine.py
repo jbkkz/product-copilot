@@ -1523,3 +1523,109 @@ def test_console_scripts_alias_shares_one_entry_point():
     pyproject = (repo_root / "pyproject.toml").read_text()
     assert 'requivo = "requivo.cli:app"' in pyproject
     assert 'pc = "requivo.cli:app"' in pyproject
+
+
+# ── SessionRepository: the storage seam (proves the service is backing-agnostic) ──
+# The point of the seam is requivo-cloud: the same SessionService orchestration must run on a Postgres
+# backing, not just files. This in-memory repository stands in for that non-file backing — if the
+# service works against it with zero filesystem, the orchestration is genuinely storage-agnostic.
+from requivo.core.errors import RevisionConflictError as _RevConflict  # noqa: E402
+from requivo.core.errors import SessionNotFoundError as _NotFound  # noqa: E402
+from requivo.core.persistence import ArtifactStatus, RevisionRecord, SessionMeta  # noqa: E402
+from requivo.services.repository import SessionRepository  # noqa: E402
+
+
+class InMemorySessionRepository:
+    """A dict-backed SessionRepository — no filesystem, no `.requivo/` directory. A faithful stand-in
+    for a Postgres backing (everything is mutation-backed, so has_meta == exists, ensure_writable is a
+    no-op check)."""
+
+    def __init__(self):
+        self._meta: dict = {}
+        self._model: dict = {}
+        self._req: dict = {}
+        self._art: dict = {}
+
+    def exists(self, slug): return slug in self._meta
+    def has_meta(self, slug): return slug in self._meta
+
+    def ensure_writable(self, slug):
+        if slug not in self._meta:
+            raise _NotFound(f"no session '{slug}'", details={"slug": slug})
+
+    def create(self, slug, request, *, provider=None, model_name=None, context_cards=None):
+        meta = SessionMeta(session_id="mem-" + slug, slug=slug, created_at="t", updated_at="t",
+                           provider=provider, model_name=model_name, context_cards=context_cards)
+        self._meta[slug] = meta
+        self._req[slug] = request
+        self._art[slug] = {}
+        return meta
+
+    def read_meta(self, slug):
+        if slug not in self._meta:
+            raise _NotFound(f"no session '{slug}'", details={"slug": slug})
+        return self._meta[slug]
+
+    def write_meta(self, slug, meta): self._meta[slug] = meta
+    def list_slugs(self): return sorted(self._meta)
+
+    def load_model(self, slug):
+        if slug not in self._model:
+            raise _NotFound(f"no model '{slug}'", details={"slug": slug})
+        return self._model[slug]
+
+    def save_revision(self, slug, model, *, expected_revision=None, provenance=None):
+        meta = self.read_meta(slug)
+        if expected_revision is not None and meta.current_revision != expected_revision:
+            raise _RevConflict("conflict", details={"expected": expected_revision,
+                                                    "actual": meta.current_revision})
+        rev = meta.current_revision + 1
+        prov = dict(provenance or {})
+        meta.revisions.append(RevisionRecord(
+            revision=rev, created_at="t", previous_revision=meta.current_revision or None,
+            model_hash="sha256:mem", provider=prov.get("provider"), model_name=prov.get("model_name"),
+            surface=prov.get("surface"), prompt_version=prov.get("prompt_version")))
+        meta.current_revision = rev
+        self._model[slug] = model
+        return rev, meta
+
+    def request_text(self, slug): return self._req.get(slug, "")
+    def context_cards(self, slug): return self._meta[slug].context_cards if slug in self._meta else None
+
+    def save_artifact(self, slug, artifact_type, filename, content, *, source_revision):
+        self._art[slug][filename] = content
+        st = ArtifactStatus(revision=source_revision, filename=filename, updated_at="t", stale=False)
+        self._meta[slug].artifact_status[artifact_type] = st
+        return st
+
+    def load_artifact(self, slug, filename): return self._art.get(slug, {}).get(filename)
+
+
+def test_session_service_runs_unchanged_on_a_non_file_repository():
+    from requivo.services.sessions import SessionService
+    repo = InMemorySessionRepository()
+    assert isinstance(repo, SessionRepository)          # satisfies the protocol (runtime-checkable)
+    svc = SessionService(repo)
+
+    svc.create_session("a leave request", slug="leave-mem")
+    r1 = svc.update_model("leave-mem", out({"workflow": slot(60, "inferred", "high")}).model_dump(),
+                          provenance={"provider": "anthropic", "surface": "cli-discover"})
+    assert r1.revision == 1
+
+    # artifact tracking + dependency-graph staleness, entirely in memory
+    ArtifactService(repo).save("leave-mem", "criteria", "# c")   # criteria consumes workflow
+    r2 = svc.update_model(
+        "leave-mem", out({"workflow": {**slot(95, "explicit", "high"), "value": "a → b"}}).model_dump())
+    assert r2.revision == 2
+    assert ArtifactService(repo).list("leave-mem")["criteria"]["stale"] is True
+
+    # optimistic locking is enforced by the backing, not the file layout
+    with pytest.raises(_RevConflict):
+        svc.update_model("leave-mem", out({"workflow": slot(95, "explicit", "high")}).model_dump(),
+                         expected_revision=0)
+
+    # the rich status projection needs no filesystem either
+    st = svc.status("leave-mem")
+    assert st["revision"] == 2 and "understanding" in st
+    # provenance is recorded per revision on the non-file backing
+    assert [rr.surface for rr in svc.meta("leave-mem").revisions] == ["cli-discover", None]

@@ -67,7 +67,10 @@ The layers form a strict DAG:
   surface is a *second* provider that lives outside Python: Claude reasons, the deterministic CLI applies.
 - **`services/`** — the application seam. `SessionService.update_model` is the single validated apply
   path (validate → diff → propagate → revision → stale-flag) shared by the CLI, the provider, and Claude
-  Code. There is no second apply implementation.
+  Code. There is no second apply implementation. Storage is injected as a `SessionRepository`
+  (`services/repository.py`): `FileSessionRepository` (default) delegates to `core.persistence` and owns
+  the canonical-vs-legacy `out/` handling, so the service orchestration is storage-agnostic — a future
+  `PostgresSessionRepository` (requivo-cloud) reuses it verbatim.
 - **`render/`** turns data into strings; **`cli.py` + `deterministic.py`** are the only layers that touch
   argv/stdout/TTY.
 
@@ -97,6 +100,7 @@ requivo/
     base.py          ReasoningProvider protocol         anthropic.py   client + _complete + discovery/generators + ledger
   services/        the shared apply/artifact seam
     sessions.py      SessionService (create / update_model / diff / status)   artifacts.py  ArtifactService
+    repository.py    SessionRepository protocol + FileSessionRepository (storage seam; Postgres-swappable)
   render/          views (data → str/stdout, no side effects)
     markdown.py      *_markdown                         terminal.py    render_*
   cli.py           the `requivo`/`pc` CLI: provider verbs (discover/answer/generators) + legacy flag main()

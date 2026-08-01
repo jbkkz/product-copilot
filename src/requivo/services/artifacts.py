@@ -8,10 +8,10 @@ provider (or Claude Code) produces the text; this service persists and tracks it
 
 from __future__ import annotations
 
-from requivo.core import persistence as store
 from requivo.core.dependencies import propagate
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import ArtifactStatus
+from requivo.services.repository import SessionRepository, default_repository
 
 # The saveable artifact vocabulary: type → filename under <session>/artifacts/. This is the union of
 # the buildable deliverables; it is a superset of `dependencies.ARTIFACT_FILES` (which tracks only the
@@ -32,6 +32,9 @@ class UnknownArtifactTypeError(RequivoError):
 
 
 class ArtifactService:
+    def __init__(self, repo: SessionRepository | None = None):
+        self.repo: SessionRepository = repo or default_repository()
+
     def _filename(self, artifact_type: str) -> str:
         try:
             return ARTIFACT_FILENAMES[artifact_type]
@@ -46,16 +49,16 @@ class ArtifactService:
         """Persist an artifact and tie it to the model revision it was generated from. `source_revision`
         defaults to the session's current revision (the common case: generate-then-save)."""
         filename = self._filename(artifact_type)
-        if not store.session_exists(slug):
+        if not self.repo.has_meta(slug):
             raise SessionNotFoundError(
                 f"session '{slug}' is not in the canonical store; apply a model first", details={"slug": slug})
-        meta = store.read_meta(slug)
+        meta = self.repo.read_meta(slug)
         rev = source_revision if source_revision is not None else meta.current_revision
-        return store.save_session_artifact(slug, artifact_type, filename, content, source_revision=rev)
+        return self.repo.save_artifact(slug, artifact_type, filename, content, source_revision=rev)
 
     def list(self, slug: str) -> dict[str, dict]:
         """Every recorded artifact with its freshness relative to the current model revision."""
-        meta = store.read_meta(slug)
+        meta = self.repo.read_meta(slug)
         out: dict[str, dict] = {}
         for t, st in meta.artifact_status.items():
             # Freshness is the explicit stale flag, set by `update_model`/`mark_stale` for exactly the
@@ -69,21 +72,21 @@ class ArtifactService:
     def show(self, slug: str, artifact_type: str) -> str:
         """The saved content of an artifact."""
         filename = self._filename(artifact_type)
-        p = store.canonical_dir(slug) / "artifacts" / filename
-        if not p.exists():
+        content = self.repo.load_artifact(slug, filename)
+        if content is None:
             raise SessionNotFoundError(
                 f"session '{slug}' has no saved {artifact_type!r} artifact",
                 details={"slug": slug, "type": artifact_type})
-        return p.read_text()
+        return content
 
     def mark_stale(self, slug: str, changed_slots: list[str]) -> list[str]:
         """Flag every generated artifact in the blast radius of `changed_slots` stale, and return the
         types flagged. Used after a model change made outside `update_model`."""
-        model = store.load_session_model(slug)
-        meta = store.read_meta(slug)
+        model = self.repo.load_model(slug)
+        meta = self.repo.read_meta(slug)
         hit = set(propagate(model, changed_slots).artifacts) & set(meta.artifact_status)
         for t in hit:
             meta.artifact_status[t].stale = True
         if hit:
-            store.write_meta(slug, meta)
+            self.repo.write_meta(slug, meta)
         return sorted(hit)
