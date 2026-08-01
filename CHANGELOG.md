@@ -6,8 +6,11 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-01
+
 Architectural refactor into **three surfaces over one engine** — Core, CLI, and Claude Code — in
-preparation for a future Web UI. No product behaviour changed; the model format is unchanged.
+preparation for a future Web UI, plus the formalized **open-source strategy** (the Community / Cloud /
+Lab boundary). No product behaviour changed; the model format is unchanged; the license stays MIT.
 
 ### Added
 - **Requivo for Claude Code** — a plugin (`plugins/claude-code/`) with six skills (`/requivo-discover`,
@@ -260,6 +263,12 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jbkkz/requivo/releases/tag/v0.8.0
+[0.7.0]: https://github.com/jbkkz/requivo/releases/tag/v0.7.0
+[0.6.3]: https://github.com/jbkkz/requivo/releases/tag/v0.6.3
+[0.6.2]: https://github.com/jbkkz/requivo/releases/tag/v0.6.2
+[0.6.1]: https://github.com/jbkkz/requivo/releases/tag/v0.6.1
 [0.6.0]: https://github.com/jbkkz/requivo/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jbkkz/requivo/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jbkkz/requivo/releases/tag/v0.4.0
