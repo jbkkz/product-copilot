@@ -48,12 +48,16 @@ else:
 
 MODEL_DEFAULT = "claude-sonnet-5"
 
-# Output-token ceiling per call. Discovery emits a full slot model + questions + summary and runs
-# right up against a 4k ceiling (a simple request already spends ~3.6k output tokens), so 4k left rich
-# requests one variance spike away from truncation. 8k gives ~2x headroom; you pay only for tokens
-# generated, not the ceiling, so raising it costs nothing on smaller outputs. A per-generator budget
-# (the assessment needs less than an epic) is a later refinement — one safe ceiling first.
-MAX_OUTPUT_TOKENS = 8000
+# Output-token ceiling per call. Discovery emits a full slot model + questions + summary; on a rich
+# multi-feature request that JSON exceeds 8k output tokens and the whole reply is discarded as
+# truncated (observed: a messy 5-feature request truncated at 8k). claude-sonnet-5 actually caps at
+# 128k output, but this path is a *non-streaming* client.messages.create(), and the SDK raises / risks
+# HTTP timeouts above ~16k without streaming — so 16k is the safe ceiling here. It fits a rich
+# discovery run with headroom, and you pay only for tokens generated, so raising it costs nothing on
+# smaller outputs (and never changes an output that already fit — golden baselines are unaffected).
+# Going higher (32k–128k) needs the call switched to streaming; a per-generator budget (the assessment
+# needs less than an epic) is a further refinement. One safe ceiling first.
+MAX_OUTPUT_TOKENS = 16000
 
 
 class EngineError(RequivoError):
