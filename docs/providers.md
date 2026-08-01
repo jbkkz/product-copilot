@@ -40,5 +40,23 @@ exact; the cost is a labelled estimate from a dated rate table, never treated as
 
 ## Adding a provider
 
-A provider implements the `ReasoningProvider` protocol in `providers/base.py`. The Core stays
-provider-free, so a new provider is additive and never touches the model logic.
+A provider implements the `ReasoningProvider` protocol in `providers/base.py`:
+
+| Method | Returns |
+|---|---|
+| `analyze(request, current_model=…, answers=…, only=…)` | a validated `EngineOutput` — one discovery turn |
+| `generate(artifact_type, model, only=…, **kwargs)` | the typed contract for that artifact |
+| `model_name()` | the reasoning model, recorded on the session |
+| `provenance(op, only=…)` | provider / model / prompt identity, recorded on each revision |
+
+`DiscoveryService` talks to the protocol and nothing else, so a second provider is a constructor
+argument rather than a fork of the orchestration:
+
+```python
+DiscoveryService(MyProvider()).start("A leave approval system.")
+```
+
+Provenance comes from the provider rather than being assembled by the service, so a revision produced
+by another implementation is stamped with *its* name and *its* prompt hash — nothing hard-codes
+`"anthropic"`. `tests/test_sessions.py` runs a whole discovery through a provider that has no vendor
+behind it; that test is what keeps the seam honest. The Core stays provider-free either way.

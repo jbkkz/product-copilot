@@ -12,10 +12,10 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1] / "plugins" / "claude-code"
 SKILLS = PLUGIN / "skills"
-EXPECTED_SKILLS = {
-    "requivo-discover", "requivo-answer", "requivo-status",
-    "requivo-brief", "requivo-prd", "requivo-impact",
-}
+# Claude Code namespaces plugin skills as `/<plugin>:<skill>`, so the directory name must NOT repeat
+# the plugin name — `skills/requivo-discover/` in a plugin called `requivo` is invoked as
+# `/requivo:requivo-discover`, which is not what any of the docs said.
+EXPECTED_SKILLS = {"discover", "answer", "status", "brief", "prd", "impact"}
 
 
 def _cli_commands() -> set[str]:
@@ -60,6 +60,28 @@ def test_readme_present():
     assert (PLUGIN / "REASONING.md").is_file()
 
 
+def test_repo_is_a_marketplace_pointing_at_this_plugin():
+    # `/plugin marketplace add jbkkz/requivo` is the documented install path, and it only works if the
+    # repo root carries a catalog whose `source` actually resolves to the plugin directory.
+    catalog = PLUGIN.parents[1] / ".claude-plugin" / "marketplace.json"
+    assert catalog.is_file(), "the repo root must carry a marketplace catalog"
+    data = json.loads(catalog.read_text())
+    entry = next(p for p in data["plugins"] if p["name"] == "requivo")
+    assert (catalog.parent.parent / entry["source"]).resolve() == PLUGIN.resolve()
+    # The catalog and the manifest are edited in different files; drift makes the install lie.
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert entry["version"] == manifest["version"]
+
+
+def test_documented_skill_invocations_are_namespaced():
+    # Claude Code always namespaces plugin skills as `/<plugin>:<skill>`. The README documented
+    # `/requivo-discover`, which no user could ever type successfully.
+    readme = (PLUGIN / "README.md").read_text()
+    for name in EXPECTED_SKILLS:
+        assert f"/requivo:{name}" in readme, f"{name}: README must document the namespaced invocation"
+    assert "/requivo-" not in readme
+
+
 # ── skills ───────────────────────────────────────────────────────────────────────
 
 
@@ -95,7 +117,7 @@ def test_skills_reference_only_real_cli_commands():
 def test_mutating_skills_use_a_proposal_file_not_direct_edits():
     # discover/answer change the model — they MUST go through validate/apply on a temp proposal, never
     # by editing model.json directly.
-    for name in ("requivo-discover", "requivo-answer"):
+    for name in ("discover", "answer"):
         text = (SKILLS / name / "SKILL.md").read_text()
         assert "model apply" in text, f"{name}: must apply via the CLI"
         assert "model validate" in text, f"{name}: must validate before applying"
@@ -107,6 +129,6 @@ def test_mutating_skills_use_a_proposal_file_not_direct_edits():
 
 
 def test_artifact_saving_skills_use_the_cli():
-    for name in ("requivo-brief", "requivo-prd"):
+    for name in ("brief", "prd"):
         text = (SKILLS / name / "SKILL.md").read_text()
         assert "artifact save" in text, f"{name}: must save via `requivo artifact save`"

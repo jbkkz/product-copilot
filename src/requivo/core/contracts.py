@@ -1,14 +1,53 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from requivo.paths import FRAMEWORK
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+
+
+class StrictModel(BaseModel):
+    """Base for every contract an LLM fills.
+
+    `extra="forbid"` rather than Pydantic's default of dropping unknown keys. The product's promise is
+    a *validated* model, and silently discarding a field the model invented breaks that twice: the
+    output looks conformant while carrying less than the model produced, and a prompt that has drifted
+    away from its contract (a renamed field, an extra section) reads as a clean success instead of the
+    loud failure it is. Rejecting is also self-healing here — `_complete()` retries with a corrective
+    nudge, so the model is told what it got wrong rather than having it quietly deleted.
+
+    This is the boundary contract only. Internal partial projections (a diff, a propagate basis) build
+    `EngineOutput`s directly and are unaffected; the *completeness* rules that a real discovery reply
+    must satisfy still live at the discovery boundary, not here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# A text field that must actually say something. Used where an empty string is not a legal value but a
+# silently-degraded output: an unanswerable question, a nameless story, a challenge with no premise.
+NonEmpty = Annotated[str, Field(min_length=1)]
+
+
+def _stable_id(prefix: str, *parts: str) -> str:
+    """A content-derived identifier: `<prefix>_<10 hex>` over the parts that carry the item's identity.
+
+    Derived rather than assigned, because there is no authority to assign one. The model does not
+    return ids (and could not return *stable* ones), and a counter kept in session metadata would have
+    to be reconciled on every apply. Hashing the statement itself gives an id that is identical across
+    revisions, surfaces and machines for as long as the statement is unchanged — which is exactly the
+    span over which "the same decision" means anything. A reworded decision gets a new id, and that is
+    honest: nothing in the data says the rewording preserved the intent.
+    """
+    digest = hashlib.sha256("␟".join(p.strip() for p in parts).encode("utf-8")).hexdigest()
+    return f"{prefix}_{digest[:10]}"
 
 
 @functools.lru_cache(maxsize=1)
@@ -58,7 +97,7 @@ class Level(str, Enum):
     high = "high"
 
 
-class Slot(BaseModel):
+class Slot(StrictModel):
     completeness: int = Field(ge=0, le=100)
     confidence: Confidence
     impact: Impact
@@ -66,22 +105,25 @@ class Slot(BaseModel):
     evidence: str = ""
 
 
-class Question(BaseModel):
-    q: str
-    slot: str
-    why: str
+class Question(StrictModel):
+    # A question with no text, or aimed at nothing, is not a question — and it would still be rendered,
+    # counted and answered against. The slot id is checked against the schema vocabulary below.
+    q: NonEmpty
+    slot: NonEmpty
+    why: NonEmpty
 
 
-class Summary(BaseModel):
+class Summary(StrictModel):
     objective: str = ""
     scope: str = ""
     assumptions: list[str] = Field(default_factory=list)
     blind_spot: str = ""
 
 
-class EngineOutput(BaseModel):
-    # protected_namespaces=() lets us keep the field literally named `model`.
-    model_config = ConfigDict(protected_namespaces=())
+class EngineOutput(StrictModel):
+    # protected_namespaces=() lets us keep the field literally named `model`; extra="forbid" is
+    # inherited from StrictModel and restated here so the whole config is visible in one place.
+    model_config = ConfigDict(protected_namespaces=(), extra="forbid")
     model: dict[str, Slot]
     # The engine asks at most 6 (the prompt says 3–6; the stop signal is []). The cap is an invariant,
     # not a suggestion — a turn that floods 12 questions has stopped prioritising by information value.
@@ -122,7 +164,7 @@ class EngineOutput(BaseModel):
         return self
 
 
-class Story(BaseModel):
+class Story(StrictModel):
     id: str
     title: str
     as_a: str = ""
@@ -132,7 +174,7 @@ class Story(BaseModel):
     slots: list[str] = Field(default_factory=list)
 
 
-class Stories(BaseModel):
+class Stories(StrictModel):
     stories: list[Story]
 
 
@@ -142,7 +184,7 @@ class Complexity(str, Enum):
     L = "L"
 
 
-class EstimateItem(BaseModel):
+class EstimateItem(StrictModel):
     story_id: str
     title: str
     complexity: Complexity
@@ -152,7 +194,7 @@ class EstimateItem(BaseModel):
     note: str = ""
 
 
-class EstimateDraft(BaseModel):
+class EstimateDraft(StrictModel):
     # What the LLM produces. Totals, confidence and spread_drivers are computed in Python
     # (from real slot data) so they can't be hallucinated.
     items: list[EstimateItem]
@@ -165,33 +207,59 @@ class Leverage(str, Enum):
     future = "future"
 
 
-class Opportunity(BaseModel):
-    text: str
+# The reasoning layer carries identity. A decision, a challenge and an opportunity are each things a
+# reader will want to refer back to — comment on, mark as accepted, follow across revisions — and text
+# is a poor handle for that. Each therefore carries a stable `id`, always *recomputed* from its own
+# content on validation: whatever a model put in the field is overwritten, so an id can never be
+# hallucinated, and a round-trip through JSON yields the identical value.
+
+class Opportunity(StrictModel):
+    id: str = ""           # derived from `text`; see _stable_id
+    text: NonEmpty
     leverage: Leverage
     modules: list[str] = Field(default_factory=list)  # concrete modules the leverage reaches (grounds it)
 
+    @model_validator(mode="after")
+    def _assign_id(self):
+        object.__setattr__(self, "id", _stable_id("opp", self.text))
+        return self
 
-class Challenge(BaseModel):
+
+class Challenge(StrictModel):
     # Not "what did we learn" but "what should we contest" — the senior-PM pushback on the premise.
-    headline: str          # 3–6 words naming the thing being challenged
-    premise: str           # the assumption the request takes for granted
-    alternative: str       # a concrete, domain-grounded alternative worth weighing
-    consequence: str       # what the current premise risks or costs
-    recommendation: str    # what to do about it before build
+    # All five parts are load-bearing: a challenge missing its alternative or its recommendation is an
+    # objection with nowhere to go, and it would still be rendered as if it were actionable.
+    id: str = ""               # derived from headline + premise; see _stable_id
+    headline: NonEmpty         # 3–6 words naming the thing being challenged
+    premise: NonEmpty          # the assumption the request takes for granted
+    alternative: NonEmpty      # a concrete, domain-grounded alternative worth weighing
+    consequence: NonEmpty      # what the current premise risks or costs
+    recommendation: NonEmpty   # what to do about it before build
     contests: list[str] = Field(default_factory=list)  # slot ids whose premise this contests
 
+    @model_validator(mode="after")
+    def _assign_id(self):
+        object.__setattr__(self, "id", _stable_id("chl", self.headline, self.premise))
+        return self
 
-class DesignDecision(BaseModel):
+
+class DesignDecision(StrictModel):
     # A settled decision. why/alternative/tradeoff are filled only where there was a real fork —
     # trivial sourcing facts stay a bare `decision` line.
-    decision: str          # what was decided
+    id: str = ""           # derived from `decision`; see _stable_id
+    decision: NonEmpty     # what was decided
     why: str = ""          # the rationale
     alternative: str = ""  # what was weighed instead
     tradeoff: str = ""     # the cost accepted for this choice
     derived_from: list[str] = Field(default_factory=list)  # slot ids the decision rests on (the DAG edge)
 
+    @model_validator(mode="after")
+    def _assign_id(self):
+        object.__setattr__(self, "id", _stable_id("dec", self.decision))
+        return self
 
-class Brief(BaseModel):
+
+class Brief(StrictModel):
     # The advisory layer: what a senior consultant would add on top of the discovery.
     problem: str = ""                                   # one-line problem statement (exec summary)
     solution: str = ""                                  # one-line solution statement (exec summary)
@@ -213,13 +281,13 @@ class Priority(str, Enum):
     could = "could"
 
 
-class Requirement(BaseModel):
+class Requirement(StrictModel):
     id: str
     requirement: str
     priority: Priority
 
 
-class PRD(BaseModel):
+class PRD(StrictModel):
     title: str
     summary: str = ""
     problem: str = ""
@@ -246,7 +314,7 @@ class ScenarioKind(str, Enum):
     permission = "permission"
 
 
-class Scenario(BaseModel):
+class Scenario(StrictModel):
     id: str
     title: str
     kind: ScenarioKind = ScenarioKind.happy_path
@@ -255,18 +323,18 @@ class Scenario(BaseModel):
     then: list[str] = Field(default_factory=list)
 
 
-class Feature(BaseModel):
+class Feature(StrictModel):
     name: str
     scenarios: list[Scenario] = Field(default_factory=list)
 
 
-class AcceptanceCriteria(BaseModel):
+class AcceptanceCriteria(StrictModel):
     title: str
     features: list[Feature] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
 
 
-class EpicIssue(BaseModel):
+class EpicIssue(StrictModel):
     id: str
     title: str
     description: str = ""
@@ -274,7 +342,7 @@ class EpicIssue(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
 
 
-class Epic(BaseModel):
+class Epic(StrictModel):
     title: str
     goal: str = ""
     business_value: str = ""
@@ -285,7 +353,7 @@ class Epic(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
-class ReleaseNotes(BaseModel):
+class ReleaseNotes(StrictModel):
     title: str
     version: str = ""
     summary: str = ""

@@ -28,14 +28,45 @@ plugin and the Web app all read and write the same layout.
 
 ## Revisions and provenance
 
-Each applied revision records **who produced it** — provider, model name, the reasoning surface
-(`cli-discover`, `web-answer`, a Claude Code turn…), the previous revision, and a content hash — in a
-`revisions` log in `session.json`. Provenance belongs to the revision, not just the session, because a
-model is moved by more than one surface over its life.
+Each applied revision records **who produced it**, in a `revisions` log in `session.json`:
+
+| Field | What it answers |
+|---|---|
+| `provider`, `model_name` | which engine reasoned |
+| `prompt_version` | `sha256:…` of the exact system prompt — prompt file + schema + the context cards actually selected |
+| `surface` | which interface asked (`cli-discover`, `web-answer`, `cli-brief`, a Claude Code turn…) |
+| `previous_revision`, `created_at` | where it sits in the history |
+| `model_hash` | content identity of the model that was written |
+
+Provenance belongs to the revision, not the session, because a model is moved by more than one surface
+over its life. The prompt hash is there because behaviour is tuned by editing prompts and context
+cards: "which model produced this" answers half the question, and the other half is what changed
+between two runs that look identical in the log.
 
 Updates go through the single validated apply path and support an **optimistic-locking** precondition:
 `requivo model apply <slug> proposal.json --expected-revision N` fails cleanly with a
 `revision_conflict` if the session has moved on, instead of silently overwriting a concurrent change.
+Provider-backed operations set it for you — a generation or an answers turn holds the revision it read,
+so a change that lands while the provider is reasoning is a clean conflict rather than a lost update.
+
+## Artifacts and freshness
+
+`session.json` tracks each generated artifact: its file, when it was written, the **source revision**
+it was generated from, and a `stale` flag.
+
+The source revision is *provenance*, not a verdict. An artifact is stale when a slot it rests on
+actually changed — computed from the dependency graph at apply time — not because the session has moved
+past its source revision. An old artifact whose inputs never moved is still fresh, and every surface
+reports the flag rather than comparing numbers.
+
+## Stable identifiers
+
+Design decisions, challenges and opportunities each carry an `id` (`dec_…`, `chl_…`, `opp_…`) derived
+from their own content and recomputed on every validation. It is the same value across revisions,
+surfaces and machines for as long as the statement is unchanged, so a decision can be referred back to
+without quoting its text. A supplied id is never trusted — it is always recomputed, so neither a model
+nor a hand-edited session file can invent an identity. A reworded statement gets a new id; nothing in
+the data says the rewording preserved the intent.
 
 ## Slugs
 

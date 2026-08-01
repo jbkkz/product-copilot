@@ -13,12 +13,12 @@ Six skills, each a thin driver over the deterministic `requivo` CLI:
 
 | Skill | What it does | Reasoning? |
 |---|---|---|
-| `/requivo-discover` | Start a session from a request → validated model + priority questions | Claude |
-| `/requivo-answer` | Fold answers back in → refined model, stale-artifact warnings | Claude |
-| `/requivo-status` | Readiness, blocking slots, revision, artifact freshness | none (deterministic) |
-| `/requivo-brief` | Solution assessment (the senior-PM judgment), saved as a tracked artifact | Claude |
-| `/requivo-prd` | PRD as a view of the model, unknowns kept visible, saved and tracked | Claude |
-| `/requivo-impact` | Blast radius of a change (decisions to re-validate, artifacts gone stale) | none (deterministic) |
+| `/requivo:discover` | Start a session from a request → validated model + priority questions | Claude |
+| `/requivo:answer` | Fold answers back in → refined model, stale-artifact warnings | Claude |
+| `/requivo:status` | Readiness, blocking slots, revision, artifact freshness | none (deterministic) |
+| `/requivo:brief` | Solution assessment (the senior-PM judgment), saved as a tracked artifact | Claude |
+| `/requivo:prd` | PRD as a view of the model, unknowns kept visible, saved and tracked | Claude |
+| `/requivo:impact` | Blast radius of a change (decisions to re-validate, artifacts gone stale) | none (deterministic) |
 
 ## Prerequisites
 
@@ -29,11 +29,34 @@ Six skills, each a thin driver over the deterministic `requivo` CLI:
 - Verify with `requivo doctor` — a missing Anthropic SDK / API key is reported as informational, not an
   error, for exactly this mode.
 
-## Install (local)
+## Install
 
-From a checkout of the Requivo repo, point Claude Code at this directory as a plugin (e.g. via your
-Claude Code plugin configuration / marketplace pointing at `plugins/claude-code/`). The skills are
-auto-discovered from `skills/`.
+**From the marketplace** (no checkout needed). In Claude Code:
+
+```
+/plugin marketplace add jbkkz/requivo
+/plugin install requivo@requivo
+/reload-plugins
+```
+
+The first command registers this repository as a plugin marketplace (its catalog lives at
+`.claude-plugin/marketplace.json`); the second installs the plugin from it. `/plugin marketplace update`
+pulls a newer version later.
+
+**From a checkout** (for development, or to run an unreleased version):
+
+```bash
+claude --plugin-dir ./plugins/claude-code     # loads it for this session only
+claude plugin validate ./plugins/claude-code  # static check, same one the review pipeline runs
+```
+
+Either way, verify with `/help` → **Custom commands**: the six skills appear under the `requivo`
+namespace. They are invoked as `/requivo:discover`, `/requivo:answer`, and so on — Claude Code always
+namespaces plugin skills as `/<plugin>:<skill>`.
+
+**Versioning:** the plugin version tracks the Requivo release it was tested against (0.9.2 here). The
+skills call the `requivo` CLI, so keep the two roughly in step — an older CLI may not have a verb a
+newer skill uses.
 
 ## How it works — two modes
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "requivo"
-version = "0.9.1"
+version = "0.9.2"
 description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -51,6 +51,14 @@ requivo = "requivo.cli:app"
 # `pc` is a deprecated backward-compat alias for `requivo` (the project was renamed from Product
 # Copilot). It calls the exact same entry point and may be removed in a future major version.
 pc = "requivo.cli:app"
+
+[tool.setuptools]
+# THIRD-PARTY-NOTICES.md rides along with the license into the wheel's dist-info. The wheel carries a
+# verbatim copy of htmx, and a redistributed file should be traceable to its source and version even
+# though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather than PEP 639's
+# `[project] license-files`, which would raise the build-time setuptools floor and the metadata version
+# for no gain here.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -175,7 +175,9 @@ class SessionMeta(BaseModel):
     context_cards: Optional[list[str]] = None  # the card selection; None == all cards
     request_hash: str = ""               # "sha256:…" of the originating request
     schema_version: int = SCHEMA_VERSION
-    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    # (A session-level `prompt_versions` map lived here and was never written. Prompt identity belongs
+    # to the revision that was reasoned with it, not to the session — see RevisionRecord.prompt_version.
+    # `extra="ignore"` means sessions written before 0.9.2 still load; the dead key is simply dropped.)
     current_revision: int = 0            # 0 == session created but no model applied yet
     revisions: list[RevisionRecord] = Field(default_factory=list)  # provenance log, one per applied revision
     artifact_status: dict[str, ArtifactStatus] = Field(default_factory=dict)

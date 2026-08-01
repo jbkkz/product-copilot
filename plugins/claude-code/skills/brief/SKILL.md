@@ -1,10 +1,10 @@
 ---
-name: requivo-brief
+name: brief
 description: Produce a solution assessment (brief) from a Requivo session's current model, using this Claude session for the judgment, and save it as a tracked artifact tied to the model revision. Use when discovery has converged and the user wants the senior-PM read of the requirements.
 allowed-tools: Bash(requivo:*), Read, Write
 ---
 
-# /requivo-brief
+# /requivo:brief
 
 Write the **solution assessment** — a judgment, not a recap — from the session's model. **You** do the
 analysis; Requivo tracks the artifact. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
@@ -33,11 +33,11 @@ Produce a two-tier document in PM language:
 Voice rule: no slot ids, no percentages, no confidence labels in the prose. Distinguish facts from
 assumptions explicitly; mark every assumption as an assumption.
 
-Write the assessment markdown to `/tmp/requivo-brief.md`.
+Write the assessment markdown to `/tmp/requivo:brief.md`.
 
 ## 4. Save it as a tracked artifact
 ```
-requivo artifact save <slug> --type brief --file /tmp/requivo-brief.md
+requivo artifact save <slug> --type brief --file /tmp/requivo:brief.md
 ```
 This ties the assessment to the model revision it was written from. The assessment is a judgment over
 the whole model, so any later material change to it flags the saved copy stale. Confirm the save, then

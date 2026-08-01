@@ -219,6 +219,64 @@ def test_output_rejects_a_challenge_contesting_an_unknown_slot():
         })
 
 
+def test_contracts_reject_a_field_the_schema_does_not_define():
+    # Pydantic's default is to drop unknown keys. For an LLM boundary that is the wrong default: the
+    # output reads as conformant while carrying less than the model produced, and a prompt that has
+    # drifted from its contract looks like a clean success. Rejecting also lets the retry loop tell the
+    # model what it got wrong.
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"workflow": slot(60, "inferred", "high")},
+            "questions": [], "summary": {}, "confidence_score": 0.8,   # invented field
+        })
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"workflow": {**slot(60, "inferred", "high"), "source": "guessed"}},
+            "questions": [], "summary": {},
+        })
+
+
+def test_contracts_reject_an_empty_question():
+    # A question with no text, or no rationale, would still be rendered, counted and answered against.
+    for bad in ({"q": "", "slot": "workflow", "why": "w"}, {"q": "Q?", "slot": "workflow", "why": ""}):
+        with pytest.raises(ValidationError):
+            EngineOutput.model_validate({
+                "model": {"workflow": slot(60, "inferred", "high")},
+                "questions": [bad], "summary": {},
+            })
+
+
+def test_contracts_reject_a_challenge_missing_a_load_bearing_part():
+    # A challenge without its alternative or recommendation is an objection with nowhere to go — and
+    # it renders in the assessment as though it were actionable.
+    base = {"headline": "h", "premise": "p", "alternative": "a", "consequence": "c", "recommendation": "r"}
+    for missing in ("premise", "alternative", "consequence", "recommendation"):
+        with pytest.raises(ValidationError):
+            Challenge.model_validate({**base, missing: ""})
+
+
+def test_reasoning_items_carry_a_stable_content_derived_id():
+    # Cloud will want to refer back to a decision — comment on it, mark it accepted, follow it across
+    # revisions — and text is a poor handle. The id is derived from the content, so it is identical
+    # across revisions, surfaces and machines for as long as the statement is unchanged.
+    d1 = DesignDecision.model_validate({"decision": "Draft-first", "derived_from": ["permissions"]})
+    d2 = DesignDecision.model_validate({"decision": "Draft-first", "why": "different rationale"})
+    assert d1.id.startswith("dec_") and d1.id == d2.id            # same statement → same handle
+    assert d1.id != DesignDecision.model_validate({"decision": "Approve-first"}).id
+    # Survives the round-trip through model.json unchanged…
+    assert DesignDecision.model_validate_json(d1.model_dump_json()).id == d1.id
+    # …and a supplied id is never trusted: it is recomputed from the content, so a model (or a
+    # hand-edited session file) cannot invent an identity for a statement.
+    assert DesignDecision.model_validate({"decision": "Draft-first", "id": "dec_forged"}).id == d1.id
+
+
+def test_reasoning_ids_are_distinct_per_kind():
+    c = Challenge.model_validate({"headline": "h", "premise": "p", "alternative": "a",
+                                  "consequence": "c", "recommendation": "r"})
+    o = Opportunity.model_validate({"text": "reuse the notification service", "leverage": "high"})
+    assert c.id.startswith("chl_") and o.id.startswith("opp_")
+
+
 # ── The driver: uncertainty × impact ─────────────────────────────────────────
 
 
@@ -829,6 +887,27 @@ def test_pc_estimate_renders():
         assert "=== ESTIMATE" in _run_app(["estimate", str(p)], client=fake)
 
 
+def test_pc_brief_writes_the_artifact_like_every_other_surface():
+    # The terminal used to render the assessment and keep it: the Web and Claude Code saved a tracked
+    # artifact, the CLI saved nothing. A generation now produces the same document wherever it was
+    # asked for — same file, same provenance, same staleness tracking.
+    with _model_in_out("clitest-brief-artifact") as p:
+        _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
+        assert (p.parent / "artifacts" / "solution-assessment.md").exists()
+        listed = ArtifactService().list(p.parent.name)["brief"]
+        assert listed["stale"] is False and listed["revision"] >= 1
+
+
+def test_pc_generators_record_which_prompt_reasoned(tmp_path):
+    # A revision log that cannot say what produced it cannot reproduce it. Behaviour is tuned by
+    # editing prompts and context cards, so the prompt hash is half the provenance.
+    with _model_in_out("clitest-provenance") as p:
+        _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low"})))
+        rec = store.read_meta(p.parent.name).revisions[-1]
+        assert rec.surface == "cli-brief" and rec.provider == "anthropic"
+        assert rec.prompt_version and rec.prompt_version.startswith("sha256:")
+
+
 def test_pc_prd_writes_artifact():
     with _model_in_out("clitest-prd") as p:
         _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X"})))
@@ -892,7 +971,9 @@ def test_pc_answer_refines_the_model():
         turn2 = json.dumps({
             "model": full_slots(problem=slot(95, "explicit", "high")),
             "questions": [],
-            "summary": {},
+            # A discovery reply owes an objective — a session of slots with nothing naming what they
+            # are for renders as a blank heading everywhere. The boundary check rejects it otherwise.
+            "summary": {"objective": "A leave approval system"},
         })
         fake = FakeClient(turn2)
         _run_app(["answer", str(p), "The approver is HR, and the circuit is per-client."], client=fake)
@@ -1194,7 +1275,7 @@ def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
         turn2 = json.dumps({
             "model": full_slots(workflow={"completeness": 95, "confidence": "explicit",
                                           "impact": "high", "value": "draft → issued → paid → archived"}),
-            "questions": [], "summary": {},
+            "questions": [], "summary": {"objective": "Document lifecycle"},
         })
         text = _run_app(["answer", str(p), "It also has an archived state."],
                         client=FakeClient(turn2))
@@ -1377,12 +1458,18 @@ def test_run_restricts_context_cards_when_only_given():
     assert "## financial-reporting" not in system
 
 
-def test_resolve_cards_maps_stems_and_flags_unknown():
-    from requivo.cli import _resolve_cards
+def test_resolve_cards_maps_stems_and_refuses_an_unknown_one():
+    # One resolver in Core, shared by every surface. An unknown card is an error rather than a warning
+    # you can walk past: dropping it leaves an empty selection, and an empty selection means *all*
+    # cards — so a typo would widen the context instead of narrowing it.
+    from requivo.core.context import resolve_cards
+    from requivo.core.errors import UnknownContextCardError
 
-    picked, unknown = _resolve_cards("b2b-platform, nope, financial-reporting")
-    assert picked == ["b2b-platform", "financial-reporting"]
-    assert unknown == ["nope"]
+    assert resolve_cards(["b2b-platform", " financial-reporting"]) == ["b2b-platform", "financial-reporting"]
+    assert resolve_cards([]) is None                      # no selection == every card, explicitly
+    with pytest.raises(UnknownContextCardError) as ei:
+        resolve_cards(["b2b-platform", "nope"])
+    assert ei.value.details["unknown"] == ["nope"]
 
 
 # ── 0.6.1: durable writes, provenance, API-boundary robustness, context continuity ─

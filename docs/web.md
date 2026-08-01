@@ -93,6 +93,8 @@ Even though it is a local app:
 - All rendered content is HTML-escaped (Jinja autoescape); artifact Markdown is shown in a code block.
 - Conservative headers are set: `X-Content-Type-Options`, `Referrer-Policy`, and a `Content-Security-Policy`
   that allows only same-origin assets (so the vendored HTMX and local CSS are the only scripts/styles).
+  HTMX is vendored rather than fetched from a CDN for exactly that reason, and because the app is meant
+  to work offline; its version and licence are recorded in `THIRD-PARTY-NOTICES.md`.
 - Input is length-bounded, and an over-long request or answer is **refused, not truncated** — half a
   request folded into the model reads exactly like a whole one. Request bodies are capped before they
   are parsed. An unknown context card is an error too: filtering it out would leave an empty selection,

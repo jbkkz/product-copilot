@@ -13,26 +13,18 @@ from dotenv import load_dotenv
 from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from requivo.core.analysis import _label, model_status
-from requivo.core.context import available_cards
+from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
-from requivo.core.persistence import _slug, load_model, save_model, write_artifact
+from requivo.core.persistence import load_model
 from requivo.deterministic import register as register_deterministic
+
+# The legacy flag CLI is deprecated and frozen in `requivo.legacy`; `main` is re-exported here only
+# because `src/engine.py` has imported it from this module since before the split.
+from requivo.legacy import _flag_value, main  # noqa: F401  (re-export for the legacy entry point)
 from requivo.paths import DEMO
-from requivo.providers.anthropic import (
-    EngineError,
-    advise,
-    derive_stories,
-    estimate,
-    generate_criteria,
-    generate_epic,
-    generate_prd,
-    generate_release,
-    new_client,
-    run,
-    track_usage,
-)
+from requivo.providers.anthropic import EngineError, advise, estimate, new_client, run, track_usage
 from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import (
     render_brief,
@@ -44,8 +36,8 @@ from requivo.render.terminal import (
     render_turn,
     render_usage,
 )
-from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
-from requivo.services.discovery import DiscoveryService, absorb_reasoning
+from requivo.services.artifacts import ARTIFACT_FILENAMES
+from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 
 load_dotenv()
@@ -96,122 +88,9 @@ def converse(client, request: str, only: list[str] | None = None) -> EngineOutpu
     return out
 
 
-def _flag_value(args: list[str], name: str) -> str | None:
-    if name in args:
-        i = args.index(name)
-        if i + 1 < len(args):
-            return args[i + 1]
-    return None
-
-
-def main() -> None:
-    """Legacy flag CLI entry — thin wrapper turning a clean EngineError into a tidy exit."""
-    try:
-        _run_legacy()
-    except EngineError as e:
-        print(f"\n{e}", file=sys.stderr)
-        raise SystemExit(1) from None
-
-
-def _run_legacy() -> None:
-    args = sys.argv[1:]
-    flags = {a for a in args if a.startswith("--")}
-    from_path = _flag_value(args, "--from")
-    # --release optionally takes a version token (e.g. --release v1.0); ignore a following flag.
-    release_version = _flag_value(args, "--release") or ""
-    if release_version.startswith("--"):
-        release_version = ""
-    consumed = {from_path, release_version}
-    positional = [a for a in args if not a.startswith("--") and a not in consumed]
-    client = new_client()
-
-    if from_path:
-        # Regenerate artifacts from a saved model — no discovery.
-        out = load_model(Path(from_path))
-        slug = Path(from_path).parent.name
-        print(f"Loaded model ← {from_path}")
-        quick = False
-    elif positional:
-        arg = positional[0]
-        request = Path(arg).read_text() if Path(arg).exists() else arg
-        slug = _slug(Path(arg).stem if Path(arg).exists() else request)
-        # Interactive loop, or a single quick pass with --once / no TTY.
-        quick = "--once" in flags or not sys.stdin.isatty()
-        if quick:
-            out = run(client, [{"role": "user", "content": request}])
-            render_turn(out)
-        else:
-            out = converse(client, request)
-        if out:
-            print(f"\nSaved model → {save_model(out, slug)}")
-    else:
-        print('Usage: python src/engine.py [--once] [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--epic-gitlab] [--release [version]] "request" | file.md')
-        print('       python src/engine.py --from out/<slug>/model.json [--stories] [--estimate] [--prd] [--criteria] [--epic] [--epic-json] [--epic-github] [--epic-gitlab] [--release [version]]')
-        sys.exit(1)
-
-    if not out:
-        return
-
-    # The solution assessment is the default deliverable (skipped on a quick --once pass).
-    if not quick:
-        print("\nGenerating the solution assessment…")
-        brief = advise(client, out)
-        absorb_reasoning(out, brief)  # bake the reasoning into the model
-        save_model(out, slug)          # re-save enriched (backfills the --from path too)
-        render_brief(out, brief)
-
-    # Delivery pipeline. --estimate implies stories (it estimates them).
-    if "--stories" in flags or "--estimate" in flags:
-        stories = derive_stories(client, out)
-        render_stories(stories)
-        if "--estimate" in flags:
-            draft, soft, confidence = estimate(client, out, stories)
-            render_estimate(draft, soft, confidence)
-
-    # Artifact generators: model → file.
-    if "--prd" in flags:
-        print("\nGenerating the PRD…")
-        markdown = prd_markdown(generate_prd(client, out))
-        path = write_artifact(slug, "prd.md", markdown)
-        print(markdown)
-        print(f"\nWrote PRD → {path}")
-
-    if "--criteria" in flags:
-        print("\nGenerating the acceptance criteria…")
-        markdown = criteria_markdown(generate_criteria(client, out))
-        path = write_artifact(slug, "acceptance-criteria.md", markdown)
-        print(markdown)
-        print(f"\nWrote acceptance criteria → {path}")
-
-    if flags & {"--epic", "--epic-json", "--epic-github", "--epic-gitlab"}:
-        print("\nGenerating the delivery epic…")
-        epic = generate_epic(client, out)  # one model call; every view renders from it
-        if "--epic" in flags:
-            markdown = epic_markdown(epic)
-            path = write_artifact(slug, "epic.md", markdown)
-            print(markdown)
-            print(f"\nWrote epic → {path}")
-        if "--epic-json" in flags:
-            path = write_artifact(slug, "epic.json", epic_export_json(epic))
-            print(f"Wrote neutral epic export (GitHub/GitLab-importable) → {path}")
-        if "--epic-github" in flags:
-            path = write_artifact(slug, "epic.github.json", to_github_json(epic, slug))
-            print(f"Wrote GitHub issue-creation plan → {path}")
-        if "--epic-gitlab" in flags:
-            path = write_artifact(slug, "epic.gitlab.json", to_gitlab_json(epic, slug))
-            print(f"Wrote GitLab issue-creation plan → {path}")
-
-    if "--release" in flags:
-        print("\nGenerating the release notes…")
-        markdown = release_markdown(generate_release(client, out, release_version))
-        path = write_artifact(slug, "release-notes.md", markdown)
-        print(markdown)
-        print(f"\nWrote release notes → {path}")
-
-
 # ── Subcommand CLI (`pc`) ─────────────────────────────────────────────────────
-# The modern surface. A thin layer over the same core the legacy flag CLI above
-# uses: each handler parses, calls core, renders, writes — no business logic here.
+# The modern surface. A thin layer over the same core: each handler parses, calls
+# the services, renders, writes — no business logic here.
 # `app()` takes an optional client so tests can inject a stub; only verbs that hit
 # the API build one, so `requivo status` runs fully offline.
 
@@ -229,18 +108,6 @@ def _is_file_arg(arg: str) -> bool:
         return False
 
 
-def _resolve_cards(spec: str) -> tuple[list[str], list[str]]:
-    """Map a comma-separated --context spec to context-card stems. Returns (picked, unknown)."""
-    avail = {c.lower(): c for c in available_cards()}
-    picked, unknown = [], []
-    for tok in spec.split(","):
-        key = tok.strip().lower()
-        if not key:
-            continue
-        (picked if key in avail else unknown).append(avail.get(key, tok.strip()))
-    return picked, unknown
-
-
 def _cmd_discover(a, client) -> None:
     if not a.request or not a.request.strip():
         print("discover needs a request: a sentence describing what to build, or a path to a file "
@@ -250,20 +117,18 @@ def _cmd_discover(a, client) -> None:
     is_file = _is_file_arg(a.request)
     request = Path(a.request).read_text() if is_file else a.request
 
-    only = None
-    if a.context:
-        picked, unknown = _resolve_cards(a.context)
-        if unknown:
-            print(f"Unknown context card(s): {', '.join(unknown)}. "
-                  f"Available: {', '.join(available_cards())}", file=sys.stderr)
-        if picked:  # if nothing valid was named, fall back to all cards rather than none
-            only = picked
-            print(f"Context cards: {', '.join(only)}")
+    # One resolver, in Core, shared with the deterministic verbs and the Web: an unknown card is a hard
+    # error. This used to warn and carry on with `only = None`, which does not mean "the cards you
+    # named minus the typo" — it means *every* card. A misspelling widened the context instead of
+    # narrowing it, and the run looked like it had honoured the selection.
+    only = resolve_cards(a.context.split(",")) if a.context else None
+    if only:
+        print(f"Context cards: {', '.join(only)}")
 
     # Discovery orchestration (run the provider → apply through the validated path) lives in the shared
     # DiscoveryService, so the Web drives the exact same pipeline — the CLI only owns the interactive
     # TTY loop and the rendering.
-    disco = DiscoveryService(client)
+    disco = DiscoveryService(client=client)
     slug_hint = Path(a.request).stem if is_file else None
     quick = a.once or not sys.stdin.isatty()
     if quick:
@@ -287,7 +152,7 @@ def _cmd_discover(a, client) -> None:
 def _cmd_answer(a, client) -> None:
     # Same shared orchestration as the Web: DiscoveryService folds the answers in and applies the
     # refined model through the validated path (diff → revision → stale-flag).
-    disco = DiscoveryService(client)
+    disco = DiscoveryService(client=client)
     svc = disco.sessions
     slug = svc.resolve_slug(a.model)
     if not svc.exists(slug):
@@ -413,70 +278,73 @@ def _cmd_impact(a, client) -> None:
         render_impact(propagate(out, resolved))
 
 
-# Provider-backed generators. Each resolves a session (slug or model.json path), reasons via the
-# provider, and saves the artifact into the canonical store through ArtifactService — the same place
-# the deterministic `artifact save` verb writes, and never the legacy `out/`. A legacy session is
-# migrated on this first artifact write.
+# Provider-backed generators. Each resolves a session (slug or model.json path) and hands off to
+# `DiscoveryService`, which is where reasoning, the revision lock, provenance and the artifact write
+# actually happen — so a document asked for from the terminal is produced, saved and tracked exactly as
+# the same document asked for from the browser or from Claude Code. The CLI's job here is to resolve
+# the session, choose the terminal view, and say where the file went.
 
 
-def _generator_session(a, client) -> tuple[object, EngineOutput, str, list[str] | None]:
-    """Shared preamble for the provider generators: (client, model, slug, cards). Ensures the session
-    is canonical so the produced artifact is tracked in `.requivo/sessions/`."""
-    client = client or new_client()
+def _generator_service(a, client) -> tuple[str, DiscoveryService]:
+    """Shared preamble: (slug, service). Fails early if the session does not exist, so a typo'd slug
+    never reaches the provider and gets billed for it."""
     svc = SessionService()
     slug = svc.resolve_slug(a.model)
     if not svc.exists(slug):
         raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
-    out = svc.load_model(slug)
-    cards = svc.cards(slug)
-    svc.ensure_canonical(slug)  # migrate a legacy session before writing its first artifact
-    return client, out, slug, cards
+    return slug, DiscoveryService(client=client, sessions=svc)
 
 
-def _save_artifact(slug: str, artifact_type: str, markdown: str, label: str) -> None:
-    print(markdown)
-    st = ArtifactService().save(slug, artifact_type, markdown)
-    print(f"\nWrote {label} → {store.canonical_dir(slug) / 'artifacts' / st.filename}")
+def _wrote(slug: str, result, label: str) -> None:
+    print(f"\nWrote {label} → {store.canonical_dir(slug) / 'artifacts' / result.status.filename}")
 
 
 def _cmd_brief(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    brief = advise(client, out, only=cards)
-    absorb_reasoning(out, brief)
-    # Backfilling the reasoning into the model is a model change — it goes through the apply path,
-    # so downstream generators inherit the reasoning from a proper new revision.
-    SessionService().update_model(slug, out.model_dump_json())
-    render_brief(out, brief)
+    slug, disco = _generator_service(a, client)
+    # The assessment's reasoning is absorbed back into the model as a new revision inside `generate`,
+    # so downstream generators inherit the decisions and challenges, not just the facts.
+    result = disco.generate(slug, "brief", surface="cli-brief")
+    render_brief(result.model, result.artifact)
+    _wrote(slug, result, "solution assessment")
 
 
 def _cmd_prd(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    _save_artifact(slug, "prd", prd_markdown(generate_prd(client, out, only=cards)), "PRD")
+    slug, disco = _generator_service(a, client)
+    result = disco.generate(slug, "prd", surface="cli-prd")
+    print(prd_markdown(result.artifact))
+    _wrote(slug, result, "PRD")
 
 
 def _cmd_stories(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    render_stories(derive_stories(client, out, only=cards))  # terminal-only view (no saved artifact)
+    # Terminal-only: stories are an analysis feeding the estimate, not a deliverable with a file.
+    slug, disco = _generator_service(a, client)
+    render_stories(disco.reason(slug, "stories"))
 
 
 def _cmd_estimate(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    stories = derive_stories(client, out, only=cards)
+    slug, disco = _generator_service(a, client)
+    svc, client = SessionService(), client or new_client()
+    stories = disco.reason(slug, "stories")
     render_stories(stories)
-    draft, soft, confidence = estimate(client, out, stories, only=cards)
+    # The estimate is the one call that needs a prior artifact as input, so it does not fit the
+    # single-model→artifact shape of the provider's `generate`; it stays a direct call. Terminal-only.
+    draft, soft, confidence = estimate(client, svc.load_model(slug), stories, only=svc.cards(slug))
     render_estimate(draft, soft, confidence)
 
 
 def _cmd_criteria(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    _save_artifact(slug, "criteria",
-                   criteria_markdown(generate_criteria(client, out, only=cards)), "acceptance criteria")
+    slug, disco = _generator_service(a, client)
+    result = disco.generate(slug, "criteria", surface="cli-criteria")
+    print(criteria_markdown(result.artifact))
+    _wrote(slug, result, "acceptance criteria")
 
 
 def _cmd_epic(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    epic = generate_epic(client, out, only=cards)  # one model call; every view renders from it
-    _save_artifact(slug, "epic", epic_markdown(epic), "epic")
+    slug, disco = _generator_service(a, client)
+    result = disco.generate(slug, "epic", surface="cli-epic")  # one model call; every view renders from it
+    epic = result.artifact
+    print(epic_markdown(epic))
+    _wrote(slug, result, "epic")
     if a.json:
         print(f"Wrote neutral epic export → {store.write_artifact_file(slug, 'epic.json', epic_export_json(epic))}")
     if a.github:
@@ -488,9 +356,10 @@ def _cmd_epic(a, client) -> None:
 
 
 def _cmd_release(a, client) -> None:
-    client, out, slug, cards = _generator_session(a, client)
-    _save_artifact(slug, "release",
-                   release_markdown(generate_release(client, out, a.version, only=cards)), "release notes")
+    slug, disco = _generator_service(a, client)
+    result = disco.generate(slug, "release", surface="cli-release", version=a.version)
+    print(release_markdown(result.artifact))
+    _wrote(slug, result, "release notes")
 
 
 def _cmd_web(a, client) -> None:

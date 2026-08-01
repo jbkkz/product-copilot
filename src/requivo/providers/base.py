@@ -35,7 +35,20 @@ class ReasoningProvider(Protocol):
         `only` restricts the context cards, held constant across a session's turns."""
         ...
 
-    def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None) -> object:
+    def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None,
+                 **kwargs) -> object:
         """A model → a typed artifact contract (PRD, Stories, Epic, …). The concrete return type is
-        the Pydantic contract for `artifact_type`; the caller renders/persists it."""
+        the Pydantic contract for `artifact_type`; the caller renders/persists it. `**kwargs` carries
+        the few per-artifact options a generator takes (e.g. a `version` to stamp on release notes)."""
+        ...
+
+    def model_name(self) -> str:
+        """The reasoning model this provider will call — recorded on the session it produces."""
+        ...
+
+    def provenance(self, op: str, *, only: list[str] | None = None) -> dict:
+        """Who reasoned, with what, and against which prompt, for one operation (`analyze` or an
+        artifact type). The service records this on the revision rather than assembling it itself —
+        provider identity and prompt identity belong to the layer that owns them, so a second provider
+        cannot end up stamping its revisions with another's name."""
         ...

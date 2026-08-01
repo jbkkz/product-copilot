@@ -1,10 +1,10 @@
 ---
-name: requivo-prd
+name: prd
 description: Generate a PRD from a Requivo session's model — a view of the model, with unknowns kept visible and open decisions left open — and save it as a tracked artifact. Use when the user wants a Product Requirements Document from a discovered model.
 allowed-tools: Bash(requivo:*), Read, Write
 ---
 
-# /requivo-prd
+# /requivo:prd
 
 Generate a **PRD as a view of the model** — not new invention. **You** write it from the model; Requivo
 tracks it. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
@@ -26,11 +26,11 @@ assumptions, open questions, risks). Rules that keep it faithful to the model:
 - **Traceability.** Each requirement should be traceable to the slot(s) it comes from; keep them
   grounded in the model, not added from outside it.
 
-Write the PRD markdown to `/tmp/requivo-prd.md`.
+Write the PRD markdown to `/tmp/requivo:prd.md`.
 
 ## 3. Save it as a tracked artifact
 ```
-requivo artifact save <slug> --type prd --file /tmp/requivo-prd.md
+requivo artifact save <slug> --type prd --file /tmp/requivo:prd.md
 ```
 The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
 on flags it stale (`requivo status` will show it). Confirm the save; clean up the temp file.

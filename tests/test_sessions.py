@@ -289,7 +289,9 @@ def test_an_answers_turn_holds_the_revision_it_read(workspace):
     def concurrent_apply():
         svc.update_model("s", _full_model(**{"risks": _slot(70, "explicit", "high", "rollout risk")}))
 
-    disco = DiscoveryService(client=_RacingClient(json.dumps(_full_model()), concurrent_apply))
+    reply = _full_model()
+    reply["summary"] = {"objective": "A leave approval system"}   # a discovery reply owes an objective
+    disco = DiscoveryService(client=_RacingClient(json.dumps(reply), concurrent_apply))
     with pytest.raises(RevisionConflictError):
         disco.answer("s", "here are my answers")
     assert svc.load_model("s").model["risks"].value == "rollout risk"
@@ -311,6 +313,56 @@ def test_an_artifact_generated_from_a_superseded_revision_is_born_stale(workspac
     saved = art.list("s")["prd"]
     assert saved["revision"] == 1        # recorded against the revision it was written from…
     assert saved["stale"] is True        # …and the workflow change it never saw makes it stale
+
+
+# ── the provider seam ─────────────────────────────────────────────────────────
+# The point of the protocol is that the orchestration is not Anthropic-shaped. These two tests are the
+# proof: one drives a whole discovery through a provider that has never heard of Anthropic, the other
+# checks that what lands in the revision log is enough to reproduce the run.
+
+class _FakeProvider:
+    """A `ReasoningProvider` with no vendor behind it — the stand-in for a second implementation."""
+
+    name = "fake"
+
+    def analyze(self, request, *, current_model=None, answers=None, only=None):
+        return EngineOutput.model_validate({**_full_model(), "summary": {"objective": "A leave system"}})
+
+    def generate(self, artifact_type, model, *, only=None):
+        raise AssertionError("not needed for this test")
+
+    def model_name(self):
+        return "fake-model-1"
+
+    def provenance(self, op, *, only=None):
+        return {"provider": self.name, "model_name": self.model_name(), "prompt_version": "sha256:fake"}
+
+
+def test_discovery_runs_on_a_provider_that_is_not_anthropic(workspace):
+    from requivo.services.discovery import DiscoveryService
+
+    slug = DiscoveryService(_FakeProvider()).start("A leave approval system.", slug="fake-prov")
+    meta = SessionService().meta(slug)
+    # Nothing hard-codes "anthropic": the session and its revision are stamped by the provider itself.
+    assert meta.provider == "fake" and meta.model_name == "fake-model-1"
+    assert [(r.provider, r.model_name) for r in meta.revisions] == [("fake", "fake-model-1")]
+
+
+def test_a_revision_records_the_prompt_it_was_reasoned_against(workspace):
+    # A revision log that is only "anthropic, at 14:02" cannot reproduce anything: behaviour here is
+    # tuned by editing prompts and context cards, so the prompt identity is half the provenance.
+    from requivo.providers.anthropic import prompt_version
+    from requivo.services.discovery import DiscoveryService
+
+    reply = {**_full_model(), "summary": {"objective": "A leave approval system"}}
+    slug = DiscoveryService(client=_RacingClient(json.dumps(reply), lambda: None)).start(
+        "A leave approval system.", slug="prov")
+
+    rec = SessionService().meta(slug).revisions[-1]
+    assert rec.provider == "anthropic" and rec.model_name
+    assert rec.prompt_version and rec.prompt_version.startswith("sha256:")
+    # It follows the context-card selection, because a different card set is different reasoning.
+    assert prompt_version("analyze") != prompt_version("analyze", only=[])
 
 
 def test_update_missing_session_raises(workspace):

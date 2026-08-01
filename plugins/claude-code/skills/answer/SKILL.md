@@ -1,10 +1,10 @@
 ---
-name: requivo-answer
-description: Fold the user's answers into an existing Requivo session and refine the model one turn. Reasoning is this Claude session (no API key); the refined model is validated and applied, and any now-stale artifacts are reported. Use after /requivo-discover when the user has answered the open questions.
+name: answer
+description: Fold the user's answers into an existing Requivo session and refine the model one turn. Reasoning is this Claude session (no API key); the refined model is validated and applied, and any now-stale artifacts are reported. Use after /requivo:discover when the user has answered the open questions.
 allowed-tools: Bash(requivo:*), Read, Write
 ---
 
-# /requivo-answer
+# /requivo:answer
 
 Refine an existing session with the user's answers. **You** reason; Requivo Core validates and applies.
 Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
@@ -43,4 +43,4 @@ From the `model apply` JSON, tell the user in plain language:
 - the new readiness (ready, or which slots still block it),
 - the next small group of questions, verbatim, or that discovery has converged.
 
-If converged, suggest `/requivo-brief <slug>`. Clean up the temp file.
+If converged, suggest `/requivo:brief <slug>`. Clean up the temp file.

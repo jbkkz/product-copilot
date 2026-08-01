@@ -13,6 +13,7 @@ module only *feeds* the assembled prompt to the model.
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
 import re
@@ -319,13 +320,20 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
 
 
 def _require_complete_model(out: EngineOutput) -> None:
-    """A discovery turn must return the whole required slot set. A model missing a required slot
-    isn't just incomplete — that slot becomes invisible to readiness and every view, so a
-    high-impact gap could pass silently as 'ready'. Reject it here; the retry loop makes the model
-    re-emit the missing slots (the prompt already asks for all of them each turn)."""
+    """A discovery turn must return the whole required slot set, and must say what the thing is for.
+
+    A model missing a required slot isn't just incomplete — that slot becomes invisible to readiness
+    and every view, so a high-impact gap could pass silently as 'ready'. An empty objective is the same
+    failure one level up: the session is then a set of slots with nothing naming what they are about,
+    and it renders as a blank heading in every view. Both are rejected here rather than in the contract,
+    because a partial `EngineOutput` is a legitimate internal object (a diff basis, a projection) — it
+    is only a *discovery reply* that owes completeness. The retry loop makes the model self-correct.
+    """
     missing = missing_required_slots(set(out.model))
     if missing:
         raise ValueError(f"model is missing required slots: {missing}. Emit every schema slot.")
+    if not out.summary.objective.strip():
+        raise ValueError("summary.objective is empty — state in one line what this is meant to achieve.")
 
 
 def run(client, messages: list[dict], retries: int = 2,
@@ -433,6 +441,25 @@ _GENERATORS = {
     "release": generate_release,
 }
 
+# The prompt file behind each operation — what `prompt_version()` hashes to identify the reasoning that
+# produced a revision. `analyze` is the discovery turn; the rest are the artifact types.
+_OP_PROMPTS = {
+    "analyze": "engine.md", "brief": "brief.md", "stories": "stories.md", "estimate": "estimate.md",
+    "prd": "prd.md", "criteria": "criteria.md", "epic": "epic.md", "release": "release.md",
+}
+
+
+def prompt_version(op: str, only: list[str] | None = None) -> str:
+    """`"sha256:…"` over the exact system prompt an operation sends — the prompt file, the schema, and
+    the selected context cards, byte for byte.
+
+    This is what makes a revision traceable rather than merely timestamped. Behaviour here is tuned by
+    editing Markdown and JSON assets, so "which model produced this" answers half the question; the
+    other half is "against which prompt and which context cards", and that is exactly what changes
+    between two runs that look identical in the log. A card added to the set moves the hash, because it
+    genuinely moved the reasoning."""
+    return "sha256:" + hashlib.sha256(build_prompt(_OP_PROMPTS[op], only).encode("utf-8")).hexdigest()
+
 
 class AnthropicProvider:
     """`ReasoningProvider` over the Anthropic SDK. Holds a client so the free functions above (which
@@ -450,12 +477,22 @@ class AnthropicProvider:
             return answer_turn(self.client, current_model, request, answers, only=only)
         return run(self.client, [{"role": "user", "content": request}], only=only)
 
-    def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None):
+    def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None,
+                 **kwargs):
+        """`**kwargs` carries the few per-artifact options a generator takes (release notes accept a
+        `version` to stamp); an option a generator does not know is a TypeError, not a silent no-op."""
         try:
             fn = _GENERATORS[artifact_type]
         except KeyError as e:
             raise EngineError(f"unknown artifact type for the Anthropic provider: {artifact_type!r}") from e
-        return fn(self.client, model, only=only)
+        return fn(self.client, model, only=only, **kwargs)
 
     def model_name(self) -> str:
         return current_model_name()
+
+    def provenance(self, op: str, *, only: list[str] | None = None) -> dict:
+        """Who reasoned, with what, against which prompt — the fields a revision records. The service
+        asks the provider for this instead of assembling it, so a second provider cannot silently
+        stamp revisions as `anthropic`, and the prompt identity comes from the layer that owns it."""
+        return {"provider": self.name, "model_name": self.model_name(),
+                "prompt_version": prompt_version(op, only)}

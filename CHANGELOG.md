@@ -6,6 +6,67 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-01
+
+The second half of the 0.9.0 review: consistency between surfaces, and the identity/provenance
+decisions that have to be made before anything else writes sessions. No breaking change to the session
+format — a 0.9.x session is read and written unchanged.
+
+### Changed
+- **Every interface produces the same artifact.** Generation moved behind `DiscoveryService.generate()`
+  for all of `brief` / `prd` / `criteria` / `epic` / `release`, so a document asked for from the
+  terminal is produced, saved, versioned and tracked exactly as the same document asked for from the
+  browser or from Claude Code. The terminal used to render the solution assessment and keep it — it now
+  saves it like everywhere else. `stories` and `estimate` stay deliberately terminal-only (analyses
+  feeding the estimate, not deliverables with a file) via `DiscoveryService.reason()`.
+- **The provider seam is real, not decorative.** `DiscoveryService` now talks to the
+  `ReasoningProvider` protocol only — `analyze` / `generate` / `model_name` / `provenance` — instead of
+  importing the Anthropic functions directly. Swapping the reasoning backend is a constructor argument;
+  a test runs a whole discovery through a provider with no vendor behind it.
+- **Provenance is populated, not just declared.** Each revision records the provider, the model, the
+  surface, and `prompt_version` — a hash of the exact system prompt (prompt file + schema + the context
+  cards actually selected). Behaviour here is tuned by editing assets, so that hash is half the answer
+  to "what produced this revision". The never-written session-level `prompt_versions` map is gone.
+- **Boundary contracts are strict.** Everything an LLM fills now inherits a `StrictModel` base
+  (`extra="forbid"`): a field the model invents fails loudly and rides the retry loop instead of being
+  silently dropped. Text that must say something (a question's `q`/`why`, a challenge's premise,
+  alternative, consequence and recommendation) is rejected when empty, and a discovery reply must carry
+  a non-empty objective.
+- **Design decisions, challenges and opportunities carry stable ids** (`dec_…`, `chl_…`, `opp_…`),
+  derived from their own content and recomputed on every validation — identical across revisions,
+  surfaces and machines while the statement is unchanged, and impossible to forge, since a supplied id
+  is always overwritten. Cloud needs to refer back to a decision; text is a poor handle.
+- **The legacy flag CLI is deprecated** and moved to `requivo/legacy.py`, frozen, with a notice on use
+  and removal scheduled for **1.1.0**. It writes the old `out/` layout — no revisions, no provenance,
+  no staleness — and deleting that one file is now the whole removal.
+- **`CLAUDE.md` rewritten** (327 → 261 lines). It described `out/<slug>/model.json` as the store, `pc`
+  as the modern CLI, an 8k token ceiling, and two modules that no longer exist — and it is the file an
+  agent reads before changing this repo, so its drift was a live risk of re-introducing what had just
+  been removed. It now leads with the invariants that must not be broken.
+
+### Fixed
+- **The Claude Code skills were documented under names nobody could type.** Claude Code namespaces
+  plugin skills as `/<plugin>:<skill>`, so `skills/requivo-discover/` in a plugin named `requivo` was
+  really `/requivo:requivo-discover`. The skills are renamed to `discover`, `answer`, `status`,
+  `brief`, `prd`, `impact` — invoked as `/requivo:discover` — and a test now checks the README against
+  the actual namespacing.
+- **`requivo discover --context` accepted an unknown card with a warning** and carried on with *all*
+  cards, which is the opposite of narrowing. It now uses the same Core resolver as the deterministic
+  verbs and the Web, and refuses. (0.9.1 fixed this everywhere except the main discovery path.)
+
+### Added
+- **The repository is a plugin marketplace** (`.claude-plugin/marketplace.json`), so the plugin install
+  is two exact commands — `/plugin marketplace add jbkkz/requivo` then `/plugin install requivo@requivo`
+  — instead of the previous "point Claude Code at this directory". The plugin version now tracks the
+  Requivo release it was tested against.
+- **`THIRD-PARTY-NOTICES.md`**, shipped in the wheel's `dist-info`: the vendored htmx copy, its version,
+  its upstream and its licence. 0BSD requires no attribution; a redistributed file should still be
+  traceable.
+- **The publish workflow gates on the things that make a bad release permanent**: the tag must exist and
+  agree with both `pyproject.toml` and `__version__`, the tagged commit is what gets built, and lint,
+  tests, `twine check` and an outside-the-repo wheel smoke test (including the web assets) all run
+  before the upload. A manual dispatch now requires a tag instead of publishing whatever is on main.
+
 ## [0.9.1] - 2026-08-01
 
 Correctness and web-security fixes from an external review of 0.9.0. No new surface, no format change:

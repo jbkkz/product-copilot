@@ -69,14 +69,18 @@ uv run requivo demo
 
 ### Claude Code
 
-Reason with the Claude session you already have — no Anthropic API key needed. Install the plugin from
-[`plugins/claude-code/`](plugins/claude-code/), then in Claude Code:
+Reason with the Claude session you already have — no Anthropic API key needed. In Claude Code:
 
 ```text
-/requivo-discover  We'd like a leave approval system.
-/requivo-status    <slug>
-/requivo-brief     <slug>
+/plugin marketplace add jbkkz/requivo
+/plugin install requivo@requivo
+
+/requivo:discover  We'd like a leave approval system.
+/requivo:status    <slug>
+/requivo:brief     <slug>
 ```
+
+See the [plugin README](plugins/claude-code/) for the full skill list and the from-a-checkout install.
 
 ### Web
 

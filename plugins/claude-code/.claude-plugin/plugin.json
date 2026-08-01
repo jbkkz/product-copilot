@@ -1,9 +1,17 @@
 {
   "name": "requivo",
-  "version": "0.1.0",
+  "version": "0.9.2",
   "description": "Turn vague product requests into a validated, traceable requirements model — using your existing Claude Code session for the reasoning. No Anthropic API key required.",
-  "author": { "name": "jbkkz" },
+  "author": {
+    "name": "jbkkz"
+  },
   "homepage": "https://github.com/jbkkz/requivo",
   "license": "MIT",
-  "keywords": ["requirements", "discovery", "product", "prd", "elicitation"]
+  "keywords": [
+    "requirements",
+    "discovery",
+    "product",
+    "prd",
+    "elicitation"
+  ]
 }

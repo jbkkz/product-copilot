@@ -52,13 +52,23 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.
 
-## Legacy flag CLI
+## Legacy flag CLI (deprecated)
 
-The original flag interface still works unchanged:
+The original flag interface still runs, unchanged:
 
 ```bash
 python src/engine.py "…request…" --prd
 python src/engine.py --from out/<slug>/model.json --prd
 ```
 
-`src/engine.py` is a backward-compat shim; new work uses the subcommand CLI above.
+It is **frozen and scheduled for removal in 1.1.0**, and it prints a deprecation notice when used. It
+writes to the old `out/<slug>/` layout rather than the versioned session store, so its output has no
+revisions, no provenance and no staleness tracking — everything the subcommand CLI above gives you.
+The equivalents:
+
+| Legacy | Modern |
+|---|---|
+| `python src/engine.py "request" --prd` | `requivo discover "request"` then `requivo prd <slug>` |
+| `python src/engine.py --from out/x/model.json --epic` | `requivo epic x` |
+
+The code lives in `requivo/legacy.py`; deleting that file is the whole removal.

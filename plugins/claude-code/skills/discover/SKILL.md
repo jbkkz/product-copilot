@@ -1,10 +1,10 @@
 ---
-name: requivo-discover
+name: discover
 description: Start a Requivo discovery from a client request. Reason with this Claude session (no API key), produce a validated requirements model, and ask only the high-information questions. Use when the user wants to turn a vague product request into a structured, traceable model.
 allowed-tools: Bash(requivo:*), Read, Write
 ---
 
-# /requivo-discover
+# /requivo:discover
 
 Start a new Requivo session from a client request. **You** do the reasoning here — this Claude Code
 session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (the shared rules:
@@ -54,6 +54,6 @@ Run `requivo status <slug> --json` and relay, in plain language:
 - your 3–6 priority questions, **verbatim and numbered**.
 
 Then **stop and wait** for the user's answers. Do not answer for them. When they reply, continue with
-`/requivo-answer <slug>`.
+`/requivo:answer <slug>`.
 
 Clean up `/tmp/requivo-proposal.json` when done.

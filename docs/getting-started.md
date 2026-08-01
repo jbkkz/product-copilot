@@ -21,14 +21,22 @@ uv run requivo demo
 Reason with the Claude session you already have — **no Anthropic API key needed**. The deterministic CLI
 validates and applies what Claude proposes.
 
-1. Install the plugin from [`plugins/claude-code/`](../plugins/claude-code/).
-2. In Claude Code:
+1. Install the plugin. In Claude Code:
 
    ```text
-   /requivo-discover  We'd like a leave approval system.
-   /requivo-answer    <slug>  <your answers>
-   /requivo-status    <slug>
-   /requivo-brief     <slug>
+   /plugin marketplace add jbkkz/requivo
+   /plugin install requivo@requivo
+   /reload-plugins
+   ```
+
+   (From a checkout instead: `claude --plugin-dir ./plugins/claude-code`.)
+2. Then:
+
+   ```text
+   /requivo:discover  We'd like a leave approval system.
+   /requivo:answer    <slug>  <your answers>
+   /requivo:status    <slug>
+   /requivo:brief     <slug>
    ```
 
 See the [plugin README](../plugins/claude-code/) for the full skill list and workflow.

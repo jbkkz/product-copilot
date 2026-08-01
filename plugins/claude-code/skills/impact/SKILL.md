@@ -1,10 +1,10 @@
 ---
-name: requivo-impact
+name: impact
 description: Show what a change to a Requivo session touches — the decisions to re-validate and the artifacts that go stale — from the dependency DAG. Pure deterministic query, no reasoning, no API key. Use when the user asks "what does changing X affect?" or wants to know what to regenerate after a model change.
 allowed-tools: Bash(requivo:*)
 ---
 
-# /requivo-impact
+# /requivo:impact
 
 Report the blast radius of a change. This is a **deterministic DAG query** — no Claude reasoning; run
 the command and translate.
@@ -24,7 +24,7 @@ requivo status <slug> --json         # each artifact's `stale` flag — the sour
 Present, in plain language:
 - the **decisions to re-validate** (they rested on a changed slot via `derived_from`),
 - the **premises to re-examine** (challenges that contest a changed slot via `contests`),
-- the **artifacts that go stale** and should be regenerated (`/requivo-prd`, `/requivo-brief`, …) — the
+- the **artifacts that go stale** and should be regenerated (`/requivo:prd`, `/requivo:brief`, …) — the
   saved assessment rests on the whole model, so any material change reaches it,
 - and recommend **only the necessary** regenerations — not everything.
 

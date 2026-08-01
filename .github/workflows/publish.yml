@@ -5,12 +5,21 @@ name: Publish to PyPI
 #
 # Triggers:
 #   - a published GitHub Release  → every future release auto-publishes
-#   - manual dispatch             → to publish the current main on demand (e.g. the first release,
-#                                   whose GitHub Release was cut before this workflow existed)
+#   - manual dispatch             → publish a tag on demand, but only a tag: the workflow refuses to
+#                                   run against an untagged commit (see the version guard below)
+#
+# A publish is irreversible — PyPI never lets a version number be reused, even after a delete — so the
+# gates run *before* the upload. Each one is a thing that has shipped wrong in a Python project at
+# least once: a version that disagrees with its tag, a failing test suite nobody re-ran, a lint error
+# waved through, a wheel that imports fine from the checkout and not outside it.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.9.2). Must exist and match the version in pyproject.toml."
+        required: true
 
 jobs:
   publish:
@@ -23,17 +32,60 @@ jobs:
       id-token: write   # mint the OIDC token Trusted Publishing uses — this is what replaces a token
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Publish exactly the tagged commit, never whatever happens to be on the default branch.
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Check the tag exists and agrees with the version
+        # Three places state the version — the git tag, pyproject.toml and `requivo.__version__` — and
+        # nothing keeps them in step but this check. A mismatch here costs a re-run; a mismatch on
+        # PyPI costs the version number.
+        run: |
+          TAG="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}"
+          git rev-parse "refs/tags/$TAG" >/dev/null 2>&1 || { echo "::error::tag $TAG does not exist"; exit 1; }
+          PYPROJECT=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          DUNDER=$(python -c "import re,pathlib;print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('src/requivo/__init__.py').read_text()).group(1))")
+          echo "tag=$TAG  pyproject=$PYPROJECT  __version__=$DUNDER"
+          [ "$TAG" = "v$PYPROJECT" ] || { echo "::error::tag $TAG != v$PYPROJECT (pyproject.toml)"; exit 1; }
+          [ "$PYPROJECT" = "$DUNDER" ] || { echo "::error::pyproject $PYPROJECT != __version__ $DUNDER"; exit 1; }
+
+      - name: Install with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Tests
+        run: python -m pytest tests/ -q
+
       - name: Build sdist + wheel
         run: |
-          python -m pip install --upgrade build
+          python -m pip install --upgrade build twine
           python -m build
+
+      - name: Check distribution metadata
+        run: twine check dist/*
+
       - name: Verify the wheel installs and runs outside the repo
+        # Outside the repo, because a wheel missing package data still works from a checkout — the
+        # files are simply found on disk. This is the check that catches an unshipped asset.
         run: |
           python -m venv /tmp/verifyenv
-          /tmp/verifyenv/bin/pip install dist/*.whl
+          /tmp/verifyenv/bin/pip install "$(ls dist/*.whl)[web]"
           cd /tmp && /tmp/verifyenv/bin/requivo demo | grep -q "REQUIVO — DEMO"
+          cd /tmp && /tmp/verifyenv/bin/requivo doctor --json > /dev/null
+          cd /tmp && /tmp/verifyenv/bin/python -c "
+          from requivo.web.templating import STATIC_DIR, TEMPLATES_DIR
+          assert (TEMPLATES_DIR / '_csrf.html').is_file(), 'web templates missing from the wheel'
+          assert (STATIC_DIR / 'vendor' / 'htmx.min.js').is_file(), 'vendored htmx missing from the wheel'
+          "
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
