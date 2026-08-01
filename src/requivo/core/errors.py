@@ -80,3 +80,11 @@ class StaleArtifactError(RequivoError):
     """An artifact was produced from a revision the model has since moved past."""
 
     code = "stale_artifact"
+
+
+class RevisionConflictError(RequivoError):
+    """A write expected the session at one revision, but it has already moved on — two updates raced
+    from the same base. The caller must reload the current model and re-apply. Harmless for a single
+    local CLI user (which omits the precondition); a hard requirement for a concurrent Web service."""
+
+    code = "revision_conflict"

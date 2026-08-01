@@ -6,6 +6,40 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+Pre-Cloud correctness at the session boundary — the layer requivo-cloud will sit on. From the same
+external review's "before you connect Cloud sessions" list.
+
+### Added
+- **Optimistic locking.** `SessionService.update_model` / `save_revision` take an optional
+  `expected_revision`; a write whose expectation is stale raises `RevisionConflictError`
+  (`revision_conflict`, with `expected`/`actual`) instead of silently landing on top of a concurrent
+  update. The single-user CLI omits it; `requivo model apply --expected-revision N` exposes it. Harmless
+  locally, required for a concurrent Web service.
+- **Per-revision provenance.** Each applied revision now records who produced it — `RevisionRecord`
+  (revision, created_at, previous_revision, provider, model_name, surface, model_hash) appended to a
+  `revisions` log in `session.json`. Provenance belongs to the revision, not just session creation,
+  because a model is moved by more than one surface (Anthropic provider, Claude Code, CLI, later Web)
+  over its life. `discover` / `answer` / `model apply` each stamp their surface.
+- **Richer `status --json`.** The payload now carries the full picture — `understanding` (per-slot,
+  grouped by state, with pillar/completeness/impact and a `thin` flag), priority `questions` (labelled),
+  `summary`, `remaining_gaps`, and `context_cards` — so Claude Code and a future Web client render it
+  without rebuilding the presentation logic. Built from one shared `model_status` projection used by
+  both the CLI and `SessionService.status` (no second implementation).
+
+### Fixed
+- **Reasoning references are validated.** `DesignDecision.derived_from` and `Challenge.contests` could
+  name a slot the schema doesn't define, letting the dependency graph look rigorous while pointing at
+  nothing. The `EngineOutput` contract now rejects unknown slot references, same as the model and the
+  questions.
+- **First apply no longer invalidates its own reasoning.** A first model carrying decisions/challenges
+  reported them all as invalidated on apply (the impact was computed over the *new* model when there
+  was no prior). Invalidation is now computed strictly against the prior established reasoning; on a
+  first apply nothing is invalidated.
+- **Third copy of the artifact-staleness bug.** `cli._status_payload` (what `status --json` actually
+  used) still carried the `revision != current` invalidation the 0.8.1 fix removed from
+  `ArtifactService.list` and `SessionService.status`. Unifying the two status paths onto `model_status`
+  eliminated it.
+
 ## [0.8.1] - 2026-08-01
 
 Correctness pass at the surface boundaries, from a full external review of the 0.8.0 snapshot. No

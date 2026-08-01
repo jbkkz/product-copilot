@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from requivo import __version__
 from requivo.core.contracts import EngineOutput
-from requivo.core.errors import InvalidSessionError, InvalidSlugError, SessionNotFoundError
+from requivo.core.errors import InvalidSessionError, InvalidSlugError, RevisionConflictError, SessionNotFoundError
 from requivo.paths import output_root, session_root
 
 SESSION_FORMAT_VERSION = 1
@@ -142,6 +142,23 @@ class ArtifactStatus(BaseModel):
     stale: bool = False
 
 
+class RevisionRecord(BaseModel):
+    """Provenance for one applied revision: who produced it and from what. A session's model can be
+    moved by more than one surface over its life (the Anthropic provider, a Claude Code turn, the CLI,
+    later the Web), so provenance belongs to each *revision*, not just the session's creation. `extra`
+    is allowed so a newer Requivo can add a provenance field an older reader simply carries through."""
+    model_config = ConfigDict(extra="allow")
+
+    revision: int
+    created_at: str
+    previous_revision: Optional[int] = None   # the revision this one succeeded (None for the first)
+    provider: Optional[str] = None            # "anthropic", "claude-code", "cli", …
+    model_name: Optional[str] = None          # the reasoning model, when one produced it
+    surface: Optional[str] = None             # the reasoning surface, e.g. "cli-discover", "requivo-answer"
+    prompt_version: Optional[str] = None      # "sha256:…" of the prompt, when known
+    model_hash: str = ""                      # "sha256:…" of the model payload — content identity
+
+
 class SessionMeta(BaseModel):
     """The versioned session metadata (`session.json`). `extra="ignore"` keeps an older reader from
     choking on a field a newer Requivo added; `migrate_session()` is the explicit version frontier."""
@@ -160,6 +177,7 @@ class SessionMeta(BaseModel):
     schema_version: int = SCHEMA_VERSION
     prompt_versions: dict[str, str] = Field(default_factory=dict)
     current_revision: int = 0            # 0 == session created but no model applied yet
+    revisions: list[RevisionRecord] = Field(default_factory=list)  # provenance log, one per applied revision
     artifact_status: dict[str, ArtifactStatus] = Field(default_factory=dict)
 
 
@@ -267,17 +285,40 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
     return meta
 
 
-def save_revision(slug: str, model: EngineOutput) -> tuple[int, SessionMeta]:
+def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,
+                  provenance: dict | None = None) -> tuple[int, SessionMeta]:
     """Persist a new model revision: write model.json AND revisions/NNNN-model.json (the prior model
-    is already frozen in an earlier revision file), then bump current_revision + updated_at. Returns
-    (new_revision, updated_meta)."""
+    is already frozen in an earlier revision file), record the revision's provenance, then bump
+    current_revision + updated_at. Returns (new_revision, updated_meta).
+
+    `expected_revision` is an optimistic-locking precondition: when given, the write fails with
+    `RevisionConflictError` unless the session is still at that revision — so two updates racing from
+    the same base can't both land silently. The single-user CLI omits it (last-writer-wins is fine
+    locally); a concurrent Web service passes the revision the client read. `provenance` carries the
+    surface-supplied fields (provider / model_name / surface / prompt_version) for the revision log."""
     meta = read_meta(slug)  # raises SessionNotFoundError if the session isn't there
+    if expected_revision is not None and meta.current_revision != expected_revision:
+        raise RevisionConflictError(
+            f"session '{slug}' is at revision {meta.current_revision}, not the expected {expected_revision}"
+            " — reload the current model and re-apply",
+            details={"slug": slug, "expected": expected_revision, "actual": meta.current_revision})
     d = canonical_dir(slug)
     (d / "revisions").mkdir(parents=True, exist_ok=True)
     rev = meta.current_revision + 1
     payload = model.model_dump_json(indent=2)
     _atomic_write(d / "model.json", payload)
     _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+    prov = dict(provenance or {})
+    meta.revisions.append(RevisionRecord(
+        revision=rev,
+        created_at=_now(),
+        previous_revision=meta.current_revision or None,
+        model_hash=_hash(payload),
+        provider=prov.get("provider"),
+        model_name=prov.get("model_name"),
+        surface=prov.get("surface"),
+        prompt_version=prov.get("prompt_version"),
+    ))
     meta.current_revision = rev
     meta.updated_at = _now()
     write_meta(slug, meta)

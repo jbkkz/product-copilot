@@ -300,7 +300,9 @@ def _cmd_model_apply(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     data = Path(a.proposal).read_text()
-    result = svc.update_model(slug, data, require_complete=not a.allow_partial)
+    result = svc.update_model(slug, data, require_complete=not a.allow_partial,
+                              expected_revision=a.expected_revision,
+                              provenance={"provider": "claude-code", "surface": "cli-apply"})
     if a.json:
         _print_json(result.to_dict())
         return
@@ -441,6 +443,8 @@ def register(sub) -> None:
     ma.add_argument("session", help="session slug or path")
     ma.add_argument("proposal", help="path to a proposed model JSON")
     ma.add_argument("--allow-partial", action="store_true", help="do not require the full slot set")
+    ma.add_argument("--expected-revision", type=int, default=None,
+                    help="only apply if the session is still at this revision (optimistic lock)")
     ma.add_argument("--json", action="store_true")
     ma.set_defaults(func=_cmd_model_apply)
 

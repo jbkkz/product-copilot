@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from requivo.core import persistence as store
-from requivo.core.analysis import _label, _readiness_blockers
+from requivo.core.analysis import _readiness_blockers, model_status
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import diff_models, propagate
 from requivo.core.errors import SessionNotFoundError
@@ -159,39 +159,56 @@ class SessionService:
         current = self.load_model(slug) if self.exists(slug) else None
         return self._plan(slug, current, new, apply=False)
 
-    def update_model(self, slug: str, proposal: dict | str, *,
-                     require_complete: bool = True) -> UpdateResult:
+    def update_model(self, slug: str, proposal: dict | str, *, require_complete: bool = True,
+                     expected_revision: int | None = None, provenance: dict | None = None) -> UpdateResult:
         """Validate a proposal and apply it as a new revision (`model apply`). Migrates a legacy
         session on this first mutation, saves the prior model as a revision, flags stale artifacts,
-        and returns the structured outcome."""
+        and returns the structured outcome.
+
+        `expected_revision` is the optimistic-locking precondition (see `persistence.save_revision`):
+        omit it for the single-user CLI, pass the client's last-known revision from a concurrent
+        service. `provenance` records who produced the revision (provider / surface / model)."""
         new = validate_proposal(proposal, require_complete=require_complete)
         self._ensure_canonical(slug)
         current = self.load_model(slug) if store.read_meta(slug).current_revision > 0 else None
-        return self._plan(slug, current, new, apply=True)
+        return self._plan(slug, current, new, apply=True,
+                          expected_revision=expected_revision, provenance=provenance)
 
-    def _plan(self, slug: str, current: EngineOutput | None, new: EngineOutput, *, apply: bool) -> UpdateResult:
+    def _plan(self, slug: str, current: EngineOutput | None, new: EngineOutput, *, apply: bool,
+              expected_revision: int | None = None, provenance: dict | None = None) -> UpdateResult:
         # A first model (no prior) counts every present slot as changed, so the whole blast radius is
         # reported; otherwise only the slots that materially moved.
         changed = diff_models(current, new) if current is not None else list(new.model.keys())
-        # Check the change against the model that carries the *established* reasoning — the current one
-        # on disk (a refinement turn often drops decisions/challenges from its reply). Its baked-in
-        # reasoning is what the change threatens; the artifact map is static, so the basis is neutral there.
-        basis = current if (current is not None and (current.decisions or current.challenges)) else new
-        report = propagate(basis, changed)
-        invalidated_decisions = [d.decision for d in report.decisions]
-        invalidated_challenges = [c.headline for c in report.challenges]
+        # Artifacts rest on slots via the static ARTIFACT_SLOTS map, so the blast radius is basis-neutral
+        # — any model with these `changed` slots yields the same artifact set.
+        report = propagate(new, changed)
+
+        # Reasoning invalidation is about the *prior established* reasoning a change unseats — it exists
+        # only when the current model on disk carries decisions/challenges (a refinement turn often drops
+        # them from its reply, so `new` may have none). On a first apply — `current is None` — the
+        # reasoning in `new` was proposed *for* this very state; it is not stale, so nothing is
+        # invalidated. Computing this against `new` (the old `basis` fallback) was the bug: it reported a
+        # model's own freshly-proposed decisions and challenges as invalidated on their first apply.
+        if current is not None and (current.decisions or current.challenges):
+            prior = propagate(current, changed)
+            invalidated_decisions = [d.decision for d in prior.decisions]
+            invalidated_challenges = [c.headline for c in prior.challenges]
+            reasoning_hit = prior.reasoning_hit
+        else:
+            invalidated_decisions, invalidated_challenges, reasoning_hit = [], [], False
 
         def _resolve_stale(generated: set[str]) -> list[str]:
             stale = [t for t in report.artifacts if t in generated]
-            # The saved assessment *renders* the reasoning — if the change unseats a decision or a
-            # challenge it rests on, the assessment on disk no longer holds, even though the assessment
+            # The saved assessment *renders* the prior reasoning — if the change unseats a decision or a
+            # challenge it rested on, the assessment on disk no longer holds, even though the assessment
             # is deliberately outside the static artifact→slot map (it is the live analysis layer).
-            if report.reasoning_hit and "brief" in generated and "brief" not in stale:
+            if reasoning_hit and "brief" in generated and "brief" not in stale:
                 stale.append("brief")
             return stale
 
         if apply:
-            revision, meta = store.save_revision(slug, new)
+            revision, meta = store.save_revision(
+                slug, new, expected_revision=expected_revision, provenance=provenance)
             stale = _resolve_stale(set(meta.artifact_status))
             if stale:
                 for t in stale:
@@ -214,10 +231,11 @@ class SessionService:
 
     # ── status ──────────────────────────────────────────────────────────────────
     def status(self, slug: str) -> dict:
-        """A machine-readable status snapshot for `status --json`: readiness, blocking slots (with
-        labels), current revision, and the artifacts with their freshness."""
+        """A machine-readable status snapshot for `status --json` — rich enough that Claude Code and a
+        future Web client render the full picture (understanding checklist, priority questions, gaps,
+        context) without rebuilding the presentation logic in another language. Everything here is a
+        pure projection of the model plus the session metadata."""
         model = self.load_model(slug)
-        rd = _readiness(model)
         meta = store.read_meta(slug) if store.session_exists(slug) else None
         artifacts = {}
         if meta:
@@ -228,9 +246,7 @@ class SessionService:
         return {
             "slug": slug,
             "revision": meta.current_revision if meta else None,
-            "readiness": {
-                "ready": rd.ready,
-                "blocking_slots": [{"slot": s, "label": _label(s)} for s in rd.blocking_slots],
-            },
+            **model_status(model),
+            "context_cards": meta.context_cards if meta else None,
             "artifacts": artifacts,
         }

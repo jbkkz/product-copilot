@@ -84,3 +84,41 @@ def _state_of(s: Slot) -> str:
     if s.confidence is Confidence.inferred:
         return "inferred"
     return "unknown"
+
+
+def model_status(out: EngineOutput) -> dict:
+    """The model-derived half of a status snapshot — readiness, understanding, priority questions,
+    summary, and remaining gaps — as one computed projection. Both `status --json` (a raw model or a
+    session) and `SessionService.status` (a session) build on this, so the presentation logic lives in
+    exactly one place; the session-only fields (revision, artifacts, context cards) are layered on by
+    each caller. Everything here needs only the model, so it works for a bare model.json too."""
+    blockers = _readiness_blockers(out)
+    gaps = [{"slot": s, "label": _label(s)} for s in blockers]
+    return {
+        "readiness": {"ready": not blockers, "blocking_slots": gaps},
+        "understanding": understanding_view(out),
+        "questions": [{"q": q.q, "slot": q.slot, "label": _label(q.slot), "why": q.why}
+                      for q in out.questions],
+        "summary": out.summary.model_dump(),
+        "remaining_gaps": gaps,
+    }
+
+
+def understanding_view(out: EngineOutput) -> dict[str, list[dict]]:
+    """The per-slot understanding grouped by state (confirmed / inferred / unknown), each entry carrying
+    its pillar, label, completeness and impact. This is the machine form of the `render_turn` checklist:
+    the JSON status and a future Web client read the same computed view rather than rebuilding the
+    presentation logic. `thin` marks a confirmed-but-below-coverage slot — the exact case readiness now
+    still blocks on, surfaced so a client can render 'stated but partial' without re-deriving it."""
+    pillars, _labels = _slot_meta()
+    groups: dict[str, list[dict]] = {"confirmed": [], "inferred": [], "unknown": []}
+    for sid, s in out.model.items():
+        groups[_state_of(s)].append({
+            "slot": sid,
+            "label": _label(sid),
+            "pillar": pillars.get(sid),
+            "completeness": s.completeness,
+            "impact": s.impact.value,
+            "thin": s.confidence is Confidence.explicit and s.completeness < SOFT_COMPLETENESS,
+        })
+    return groups

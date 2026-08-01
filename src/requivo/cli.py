@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
-from requivo.core.analysis import _label, _readiness_blockers
+from requivo.core.analysis import _label, model_status
 from requivo.core.context import available_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
@@ -289,7 +289,9 @@ def _cmd_discover(a, client) -> None:
     meta = svc.create_session(request, context_cards=only,
                               slug=(Path(a.request).stem if is_file else None),
                               provider="anthropic", model_name=current_model_name())
-    svc.update_model(meta.slug, out.model_dump_json())
+    svc.update_model(meta.slug, out.model_dump_json(),
+                     provenance={"provider": "anthropic", "surface": "cli-discover",
+                                 "model_name": current_model_name()})
     if brief is not None:
         render_brief(out, brief)
     print(f"\nSaved session → {store.canonical_dir(meta.slug)}")
@@ -309,7 +311,9 @@ def _cmd_answer(a, client) -> None:
     render_turn(out)
     # The refined model goes through the same validated apply path — which migrates a legacy session,
     # diffs against the prior revision, and flags any generated artifact that just went stale.
-    result = svc.update_model(slug, out.model_dump_json())
+    result = svc.update_model(slug, out.model_dump_json(),
+                              provenance={"provider": "anthropic", "surface": "cli-answer",
+                                          "model_name": current_model_name()})
     if result.stale_artifacts:
         pairs = [(t, ARTIFACT_FILENAMES[t]) for t in result.stale_artifacts]
         render_stale(pairs, [_label(sid) for sid in result.changed_slots])
@@ -338,21 +342,19 @@ def _resolve_ref(ref: str) -> tuple[EngineOutput, str]:
 
 
 def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
-    """(model, machine status). Readiness is always computed; revision + artifact freshness are added
-    when the reference resolves to a canonical session."""
+    """(model, machine status). The model-derived view (readiness, understanding, questions, summary,
+    gaps) comes from the shared `model_status` projection — the same one `SessionService.status` uses,
+    so there is no second status implementation to drift. Revision, context and artifact freshness are
+    layered on when the reference resolves to a canonical session (a bare model.json has none)."""
     out, slug = _resolve_ref(ref)
-    blockers = _readiness_blockers(out)
-    payload: dict = {
-        "slug": slug,
-        "readiness": {"ready": not blockers,
-                      "blocking_slots": [{"slot": s, "label": _label(s)} for s in blockers]},
-    }
+    payload: dict = {"slug": slug, **model_status(out)}
     if store.session_exists(slug):
         meta = store.read_meta(slug)
         payload["revision"] = meta.current_revision
+        payload["context_cards"] = meta.context_cards
+        # Freshness is the explicit stale flag only — revision is provenance, not an invalidation rule.
         payload["artifacts"] = {
-            t: {"revision": st.revision, "filename": st.filename,
-                "stale": st.stale or st.revision != meta.current_revision}
+            t: {"revision": st.revision, "filename": st.filename, "stale": st.stale}
             for t, st in meta.artifact_status.items()
         }
     return out, payload

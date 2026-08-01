@@ -197,6 +197,27 @@ def test_output_rejects_a_question_targeting_an_unknown_slot():
         })
 
 
+def test_output_rejects_a_decision_derived_from_an_unknown_slot():
+    # A DAG edge into a slot the schema doesn't define would make the dependency graph look rigorous
+    # while pointing at nothing — rejected at the contract, same as an unknown slot in the model.
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"workflow": slot(60, "inferred", "high")},
+            "questions": [], "summary": {},
+            "decisions": [{"decision": "X", "derived_from": ["not_a_slot"]}],
+        })
+
+
+def test_output_rejects_a_challenge_contesting_an_unknown_slot():
+    with pytest.raises(ValidationError):
+        EngineOutput.model_validate({
+            "model": {"workflow": slot(60, "inferred", "high")},
+            "questions": [], "summary": {},
+            "challenges": [{"headline": "h", "premise": "p", "alternative": "a", "consequence": "c",
+                            "recommendation": "r", "contests": ["not_a_slot"]}],
+        })
+
+
 # ── The driver: uncertainty × impact ─────────────────────────────────────────
 
 
@@ -700,6 +721,33 @@ def test_pc_status_runs_offline():
         assert "UNDERSTANDING" in _run_app(["status", str(p)])  # no client built
 
 
+def test_status_json_payload_is_rich_enough_for_a_client():
+    # status(slug) must carry the full picture — understanding, questions, gaps, summary, context —
+    # so Claude Code and a future Web client render it without rebuilding the presentation logic.
+    from requivo.services.sessions import SessionService
+    slug = "clitest-status-json"
+    store.create_session(slug, "req")
+    model = EngineOutput.model_validate({
+        "model": full_slots(workflow=slot(90, "explicit", "high"),
+                            business_rules=slot(30, "explicit", "high")),   # explicit but thin
+        "questions": [{"q": "How are exceptions handled?", "slot": "business_rules", "why": "u×i"}],
+        "summary": {"objective": "obj"},
+    })
+    SessionService().update_model(slug, model.model_dump())
+    try:
+        st = SessionService().status(slug)
+        assert set(st) >= {"understanding", "questions", "summary", "remaining_gaps",
+                           "context_cards", "artifacts", "readiness", "revision"}
+        assert st["questions"][0]["slot"] == "business_rules" and st["questions"][0]["label"]
+        assert st["summary"]["objective"] == "obj"
+        # confirmed-but-thin high-impact slot: still a gap, and flagged `thin` in the understanding view
+        assert "business_rules" in {g["slot"] for g in st["remaining_gaps"]}
+        thin = [e for grp in st["understanding"].values() for e in grp if e["thin"]]
+        assert any(e["slot"] == "business_rules" for e in thin)
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
 def test_pc_demo_runs_offline_from_saved_example():
     # The activation path: a visitor runs `requivo demo` with no key, no args, no network, and sees a
     # real run end to end. No client is passed and none is built.
@@ -1010,6 +1058,97 @@ def test_related_slot_change_marks_artifact_stale():
         svc.update_model(slug, out({"workflow": wf}).model_dump())
         items = ArtifactService().list(slug)
         assert items["criteria"]["stale"] is True
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_first_apply_does_not_invalidate_its_own_reasoning():
+    # A first apply of a model that already carries decisions/challenges must NOT report them as
+    # invalidated: they were proposed FOR this state, there is no prior reasoning to unseat. The old
+    # code propagated over `new` when there was no `current`, flagging a model's own reasoning stale.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-first-apply"
+    store.create_session(slug, "req")
+    model = EngineOutput.model_validate({
+        "model": full_slots(workflow=slot(80, "explicit", "high"),
+                            permissions=slot(75, "explicit", "high")),
+        "questions": [], "summary": {},
+        "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                                     derived_from=["workflow", "permissions"]).model_dump()],
+        "challenges": [Challenge(headline="Invoice at signature", premise="p", alternative="a",
+                                 consequence="c", recommendation="r",
+                                 contests=["workflow"]).model_dump()],
+    })
+    try:
+        result = svc.update_model(slug, model.model_dump())
+        assert result.invalidated_decisions == []      # its own reasoning is fresh, not stale
+        assert result.invalidated_challenges == []
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_second_apply_invalidates_prior_reasoning_a_change_unseats():
+    # The other side: once reasoning is established, a later change that reaches a slot it rests on
+    # DOES invalidate it — the behaviour the first-apply guard must not suppress.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-second-apply"
+    store.create_session(slug, "req")
+    first = EngineOutput.model_validate({
+        "model": full_slots(workflow=slot(80, "inferred", "high")),
+        "questions": [], "summary": {},
+        "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                                     derived_from=["workflow"]).model_dump()],
+    })
+    svc.update_model(slug, first.model_dump())
+    try:
+        # a material change to workflow, and the refinement turn drops the decision from its reply
+        second = out({"workflow": {**slot(95, "explicit", "high"), "value": "draft → issued → archived"}})
+        result = svc.update_model(slug, second.model_dump())
+        assert "Draft-first invoices reviewed by Finance" in result.invalidated_decisions
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_expected_revision_precondition_blocks_a_stale_write():
+    # Optimistic locking: a writer that expects an out-of-date revision is rejected rather than landing
+    # silently on top of another update — the guarantee a concurrent Web service needs.
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-lock"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(60, "inferred", "high")}).model_dump())  # → revision 1
+    try:
+        with pytest.raises(RevisionConflictError):   # a racer still thinks it is at revision 0
+            svc.update_model(slug, out({"workflow": slot(80, "explicit", "high")}).model_dump(),
+                             expected_revision=0)
+        r = svc.update_model(slug, out({"workflow": slot(80, "explicit", "high")}).model_dump(),
+                             expected_revision=1)     # the right expectation applies cleanly
+        assert r.revision == 2
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_each_revision_records_its_provenance():
+    # Provenance is per-revision: a session's model is moved by more than one surface over its life, so
+    # each revision records who produced it, what it succeeded, and a content hash.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-provenance"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(60, "inferred", "high")}).model_dump(),
+                     provenance={"provider": "anthropic", "surface": "cli-discover", "model_name": "claude-x"})
+    svc.update_model(slug, out({"workflow": {**slot(90, "explicit", "high"), "value": "a → b"}}).model_dump(),
+                     provenance={"provider": "claude-code", "surface": "cli-apply"})
+    try:
+        revs = store.read_meta(slug).revisions
+        assert [r.revision for r in revs] == [1, 2]
+        assert revs[0].previous_revision is None and revs[1].previous_revision == 1
+        assert revs[0].surface == "cli-discover" and revs[0].provider == "anthropic"
+        assert revs[1].surface == "cli-apply" and revs[1].provider == "claude-code"
+        assert all(r.model_hash.startswith("sha256:") for r in revs)
     finally:
         shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
 

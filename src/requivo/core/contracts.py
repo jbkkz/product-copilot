@@ -109,6 +109,16 @@ class EngineOutput(BaseModel):
         bad_questions = sorted({q.slot for q in self.questions if q.slot not in allowed})
         if bad_questions:
             raise ValueError(f"questions target unknown slots (not in schema): {bad_questions}")
+        # The reasoning layer carries DAG edges into the slots: a decision rests on `derived_from`, a
+        # challenge contests `contests`. An edge to a slot the schema does not define would let the
+        # dependency graph (propagate / impact) look rigorous while pointing at nothing — so the same
+        # vocabulary rule applies to every reference, not just the model and the questions.
+        bad_refs = sorted(
+            {sid for d in self.decisions for sid in d.derived_from if sid not in allowed}
+            | {sid for c in self.challenges for sid in c.contests if sid not in allowed}
+        )
+        if bad_refs:
+            raise ValueError(f"reasoning references unknown slots (not in schema): {bad_refs}")
         return self
 
 
