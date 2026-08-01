@@ -90,8 +90,13 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     """The deliverable: a two-tier solution assessment — an executive summary a PM reads in seconds,
     then the full analysis below (including what to *challenge*, not just what was learned). Written
     in a PM's language, never the engine's internals."""
+    # While a blocking decision is unresolved the assessment rests on unconfirmed ground — label it a
+    # draft so the reader knows it is not yet ready to build from, honestly rather than in the prose.
+    draft = bool(_readiness_blockers(out))
     print("\n" + "═" * 64)
-    print("SOLUTION ASSESSMENT")
+    print("DRAFT SOLUTION ASSESSMENT" if draft else "SOLUTION ASSESSMENT")
+    if draft:
+        print("(blocking decisions remain — see Unknowns below)")
     print("═" * 64)
 
     # ── Executive summary (what a PM reads first) ──
