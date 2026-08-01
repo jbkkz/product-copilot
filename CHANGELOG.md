@@ -6,6 +6,8 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-01
+
 Pre-Cloud correctness at the session boundary — the layer requivo-cloud will sit on. From the same
 external review's "before you connect Cloud sessions" list.
 
