@@ -7,10 +7,10 @@ document, not a legal one — the code license is [MIT](../LICENSE), and the tra
 
 ## Why open source
 
-Requivo Core, the CLI and the Claude Code integration are open source on purpose. The goal is to make
-the requirements *model* portable, inspectable and usable locally — without forcing anyone into a
-hosted service to get value from it. Open source serves adoption, trust, local and self-hosted use,
-use inside Claude Code, contributions, and integration into other workflows.
+Requivo Core, the CLI, the Claude Code integration and the local Web interface are open source on
+purpose. The goal is to make the requirements *model* portable, inspectable and usable locally —
+without forcing anyone into a hosted service to get value from it. Open source serves adoption, trust,
+local and self-hosted use, use inside Claude Code, contributions, and integration into other workflows.
 
 The main risk for a project at this stage is not that a competitor copies the code. The code is
 generic; the reasoning lives in prompts and context that anyone could rewrite. The main risk is that
@@ -23,7 +23,7 @@ The durable proprietary value, if any, is expected to come not from the generic 
 ## The surfaces
 
 Requivo is one engine behind several surfaces. The layering is described in
-[CLAUDE.md](../CLAUDE.md#architecture); this section maps each surface to how it is distributed.
+[architecture.md](architecture.md); this section maps each surface to how it is distributed.
 
 ### Requivo Core — open source
 
@@ -50,12 +50,14 @@ The plugin and skills under `plugins/claude-code/`. They drive the engine using 
 Claude** inside Claude Code. This surface does **not** require a separate Anthropic API key: Claude
 does the reasoning, the deterministic CLI applies the result.
 
-### Requivo Community Web — planned, intended to be open source and self-hostable
+### Requivo Web — open source, self-hostable (shipping)
 
-A future web interface — submit a request, answer the engine's questions, review the model, generate
-artifacts, import/export a session. **It does not exist yet.** It is listed here to state the
-intent: when built, it is intended to be open source and self-hostable, a thin layer over the same
-Core like every other surface.
+The local web interface (`requivo web`, the optional `[web]` extra), under `src/requivo/web/`. Submit a
+request, answer the engine's questions, review the model, generate a solution assessment or a PRD,
+view and export artifacts. It is a thin FastAPI + HTMX layer over the same Core and services as every
+other surface — **local, single-user, filesystem-backed, no authentication, no database, no remote
+storage.** That boundary is exactly what keeps it distinct from Requivo Cloud (below). See
+[web.md](web.md).
 
 ### Requivo Cloud — future, potentially proprietary, not in this repository
 
@@ -76,7 +78,7 @@ like* lives. Nothing in Lab is published automatically (see the data boundary be
 | Concern | Community (public, MIT) | Cloud (future, private) | Lab (private) |
 |---|---|---|---|
 | Reasoning engine, schema, validation | ✅ | — | — |
-| CLI, Claude Code plugin, generic providers | ✅ | — | — |
+| CLI, Claude Code plugin, local Web, generic providers | ✅ | — | — |
 | Generic prompts & generic context cards | ✅ | — | — |
 | Renderers, GitHub/GitLab exports | ✅ | — | — |
 | Anonymised examples, golden harness | ✅ | — | — |
@@ -105,7 +107,7 @@ prompts associated with confidential data.
 ## Repository layout
 
 ```text
-requivo/          public repository (this one) — Core, CLI, Claude Code, generic assets
+requivo/          public repository (this one) — Core, CLI, Claude Code, local Web, generic assets
 requivo-cloud/    private repository — hosted service backend
 requivo-lab/      private repository — evaluation data, experiments, learnings
 ```
@@ -116,7 +118,7 @@ repository yet. No Git submodules link them, and no GitHub organisation is used.
 
 ## License and trademark
 
-The code is MIT ([LICENSE](../LICENSE)) and stays MIT for now. A move to a different license (e.g.
-AGPL) would only be reconsidered if and when a Community Web version exists — not before, and only
-with an explicit decision. The **Requivo name and identity** are separate from the code license; see
+The code is MIT ([LICENSE](../LICENSE)) and stays MIT — including the local Web interface. A move to a
+different license (e.g. AGPL) would be a separate, explicit decision, never automatic; none is planned.
+The **Requivo name and identity** are separate from the code license; see
 [TRADEMARKS.md](../TRADEMARKS.md).
