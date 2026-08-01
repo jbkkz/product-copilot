@@ -39,5 +39,6 @@ Write the assessment markdown to `/tmp/requivo-brief.md`.
 ```
 requivo artifact save <slug> --type brief --file /tmp/requivo-brief.md
 ```
-This ties the assessment to the model revision it was written from, so it is flagged stale if the model
-later changes. Confirm the save, then clean up the temp file.
+This ties the assessment to the model revision it was written from. The assessment is a judgment over
+the whole model, so any later material change to it flags the saved copy stale. Confirm the save, then
+clean up the temp file.

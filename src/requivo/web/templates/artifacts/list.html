@@ -28,9 +28,11 @@
   {% endif %}
   <div class="toolbar">
     <form hx-post="/sessions/{{ s.slug }}/artifacts/brief" hx-target="#artifacts-region" hx-swap="outerHTML">
+      {% include "_csrf.html" %}
       <button class="btn" type="submit">Generate solution assessment</button>
     </form>
     <form hx-post="/sessions/{{ s.slug }}/artifacts/prd" hx-target="#artifacts-region" hx-swap="outerHTML">
+      {% include "_csrf.html" %}
       <button class="btn secondary" type="submit">Generate PRD</button>
     </form>
     <span class="spinner" role="status">Generating…</span>

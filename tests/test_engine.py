@@ -3,6 +3,7 @@ import io
 import json
 import shutil
 from contextlib import contextmanager, redirect_stdout
+from datetime import date as _date
 
 import anthropic
 import httpx
@@ -940,10 +941,13 @@ def test_propagate_flags_dependent_decisions_and_artifacts():
     assert not rep.empty
 
 
-def test_propagate_is_empty_for_an_isolated_slot():
-    # current_process feeds no buildable artifact and no decision rests on it → safe in isolation
+def test_propagate_reaches_only_the_assessment_for_an_otherwise_isolated_slot():
+    # current_process feeds no buildable deliverable and no decision rests on it. The solution
+    # assessment is the exception by design: it is a judgment over the whole model, so it rests on
+    # every slot — describing the as-is process differently does change the assessment on disk.
     rep = propagate(_out_with_decisions(), ["current_process"])
-    assert rep.empty
+    assert rep.artifacts == ["brief"]
+    assert not rep.decisions and not rep.challenges and not rep.empty
 
 
 def test_resolve_slots_accepts_ids_and_label_words_and_flags_unknowns():
@@ -1238,16 +1242,26 @@ def test_usage_ledger_totals_and_cost():
     ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000))
     ledger.record(CallRecord(model="claude-sonnet-5", output_tokens=1_000_000))
     assert ledger.input_tokens == 1_000_000 and ledger.output_tokens == 1_000_000
-    # 1M input @ $3 + 1M output @ $15 = $18.00
-    assert abs(ledger.cost_usd() - 18.0) < 1e-6
+    # Standard rates: 1M input @ $3 + 1M output @ $15 = $18.00. Pinned to a day after the launch
+    # window so the assertion states one rate rather than whichever is live when the suite runs.
+    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - 18.0) < 1e-6
+
+
+def test_usage_ledger_applies_launch_pricing_until_it_lapses():
+    # Sonnet 5 runs on launch pricing ($2/$10) through 2026-08-31, then reverts to $3/$15. A dated
+    # table with no expiry gets exactly one of those two days right.
+    ledger = UsageLedger()
+    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000, output_tokens=1_000_000))
+    assert abs(ledger.cost_usd(on=_date(2026, 8, 31)) - 12.0) < 1e-6   # launch: 2 + 10
+    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - 18.0) < 1e-6    # standard: 3 + 15
 
 
 def test_usage_ledger_cost_counts_cache_tiers():
     ledger = UsageLedger()
-    # cache read ≈ 0.1× input rate, cache write ≈ 1.25× input rate (Sonnet input $3/Mtok)
+    # cache read ≈ 0.1× input rate, cache write ≈ 1.25× input rate (Sonnet standard input $3/Mtok)
     ledger.record(CallRecord(model="claude-sonnet-5", cache_read_tokens=1_000_000,
                              cache_write_tokens=1_000_000))
-    assert abs(ledger.cost_usd() - (0.3 + 3.75)) < 1e-6
+    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - (0.3 + 3.75)) < 1e-6
 
 
 def test_usage_ledger_cost_is_none_for_unpriced_model():
@@ -1557,6 +1571,7 @@ class InMemorySessionRepository:
     def __init__(self):
         self._meta: dict = {}
         self._model: dict = {}
+        self._revs: dict = {}      # (slug, revision) → model, the history a file backing keeps on disk
         self._req: dict = {}
         self._art: dict = {}
 
@@ -1588,6 +1603,11 @@ class InMemorySessionRepository:
             raise _NotFound(f"no model '{slug}'", details={"slug": slug})
         return self._model[slug]
 
+    def load_revision(self, slug, revision):
+        if (slug, revision) not in self._revs:
+            raise _NotFound(f"no revision {revision}", details={"slug": slug, "revision": revision})
+        return self._revs[(slug, revision)]
+
     def save_revision(self, slug, model, *, expected_revision=None, provenance=None):
         meta = self.read_meta(slug)
         if expected_revision is not None and meta.current_revision != expected_revision:
@@ -1601,6 +1621,7 @@ class InMemorySessionRepository:
             surface=prov.get("surface"), prompt_version=prov.get("prompt_version")))
         meta.current_revision = rev
         self._model[slug] = model
+        self._revs[(slug, rev)] = model
         return rev, meta
 
     def request_text(self, slug): return self._req.get(slug, "")

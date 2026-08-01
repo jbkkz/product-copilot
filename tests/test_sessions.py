@@ -200,6 +200,119 @@ def test_apply_flags_assessment_stale_when_reasoning_is_unseated(workspace):
     assert "invalidated_challenges" in result.to_dict()
 
 
+def test_changing_the_problem_marks_a_saved_assessment_stale(workspace):
+    # The assessment used to sit outside the artifact→slot map entirely, on the grounds that it was the
+    # live analysis layer rather than a deliverable. Once it is saved to disk that stops holding: an
+    # assessment whose problem statement has since been rewritten is not "fresh", it is out of date.
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())          # no decisions, no challenges — nothing to unseat
+    art.save("s", "brief", "# Assessment\n")
+    assert art.list("s")["brief"]["stale"] is False
+
+    result = svc.update_model("s", _full_model(**{"problem": _slot(80, "explicit", "high", "reframed")}))
+    assert "brief" in result.stale_artifacts
+    assert art.list("s")["brief"]["stale"] is True
+
+
+def test_artifact_cannot_be_recorded_against_an_impossible_revision(workspace):
+    # Provenance that cannot be true is worse than none: every freshness answer downstream is read off
+    # this number, so a revision from the future is refused rather than stored.
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())          # session is at revision 1
+    with pytest.raises(RequivoError) as ei:
+        art.save("s", "prd", "# PRD\n", source_revision=999)
+    assert ei.value.code == "invalid_session"
+    with pytest.raises(RequivoError):
+        art.save("s", "prd", "# PRD\n", source_revision=0)
+    assert "prd" not in art.list("s")            # nothing was recorded
+
+
+# ── generation vs. concurrent writes ──────────────────────────────────────────
+# A provider call runs for seconds to minutes, and the session can move underneath it (a second browser
+# tab, a CLI apply, a Claude Code turn). These two tests pin the behaviour at that seam: the model the
+# generator read is the revision it writes against, and a change that lands mid-flight is never lost
+# and never silently inherited.
+
+class _RacingClient:
+    """A provider whose reply arrives only after someone else has already moved the session."""
+
+    def __init__(self, reply: str, on_call):
+        self._reply, self._on_call = reply, on_call
+        self.messages = self
+
+    def create(self, **kwargs):
+        self._on_call()          # the concurrent write lands while "reasoning" is in flight
+        return _Reply(self._reply)
+
+
+class _Reply:
+    def __init__(self, text):
+        self.content = [type("B", (), {"type": "text", "text": text})()]
+        self.stop_reason = "end_turn"
+        self.usage = None
+
+
+def test_generation_that_races_a_concurrent_apply_does_not_lose_it(workspace):
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())          # revision 1 — what the generator will read
+
+    def concurrent_answer():
+        svc.update_model("s", _full_model(**{"business_rules": _slot(90, "explicit", "high", "HR signs off")}))
+
+    brief_reply = json.dumps({"complexity": "medium", "problem": "P", "solution": "S",
+                              "risks": [], "next_steps": []})
+    disco = DiscoveryService(client=_RacingClient(brief_reply, concurrent_answer))
+    with pytest.raises(RevisionConflictError):
+        disco.generate("s", "brief")
+
+    # The rule that landed mid-flight is still there — the assessment's apply did not write over it.
+    assert svc.load_model("s").model["business_rules"].value == "HR signs off"
+
+
+def test_an_answers_turn_holds_the_revision_it_read(workspace):
+    # A turn has the same seam as a generation, so a caller that passes no expectation still gets one:
+    # the revision the turn actually read. Without it, the CLI's `answer` would quietly overwrite a
+    # change made in a browser tab between the read and the apply.
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())
+
+    def concurrent_apply():
+        svc.update_model("s", _full_model(**{"risks": _slot(70, "explicit", "high", "rollout risk")}))
+
+    disco = DiscoveryService(client=_RacingClient(json.dumps(_full_model()), concurrent_apply))
+    with pytest.raises(RevisionConflictError):
+        disco.answer("s", "here are my answers")
+    assert svc.load_model("s").model["risks"].value == "rollout risk"
+
+
+def test_an_artifact_generated_from_a_superseded_revision_is_born_stale(workspace):
+    from requivo.services.discovery import DiscoveryService
+
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())          # revision 1 — the PRD's actual source
+
+    def concurrent_answer():
+        svc.update_model("s", _full_model(**{"workflow": _slot(90, "explicit", "high", "new flow")}))
+
+    prd_reply = json.dumps({"title": "PRD", "summary": "…"})
+    DiscoveryService(client=_RacingClient(prd_reply, concurrent_answer)).generate("s", "prd")
+
+    saved = art.list("s")["prd"]
+    assert saved["revision"] == 1        # recorded against the revision it was written from…
+    assert saved["stale"] is True        # …and the workflow change it never saw makes it stale
+
+
 def test_update_missing_session_raises(workspace):
     with pytest.raises(SessionNotFoundError):
         SessionService().update_model("ghost", _full_model())

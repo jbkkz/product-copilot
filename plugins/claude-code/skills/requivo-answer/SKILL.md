@@ -38,8 +38,8 @@ From the `model apply` JSON, tell the user in plain language:
 - which slots changed,
 - any **decisions to re-validate** (`invalidated_decisions`) or **premises to re-examine**
   (`invalidated_challenges`) that rested on a changed slot,
-- any **artifacts that went stale** (`stale_artifacts`) — recommend regenerating those; note that the
-  saved assessment is flagged stale whenever the reasoning it rests on is unseated,
+- any **artifacts that went stale** (`stale_artifacts`) — recommend regenerating those; a saved
+  assessment rests on the whole model, so it goes stale on any material change,
 - the new readiness (ready, or which slots still block it),
 - the next small group of questions, verbatim, or that discovery has converged.
 

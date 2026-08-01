@@ -16,6 +16,7 @@ from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.services.discovery import DiscoveryService
 from requivo.web.app import create_app
 from requivo.web.dependencies import get_discovery
+from requivo.web.security import CSRF_HEADER, csrf_token
 
 
 def full_model(**overrides) -> dict:
@@ -84,8 +85,18 @@ def app():
 
 
 @pytest.fixture
-def client(app):
-    return TestClient(app, raise_server_exceptions=False)
+def raw_client(app):
+    """A client that sends nothing a browser wouldn't: loopback host, no request token. Everything a
+    real page carries has to be added explicitly — which is what makes the guard tests meaningful."""
+    return TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
+
+
+@pytest.fixture
+def client(raw_client):
+    """The everyday client: same as `raw_client` plus the cross-site request token every rendered form
+    carries as a hidden field. Sent as a header here so tests can keep posting plain `data=` dicts."""
+    raw_client.headers[CSRF_HEADER] = csrf_token()
+    return raw_client
 
 
 @pytest.fixture

@@ -21,8 +21,10 @@ Translate the JSON into plain language:
 - **Readiness**: ready to build, or not — and if not, name the **blocking slots** (use their `label`,
   not the raw id).
 - **Revision**: the current model revision.
-- **Artifacts**: for each, whether it is fresh or **stale** (produced from an older revision — it
-  should be regenerated).
+- **Artifacts**: for each, whether it is fresh or **stale**. Stale means the model has moved in a way
+  that actually touches what that artifact was built from, so it should be regenerated. An older
+  source revision on its own does *not* make an artifact stale — that number is provenance (where it
+  came from), not a verdict. Report the `stale` flag; never infer staleness from the revision.
 
 Be clear about what is still blocking. If the user wants the full understanding checklist and open
 questions, run `requivo status <slug>` without `--json` and show that view. Do not invent detail the

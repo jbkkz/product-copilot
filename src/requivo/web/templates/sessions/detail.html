@@ -13,6 +13,7 @@
 </div>
 {% if provider.available %}
 <form method="post" action="/sessions/{{ slug }}/discover">
+  {% include "_csrf.html" %}
   <div class="toolbar"><button class="btn" type="submit">Run discovery</button>
     <span class="muted">Calls the provider — a few seconds.</span></div>
 </form>

@@ -14,6 +14,7 @@ revision), so revision handling and staleness are identical to every other surfa
 from __future__ import annotations
 
 from requivo.core.contracts import EngineOutput
+from requivo.core.dependencies import diff_models
 from requivo.providers.anthropic import advise, answer_turn, current_model_name, generate_prd, new_client, run
 from requivo.render.markdown import brief_markdown, prd_markdown
 from requivo.services.artifacts import ArtifactService
@@ -90,13 +91,20 @@ class DiscoveryService:
     # ── refinement ───────────────────────────────────────────────────────────────
     def answer(self, slug: str, answers: str, *, expected_revision: int | None = None,
                surface: str = "answer") -> UpdateResult:
-        """Fold the user's answers into a session's model as a new revision. `expected_revision`
-        (optimistic lock) lets a concurrent surface reject a stale write with a clean conflict."""
+        """Fold the user's answers into a session's model as a new revision.
+
+        A turn has the same seam as a generation: the provider reasons over the model as it was, and the
+        session can move meanwhile. So the precondition defaults to the revision this turn actually read
+        — a caller that knows better (the Web, which carries the revision the user saw in the form) can
+        still pass its own. Only a session with no metadata yet (a legacy `out/` layout, migrated on
+        this write) goes without one, because there is no revision to hold it to."""
+        read_revision = self.sessions.meta(slug).current_revision if self.sessions.exists_meta(slug) else None
         before = self.sessions.load_model(slug)
         cards = self.sessions.cards(slug)
         out = answer_turn(self._need_client(), before, self.sessions.request_text(slug), answers, only=cards)
         return self.sessions.update_model(
-            slug, out.model_dump_json(), expected_revision=expected_revision,
+            slug, out.model_dump_json(),
+            expected_revision=expected_revision if expected_revision is not None else read_revision,
             provenance={"provider": "anthropic", "surface": surface, "model_name": current_model_name()})
 
     # ── generation ───────────────────────────────────────────────────────────────
@@ -105,19 +113,48 @@ class DiscoveryService:
         revision. `brief` (the solution assessment) also absorbs its reasoning back into the model as a
         revision, so downstream artifacts inherit it. Returns the saved `ArtifactStatus`.
 
+        **Generation is not atomic.** A provider call runs for seconds to minutes, and the session can
+        move underneath it — a second browser tab folding in answers, a CLI apply, a Claude Code turn.
+        So the revision the model was read at is captured *before* the call and carried through both
+        writes: as the optimistic-lock precondition on any apply (a concurrent change becomes a clean
+        conflict instead of silently overwriting that revision) and as the artifact's recorded source
+        (so a document written from revision 1 is never filed as if it came from revision 2).
+
         The first Web version supports `brief` and `prd`; the rest (stories/criteria/estimate/epic)
         already exist as CLI generators and can be added here without new orchestration."""
         self.sessions.ensure_canonical(slug)  # migrate a legacy session before its first artifact write
+        source_revision = self.sessions.meta(slug).current_revision
         out = self.sessions.load_model(slug)
         cards = self.sessions.cards(slug)
         client = self._need_client()
         if artifact_type == "brief":
             brief = advise(client, out, only=cards)
             absorb_reasoning(out, brief)
-            self.sessions.update_model(
-                slug, out.model_dump_json(),
+            # `out` is the revision-N model plus the reasoning just derived from it. Applying it without
+            # the precondition would discard any revision that landed while the provider was reasoning.
+            applied = self.sessions.update_model(
+                slug, out.model_dump_json(), expected_revision=source_revision,
                 provenance={"provider": "anthropic", "surface": surface, "model_name": current_model_name()})
-            return self.artifacts.save(slug, "brief", brief_markdown(out, brief))
+            # The assessment renders exactly the model that apply just wrote, so it belongs to that revision.
+            return self.artifacts.save(slug, "brief", brief_markdown(out, brief),
+                                       source_revision=applied.revision)
         if artifact_type == "prd":
-            return self.artifacts.save(slug, "prd", prd_markdown(generate_prd(client, out, only=cards)))
+            content = prd_markdown(generate_prd(client, out, only=cards))
+            return self._save_generated(slug, "prd", content, source_revision)
         raise ValueError(f"generation of {artifact_type!r} is not supported yet")
+
+    def _save_generated(self, slug: str, artifact_type: str, content: str, source_revision: int):
+        """Save a generated artifact against the revision it was actually produced from, then replay any
+        change that landed during generation through the dependency graph.
+
+        Without the replay, an artifact written from revision 1 while revision 2 was being applied would
+        be recorded at the current revision and inherit that revision's freshness — the one case where
+        a stale document reports itself as up to date."""
+        status = self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)
+        current = self.sessions.meta(slug).current_revision
+        if current != source_revision:
+            changed = diff_models(self.sessions.load_revision(slug, source_revision),
+                                  self.sessions.load_model(slug))
+            self.artifacts.mark_stale(slug, changed)
+            status = self.sessions.meta(slug).artifact_status[artifact_type]
+        return status

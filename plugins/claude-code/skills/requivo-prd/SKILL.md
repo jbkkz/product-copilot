@@ -32,5 +32,5 @@ Write the PRD markdown to `/tmp/requivo-prd.md`.
 ```
 requivo artifact save <slug> --type prd --file /tmp/requivo-prd.md
 ```
-The PRD is now tied to the model revision, so a later model change flags it stale (`requivo status`
-will show it). Confirm the save; clean up the temp file.
+The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
+on flags it stale (`requivo status` will show it). Confirm the save; clean up the temp file.

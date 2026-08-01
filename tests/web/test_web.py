@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from requivo.cli import app as cli_app
 from requivo.services.sessions import SessionService
+from requivo.web.config import MAX_REQUEST_CHARS
+from requivo.web.security import CSRF_FIELD, csrf_token
 from tests.web.conftest import BRIEF_REPLY, PRD_REPLY, engine_reply, full_model
 
 HIGH_EXPLICIT = {"completeness": 90, "confidence": "explicit", "impact": "high"}
@@ -180,6 +183,66 @@ def test_slug_traversal_is_rejected(client):
     assert client.get("/sessions/a..b").status_code == 400   # matches {slug}, fails validation
     assert client.post("/sessions", data={"request_text": "x", "slug": "../escape",
                                           "provider": "create_only"}).status_code == 400
+
+
+# ── cross-site protection ─────────────────────────────────────────────────────
+# Listening on 127.0.0.1 keeps nobody out: any page open in the same browser can post to a known local
+# port without a preflight, and for this app writing *is* the damage (sessions created, provider calls
+# billed). These pin each layer of web/security.py independently.
+
+def test_a_write_without_the_request_token_is_refused(raw_client):
+    r = raw_client.post("/sessions", data={"request_text": "x", "slug": "evil", "provider": "create_only"})
+    assert r.status_code == 403
+    assert raw_client.get("/").status_code == 200          # reads are untouched
+
+
+def test_the_token_works_as_a_form_field(raw_client):
+    # The browser path: a hidden input, not a header — no page in this app can set a request header.
+    r = raw_client.post("/sessions", data={"request_text": "x", "slug": "ok", "provider": "create_only",
+                                           CSRF_FIELD: csrf_token()}, follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_forms_render_the_request_token(client):
+    assert csrf_token() in client.get("/sessions/new").text
+
+
+def test_a_write_from_another_origin_is_refused(client):
+    r = client.post("/sessions", data={"request_text": "x", "provider": "create_only"},
+                    headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403
+
+
+def test_a_browser_declared_cross_site_write_is_refused(client):
+    r = client.post("/sessions", data={"request_text": "x", "provider": "create_only"},
+                    headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+
+
+def test_a_request_addressed_to_another_host_is_refused(app):
+    # DNS rebinding: `evil.example` resolving to 127.0.0.1 is same-origin to the browser, so it would
+    # pass every other check *and* be able to read the token off the page. The host allowlist is the
+    # only guard that catches it, which is why it also runs on reads.
+    rebound = TestClient(app, base_url="http://evil.example", raise_server_exceptions=False)
+    assert rebound.get("/").status_code == 403
+
+
+# ── input bounds ──────────────────────────────────────────────────────────────
+
+def test_an_oversized_request_is_refused_not_truncated(client):
+    r = client.post("/sessions", data={"request_text": "x" * (MAX_REQUEST_CHARS + 1),
+                                       "provider": "create_only"})
+    assert r.status_code == 413
+    assert not SessionService().list_sessions()      # nothing was created from the truncated half
+
+
+def test_an_unknown_context_card_is_refused(client):
+    # Filtering it out would leave an empty selection, which every reader treats as "all cards" — a
+    # typo would silently widen the context instead of narrowing it.
+    r = client.post("/sessions", data={"request_text": "x", "provider": "create_only",
+                                       "cards": ["no-such-card"]})
+    assert r.status_code == 400
+    assert not SessionService().list_sessions()
 
 
 def test_api_key_never_reaches_the_browser(client, monkeypatch):

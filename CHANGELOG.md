@@ -6,6 +6,52 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-01
+
+Correctness and web-security fixes from an external review of 0.9.0. No new surface, no format change:
+a 0.9.0 session is read and written identically.
+
+### Fixed
+- **Generation no longer races a concurrent write.** A provider call runs for seconds to minutes, and
+  the session can move underneath it (a second browser tab, a CLI apply, a Claude Code turn). The
+  revision the model was read at is now captured before the call and carried through both writes: as
+  the optimistic-lock precondition on any apply — so a concurrent change surfaces as a clean
+  `revision_conflict` instead of being silently overwritten — and as the artifact's recorded source, so
+  a document written from revision 1 is never filed as if it came from revision 2. An artifact whose
+  inputs moved while it was being generated is now born stale rather than inheriting the newer
+  revision's freshness. An answers turn now defaults to the same precondition (the revision it read),
+  so the CLI inherits the protection the Web already had from its form.
+- **The saved solution assessment goes stale when the model does.** It was excluded from the
+  artifact→slot map as "the live analysis layer"; that stopped being true when it became a saved
+  artifact, and the result was an assessment still marked fresh after the problem statement under it
+  had been rewritten. It now maps to every slot — it is a judgment over the whole model — so any
+  material change reaches it.
+- **`session show` and `artifact list` agree on freshness.** `session show` treated any artifact behind
+  the current revision as stale, contradicting every other view in the same binary. The explicit stale
+  flag (set from the dependency graph) is the rule; the source revision is provenance, not a verdict.
+  The Claude Code skills said the same wrong thing and have been corrected.
+- **Impossible artifact provenance is refused.** An artifact could be recorded against a revision that
+  does not exist (or against revision 0). Every freshness answer downstream is read off that number,
+  so it is now validated against the session's history at the write.
+- **Sonnet 5 launch pricing.** The cost estimate billed the default model at the standard $3/$15 while
+  launch pricing ($2/$10, through 2026-08-31) was live, overstating cost by a third. Rates that expire
+  now carry their end date, so the estimate is right on both sides of it without another edit.
+
+### Security
+- **Cross-site request protection on Requivo Web.** Binding to `127.0.0.1` is not a boundary: any page
+  open in the same browser could post to a known local port without a preflight, creating sessions and
+  spending the server's Anthropic key — the attacker never needs to read a response to do that damage.
+  Writes now require a per-process request token (rendered into every form), and are checked against
+  the browser's `Sec-Fetch-Site` hint and an `Origin`/`Referer` host match. A host allowlist (loopback,
+  plus `REQUIVO_WEB_ALLOWED_HOSTS` for a deliberate non-local bind) runs on reads too — it is the guard
+  against DNS rebinding, where the attacker's page *would* be able to read the token. `requivo web
+  --host` records its own bind address, so an intentional non-local run keeps working.
+- **Over-long input is refused, not truncated.** A request or answers block past its ceiling was cut
+  silently and reasoned over as if whole. Request bodies are also capped before being parsed.
+- **An unknown context card is an error.** It used to be filtered out, which left an empty selection —
+  and an empty selection means *all* cards, so a typo widened the context instead of narrowing it. The
+  CLI already refused; the resolver now lives in Core and both surfaces share it.
+
 ## [0.9.0] - 2026-08-01
 
 **Requivo Web — a third interface.** A local, single-user, self-hostable browser UI over the same Core,

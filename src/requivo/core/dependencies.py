@@ -30,9 +30,17 @@ def _all_slot_ids() -> set[str]:
 
 # Which slots materially shape each artifact. Deliberate, not "everything": an over-broad map makes
 # every change invalidate everything, which is the same as saying nothing. The names match the
-# buildable generators. The `brief`/assessment is deliberately absent — it is the live analysis
-# layer, regenerated each discovery, not a downstream deliverable that goes "stale".
+# buildable generators.
+#
+# The `brief`/assessment is the one entry mapped to `*`, and that is not laziness. It is a *judgment
+# over the whole model* — the executive summary, the complexity verdict, the challenges and the
+# understanding checklist are all read off the complete slot set — so any slot that materially moves
+# does invalidate the copy on disk. It used to be absent from this map on the grounds that it is the
+# live analysis layer rather than a deliverable; that stopped being true when it became a saved
+# artifact, and the result was an assessment that stayed marked "fresh" after the problem statement
+# under it had changed.
 _ARTIFACT_SLOTS_RAW: dict[str, set[str] | str] = {
+    "brief": "*",
     "prd": {"problem", "success_metrics", "actors", "business_objects", "business_rules",
             "workflow", "integrations", "permissions", "constraints", "edge_cases",
             "acceptance", "risks"},
@@ -48,7 +56,7 @@ _ARTIFACT_SLOTS_RAW: dict[str, set[str] | str] = {
 # The persisted file for each artifact, or None when the artifact is only rendered to the terminal
 # (stories, estimate). Used by change-detection to flag *existing* stale files on disk.
 ARTIFACT_FILES: dict[str, str | None] = {
-    "prd": "prd.md", "stories": None, "estimate": None,
+    "brief": "solution-assessment.md", "prd": "prd.md", "stories": None, "estimate": None,
     "criteria": "acceptance-criteria.md", "epic": "epic.md", "release": "release-notes.md",
 }
 

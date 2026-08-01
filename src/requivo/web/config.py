@@ -10,7 +10,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Field length ceilings — a local app still bounds input so a pasted megabyte can't wedge a turn.
+# Field length ceilings — a local app still bounds input so a pasted megabyte can't wedge a turn. Past
+# the ceiling the field is *refused*, never trimmed to fit: half a request folded into the model reads
+# exactly like a whole one, so the user would never learn which half the engine saw. (The body itself
+# is capped earlier still, in `security.py`, before anything is parsed.)
 MAX_REQUEST_CHARS = 20_000
 MAX_ANSWERS_CHARS = 20_000
 MAX_SLUG_CHARS = 80

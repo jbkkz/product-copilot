@@ -79,6 +79,13 @@ Even though it is a local app:
 
 - The server binds to `127.0.0.1` by default. Passing `--host 0.0.0.0` prints a warning: there is **no
   authentication**, so the app must not be exposed on an untrusted network.
+- **Writes are protected against cross-site requests.** Binding to loopback keeps nobody out — any page
+  open in the same browser can post to a known local port without a preflight, and for this app writing
+  is the damage (sessions created, provider calls billed). Four checks run in `web/security.py`: a host
+  allowlist (loopback, plus anything in `REQUIVO_WEB_ALLOWED_HOSTS` — this is the DNS-rebinding guard,
+  and the only one that also runs on reads), the browser's `Sec-Fetch-Site` hint, an `Origin`/`Referer`
+  host match, and a per-process request token rendered into every form. A page held open across a
+  server restart needs a reload to pick up the new token.
 - Every slug is validated in the Core (strict kebab-case, no path separators or dot segments), so a
   request can never escape `.requivo/sessions/`.
 - Only the package's `static/` directory is served — never the workspace, `.requivo`, `.env` or `.git`.
@@ -86,7 +93,10 @@ Even though it is a local app:
 - All rendered content is HTML-escaped (Jinja autoescape); artifact Markdown is shown in a code block.
 - Conservative headers are set: `X-Content-Type-Options`, `Referrer-Policy`, and a `Content-Security-Policy`
   that allows only same-origin assets (so the vendored HTMX and local CSS are the only scripts/styles).
-- Input fields are length-bounded.
+- Input is length-bounded, and an over-long request or answer is **refused, not truncated** — half a
+  request folded into the model reads exactly like a whole one. Request bodies are capped before they
+  are parsed. An unknown context card is an error too: filtering it out would leave an empty selection,
+  which every reader downstream treats as "load every card".
 
 ## Limits of this first version
 
@@ -97,6 +107,9 @@ Even though it is a local app:
 - Artifacts are shown as escaped Markdown in a code block, not rendered to HTML.
 - Readiness is binary (ready + blocking topics), as in the Core — no invented "levels".
 - Single user, single workspace, no concurrent-editing UI beyond the optimistic-lock conflict message.
+  Two tabs cannot corrupt a session — a generation carries the revision it read as a precondition, so a
+  concurrent change surfaces as a conflict rather than being overwritten — but the second tab is not
+  live-updated; it finds out when it next submits.
 
 ## Requivo Web is not Requivo Cloud
 

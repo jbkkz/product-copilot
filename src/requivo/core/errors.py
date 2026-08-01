@@ -56,6 +56,22 @@ class MissingRequiredSlotError(InvalidModelError):
     code = "missing_required_slot"
 
 
+class UnknownContextCardError(InvalidModelError):
+    """A caller named a context card that does not exist. A hard error on every surface: silently
+    dropping the unknown name falls back to *all* cards, which widens the context instead of narrowing
+    it — the opposite of what a caller asking for a subset intended."""
+
+    code = "unknown_context_card"
+
+
+class InputTooLargeError(RequivoError):
+    """A supplied text exceeds the ceiling the engine accepts. Raised rather than truncated: a request
+    or an answer silently cut mid-sentence is reasoned over as if it were the whole thing, and the
+    caller never learns which half the model saw."""
+
+    code = "input_too_large"
+
+
 class InvalidSessionError(RequivoError):
     """A session on disk is malformed, unreadable, or of an unsupported format version."""
 

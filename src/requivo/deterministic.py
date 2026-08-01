@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 from requivo.core import persistence as store
-from requivo.core.context import available_cards
+from requivo.core.context import available_cards, resolve_cards
 from requivo.core.errors import InvalidModelError, SessionNotFoundError
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, session_root, workspace_root
@@ -142,23 +142,10 @@ def _cmd_doctor(a, client) -> None:
 
 
 def _resolve_cards(spec: str | None) -> list[str] | None:
-    """A comma-separated --context spec → validated card stems (None == all cards). Unknown cards are
-    a hard error here (deterministic path): a typo shouldn't silently widen the context."""
-    if not spec:
-        return None
-    avail = {c.lower(): c for c in available_cards()}
-    picked, unknown = [], []
-    for tok in spec.split(","):
-        key = tok.strip().lower()
-        if not key:
-            continue
-        (picked if key in avail else unknown).append(avail.get(key, tok.strip()))
-    if unknown:
-        raise InvalidModelError(
-            f"unknown context card(s): {', '.join(unknown)}. Available: {', '.join(available_cards())}",
-            details={"unknown": unknown},
-        )
-    return picked or None
+    """A comma-separated --context spec → validated card stems (None == all cards). The resolution and
+    the unknown-card error live in Core (`resolve_cards`), shared with the Web, so a typo can never
+    silently widen the context on one surface and fail on another."""
+    return resolve_cards(spec.split(",")) if spec else None
 
 
 def _cmd_session_init(a, client) -> None:
@@ -209,8 +196,11 @@ def _cmd_session_show(a, client) -> None:
     if meta.artifact_status:
         print("  artifacts:")
         for t, st in meta.artifact_status.items():
-            stale = st.stale or st.revision != meta.current_revision
-            print(f"    {t:<12} {st.filename:<26} rev {st.revision}  {'STALE' if stale else 'fresh'}")
+            # The explicit stale flag is the whole rule — the source revision is provenance, not an
+            # invalidation signal (see ArtifactService.list). An artifact produced two revisions ago
+            # whose inputs never moved is still fresh, and saying otherwise here contradicted both
+            # `artifact list` and the status JSON every other surface reads.
+            print(f"    {t:<12} {st.filename:<26} rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
 
 
 def _cmd_session_migrate(a, client) -> None:

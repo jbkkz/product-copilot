@@ -8,6 +8,7 @@ needs clarifying before any document is written.</p>
 {% if error %}<div class="notice danger">{{ error }}</div>{% endif %}
 
 <form method="post" action="/sessions" class="card">
+  {% include "_csrf.html" %}
   <label for="request_text">Product request</label>
   <textarea id="request_text" name="request_text" required maxlength="20000"
     aria-describedby="req-hint"

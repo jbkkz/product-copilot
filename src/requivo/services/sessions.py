@@ -126,6 +126,15 @@ class SessionService:
         model for read-only operations (status/impact) so they work without forcing a migration."""
         return self.repo.load_model(slug)
 
+    def exists_meta(self, slug: str) -> bool:
+        """True if the session is in the mutation-backed store — i.e. `meta()` will succeed. A legacy
+        `out/` session is readable but has no metadata until its first write migrates it."""
+        return self.repo.has_meta(slug)
+
+    def load_revision(self, slug: str, revision: int) -> EngineOutput:
+        """A historical model revision — the basis for "what moved since this artifact was made?"."""
+        return self.repo.load_revision(slug, revision)
+
     def list_sessions(self) -> list[SessionMeta]:
         return [self.repo.read_meta(s) for s in self.repo.list_slugs()]
 
@@ -179,18 +188,15 @@ class SessionService:
             prior = propagate(current, changed)
             invalidated_decisions = [d.decision for d in prior.decisions]
             invalidated_challenges = [c.headline for c in prior.challenges]
-            reasoning_hit = prior.reasoning_hit
         else:
-            invalidated_decisions, invalidated_challenges, reasoning_hit = [], [], False
+            invalidated_decisions, invalidated_challenges = [], []
 
         def _resolve_stale(generated: set[str]) -> list[str]:
-            stale = [t for t in report.artifacts if t in generated]
-            # The saved assessment *renders* the prior reasoning — if the change unseats a decision or a
-            # challenge it rested on, the assessment on disk no longer holds, even though the assessment
-            # is deliberately outside the static artifact→slot map (it is the live analysis layer).
-            if reasoning_hit and "brief" in generated and "brief" not in stale:
-                stale.append("brief")
-            return stale
+            # The blast radius, intersected with what actually exists on disk. The saved assessment
+            # needs no special case here: it rests on every slot in `ARTIFACT_SLOTS`, so a change that
+            # unseats a decision or a challenge — which is always a change to some slot — reaches it
+            # through the same map as every other artifact.
+            return [t for t in report.artifacts if t in generated]
 
         if apply:
             revision, meta = self.repo.save_revision(

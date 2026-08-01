@@ -1,0 +1,2 @@
+{# Every state-changing form carries this. See web/security.py — a POST without it is refused. #}
+<input type="hidden" name="{{ csrf_field }}" value="{{ csrf_token }}">

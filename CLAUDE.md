@@ -221,8 +221,8 @@ reloads a saved model and regenerates any artifact without redoing discovery (`l
 Because artifacts are views of the model, they can go **stale** when the model moves — and the model
 knows what rests on what. `core/dependencies.py` makes the dependency DAG explicit: a `DesignDecision`
 records the slot ids it was `derived_from` (filled by `advise()`); a static `ARTIFACT_SLOTS` map records
-which slots each buildable artifact consumes (the assessment/brief is deliberately excluded — it is the
-live analysis layer, not a downstream deliverable). `propagate(model, slots)` returns the blast radius
+which slots each buildable artifact consumes (the assessment/brief maps to `*` — it is a judgment over
+the whole model, so any material slot change invalidates the saved copy). `propagate(model, slots)` returns the blast radius
 (decisions to re-validate + artifacts to regenerate); `diff_models(old, new)` is the material change
 between two versions (value/confidence/impact — not completeness noise); `stale_on_disk()` intersects
 that with the files actually present in `out/<slug>/`. `requivo impact` surfaces the forward view on demand;

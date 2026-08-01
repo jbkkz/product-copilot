@@ -19,6 +19,7 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date
 
 from pydantic import ValidationError
 
@@ -88,16 +89,37 @@ def current_model_name() -> str:
     return os.getenv("MODEL", MODEL_DEFAULT)
 
 
-# USD per 1M tokens (input, output), from the Anthropic pricing reference as of 2026-06-24. This
+# USD per 1M tokens (input, output), from the Anthropic pricing reference as of 2026-08-01. This
 # yields an *estimate*, never a bill: prices drift and intro rates lapse, so the renderer stamps this
 # date and labels the number an estimate. Tokens (below) are ground truth from the API; cost is the
 # only thing here that can go stale — keep this table updateable and honest, not authoritative.
-PRICING_AS_OF = "2026-06-24"
+PRICING_AS_OF = "2026-08-01"
 _PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.00, 25.00),
     "claude-sonnet-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
+
+# Launch pricing that lapses on a known date: model → (input, output, last day inclusive). A dated
+# table with no notion of expiry is wrong twice — it over-reports while an intro rate is live, then
+# under-reports the day someone edits the rate in and forgets the lapse. Encoding the end date lets
+# the estimate be right on both sides of it without another edit. `claude-sonnet-5` (the default
+# model) is on launch pricing through 2026-08-31, reverting to the standard 3.00/15.00 above.
+_LAUNCH_PRICE_PER_MTOK: dict[str, tuple[float, float, str]] = {
+    "claude-sonnet-5": (2.00, 10.00, "2026-08-31"),
+}
+
+
+def price_per_mtok(model: str, on: date | None = None) -> tuple[float, float] | None:
+    """The (input, output) USD rate per million tokens for `model` on a given day, or None when the
+    model's price is unknown — never guess a price. `on` defaults to today, so a running estimate
+    follows a launch rate over its expiry without a code change."""
+    launch = _LAUNCH_PRICE_PER_MTOK.get(model)
+    if launch is not None:
+        in_rate, out_rate, until = launch
+        if (on or date.today()) <= date.fromisoformat(until):
+            return in_rate, out_rate
+    return _PRICE_PER_MTOK.get(model)
 
 
 @dataclass
@@ -149,12 +171,14 @@ class UsageLedger:
                 seen.append(c.model)
         return seen
 
-    def cost_usd(self) -> float | None:
+    def cost_usd(self, on: date | None = None) -> float | None:
         """Estimated USD across all calls, or None if any model's price is unknown (never guess a
-        price). Cache reads bill ~0.1x input, cache writes ~1.25x input."""
+        price). Cache reads bill ~0.1x input, cache writes ~1.25x input. `on` fixes the day the rates
+        are read for (launch pricing lapses); it defaults to today and exists so a test can assert both
+        sides of an expiry without waiting for it."""
         total = 0.0
         for c in self.calls:
-            price = _PRICE_PER_MTOK.get(c.model)
+            price = price_per_mtok(c.model, on)
             if price is None:
                 return None
             in_rate, out_rate = price

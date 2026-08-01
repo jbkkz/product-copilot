@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
+from requivo.core.errors import InputTooLargeError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, provider_status
@@ -42,7 +43,13 @@ def submit_answers(
     """Fold the answers into the model as a new revision (optimistic-locked on `expected_revision`),
     then return the refreshed status region for an HTMX swap. A revision conflict surfaces as a clean
     error fragment via the app's exception handler."""
-    text = answers.strip()[:MAX_ANSWERS_CHARS]
+    text = answers.strip()
+    if len(text) > MAX_ANSWERS_CHARS:
+        # Refused rather than truncated — half an answer folded into the model is worse than none,
+        # because nothing downstream can tell it was cut.
+        raise InputTooLargeError(
+            f"the answers exceed {MAX_ANSWERS_CHARS:,} characters — split them across two turns",
+            details={"limit": MAX_ANSWERS_CHARS, "length": len(text)})
     result = discovery.answer(slug, text, expected_revision=expected_revision, surface="web-answer")
     return templates.TemplateResponse(request, "sessions/_status.html", {
         "s": session_detail(sessions, slug),

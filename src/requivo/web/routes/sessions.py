@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-from requivo.core.context import available_cards
-from requivo.core.errors import SessionNotFoundError
+from requivo.core.context import available_cards, resolve_cards
+from requivo.core.errors import InputTooLargeError, SessionNotFoundError
 from requivo.core.persistence import validate_slug
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
@@ -38,11 +38,25 @@ def create_session(
 ):
     """Create a session from a product request. `provider=anthropic` runs one discovery turn now;
     `create_only` just captures the request (no LLM), to run discovery later."""
-    text = request_text.strip()[:MAX_REQUEST_CHARS]
-    chosen_slug = (slug.strip()[:MAX_SLUG_CHARS] or None)
+    # Bounds are refusals, not truncations: a request silently cut at 20k would be reasoned over as if
+    # it were the whole thing, and the user would never learn which half the engine saw.
+    text = request_text.strip()
+    if len(text) > MAX_REQUEST_CHARS:
+        raise InputTooLargeError(
+            f"the product request exceeds {MAX_REQUEST_CHARS:,} characters — trim it and resubmit",
+            details={"limit": MAX_REQUEST_CHARS, "length": len(text)})
+    chosen_slug = slug.strip()
+    if len(chosen_slug) > MAX_SLUG_CHARS:
+        raise InputTooLargeError(
+            f"the session name exceeds {MAX_SLUG_CHARS} characters",
+            details={"limit": MAX_SLUG_CHARS, "length": len(chosen_slug)})
     if chosen_slug:
         validate_slug(chosen_slug)  # InvalidSlugError → clean 400
-    picked = [c for c in cards if c in available_cards()] or None  # never trust the posted list blindly
+    else:
+        chosen_slug = None
+    # An unknown card is an error, not something to filter out: dropping it leaves an empty selection,
+    # which every reader downstream treats as "load every card" — the opposite of narrowing.
+    picked = resolve_cards(cards)
 
     if not text:
         return templates.TemplateResponse(request, "sessions/new.html", {

@@ -10,6 +10,7 @@
     {% endfor %}
   </ol>
   <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#status-region" hx-swap="outerHTML">
+    {% include "_csrf.html" %}
     <input type="hidden" name="expected_revision" value="{{ s.revision }}">
     <label for="answers">Your answers <span class="hint">(free text — address the questions above in one go)</span></label>
     <textarea id="answers" name="answers" required maxlength="20000"

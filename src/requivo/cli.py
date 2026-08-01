@@ -502,6 +502,10 @@ def _cmd_web(a, client) -> None:
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠  Binding to {host}: Requivo Web has NO authentication and must not be exposed on an "
               "untrusted network. Prefer 127.0.0.1 unless you fully control the network.", file=sys.stderr)
+        # The app only answers to hosts it recognises (the DNS-rebinding guard in web/security.py), and
+        # loopback is all it recognises by default. A deliberate bind elsewhere is the operator saying
+        # this address is legitimate, so record it — without silently widening the default.
+        os.environ.setdefault("REQUIVO_WEB_ALLOWED_HOSTS", host)
     try:
         import uvicorn
 

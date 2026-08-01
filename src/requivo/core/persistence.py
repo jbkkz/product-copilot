@@ -350,11 +350,22 @@ def session_request(slug: str) -> str:
 
 def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
                           source_revision: int) -> ArtifactStatus:
-    """Write an artifact under artifacts/ and record its provenance (source revision) in session.json."""
+    """Write an artifact under artifacts/ and record its provenance (source revision) in session.json.
+
+    The revision is validated against the session's history first: provenance that cannot be true is
+    worse than none, because every freshness question downstream is answered from it. A revision in
+    the future (or before the first model) is refused rather than recorded.
+    """
+    meta = read_meta(slug)
+    if not 1 <= source_revision <= meta.current_revision:
+        raise InvalidSessionError(
+            f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' has "
+            f"revisions 1..{meta.current_revision or 0}",
+            details={"slug": slug, "source_revision": source_revision,
+                     "current_revision": meta.current_revision})
     d = canonical_dir(slug)
     (d / "artifacts").mkdir(parents=True, exist_ok=True)
     _atomic_write(d / "artifacts" / filename, content)
-    meta = read_meta(slug)
     st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=False)
     meta.artifact_status[artifact_type] = st
     meta.updated_at = _now()

@@ -17,7 +17,7 @@ requivo impact <slug>                # the full dependency map
 ```
 To see what has *already* drifted since the last generation, also run:
 ```
-requivo status <slug> --json         # artifacts flagged stale carry a source revision behind current
+requivo status <slug> --json         # each artifact's `stale` flag — the source revision is provenance
 ```
 
 ## Relay
@@ -25,7 +25,7 @@ Present, in plain language:
 - the **decisions to re-validate** (they rested on a changed slot via `derived_from`),
 - the **premises to re-examine** (challenges that contest a changed slot via `contests`),
 - the **artifacts that go stale** and should be regenerated (`/requivo-prd`, `/requivo-brief`, …) — the
-  saved assessment goes stale whenever a decision or premise it rests on is unseated,
+  saved assessment rests on the whole model, so any material change reaches it,
 - and recommend **only the necessary** regenerations — not everything.
 
 Do not invent dependencies the command did not report; the DAG is authoritative.

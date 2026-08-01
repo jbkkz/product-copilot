@@ -9,8 +9,10 @@ import `available_cards()` to validate a `--context` selection, none of which ne
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
+from requivo.core.errors import UnknownContextCardError
 from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 
 
@@ -34,6 +36,30 @@ def available_cards() -> list[str]:
     """Stems of the loadable context cards (bundled + user), sorted — the vocabulary of the
     `--context` selector."""
     return sorted(_card_paths())
+
+
+def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
+    """Map caller-supplied card names to card stems, case-insensitively. Returns None for an empty
+    selection (== all cards), and raises `UnknownContextCardError` on a name that does not exist.
+
+    The failure mode this closes is silent *widening*: filtering unknown names out of the list leaves
+    an empty selection, which every downstream reader treats as "load every card" — so a typo in a
+    two-card selection quietly loads all of them. One resolver, shared by the CLI and the Web, so no
+    surface can be lenient where another is strict.
+    """
+    avail = {c.lower(): c for c in available_cards()}
+    picked, unknown = [], []
+    for tok in tokens:
+        key = tok.strip().lower()
+        if not key:
+            continue
+        (picked if key in avail else unknown).append(avail.get(key, tok.strip()))
+    if unknown:
+        raise UnknownContextCardError(
+            f"unknown context card(s): {', '.join(unknown)}. Available: {', '.join(available_cards())}",
+            details={"unknown": unknown},
+        )
+    return picked or None
 
 
 def load_context(only: list[str] | None = None) -> str:

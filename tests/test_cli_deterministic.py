@@ -99,6 +99,29 @@ def test_model_apply_and_status_and_artifact_flow(workspace, tmp_path):
     assert listed["brief"]["revision"] == 1 and listed["brief"]["stale"] is False
 
 
+def test_session_show_reads_freshness_from_the_dependency_graph_not_the_revision(workspace, tmp_path):
+    # `session show` used to call an artifact stale whenever the session had moved past its source
+    # revision — which contradicted `artifact list` and the status JSON in the same binary, and made
+    # every artifact look out of date after any unrelated change. The stale flag is the whole rule.
+    _run(["session", "init", "X.", "--slug", "s"])
+    proposal = tmp_path / "m.json"
+    proposal.write_text(json.dumps(_full_model()))
+    _run(["model", "apply", "s", str(proposal)])
+    prd = tmp_path / "prd.md"
+    prd.write_text("# PRD\n")
+    _run(["artifact", "save", "s", "--type", "prd", "--file", str(prd)])   # generated at revision 1
+
+    # Move the session on via a slot the PRD does not consume: revision 2, PRD inputs untouched.
+    proposal.write_text(json.dumps(_full_model(
+        **{"current_process": _slot(80, "explicit", "high", "as-is described")})))
+    _run(["model", "apply", "s", str(proposal)])
+
+    out = _run(["session", "show", "s"])
+    assert "revision 2" in out and "rev 1" in out   # provenance still says where it came from…
+    assert "STALE" not in out                       # …but it is not stale, and both views agree
+    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is False
+
+
 def test_apply_invalid_proposal_emits_error_envelope(workspace, tmp_path):
     _run(["session", "init", "X.", "--slug", "s"])
     bad = tmp_path / "bad.json"

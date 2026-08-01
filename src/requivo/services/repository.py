@@ -64,6 +64,11 @@ class SessionRepository(Protocol):
         """The current model, raising `SessionNotFoundError` if there is none."""
         ...
 
+    def load_revision(self, slug: str, revision: int) -> EngineOutput:
+        """A historical model revision, raising `SessionNotFoundError` if it does not exist. Needed to
+        answer "what changed since the model this artifact was generated from?" after the fact."""
+        ...
+
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: Optional[int] = None,
                       provenance: Optional[dict] = None) -> tuple[int, SessionMeta]:
         """Persist a new model revision (with optimistic-lock precondition and provenance) and return
@@ -128,6 +133,9 @@ class FileSessionRepository:
         if store.legacy_exists(slug):
             return EngineOutput.model_validate_json((store.legacy_dir(slug) / "model.json").read_text())
         raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+
+    def load_revision(self, slug: str, revision: int) -> EngineOutput:
+        return store.load_revision_model(slug, revision)
 
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: Optional[int] = None,
                       provenance: Optional[dict] = None) -> tuple[int, SessionMeta]:

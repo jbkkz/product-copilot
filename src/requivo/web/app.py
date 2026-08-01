@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from requivo.core.errors import RequivoError
 from requivo.providers.anthropic import EngineError
 from requivo.web.routes import artifacts, discovery, health, home, sessions
+from requivo.web.security import install_cross_site_guard
 from requivo.web.templating import STATIC_DIR, templates
 
 # Map a structured error code to an HTTP status. Anything unlisted is a 400 (bad request); an
@@ -24,11 +25,14 @@ _STATUS_BY_CODE = {
     "invalid_slug": 400,
     "invalid_model": 400,
     "unknown_slot": 400,
+    "unknown_context_card": 400,
     "missing_required_slot": 400,
     "invalid_session": 400,
+    "input_too_large": 413,
     "revision_conflict": 409,
     "stale_artifact": 409,
     "unknown_artifact_type": 400,
+    "cross_site_request": 403,
 }
 
 # A locked-down CSP: everything is same-origin, images may be inline data URIs. No external hosts, so
@@ -52,6 +56,10 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Requivo Web", docs_url=None, redoc_url=None, openapi_url=None)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Installed before the header middleware so it ends up *inside* it: a request the guard turns away
+    # still leaves with the same CSP and nosniff headers as any other response.
+    install_cross_site_guard(app, _render_error)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
