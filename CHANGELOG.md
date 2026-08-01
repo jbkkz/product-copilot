@@ -26,6 +26,10 @@ telemetry — see `docs/web.md`).
   unseated reasoning / stale artifacts), and generation of the **solution assessment** and **PRD**
   (saved with source revision, marked *Draft* when blocking unknowns remain, viewable + downloadable).
   Templates, CSS and a vendored HTMX ship in the wheel — no CDN, works offline.
+- **UI aligned to the Requivo landing** — indigo accent, warm off-white, soft-shadow cards, monospace
+  meta labels, dot-coded understanding rows (FACT / ASSUM / UNKWN) and a segmented readiness bar. A
+  visible loading signal on every action (a top progress bar + an in-button spinner) covering both HTMX
+  swaps and full-page submits, so it is always clear that something is happening. Degrades without JS.
 - **`DiscoveryService`** (`services/discovery.py`) — the provider-backed orchestration (start / answer /
   generate) extracted so the CLI and Web share exactly one pipeline; neither re-orchestrates "call the
   provider, then apply". `brief_markdown()` renders the assessment as a saveable/downloadable artifact.

@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Requivo — local{% endblock %}
 {% block content %}
-<h1>Turn vague requests into validated product decisions</h1>
+<p class="eyebrow">● Local requirements workspace</p>
+<h1>Turn vague requests into<br>validated product decisions.</h1>
 <p class="lead">Requivo separates facts, assumptions and unknowns before generating product
-documentation.</p>
+documentation — and keeps the resulting decisions traceable.</p>
 
 {% if not provider.available %}
 <div class="notice info">Provider actions are disabled — {{ provider.reason }} You can still create
@@ -18,14 +19,14 @@ sessions and review existing ones.</div>
   {% for s in sessions %}
   <div class="card">
     <div class="session-row">
-      <a href="/sessions/{{ s.slug }}"><strong>{{ s.slug }}</strong></a>
+      <a href="/sessions/{{ s.slug }}">{{ s.slug }}</a>
       {% if s.ready %}<span class="badge ok">Ready</span>
       {% elif s.blocking %}<span class="badge warn">{{ s.blocking }} blocking</span>
       {% else %}<span class="badge">In progress</span>{% endif %}
     </div>
-    <div class="meta">rev {{ s.revision }} · updated {{ s.updated_at }} · {{ s.provider }}</div>
-    <div class="meta">{{ s.artifact_count }} artifact{{ '' if s.artifact_count == 1 else 's' }}{%
-      if s.stale_count %} · <span class="badge danger">{{ s.stale_count }} stale</span>{% endif %}</div>
+    <p class="meta mono">rev {{ s.revision }} · {{ s.updated_at }} · {{ s.provider }}</p>
+    <p class="meta">{{ s.artifact_count }} artifact{{ '' if s.artifact_count == 1 else 's' }}{%
+      if s.stale_count %} · <span class="badge danger">{{ s.stale_count }} stale</span>{% endif %}</p>
   </div>
   {% endfor %}
 </div>

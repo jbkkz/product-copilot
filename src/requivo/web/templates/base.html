@@ -9,10 +9,17 @@
   <script src="/static/js/app.js" defer></script>
 </head>
 <body>
+  <div id="progress" aria-hidden="true"></div>
   <header class="site">
     <div class="container">
-      <a class="brand" href="/">Requi<span>vo</span>
-        <small>Turn vague requests into validated product decisions</small></a>
+      <a class="brand" href="/">
+        <span class="mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff"
+               stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+        </span>
+        <span class="wordmark">Requi<span>vo</span>
+          <small>Turn vague requests into validated product decisions</small></span>
+      </a>
       <nav><a class="btn small" href="/sessions/new">New discovery</a></nav>
     </div>
   </header>
@@ -23,8 +30,8 @@
   </main>
   <footer class="site">
     <div class="container">
-      Local · single-user · your sessions never leave this machine. No authentication — do not expose
-      this server on an untrusted network. Requivo Web is not Requivo Cloud.
+      Local · single-user · sessions never leave this machine. No authentication — do not expose this
+      server on an untrusted network. Requivo Web is not Requivo Cloud.
     </div>
   </footer>
 </body>

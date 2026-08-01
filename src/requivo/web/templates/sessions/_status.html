@@ -12,14 +12,23 @@
   {% endif %}
 
   <h2>Readiness</h2>
-  {% if s.readiness.ready %}
-  <span class="badge ok">{{ s.readiness.headline }}</span>
-  {% elif s.readiness.blocking %}
-  <span class="badge warn">{{ s.readiness.headline }}</span>
-  <p class="muted">Blocking unknowns: {{ s.readiness.blocking_labels|join(' · ') }}</p>
-  {% else %}
-  <span class="badge">{{ s.readiness.headline }}</span>
-  {% endif %}
+  <div class="card">
+    <div class="readiness-head">
+      {% if s.readiness.ready %}<span class="badge ok">Ready for implementation</span>
+      {% elif s.readiness.blocking %}<span class="badge warn">Blocked</span>
+      {% else %}<span class="badge">Ready for assessment</span>{% endif %}
+      <span class="count">{{ s.readiness.resolved }} / {{ s.readiness.total }} explicit</span>
+    </div>
+    <div class="progress" role="img"
+         aria-label="{{ s.readiness.resolved }} of {{ s.readiness.total }} topics explicit">
+      {% for i in range(s.readiness.total) %}
+      <span class="seg {% if i < s.readiness.resolved %}on{% if s.readiness.blocking %} blocked{% endif %}{% endif %}"></span>
+      {% endfor %}
+    </div>
+    {% if s.readiness.blocking %}
+    <p class="blockers"><b>Blocking unknowns:</b> {{ s.readiness.blocking_labels|join(' · ') }}</p>
+    {% endif %}
+  </div>
 
   <h2>Understanding</h2>
   {% include "discovery/_understanding.html" %}

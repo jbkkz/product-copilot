@@ -1,13 +1,18 @@
-{% for group in s.understanding %}
-<h3>{{ group.label }} <span class="hint">— {{ group.hint }}</span></h3>
-<ul class="clean">
-  {% for slot in group.slots %}
-  <li class="slot {% if slot.thin %}thin{% endif %}">
-    <span class="label">{{ slot.label }}</span>
-    <span class="muted">· {{ slot.pillar }}</span>
-  </li>
-  {% endfor %}
-</ul>
+{% if s.understanding %}
+<div class="card flush">
+  <div class="model-list">
+    {% for r in s.understanding %}
+    <div class="model-row">
+      <span class="dot {{ r.dot }}" aria-hidden="true"></span>
+      <span class="tag">{{ r.tag }}</span>
+      <span class="name">{{ r.name }}{% if r.thin %}<span class="pill-partial">partial</span>{% endif %}</span>
+      <span class="pillar">{{ r.pillar }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<p class="hint"><span class="dot fact"></span> explicit fact · <span class="dot assum"></span> inferred
+  assumption · <span class="dot unkwn"></span> unknown · <em>partial</em> = stated but thinly covered</p>
 {% else %}
 <p class="muted">Nothing captured yet — run discovery.</p>
-{% endfor %}
+{% endif %}

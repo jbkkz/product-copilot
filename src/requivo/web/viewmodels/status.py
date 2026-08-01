@@ -8,39 +8,47 @@ from __future__ import annotations
 
 from typing import Any
 
-# Human labels for the three understanding states the Core emits (evidence, NOT coverage — coverage is
-# the separate `thin`/`completeness` signal each entry carries).
+# The three understanding states the Core emits (evidence, NOT coverage — coverage is the separate
+# `thin` flag each entry carries), each with its display tag and dot colour class.
 UNDERSTANDING_STATES = [
-    ("confirmed", "Explicit facts", "Stated directly by the client."),
-    ("inferred", "Inferred assumptions", "Assumed from context — confirm before building."),
-    ("unknown", "Unknowns", "Not yet known; may need a question."),
+    ("confirmed", "FACT", "fact"),
+    ("inferred", "ASSUM", "assum"),
+    ("unknown", "UNKWN", "unkwn"),
 ]
 
 
 def readiness_view(status: dict) -> dict:
     """A display-ready readiness block. Readiness is binary in the Core (ready + blocking topics); we
-    do NOT invent graded levels ('nearly ready') the model does not produce — we show what blocks."""
+    do NOT invent graded levels ('nearly ready') the model does not produce — we show what blocks. The
+    coverage count (explicit slots / total) is a purely visual progress signal for the segmented bar,
+    not a second readiness concept."""
     rd = status.get("readiness", {})
     blocking = rd.get("blocking_slots", [])
+    groups = status.get("understanding", {})
+    total = sum(len(v) for v in groups.values())
+    resolved = len(groups.get("confirmed", []))
     return {
         "ready": rd.get("ready", False),
         "blocking": blocking,
         "headline": "Ready for implementation" if rd.get("ready")
         else ("Ready for assessment" if not blocking else "Blocked"),
         "blocking_labels": [b["label"] for b in blocking],
+        "resolved": resolved,
+        "total": total,
     }
 
 
 def understanding_view(status: dict) -> list[dict]:
-    """The understanding checklist grouped by state, in a fixed display order, each group carrying its
-    label and its slots (with the `thin` coverage flag Core sets)."""
+    """The understanding as a flat, dot-coded row list (facts, then assumptions, then unknowns) — the
+    'model' view: each row carries its tag (FACT/ASSUM/UNKWN), dot colour, slot label, pillar, and the
+    `thin` coverage flag. Flat rather than grouped so it reads like the landing's model card."""
     groups = status.get("understanding", {})
-    out = []
-    for key, label, hint in UNDERSTANDING_STATES:
-        entries = groups.get(key, [])
-        if entries:
-            out.append({"key": key, "label": label, "hint": hint, "slots": entries})
-    return out
+    rows = []
+    for key, tag, dot in UNDERSTANDING_STATES:
+        for e in groups.get(key, []):
+            rows.append({"tag": tag, "dot": dot, "name": e["label"],
+                         "pillar": e["pillar"], "thin": e.get("thin", False)})
+    return rows
 
 
 def update_result_view(result: Any) -> dict:

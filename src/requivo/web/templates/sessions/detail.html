@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block title %}{{ slug if pending else s.slug }} — Requivo{% endblock %}
 {% block content %}
-<p><a href="/">← All sessions</a></p>
+<p><a class="backlink" href="/">← All sessions</a></p>
 
 {% if pending %}
 <h1>{{ slug }}</h1>
-<span class="badge">Awaiting discovery</span>
+<p><span class="badge warn">Awaiting discovery</span></p>
 <div class="card">
   <h3>Request</h3>
   <p>{{ request_text }}</p>
-  {% if context_cards %}<p class="meta">Context cards: {{ context_cards|join(', ') }}</p>{% endif %}
+  {% if context_cards %}<p class="meta mono">Context cards: {{ context_cards|join(', ') }}</p>{% endif %}
 </div>
 {% if provider.available %}
 <form method="post" action="/sessions/{{ slug }}/discover">
@@ -22,48 +22,52 @@
 
 {% else %}
 <h1>{{ s.slug }}</h1>
-<div class="meta muted">revision {{ s.revision }}{% if s.context_cards %} · cards: {{ s.context_cards|join(', ') }}{% endif %}
-  · <a href="/sessions/{{ s.slug }}/export">export model</a></div>
+<p class="meta mono">revision {{ s.revision }}{% if s.context_cards %} · cards: {{ s.context_cards|join(', ') }}{% endif %}
+  · <a href="/sessions/{{ s.slug }}/export">export model</a></p>
 {% if s.summary.objective %}<p class="lead">{{ s.summary.objective }}</p>{% endif %}
 
 {% include "sessions/_status.html" %}
 
 {% if s.decisions or s.challenges or s.opportunities %}
 <h2>Decisions &amp; reasoning</h2>
-{% for d in s.decisions %}
-<div class="reason">
-  <div class="head">{{ d.decision }}</div>
-  <dl>
-    {% if d.why %}<dt>Why</dt><dd>{{ d.why }}</dd>{% endif %}
-    {% if d.alternative %}<dt>Alternative weighed</dt><dd>{{ d.alternative }}</dd>{% endif %}
-    {% if d.tradeoff %}<dt>Trade-off</dt><dd>{{ d.tradeoff }}</dd>{% endif %}
-  </dl>
-</div>
-{% endfor %}
-{% if s.challenges %}<h3>Challenges to the premise</h3>{% endif %}
-{% for c in s.challenges %}
-<div class="reason">
-  <div class="head">{{ c.headline }}</div>
-  <dl>
-    <dt>Premise</dt><dd>{{ c.premise }}</dd>
-    <dt>Alternative</dt><dd>{{ c.alternative }}</dd>
-    <dt>Consequence</dt><dd>{{ c.consequence }}</dd>
-    <dt>Recommendation</dt><dd>{{ c.recommendation }}</dd>
-  </dl>
-</div>
-{% endfor %}
-{% if s.opportunities %}
-<h3>Opportunities</h3>
-<ul class="clean">
-  {% for o in s.opportunities %}
-  <li><strong>{{ o.text }}</strong> <span class="badge">leverage: {{ o.leverage }}</span>
-    {% if o.modules %}<span class="muted">· {{ o.modules|join(', ') }}</span>{% endif %}</li>
+<div class="card">
+  {% for d in s.decisions %}
+  <div class="reason">
+    <div class="head">{{ d.decision }}</div>
+    <dl>
+      {% if d.why %}<dt>Why</dt><dd>{{ d.why }}</dd>{% endif %}
+      {% if d.alternative %}<dt>Alternative weighed</dt><dd>{{ d.alternative }}</dd>{% endif %}
+      {% if d.tradeoff %}<dt>Trade-off</dt><dd>{{ d.tradeoff }}</dd>{% endif %}
+    </dl>
+  </div>
   {% endfor %}
-</ul>
-{% endif %}
+  {% if s.challenges %}<h3>Challenges to the premise</h3>{% endif %}
+  {% for c in s.challenges %}
+  <div class="reason">
+    <div class="head">{{ c.headline }}</div>
+    <dl>
+      <dt>Premise</dt><dd>{{ c.premise }}</dd>
+      <dt>Alternative</dt><dd>{{ c.alternative }}</dd>
+      <dt>Consequence</dt><dd>{{ c.consequence }}</dd>
+      <dt>Recommendation</dt><dd>{{ c.recommendation }}</dd>
+    </dl>
+  </div>
+  {% endfor %}
+  {% if s.opportunities %}
+  <h3>Opportunities</h3>
+  <ul class="clean">
+    {% for o in s.opportunities %}
+    <li><strong>{{ o.text }}</strong> <span class="badge plain">leverage {{ o.leverage }}</span>
+      {% if o.modules %}<span class="muted"> · {{ o.modules|join(', ') }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
 {% endif %}
 
 <h2>Artifacts</h2>
-{% include "artifacts/list.html" %}
+<div class="card">
+  {% include "artifacts/list.html" %}
+</div>
 {% endif %}
 {% endblock %}

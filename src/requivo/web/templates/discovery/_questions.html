@@ -1,23 +1,25 @@
 {% if s.questions %}
 <h2>Priority questions</h2>
-<ol>
-  {% for q in s.questions %}
-  <li class="question">
-    <span class="q">{{ q.q }}</span>
-    <div class="why">Why it matters: {{ q.why }} · <span class="muted">{{ q.label }}</span></div>
-  </li>
-  {% endfor %}
-</ol>
-<form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#status-region" hx-swap="outerHTML">
-  <input type="hidden" name="expected_revision" value="{{ s.revision }}">
-  <label for="answers">Your answers <span class="hint">(free text — address the questions above in one go)</span></label>
-  <textarea id="answers" name="answers" required maxlength="20000"
-    aria-label="Your answers to the priority questions"></textarea>
-  <div class="toolbar">
-    <button class="btn" type="submit">Submit answers</button>
-    <span class="spinner" role="status">Refining the model…</span>
-  </div>
-</form>
+<div class="card">
+  <ol class="questions">
+    {% for q in s.questions %}
+    <li>
+      <div class="q"><span>{{ q.q }}</span></div>
+      <div class="why">{{ q.why }} · <span class="muted">{{ q.label }}</span></div>
+    </li>
+    {% endfor %}
+  </ol>
+  <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#status-region" hx-swap="outerHTML">
+    <input type="hidden" name="expected_revision" value="{{ s.revision }}">
+    <label for="answers">Your answers <span class="hint">(free text — address the questions above in one go)</span></label>
+    <textarea id="answers" name="answers" required maxlength="20000"
+      aria-label="Your answers to the priority questions"></textarea>
+    <div class="toolbar">
+      <button class="btn" type="submit">Submit answers</button>
+      <span class="spinner" role="status">Refining the model…</span>
+    </div>
+  </form>
+</div>
 {% else %}
 <div class="notice info">Discovery has converged — no high-value question remains. Generate the
 solution assessment or the PRD below.</div>
