@@ -102,17 +102,17 @@ organisation's context card, a company's decision history, account-linked metric
 annotations, data used to train or evaluate the system without authorisation, and experimental
 prompts associated with confidential data.
 
-## A possible future repository layout
-
-This is documentation of a *possible* direction, not something created by this work:
+## Repository layout
 
 ```text
 requivo/          public repository (this one) — Core, CLI, Claude Code, generic assets
-requivo-cloud/    future private repository — hosted service backend
-requivo-lab/      future private repository — evaluation data, experiments, learnings
+requivo-cloud/    private repository — hosted service backend
+requivo-lab/      private repository — evaluation data, experiments, learnings
 ```
 
-No Git submodules, remote repositories, or GitHub organisation are created by this document.
+The `requivo-cloud` and `requivo-lab` repositories exist and are private; both are currently empty
+placeholders that materialise the open-core boundary — no code has been split out of the public
+repository yet. No Git submodules link them, and no GitHub organisation is used.
 
 ## License and trademark
 
