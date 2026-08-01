@@ -10,7 +10,9 @@ All notable changes to Requivo are recorded here. The format follows
 
 Architectural refactor into **three surfaces over one engine** — Core, CLI, and Claude Code — in
 preparation for a future Web UI, plus the formalized **open-source strategy** (the Community / Cloud /
-Lab boundary). No product behaviour changed; the model format is unchanged; the license stays MIT.
+Lab boundary). The model format is unchanged and the license stays MIT; the refactor itself changed no
+behaviour, but this release also ships a robustness fix and a first round of discovery-quality tuning
+from the first end-to-end usage test (below).
 
 ### Added
 - **Requivo for Claude Code** — a plugin (`plugins/claude-code/`) with six skills (`/requivo-discover`,
@@ -40,7 +42,18 @@ Lab boundary). No product behaviour changed; the model format is unchanged; the 
   advisories) and a Gitleaks secret-scan workflow. The README gains **Open source** and **Data and
   privacy** sections; `.gitignore` and `.env.example` are hardened. The generator prompts
   (stories/estimate/prd/criteria/epic/release) now carry the same untrusted-data framing already used
-  in discovery and the assessment. The license stays **MIT**; no product behaviour changed.
+  in discovery and the assessment. The license stays **MIT**.
+- **Discovery-quality tuning** (from the first end-to-end usage test): the engine now ranks
+  primary-object *lifecycle* questions first (where an object is created / owned / updated / completed
+  / sent), asks the stakeholder to confirm expected **behaviour** rather than choose a technical
+  mechanism, and no longer asserts unsourced industry consensus ("many teams do X") in the assessment.
+  The assessment is titled **Draft Solution Assessment** while a blocking decision remains.
+
+### Fixed
+- **Discovery truncation on rich requests.** The per-call output ceiling was 8k tokens; the discovery
+  JSON for a messy multi-feature request exceeded it and the whole reply was discarded as truncated.
+  Raised to 16k — the non-streaming-safe ceiling — which fits a rich run with headroom and never
+  changes an output that already fit.
 
 ### Changed
 - **`requivo.core` is now provider-free** (guarded by a test): the Anthropic client, the single-call
