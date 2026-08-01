@@ -42,6 +42,7 @@ def engine_reply(*, converged: bool = False, **slot_overrides) -> str:
 BRIEF_REPLY = json.dumps({"complexity": "medium", "problem": "P", "solution": "S",
                           "risks": ["a race on approval"], "next_steps": ["confirm exceptions"]})
 PRD_REPLY = json.dumps({"title": "Leave approval — PRD", "summary": "A leave system"})
+CRITERIA_REPLY = json.dumps({"title": "Leave approval — acceptance criteria"})
 
 
 class FakeClient:

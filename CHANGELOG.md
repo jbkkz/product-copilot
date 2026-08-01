@@ -6,6 +6,40 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-01
+
+Pre-1.0 consolidation: the session format is declared public and pinned by a test, the deprecations
+are written down, and the Web catches up with what the shared service can already do.
+
+### Added
+- **The session format is a published contract.** [`docs/compatibility.md`](docs/compatibility.md)
+  states what `.requivo/sessions/` guarantees, what may change without a `format_version` bump (adding
+  a field, retiring an unpopulated one), and what requires one (renaming or repurposing a populated
+  field, changing the layout). The `--json` outputs and error `code` values are covered by the same
+  rule. A frozen 0.8.2 `session.json` now lives in the test suite and must keep loading verbatim —
+  including a key that has since been removed — and a session claiming a newer `format_version` must
+  still be refused rather than half-understood.
+- **A written deprecation policy**, with the current list: the legacy flag CLI (removal 1.1.0), the
+  `pc` alias, legacy `out/` sessions, and the old `/requivo-<skill>` plugin names. Anything deprecated
+  keeps working for at least one minor version and names its replacement; nothing is removed in a patch.
+- **The Web generates every artifact the service can produce** — acceptance criteria, delivery epic and
+  release notes join the solution assessment and the PRD. The buttons are built from the service's own
+  `GENERATABLE` vocabulary rather than a list kept in the Web, so a generator registered once appears
+  on every surface instead of each surface keeping its own list and drifting.
+
+### Fixed
+- **`discover` on a file whose name is not already a slug.** The filename stem was passed through as
+  the session slug, so an ordinary input file — `Leave Approval v2.md` — died on `invalid_slug`. A
+  filename is a suggestion; it is now slugified like any other.
+- **`discover` on a directory path.** The file check used `exists()`, which a directory satisfies, and
+  the next line called `read_text()` on it — a traceback instead of treating the argument as a request.
+- **`model validate --session` was declared and read by nothing.** A flag that parses and changes
+  nothing is worse than a missing one: the caller believes a check ran. Removed; `model diff` is the
+  command that actually validates a proposal against a session.
+- **Unexpected web errors are logged.** The handler correctly kept tracebacks away from the browser
+  but sent them nowhere else, so a genuine failure left the operator with a generic page and no trace.
+  Method and path are logged; the request body deliberately is not.
+
 ## [0.9.2] - 2026-08-01
 
 The second half of the 0.9.0 review: consistency between surfaces, and the identity/provenance

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService, UnknownArtifactTypeError
-from requivo.services.discovery import DiscoveryService
+from requivo.services.discovery import GENERATABLE, DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import provider_status
 from requivo.web.dependencies import get_artifacts, get_discovery, get_sessions, safe_slug
@@ -19,10 +19,6 @@ from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import ARTIFACT_LABELS, session_detail
 
 router = APIRouter()
-
-# The Web generates these two today (the spec's first version); the rest already exist as CLI generators
-# and can be added here without new orchestration.
-GENERATABLE = ("brief", "prd")
 
 
 @router.post("/sessions/{slug}/artifacts/{artifact_type}")
@@ -33,11 +29,12 @@ def generate_artifact(
     discovery: DiscoveryService = Depends(get_discovery),
     sessions: SessionService = Depends(get_sessions),
 ):
-    """Generate a brief or PRD and save it against the session, then return the refreshed artifacts
-    region for an HTMX swap."""
+    """Generate an artifact and save it against the session, then return the refreshed artifacts region
+    for an HTMX swap. The vocabulary is the service's `GENERATABLE`, not a list kept here — the Web
+    offers whatever the shared orchestration can produce, so the surfaces cannot drift apart."""
     if artifact_type not in GENERATABLE:
         raise UnknownArtifactTypeError(
-            f"the web interface does not generate {artifact_type!r} yet; supported: {', '.join(GENERATABLE)}",
+            f"{artifact_type!r} is not a generated artifact; supported: {', '.join(GENERATABLE)}",
             details={"type": artifact_type})
     discovery.generate(slug, artifact_type, surface=f"web-{artifact_type}")
     return templates.TemplateResponse(request, "artifacts/list.html", {

@@ -38,6 +38,11 @@ _WRITERS = {
     "release": release_markdown,
 }
 
+# Everything `generate()` can produce, in the order a user meets them. This is the source every
+# interface asks — the CLI's verbs, the Web's buttons — so a new generator becomes available
+# everywhere by being registered here, rather than by each surface keeping its own list and drifting.
+GENERATABLE: tuple[str, ...] = ("brief", *_WRITERS)
+
 
 @dataclass
 class Generated:

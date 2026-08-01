@@ -122,6 +122,11 @@ bug that looked like correct behaviour.
 6. **Provenance is real or absent.** Each revision records provider, model, surface and a hash of the
    exact prompt it was reasoned against. Don't add a provenance field you do not populate.
 7. **Core stays provider-free and IO-free.** `tests/test_boundaries.py` enforces it.
+8. **The session format and the `--json` outputs are public.** `.requivo/sessions/` is the interface
+   between every surface, at `format_version` 1. Adding a field is free; renaming or repurposing a
+   *populated* one needs a version bump and a migration in `migrate_session()`. A frozen 0.8.2
+   `session.json` in `tests/test_sessions.py` pins the backward-compatibility half of that promise, and
+   `docs/compatibility.md` is the written contract — update it in the same change, not later.
 
 ## The runner
 

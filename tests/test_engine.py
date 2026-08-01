@@ -957,6 +957,28 @@ def test_discover_file_check_rejects_blank_arg():
     assert _is_file_arg("   \n\t ") is False
 
 
+def test_discover_file_check_rejects_a_directory(tmp_path):
+    # A directory `exists()` too. Accepting one means calling read_text() on it a line later, which
+    # raises IsADirectoryError as a traceback instead of treating the argument as a request.
+    assert _is_file_arg(str(tmp_path)) is False
+    f = tmp_path / "request.md"
+    f.write_text("Build a leave approval system.")
+    assert _is_file_arg(str(f)) is True
+
+
+def test_discover_from_a_file_slugifies_its_name(tmp_path, monkeypatch):
+    # A filename is a suggestion for the slug, not a slug. Slugs name a directory in the session store
+    # and are validated strictly, so passing the raw stem through turned an ordinary input file
+    # ("Leave Approval v2.md") into an invalid_slug error.
+    from requivo.services.sessions import SessionService
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    req = tmp_path / "Leave Approval v2.md"
+    req.write_text("We would like a leave approval system.")
+    _run_app(["discover", str(req), "--once"], client=FakeClient(_ENGINE_REPLY))
+    assert [m.slug for m in SessionService().list_sessions()] == ["leave-approval-v2"]
+
+
 def test_pc_discover_rejects_empty_request():
     # An empty/whitespace request should fail fast with a clear message, not crash or fire an
     # empty-content API call. The FakeClient would raise if reached — SystemExit means we never did.

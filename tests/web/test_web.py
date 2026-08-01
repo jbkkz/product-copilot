@@ -15,7 +15,7 @@ from requivo.cli import app as cli_app
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS
 from requivo.web.security import CSRF_FIELD, csrf_token
-from tests.web.conftest import BRIEF_REPLY, PRD_REPLY, engine_reply, full_model
+from tests.web.conftest import BRIEF_REPLY, CRITERIA_REPLY, PRD_REPLY, engine_reply, full_model
 
 HIGH_EXPLICIT = {"completeness": 90, "confidence": "explicit", "impact": "high"}
 HIGH_INFERRED = {"completeness": 30, "confidence": "inferred", "impact": "high"}
@@ -167,11 +167,28 @@ def test_related_change_marks_artifact_stale(client, with_provider):
     assert "Stale" in client.get("/sessions/leave-approval").text
 
 
-def test_generating_the_web_does_not_support_stories(client, with_provider):
-    with_provider()  # no reply needed; rejected before any provider call
+def test_the_web_offers_every_artifact_the_service_can_generate(client, with_provider, monkeypatch):
+    # The Web used to keep its own two-entry list while the service could produce five. The buttons now
+    # come from the service's vocabulary, so registering a generator surfaces it on every surface.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")   # the toolbar only shows with a provider
+    with_provider(CRITERIA_REPLY)
     _make_session("leave-approval", problem=HIGH_EXPLICIT)
-    r = client.post("/sessions/leave-approval/artifacts/stories")
-    assert r.status_code == 400  # unknown_artifact_type for generation
+
+    page = client.get("/sessions/leave-approval").text
+    for label in ("Solution assessment", "PRD", "Acceptance criteria", "Delivery epic", "Release notes"):
+        assert label in page, f"no generate button for {label}"
+
+    assert client.post("/sessions/leave-approval/artifacts/criteria").status_code == 200
+    saved = client.get("/sessions/leave-approval/artifacts/criteria")
+    assert saved.status_code == 200 and "acceptance criteria" in saved.text
+
+
+def test_terminal_only_analyses_are_not_generatable_artifacts(client, with_provider):
+    # `stories` reasons but produces no document (it feeds the estimate), so there is nothing to save
+    # or track. Rejected before any provider call — the fake would raise if reached.
+    with_provider()
+    _make_session("leave-approval", problem=HIGH_EXPLICIT)
+    assert client.post("/sessions/leave-approval/artifacts/stories").status_code == 400
 
 
 # ── security ──────────────────────────────────────────────────────────────────

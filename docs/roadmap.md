@@ -16,7 +16,8 @@
   generated files a change makes stale
 - **Three interfaces over one engine** — the CLI, the Claude Code plugin, and the local Web interface,
   each a thin layer over the same Core and session format
-- **Versioned sessions** — per-revision provenance and optimistic locking
+- **Versioned sessions** — per-revision provenance (provider, model, surface, prompt hash), optimistic
+  locking, and a **published, forward-compatible format** (see [compatibility.md](compatibility.md))
 - **A regression harness** — consensus over repeated runs, separating a real effect from sampling noise
 - **A self-contained wheel** — prompts, schema, context cards and the Web assets ship in the package;
   a user-level context directory (`REQUIVO_CONTEXT_DIR`) adds cards without a checkout

@@ -96,14 +96,15 @@ def converse(client, request: str, only: list[str] | None = None) -> EngineOutpu
 
 
 def _is_file_arg(arg: str) -> bool:
-    """True if arg names an existing file. Two pathlib traps to sidestep: a blank string makes
-    Path("") resolve to the current directory (`.`), which *exists* and then blows up on read_text;
-    and a request longer than the OS filename limit makes Path.exists() *raise* instead of returning
-    False. Both must read as 'not a file' so the request is used as text — the point of discover."""
+    """True if arg names an existing *file*. Three pathlib traps to sidestep: a blank string makes
+    Path("") resolve to the current directory, which exists; a bare directory name exists too, and
+    `.exists()` accepts both — the next line then calls `read_text()` on a directory and raises. And a
+    request longer than the OS filename limit makes the check *raise* rather than return False. All
+    three must read as 'not a file', so the request is used as text — the point of discover."""
     if not arg.strip():
         return False
     try:
-        return Path(arg).exists()
+        return Path(arg).is_file()
     except OSError:
         return False
 
@@ -129,7 +130,10 @@ def _cmd_discover(a, client) -> None:
     # DiscoveryService, so the Web drives the exact same pipeline — the CLI only owns the interactive
     # TTY loop and the rendering.
     disco = DiscoveryService(client=client)
-    slug_hint = Path(a.request).stem if is_file else None
+    # A filename is a *suggestion* for the slug, not a slug: "Leave Approval v2.md" has a space and a
+    # capital, and a slug names a directory under the session store, so it is validated strictly.
+    # Passing the raw stem through turned a perfectly ordinary input file into an invalid_slug error.
+    slug_hint = store._slug(Path(a.request).stem) if is_file else None
     quick = a.once or not sys.stdin.isatty()
     if quick:
         slug = disco.start(request, cards=only, slug=slug_hint, finalize=False, surface="cli-discover")

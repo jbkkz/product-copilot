@@ -102,8 +102,11 @@ Even though it is a local app:
 
 ## Limits of this first version
 
-- Generation is limited to the **solution assessment** and the **PRD**. Stories, acceptance criteria,
-  estimate and epic already exist as CLI generators and can be added without new orchestration.
+- Generation covers every artifact the shared service produces — solution assessment, PRD, acceptance
+  criteria, delivery epic, release notes. The buttons come from the service's own vocabulary, so a new
+  generator appears here without touching the Web. The epic's tracker exports (`epic.json`,
+  `epic.github.json`, `epic.gitlab.json`) remain CLI-only; `stories` and `estimate` are terminal
+  analyses that produce no document at all.
 - Provider calls are synchronous (run in a worker thread so the event loop is not blocked); a request
   waits for the result, with an HTMX loading state. No job queue, no WebSockets.
 - Artifacts are shown as escaped Markdown in a code block, not rendered to HTML.

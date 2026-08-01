@@ -365,6 +365,68 @@ def test_a_revision_records_the_prompt_it_was_reasoned_against(workspace):
     assert prompt_version("analyze") != prompt_version("analyze", only=[])
 
 
+# ── the session format is public ──────────────────────────────────────────────
+# `.requivo/sessions/` is the interface between the CLI, the Claude Code plugin, the Web and anything
+# built on top. These tests are the contract: a session written by an older Requivo keeps loading, and
+# a session written by a newer one is refused clearly instead of being half-understood.
+
+# Verbatim shape of a session.json as 0.8.2 wrote it — including `prompt_versions`, a key that has
+# since been removed. Frozen on purpose: editing it to match today's model would defeat the test.
+SESSION_JSON_0_8_2 = """{
+  "format_version": 1,
+  "requivo_version": "0.8.2",
+  "session_id": "d4f1a0c2e5b74d0e9a3c8b1f2e6d7a45",
+  "slug": "leave-approval",
+  "created_at": "2026-07-30T09:12:00Z",
+  "updated_at": "2026-07-30T09:41:00Z",
+  "provider": "anthropic",
+  "model_name": "claude-sonnet-5",
+  "context_cards": null,
+  "request_hash": "sha256:6b2f1c",
+  "schema_version": 1,
+  "prompt_versions": {},
+  "current_revision": 2,
+  "revisions": [
+    {"revision": 1, "created_at": "2026-07-30T09:12:00Z", "previous_revision": null,
+     "provider": "anthropic", "model_name": "claude-sonnet-5", "surface": "cli-discover",
+     "prompt_version": null, "model_hash": "sha256:aaa"},
+    {"revision": 2, "created_at": "2026-07-30T09:41:00Z", "previous_revision": 1,
+     "provider": "anthropic", "model_name": "claude-sonnet-5", "surface": "cli-answer",
+     "prompt_version": null, "model_hash": "sha256:bbb"}
+  ],
+  "artifact_status": {
+    "prd": {"revision": 2, "filename": "prd.md", "updated_at": "2026-07-30T09:42:00Z", "stale": false}
+  }
+}"""
+
+
+def test_a_session_written_by_an_older_requivo_still_loads(workspace):
+    d = store.canonical_dir("leave-approval")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "session.json").write_text(SESSION_JSON_0_8_2)
+
+    meta = store.read_meta("leave-approval")
+    assert meta.current_revision == 2 and meta.provider == "anthropic"
+    assert [r.surface for r in meta.revisions] == ["cli-discover", "cli-answer"]
+    assert meta.artifact_status["prd"].filename == "prd.md"
+    assert meta.artifact_status["prd"].stale is False
+    # A field this version dropped is ignored, not fatal — that is what lets a key be retired without
+    # a format bump, and what makes the next reader's job survivable.
+    assert not hasattr(meta, "prompt_versions")
+    # Fields added since simply take their defaults.
+    assert meta.revisions[0].prompt_version is None
+
+
+def test_a_session_from_a_newer_requivo_is_refused_not_guessed(workspace):
+    d = store.canonical_dir("from-the-future")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "session.json").write_text(SESSION_JSON_0_8_2.replace('"format_version": 1', '"format_version": 2'))
+    with pytest.raises(RequivoError) as ei:
+        store.read_meta("from-the-future")
+    assert ei.value.code == "invalid_session"
+    assert "upgrade requivo" in str(ei.value).lower()
+
+
 def test_update_missing_session_raises(workspace):
     with pytest.raises(SessionNotFoundError):
         SessionService().update_model("ghost", _full_model())

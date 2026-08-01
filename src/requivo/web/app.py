@@ -8,6 +8,8 @@ port and starts no server — `requivo web` calls it.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +41,10 @@ _STATUS_BY_CODE = {
 # the vendored HTMX and local CSS are the only scripts/styles — nothing loads from a CDN.
 _CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+# Under `requivo web` this rides uvicorn's handler, so a traceback lands in the terminal the user
+# started the server in — the only place a local, single-user app has to put one.
+logger = logging.getLogger("requivo.web")
 
 
 def _render_error(request: Request, status: int, code: str, message: str):
@@ -85,7 +91,11 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _unexpected(request: Request, exc: Exception):
-        # No traceback to the browser; the code is a stable handle for the logs.
+        # No traceback to the browser — but it has to go *somewhere*, or an unexpected failure is
+        # invisible: the user sees a generic page and the operator has nothing to debug from. The
+        # method and path are enough to locate it; the request body is deliberately not logged, since
+        # it is the user's own product request.
+        logger.exception("unhandled error serving %s %s", request.method, request.url.path)
         return _render_error(request, 500, "internal_error", "Something went wrong on the server.")
 
     app.include_router(health.router)

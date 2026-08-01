@@ -15,6 +15,7 @@ depth — each has one clear responsibility; the README links to them rather tha
 - [Architecture](architecture.md) — Core, providers, services, interfaces
 - [Requirements model](requirements-model.md) — slots, evidence/coverage, readiness, dependencies
 - [Session format](session-format.md) — the `.requivo/` layout, revisions, provenance
+- [Compatibility](compatibility.md) — what is public, what may change, what is deprecated
 - [Providers](providers.md) — the Anthropic provider, models, cost
 - [Context cards](context-cards.md) — teaching the engine your product
 - [Evaluations](evaluations.md) — the golden harness for prompt/context changes

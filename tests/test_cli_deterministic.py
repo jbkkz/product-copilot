@@ -122,6 +122,14 @@ def test_session_show_reads_freshness_from_the_dependency_graph_not_the_revision
     assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is False
 
 
+def test_model_validate_has_no_flag_it_does_not_honour():
+    # `--session` was declared and read by nothing. A flag that parses and changes nothing is worse
+    # than a missing one: the caller believes a check ran. `model diff` is the real answer.
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["model", "validate", "p.json", "--session", "s"])
+    assert _build_parser().parse_args(["model", "diff", "s", "p.json"]).func.__name__ == "_cmd_model_diff"
+
+
 def test_apply_invalid_proposal_emits_error_envelope(workspace, tmp_path):
     _run(["session", "init", "X.", "--slug", "s"])
     bad = tmp_path / "bad.json"

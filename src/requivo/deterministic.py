@@ -423,7 +423,9 @@ def register(sub) -> None:
 
     mv = ms.add_parser("validate", help="validate a proposal file (no session write)")
     mv.add_argument("proposal", help="path to a proposed model JSON")
-    mv.add_argument("--session", help="validate against a session's context (optional)")
+    # (A `--session` flag lived here, promising validation "against a session's context", and was read
+    # by nothing. Whatever it was going to mean, `model diff <slug> <proposal>` already means it: it
+    # reports exactly what applying the proposal to that session would change, without writing.)
     mv.add_argument("--allow-partial", action="store_true",
                     help="do not require the full slot set (partial projection)")
     mv.add_argument("--json", action="store_true")

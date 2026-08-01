@@ -27,16 +27,17 @@
   document is marked <em>Draft</em> until they are resolved.</p>
   {% endif %}
   <div class="toolbar">
-    <form hx-post="/sessions/{{ s.slug }}/artifacts/brief" hx-target="#artifacts-region" hx-swap="outerHTML">
+    {% for g in s.generatable %}
+    <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}" hx-target="#artifacts-region" hx-swap="outerHTML">
       {% include "_csrf.html" %}
-      <button class="btn" type="submit">Generate solution assessment</button>
+      <button class="btn{% if not loop.first %} secondary{% endif %}" type="submit">{{ g.label }}</button>
     </form>
-    <form hx-post="/sessions/{{ s.slug }}/artifacts/prd" hx-target="#artifacts-region" hx-swap="outerHTML">
-      {% include "_csrf.html" %}
-      <button class="btn secondary" type="submit">Generate PRD</button>
-    </form>
+    {% endfor %}
     <span class="spinner" role="status">Generating…</span>
   </div>
+  <p class="hint">Each is generated from the current model and saved against this revision. The
+  assessment comes first — it bakes its reasoning into the model, so documents generated after it
+  inherit the decisions and challenges, not just the facts.</p>
   {% elif provider is defined and not provider.available %}
   <p class="hint">{{ provider.reason }}</p>
   {% endif %}

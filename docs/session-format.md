@@ -1,7 +1,9 @@
 # Session format
 
 > Where and how a session is stored. For what the model contains, see
-> [requirements-model.md](requirements-model.md).
+> [requirements-model.md](requirements-model.md). For what is guaranteed not to break, see
+> [compatibility.md](compatibility.md) — this layout is a **published contract**, at
+> `format_version` 1.
 
 A session is a directory under your **workspace** (the current directory, or `--workspace` /
 `REQUIVO_WORKSPACE`). It is local, versioned, and shared by every interface — the CLI, the Claude Code
