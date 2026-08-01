@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "requivo"
-version = "0.8.2"
+version = "0.9.0"
 description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,7 +34,12 @@ dependencies = [
 [project.optional-dependencies]
 # API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
 anthropic = ["anthropic>=0.40.0"]
-dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0", "httpx"]
+# Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
+# A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
+# in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
+web = ["fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "python-multipart>=0.0.9"]
+dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0", "httpx",
+       "fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "python-multipart>=0.0.9"]
 
 [project.urls]
 Homepage = "https://github.com/jbkkz/requivo"
@@ -52,10 +57,11 @@ where = ["src"]
 include = ["requivo*"]
 
 [tool.setuptools.package-data]
-# Ship the engine's assets (prompts, framework schema, context cards, demo payload) inside the wheel.
-# Without this, a `pip install` outside the clone would have no prompts/schema and every command that
-# builds a prompt or reads the schema would fail. The wheel-install CI job guards this.
-requivo = ["assets/**/*"]
+# Ship the engine's assets (prompts, framework schema, context cards, demo payload) inside the wheel,
+# plus the web interface's templates and static files (CSS/JS + the vendored HTMX — no CDN at runtime).
+# Without this, a `pip install` outside the clone would have no prompts/schema (every prompt-building
+# command fails) and `requivo web` would 500 on a missing template. The wheel-install CI job guards it.
+requivo = ["assets/**/*", "web/templates/**/*", "web/static/**/*"]
 
 [tool.ruff]
 line-length = 120
@@ -72,6 +78,11 @@ select = ["E", "F", "I", "W", "UP", "B"]
 # model-field annotations at class-definition time, and `X | None` raises TypeError there (unlike
 # deferred function annotations). Pydantic model fields therefore use `Optional[X]` by necessity.
 ignore = ["E501", "UP045"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom puts these calls in argument defaults on purpose; they are the
+# documented exception to B008 (function-call-in-default-argument), not a bug.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Form", "fastapi.Query", "fastapi.Path", "fastapi.Header"]
 
 [tool.ruff.lint.isort]
 # Keep the codebase's compact import style: pack sorted members onto as few lines as fit the width,

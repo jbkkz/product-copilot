@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Requivo{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body>
+  <header class="site">
+    <div class="container">
+      <a class="brand" href="/">Requi<span>vo</span>
+        <small>Turn vague requests into validated product decisions</small></a>
+      <nav><a class="btn small" href="/sessions/new">New discovery</a></nav>
+    </div>
+  </header>
+  <main>
+    <div class="container">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+  <footer class="site">
+    <div class="container">
+      Local · single-user · your sessions never leave this machine. No authentication — do not expose
+      this server on an untrusted network. Requivo Web is not Requivo Cloud.
+    </div>
+  </footer>
+</body>
+</html>

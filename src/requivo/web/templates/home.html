@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Requivo — local{% endblock %}
+{% block content %}
+<h1>Turn vague requests into validated product decisions</h1>
+<p class="lead">Requivo separates facts, assumptions and unknowns before generating product
+documentation.</p>
+
+{% if not provider.available %}
+<div class="notice info">Provider actions are disabled — {{ provider.reason }} You can still create
+sessions and review existing ones.</div>
+{% endif %}
+
+<div class="toolbar"><a class="btn" href="/sessions/new">New discovery</a></div>
+
+<h2>Local sessions</h2>
+{% if sessions %}
+<div class="grid">
+  {% for s in sessions %}
+  <div class="card">
+    <div class="session-row">
+      <a href="/sessions/{{ s.slug }}"><strong>{{ s.slug }}</strong></a>
+      {% if s.ready %}<span class="badge ok">Ready</span>
+      {% elif s.blocking %}<span class="badge warn">{{ s.blocking }} blocking</span>
+      {% else %}<span class="badge">In progress</span>{% endif %}
+    </div>
+    <div class="meta">rev {{ s.revision }} · updated {{ s.updated_at }} · {{ s.provider }}</div>
+    <div class="meta">{{ s.artifact_count }} artifact{{ '' if s.artifact_count == 1 else 's' }}{%
+      if s.stale_count %} · <span class="badge danger">{{ s.stale_count }} stale</span>{% endif %}</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No sessions yet. Start with <a href="/sessions/new">a new discovery</a>, or open one
+created by the CLI or Claude Code — all three interfaces share the same local sessions.</p>
+{% endif %}
+{% endblock %}

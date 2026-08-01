@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} — {{ slug }}{% endblock %}
+{% block content %}
+<p><a href="/sessions/{{ slug }}">← {{ slug }}</a></p>
+<h1>{{ label }}</h1>
+<div class="toolbar">
+  <a class="btn small ghost" href="/sessions/{{ slug }}/artifacts/{{ artifact_type }}?download=1">Download</a>
+</div>
+<pre class="artifact">{{ content }}</pre>
+{% endblock %}

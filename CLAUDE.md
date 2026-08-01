@@ -98,15 +98,22 @@ requivo/
     adapters.py      epic_export + GitHub/GitLab tracker plans
   providers/       the only LLM callers
     base.py          ReasoningProvider protocol         anthropic.py   client + _complete + discovery/generators + ledger
-  services/        the shared apply/artifact seam
+  services/        the shared apply/artifact/discovery seam
     sessions.py      SessionService (create / update_model / diff / status)   artifacts.py  ArtifactService
     repository.py    SessionRepository protocol + FileSessionRepository (storage seam; Postgres-swappable)
+    discovery.py     DiscoveryService — provider-backed orchestration (start/answer/generate) shared by CLI + Web
   render/          views (data → str/stdout, no side effects)
-    markdown.py      *_markdown                         terminal.py    render_*
-  cli.py           the `requivo`/`pc` CLI: provider verbs (discover/answer/generators) + legacy flag main()
+    markdown.py      *_markdown (incl. brief_markdown)   terminal.py    render_*
+  cli.py           the `requivo`/`pc` CLI: provider verbs (discover/answer/generators/web) + legacy flag main()
   deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact
+  web/             Requivo Web — FastAPI + Jinja2 + HTMX over the services (the `[web]` extra)
+    app.py           create_app() factory   routes/ (thin)   viewmodels/   templates/ + static/ (ship in wheel)
 plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shipped in the wheel
 ```
+
+Requivo Web is a third interface over the *same* services (`DiscoveryService`/`SessionService`/
+`ArtifactService`) — thin routes, no business logic, no `model.json` handling, no subprocess to the CLI.
+It is local and single-user (the boundary that keeps it distinct from the future private Requivo Cloud).
 
 The runner is a thin dispatch:
 

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Server error — Requivo{% endblock %}
+{% block content %}
+<h1>Something went wrong</h1>
+<p class="lead">{{ message }}</p>
+<p class="muted">Error code: <code>{{ code }}</code> — no details are shown here; check the server logs.</p>
+<p><a class="btn" href="/">Back to sessions</a></p>
+{% endblock %}

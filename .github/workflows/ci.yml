@@ -75,3 +75,24 @@ jobs:
               assert "{{SCHEMA}}" not in p and "{{CONTEXT}}" not in p, f"{name} did not substitute"
           print("wheel install OK:", len(allowed), "slots,", len(available_cards()), "cards, 8 prompts")
           PY
+      - name: Verify the web interface ships and serves from the installed wheel
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          # Install the wheel WITH the [web] extra (+ httpx for the TestClient smoke), still outside the repo.
+          /tmp/cleanenv/bin/pip install "${WHEEL}[web]" httpx
+          cd /tmp/workdir
+          /tmp/cleanenv/bin/requivo web --help >/dev/null   # the CLI command exists without the source tree
+          /tmp/cleanenv/bin/python - <<'PY'
+          from pathlib import Path
+          import requivo.web
+          from requivo.web.templating import TEMPLATES_DIR, STATIC_DIR
+          # Templates + the vendored HTMX must be inside the installed package (not the checkout).
+          assert (TEMPLATES_DIR / "base.html").exists(), "web templates missing from the wheel"
+          assert (STATIC_DIR / "vendor" / "htmx.min.js").exists(), "vendored HTMX missing from the wheel"
+          assert (STATIC_DIR / "css" / "app.css").exists(), "web CSS missing from the wheel"
+          from fastapi.testclient import TestClient
+          from requivo.web.app import create_app
+          r = TestClient(create_app()).get("/health")
+          assert r.status_code == 200 and r.json()["status"] == "ok", r.text
+          print("web wheel OK: templates + static shipped, /health 200")
+          PY

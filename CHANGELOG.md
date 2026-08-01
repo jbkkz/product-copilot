@@ -6,6 +6,39 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-01
+
+**Requivo Web — a third interface.** A local, single-user, self-hostable browser UI over the same Core,
+services and session format as the CLI and Claude Code. It exists for people less comfortable in a
+terminal; it is deliberately *not* Requivo Cloud (no accounts, auth, database, remote storage, or
+telemetry — see `docs/web.md`).
+
+### Added
+- **`requivo web`** — launches a local FastAPI + Jinja2 + HTMX interface (the optional `[web]` extra:
+  `uv tool install "requivo[web]"`). Binds to `127.0.0.1` by default, opens a browser, prints the URL,
+  and warns if bound to a non-local host. The Anthropic key is read from the server environment (never
+  the browser) and only needed for provider actions. Options: `--host --port --workspace --no-open
+  --reload`.
+- **The web interface** (`requivo.web`): home + session list, new discovery (run now or *create session
+  only*), a session screen (understanding split with a *partial* coverage marker, readiness + blockers,
+  priority questions with a single answers form, persisted decisions/challenges/opportunities,
+  artifacts), an answers turn (optimistic-locked, HTMX status refresh reporting changed slots /
+  unseated reasoning / stale artifacts), and generation of the **solution assessment** and **PRD**
+  (saved with source revision, marked *Draft* when blocking unknowns remain, viewable + downloadable).
+  Templates, CSS and a vendored HTMX ship in the wheel — no CDN, works offline.
+- **`DiscoveryService`** (`services/discovery.py`) — the provider-backed orchestration (start / answer /
+  generate) extracted so the CLI and Web share exactly one pipeline; neither re-orchestrates "call the
+  provider, then apply". `brief_markdown()` renders the assessment as a saveable/downloadable artifact.
+- **Optional `web` extra** and web package-data (templates + static) in the wheel; a CI job installs the
+  wheel with `[web]`, verifies the assets ship, and hits `/health`.
+
+### Security
+- Local by default: localhost bind, structured `RequivoError`s rendered as clean pages (never a
+  traceback), every slug validated in Core (no path traversal), only the package `static/` served
+  (never the workspace / `.requivo` / `.env` / `.git`), API key never in HTML or logs, all content
+  HTML-escaped, bounded input sizes, and conservative headers (`X-Content-Type-Options`,
+  `Referrer-Policy`, a same-origin `Content-Security-Policy`).
+
 ## [0.8.2] - 2026-08-01
 
 Pre-Cloud correctness at the session boundary — the layer requivo-cloud will sit on. From the same

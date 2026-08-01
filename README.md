@@ -48,29 +48,31 @@ Requivo is a deterministic core with interchangeable reasoners on top. The **mod
 versioned session — is the single source of truth; every surface is a thin layer over the same core.
 
 ```
-                    Requivo Core
-               validated session model
-                 /        |         \
-                /         |          \
-       Claude Code       CLI      Future Web
-           |              |
-   Claude reasoning   deterministic tools
+                       Requivo Core
+                  validated session model
+                /          |            \
+               /           |             \
+        Claude Code       CLI            Web
+            |              |              |
+    Claude reasoning  deterministic  local browser UI
 ```
 
 - **Requivo Core** — validated requirements model + deterministic impact engine. No LLM, no provider,
   no network. It validates proposals, versions sessions, computes readiness, and detects what goes stale.
-- **Requivo for Claude Code** — use your existing Claude Code session for the reasoning and dialogue.
-  Claude proposes a model; the CLI validates and applies it. **You do not need an Anthropic API key to
-  use Requivo inside Claude Code.** See [`plugins/claude-code/`](plugins/claude-code/).
-- **Requivo CLI** — inspect, validate, version and export sessions locally: `requivo doctor`,
-  `requivo session init`, `requivo model validate|apply|diff`, `requivo status`, `requivo impact`,
-  `requivo artifact save`. All deterministic, all offline.
-- **Anthropic provider** — the optional API-powered automation: `requivo discover request.md` runs
-  discovery end-to-end against the Claude API. Install with `pip install 'requivo[anthropic]'` and set
-  `ANTHROPIC_API_KEY`. Same core, same validation, same session format — just a different reasoner.
+- **Requivo CLI** — for terminal workflows and deterministic session operations: `requivo discover`,
+  `requivo status`, `requivo model validate|apply|diff`, `requivo impact`, `requivo artifact save`.
+- **Requivo for Claude Code** — use the Claude session you already have for discovery and generation.
+  Claude proposes a model; the CLI validates and applies it. **No Anthropic API key required.** See
+  [`plugins/claude-code/`](plugins/claude-code/).
+- **Requivo Web** — run a local browser interface over the same validated model: `requivo web`. A thin
+  FastAPI + HTMX layer (the `[web]` extra), local and single-user, for anyone less comfortable in a
+  terminal. It is **not** Requivo Cloud — no accounts, no database, no remote storage. See
+  [`docs/web.md`](docs/web.md).
 
-A session created by any surface is readable by the others (and by the future Web UI): they share one
-model, one validation, one apply path — there is no fork.
+Every surface calls the *same* application services — one validation, one apply path, one dependency
+graph. A session created by any of them is readable and editable by the others; there is no fork. The
+optional **Anthropic provider** (`pip install 'requivo[anthropic]'`, `ANTHROPIC_API_KEY`) is what powers
+the automated discovery and generation the CLI and Web offer.
 
 Sessions are written to `.requivo/sessions/<slug>/` under your workspace (versioned metadata, the model,
 its revision history, and generated artifacts). Legacy `out/<slug>/` sessions are read-only and migrated
@@ -258,7 +260,7 @@ requivo epic   <slug> --github --gitlab    # + a tool-neutral epic.json and trac
 requivo impact <slug> permissions          # what rests on a slot: decisions + artifacts that go stale
 ```
 
-### Two interfaces, one engine
+### Three interfaces, one engine
 
 The product is the engine; the interfaces are thin layers over the same `requivo` core.
 
@@ -267,6 +269,17 @@ The product is the engine; the interfaces are thin layers over the same `requivo
 - **Claude Code** — `/requivo-discover`, `/requivo-answer`, `/requivo-status`, `/requivo-brief`,
   `/requivo-prd`, `/requivo-impact` (the [plugin](plugins/claude-code/)) reason in your Claude session
   and drive the same CLI — no API key needed.
+- **Web** — a local browser interface over the same sessions:
+
+  ```bash
+  uv tool install "requivo[web,anthropic]"     # or just [web] to review sessions without a provider
+  export ANTHROPIC_API_KEY="…"                 # only needed for discovery / generation
+  requivo web                                  # opens http://127.0.0.1:8765
+  ```
+
+  Sessions stay local under `.requivo/sessions/`; Anthropic calls send only the selected data to the
+  provider; there is **no authentication** and the server binds to localhost — do not expose it on an
+  untrusted network. Requivo Web is not Requivo Cloud. See [`docs/web.md`](docs/web.md).
 
 The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
 unchanged.

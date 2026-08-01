@@ -1,0 +1,41 @@
+<div id="artifacts-region">
+  {% if s.artifacts %}
+  <ul class="clean">
+    {% for a in s.artifacts %}
+    <li>
+      <div class="session-row">
+        <span>
+          <strong>{{ a.label }}</strong> <span class="muted">rev {{ a.revision }}</span>
+          {% if a.stale %}<span class="badge danger">Stale</span>
+          {% else %}<span class="badge ok">Fresh</span>{% endif %}
+        </span>
+        <span class="row-actions">
+          <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}">View</a>
+          <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}?download=1">Download</a>
+        </span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No artifacts generated yet.</p>
+  {% endif %}
+
+  {% if provider is defined and provider.available %}
+  {% if not s.readiness.ready and s.readiness.blocking %}
+  <p class="hint">Blocking unknowns remain ({{ s.readiness.blocking_labels|join(', ') }}) — a generated
+  document is marked <em>Draft</em> until they are resolved.</p>
+  {% endif %}
+  <div class="toolbar">
+    <form hx-post="/sessions/{{ s.slug }}/artifacts/brief" hx-target="#artifacts-region" hx-swap="outerHTML">
+      <button class="btn" type="submit">Generate solution assessment</button>
+    </form>
+    <form hx-post="/sessions/{{ s.slug }}/artifacts/prd" hx-target="#artifacts-region" hx-swap="outerHTML">
+      <button class="btn secondary" type="submit">Generate PRD</button>
+    </form>
+    <span class="spinner" role="status">Generating…</span>
+  </div>
+  {% elif provider is defined and not provider.available %}
+  <p class="hint">{{ provider.reason }}</p>
+  {% endif %}
+</div>

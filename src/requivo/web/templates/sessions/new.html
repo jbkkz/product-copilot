@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}New discovery — Requivo{% endblock %}
+{% block content %}
+<h1>New discovery</h1>
+<p class="lead">Describe the product request in plain words. Requivo separates what's known from what
+needs clarifying before any document is written.</p>
+
+{% if error %}<div class="notice danger">{{ error }}</div>{% endif %}
+
+<form method="post" action="/sessions" class="card">
+  <label for="request_text">Product request</label>
+  <textarea id="request_text" name="request_text" required maxlength="20000"
+    aria-describedby="req-hint"
+    placeholder="e.g. We'd like a leave approval system so staff can request time off and managers can approve it."></textarea>
+  <p id="req-hint" class="hint">One or several sentences. The messier the request, the more Requivo helps.</p>
+
+  <label for="slug">Session name <span class="hint">(optional — lowercase words joined by hyphens)</span></label>
+  <input type="text" id="slug" name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="80"
+    placeholder="leave-approval" aria-describedby="slug-hint">
+  <p id="slug-hint" class="hint">Leave blank to derive one from the request.</p>
+
+  {% if cards %}
+  <fieldset>
+    <legend>Context cards <span class="hint">(sharpen discovery — leave all unchecked to use every card)</span></legend>
+    {% for c in cards %}
+    <div class="check">
+      <input type="checkbox" id="card-{{ c }}" name="cards" value="{{ c }}">
+      <label for="card-{{ c }}">{{ c }}</label>
+    </div>
+    {% endfor %}
+  </fieldset>
+  {% endif %}
+
+  <label for="provider">Action</label>
+  <select id="provider" name="provider">
+    {% if provider.available %}<option value="anthropic">Run discovery now (Anthropic)</option>{% endif %}
+    <option value="create_only">Create session only — capture the request, no LLM call</option>
+  </select>
+  {% if not provider.available %}<p class="hint">{{ provider.reason }}</p>{% endif %}
+
+  <div class="toolbar">
+    <button class="btn" type="submit">Create session</button>
+    <span class="muted">Discovery calls the provider and may take a few seconds.</span>
+  </div>
+</form>
+{% endblock %}

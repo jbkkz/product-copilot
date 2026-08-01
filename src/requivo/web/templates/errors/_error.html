@@ -1,0 +1,7 @@
+<div class="notice danger" role="alert">
+  {{ message }}
+  {% if code == "revision_conflict" %}
+  <br>The session changed since this page loaded. <a href="">Reload</a> and try again.
+  {% endif %}
+  <span class="muted">(code: {{ code }})</span>
+</div>

@@ -1,0 +1,28 @@
+<section id="status-region" aria-live="polite">
+  {% if update is defined and update %}
+  <div class="notice info">
+    Applied revision {{ update.revision }}.
+    {% if update.changed_slots %} Changed: {{ update.changed_slots|join(', ') }}.{% endif %}
+    {% if update.invalidated_decisions or update.invalidated_challenges %}
+    <br>⚠ This change unseats {{ update.invalidated_decisions|length }} decision(s) and
+    {{ update.invalidated_challenges|length }} premise(s) — regenerate the assessment to refresh it.
+    {% endif %}
+    {% if update.stale_artifacts %}<br>Now stale: {{ update.stale_artifacts|join(', ') }}.{% endif %}
+  </div>
+  {% endif %}
+
+  <h2>Readiness</h2>
+  {% if s.readiness.ready %}
+  <span class="badge ok">{{ s.readiness.headline }}</span>
+  {% elif s.readiness.blocking %}
+  <span class="badge warn">{{ s.readiness.headline }}</span>
+  <p class="muted">Blocking unknowns: {{ s.readiness.blocking_labels|join(' · ') }}</p>
+  {% else %}
+  <span class="badge">{{ s.readiness.headline }}</span>
+  {% endif %}
+
+  <h2>Understanding</h2>
+  {% include "discovery/_understanding.html" %}
+
+  {% include "discovery/_questions.html" %}
+</section>

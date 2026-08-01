@@ -1,0 +1,13 @@
+{% for group in s.understanding %}
+<h3>{{ group.label }} <span class="hint">— {{ group.hint }}</span></h3>
+<ul class="clean">
+  {% for slot in group.slots %}
+  <li class="slot {% if slot.thin %}thin{% endif %}">
+    <span class="label">{{ slot.label }}</span>
+    <span class="muted">· {{ slot.pillar }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">Nothing captured yet — run discovery.</p>
+{% endfor %}

@@ -23,8 +23,6 @@ from requivo.paths import DEMO
 from requivo.providers.anthropic import (
     EngineError,
     advise,
-    answer_turn,
-    current_model_name,
     derive_stories,
     estimate,
     generate_criteria,
@@ -47,6 +45,7 @@ from requivo.render.terminal import (
     render_usage,
 )
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
+from requivo.services.discovery import DiscoveryService, absorb_reasoning
 from requivo.services.sessions import SessionService
 
 load_dotenv()
@@ -105,14 +104,6 @@ def _flag_value(args: list[str], name: str) -> str | None:
     return None
 
 
-def _absorb_reasoning(out: EngineOutput, brief) -> None:
-    """Persist the assessment's reasoning into the model so every generator inherits it,
-    not just the facts. Called wherever advise() runs, before the model is saved."""
-    out.decisions = brief.decisions
-    out.challenges = brief.challenges
-    out.opportunities = brief.opportunities
-
-
 def main() -> None:
     """Legacy flag CLI entry — thin wrapper turning a clean EngineError into a tidy exit."""
     try:
@@ -165,7 +156,7 @@ def _run_legacy() -> None:
     if not quick:
         print("\nGenerating the solution assessment…")
         brief = advise(client, out)
-        _absorb_reasoning(out, brief)  # bake the reasoning into the model
+        absorb_reasoning(out, brief)  # bake the reasoning into the model
         save_model(out, slug)          # re-save enriched (backfills the --from path too)
         render_brief(out, brief)
 
@@ -269,51 +260,41 @@ def _cmd_discover(a, client) -> None:
             only = picked
             print(f"Context cards: {', '.join(only)}")
 
+    # Discovery orchestration (run the provider → apply through the validated path) lives in the shared
+    # DiscoveryService, so the Web drives the exact same pipeline — the CLI only owns the interactive
+    # TTY loop and the rendering.
+    disco = DiscoveryService(client)
+    slug_hint = Path(a.request).stem if is_file else None
     quick = a.once or not sys.stdin.isatty()
     if quick:
-        out = run(client, [{"role": "user", "content": request}], only=only)
+        slug = disco.start(request, cards=only, slug=slug_hint, finalize=False, surface="cli-discover")
+        out = disco.sessions.load_model(slug)
         render_turn(out)
     else:
         out = converse(client, request, only=only)
-    if not out:
-        return
-    brief = None
-    if not quick:
+        if not out:
+            return
         print("\nGenerating the solution assessment…")
         brief = advise(client, out, only=only)
-        _absorb_reasoning(out, brief)  # bake the reasoning into the model before it is applied
-    # The provider's model is a *proposal* — it flows through the SAME validated apply path as a
-    # Claude Code proposal (SessionService.update_model), writing the canonical `.requivo/sessions/`
-    # store. There is no second save path.
-    svc = SessionService()
-    meta = svc.create_session(request, context_cards=only,
-                              slug=(Path(a.request).stem if is_file else None),
-                              provider="anthropic", model_name=current_model_name())
-    svc.update_model(meta.slug, out.model_dump_json(),
-                     provenance={"provider": "anthropic", "surface": "cli-discover",
-                                 "model_name": current_model_name()})
-    if brief is not None:
+        slug = disco.finalize_discovery(request, out, cards=only, slug=slug_hint,
+                                        brief=brief, surface="cli-discover")
         render_brief(out, brief)
-    print(f"\nSaved session → {store.canonical_dir(meta.slug)}")
+    print(f"\nSaved session → {store.canonical_dir(slug)}")
     if quick and out.questions:
-        print(f'\n→ Answer and refine: requivo answer {meta.slug} "<your answers>"')
+        print(f'\n→ Answer and refine: requivo answer {slug} "<your answers>"')
 
 
 def _cmd_answer(a, client) -> None:
-    client = client or new_client()
-    svc = SessionService()
+    # Same shared orchestration as the Web: DiscoveryService folds the answers in and applies the
+    # refined model through the validated path (diff → revision → stale-flag).
+    disco = DiscoveryService(client)
+    svc = disco.sessions
     slug = svc.resolve_slug(a.model)
     if not svc.exists(slug):
         raise SessionNotFoundError(f"no session '{slug}' to answer", details={"slug": slug})
-    before = svc.load_model(slug)
-    only = svc.cards(slug)
-    out = answer_turn(client, before, svc.request_text(slug), a.answers, only=only)
+    result = disco.answer(slug, a.answers, surface="cli-answer")
+    out = svc.load_model(slug)
     render_turn(out)
-    # The refined model goes through the same validated apply path — which migrates a legacy session,
-    # diffs against the prior revision, and flags any generated artifact that just went stale.
-    result = svc.update_model(slug, out.model_dump_json(),
-                              provenance={"provider": "anthropic", "surface": "cli-answer",
-                                          "model_name": current_model_name()})
     if result.stale_artifacts:
         pairs = [(t, ARTIFACT_FILENAMES[t]) for t in result.stale_artifacts]
         render_stale(pairs, [_label(sid) for sid in result.changed_slots])
@@ -461,7 +442,7 @@ def _save_artifact(slug: str, artifact_type: str, markdown: str, label: str) -> 
 def _cmd_brief(a, client) -> None:
     client, out, slug, cards = _generator_session(a, client)
     brief = advise(client, out, only=cards)
-    _absorb_reasoning(out, brief)
+    absorb_reasoning(out, brief)
     # Backfilling the reasoning into the model is a model change — it goes through the apply path,
     # so downstream generators inherit the reasoning from a proper new revision.
     SessionService().update_model(slug, out.model_dump_json())
@@ -512,6 +493,38 @@ def _cmd_release(a, client) -> None:
                    release_markdown(generate_release(client, out, a.version, only=cards)), "release notes")
 
 
+def _cmd_web(a, client) -> None:
+    """Launch the local, single-user web interface (the `[web]` extra). Binds to localhost by default;
+    the Anthropic key is read from the server environment and is only needed for provider actions —
+    consulting existing sessions needs none. Uvicorn is imported and started here, never at module
+    import, and the FastAPI app is a factory so nothing binds a port until this runs."""
+    host, port = a.host, a.port
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"⚠  Binding to {host}: Requivo Web has NO authentication and must not be exposed on an "
+              "untrusted network. Prefer 127.0.0.1 unless you fully control the network.", file=sys.stderr)
+    try:
+        import uvicorn
+
+        from requivo.web.app import create_app
+    except ImportError as e:
+        raise EngineError(
+            "The web interface is not installed. Install it with `pip install 'requivo[web]'` "
+            f"(or `uv tool install 'requivo[web]'`). You do NOT need it for the CLI or Claude Code. "
+            f"(import error: {e})") from e
+    url = f"http://{host}:{port}"
+    print(f"\nRequivo Web → {url}")
+    print("  Sessions stay local under .requivo/sessions/. An Anthropic key (server env) is needed only")
+    print("  for provider actions (discovery, generation); consulting existing sessions needs none.\n")
+    if not a.no_open:
+        import threading
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if a.reload:
+        uvicorn.run("requivo.web.app:create_app", host=host, port=port, reload=True, factory=True)
+    else:
+        uvicorn.run(create_app(), host=host, port=port)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="requivo",
@@ -536,6 +549,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
     demo.set_defaults(func=_cmd_demo)
+
+    web = sub.add_parser("web", help="launch the local single-user web interface (needs the [web] extra)")
+    web.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, localhost only)")
+    web.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
+    # SUPPRESS so an absent web --workspace does not overwrite a global `requivo --workspace … web`.
+    web.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS,
+                     help="workspace root for sessions (default: cwd)")
+    web.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
+    web.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
+    web.set_defaults(func=_cmd_web)
 
     def model_cmd(name: str, help_: str, func, extra=None):
         sp = sub.add_parser(name, help=help_)
