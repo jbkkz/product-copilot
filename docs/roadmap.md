@@ -1,0 +1,35 @@
+# Roadmap
+
+> A snapshot of what exists and what's planned. Not a commitment.
+
+## Available today
+
+- **Discovery engine** — priority questions, multi-turn refinement, solution assessment (with
+  challenges that contest the premise)
+- **Artifact generators** — PRD, user stories, uncertainty-aware estimate, acceptance criteria,
+  delivery epic, release notes
+- **Tool-neutral epic export** (`epic.json`) and **tracker adapters** — idempotent, n8n-ready
+  issue-creation plans for GitHub and GitLab
+- **The model as a durable product** (`model.json`) — every artifact regenerable from it without
+  redoing discovery
+- **A dependency graph** — `requivo impact` shows a change's blast radius; a discovery turn flags the
+  generated files a change makes stale
+- **Three interfaces over one engine** — the CLI, the Claude Code plugin, and the local Web interface,
+  each a thin layer over the same Core and session format
+- **Versioned sessions** — per-revision provenance and optimistic locking
+- **A regression harness** — consensus over repeated runs, separating a real effect from sampling noise
+- **A self-contained wheel** — prompts, schema, context cards and the Web assets ship in the package;
+  a user-level context directory (`REQUIVO_CONTEXT_DIR`) adds cards without a checkout
+
+## Next
+
+- An HTTP API / MCP façade — another thin layer over the same Core (for automation and integrations)
+- A Jira adapter, alongside GitHub and GitLab
+- Delivery integrations — authenticated push (via n8n), Notion and Confluence
+- Context tooling — validation and assisted generation of context cards
+
+## Direction
+
+- A full artifact chain from a single model — the reasoning layer beneath product delivery
+- Surfaces over one engine: **Requivo Core**, **Requivo for Claude Code**, **Requivo Web**, and
+  eventually a separate hosted **Requivo Cloud** (see [open-source-strategy.md](open-source-strategy.md))

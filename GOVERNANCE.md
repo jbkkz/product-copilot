@@ -8,7 +8,7 @@ Requivo is at an early stage, and its governance is intentionally light.
   direction.
 - Decisions are made in the interest of the **coherence and long-term health of the project** —
   keeping the architecture clean (the Core / provider / service boundaries in
-  [CLAUDE.md](CLAUDE.md#architecture)) and the reasoning quality measurable (the golden harness).
+  [docs/architecture.md](docs/architecture.md)) and the reasoning quality measurable (the golden harness).
 - **Technical discussion happens in the open**, in GitHub issues and pull requests. Proposing a
   change or challenging a decision there is welcome.
 - There is **no formal SLA**. This is a solo-maintained beta; issues and security reports are handled

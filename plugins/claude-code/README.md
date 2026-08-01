@@ -42,19 +42,19 @@ auto-discovered from `skills/`.
                validated session model
                  /        |         \
                 /         |          \
-       Claude Code       CLI      Future Web
-           |              |
-   Claude reasoning   deterministic tools
+       Claude Code       CLI          Web
+           |              |            |
+   Claude reasoning   deterministic  local UI
 ```
 
 - **Claude Code mode (this plugin):** Claude reasons in your session, writes a proposal file, and calls
   `requivo model validate` / `requivo model apply`. Requivo Core enforces the schema, versions the
   session, and computes readiness/impact. **No API key.**
-- **API mode (optional):** `requivo discover request.md --provider anthropic` uses the Anthropic API to
-  do the reasoning instead. Same Core, same validation, same session format — just a different reasoner.
+- **API mode (optional):** `requivo discover request.md` uses the Anthropic API to do the reasoning
+  instead (needs the `anthropic` extra and a key). Same Core, same validation, same session format.
 
-Both write the **same** session format, so a session created either way is readable by the other (and by
-the future Web UI).
+Every interface writes the **same** session format, so a session created one way is readable by the
+others (the CLI, the local Web app).
 
 ## Data sent to Claude
 

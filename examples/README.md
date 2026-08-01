@@ -6,10 +6,20 @@ documentation and as inputs the tests and golden harness rely on.
 
 ## What's here
 
-- **`leave-approval/`** — a one-line request taken through the full artifact chain.
-- **`event-checkin-reconciliation/`** — a messy, multi-feature client-style email, and the
-  assessment that refuses to conflate its distinct problems (the engine's core differentiator).
-- **`case1_leave.md` … `case6_freelancer_payment.md`** — short standalone request prompts.
+**Start here — worked examples (request → model → artifacts):**
+
+- **`leave-approval/`** — a one-line request taken through the full artifact chain. The simplest way to
+  see the model-to-artifacts flow.
+- **`event-checkin-reconciliation/`** — a messy, multi-feature client email, and the assessment that
+  refuses to conflate its distinct problems. The engine's core differentiator; also the `requivo demo`
+  payload.
+
+**Additional request prompts** (just the input — run them yourself):
+
+- `case1_leave.md` … `case6_freelancer_payment.md` — short standalone requests to try.
+
+**Not examples:** the golden-harness fixtures under `fixtures/golden/` are internal test inputs, not a
+getting-started path — see [../docs/evaluations.md](../docs/evaluations.md).
 
 ## Every public example must be synthetic or properly anonymised
 

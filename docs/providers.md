@@ -1,0 +1,44 @@
+# Providers
+
+> The Core never calls an LLM. A **provider** does. Today there is one: Anthropic.
+
+## The Anthropic provider
+
+Automated discovery and generation (the CLI's `discover` / `answer` / generators, and the Web's
+provider actions) call the Claude API through the provider. It is an **optional extra**:
+
+```bash
+pip install 'requivo[anthropic]'     # or:  uv tool install 'requivo[anthropic]'
+export ANTHROPIC_API_KEY="…"
+```
+
+The key is read from the environment (or `.env`) and used only to authenticate those calls. In **Claude
+Code** mode there is no provider and no API key — Claude reasons in your session; the deterministic CLI
+applies. `requivo demo`, `requivo status` and `requivo impact` make no API call at all.
+
+## Models
+
+Developed and measured against `claude-sonnet-5` (the default). Any current Claude model works via the
+`MODEL` environment variable:
+
+```bash
+MODEL=claude-opus-4-8 requivo discover "…"
+```
+
+The exact model a session ran against is recorded in its revision provenance (see
+[session-format.md](session-format.md)).
+
+## Cost and the usage footprint
+
+A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The system prompt
+(prompt + schema + context cards) is **prompt-cached** across a session, so the repeated calls of a run
+are cheap.
+
+Every command that hits the API prints its footprint when it finishes — calls, tokens (with the cached
+share), latency, and an estimated cost — so you see the real number for *your* request. Tokens are
+exact; the cost is a labelled estimate from a dated rate table, never treated as authoritative.
+
+## Adding a provider
+
+A provider implements the `ReasoningProvider` protocol in `providers/base.py`. The Core stays
+provider-free, so a new provider is additive and never touches the model logic.

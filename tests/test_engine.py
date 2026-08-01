@@ -716,6 +716,20 @@ def test_pc_unknown_command_errors():
         _build_parser().parse_args(["bogus"])
 
 
+def test_documented_cli_commands_exist():
+    # Guard doc/CLI drift: every top-level command the README and docs/cli.md promise must be a real
+    # subcommand, so a rename or removal can't leave the docs pointing at a command that doesn't exist.
+    import argparse
+
+    parser = _build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    documented = {"discover", "answer", "status", "impact", "brief", "prd", "stories", "estimate",
+                  "criteria", "epic", "release", "web", "demo", "doctor", "schema", "context",
+                  "session", "model", "artifact"}
+    missing = documented - set(sub.choices)
+    assert not missing, f"documented CLI commands missing from the parser: {sorted(missing)}"
+
+
 def test_pc_status_runs_offline():
     with _model_in_out("clitest-status") as p:
         assert "UNDERSTANDING" in _run_app(["status", str(p)])  # no client built

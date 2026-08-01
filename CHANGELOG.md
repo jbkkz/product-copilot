@@ -43,6 +43,15 @@ telemetry — see `docs/web.md`).
   HTML-escaped, bounded input sizes, and conservative headers (`X-Content-Type-Options`,
   `Referrer-Policy`, a same-origin `Content-Security-Policy`).
 
+### Docs
+- **Editorial pass: README as orientation, `docs/` as depth.** The README is rewritten as an
+  activation guide (434 → 223 lines) — hero, why, a three-interface table, three quickstarts, core
+  concepts, a docs index — with the depth moved to ten specialized documents under `docs/`
+  (`getting-started`, `cli`, `architecture`, `requirements-model`, `session-format`, `providers`,
+  `context-cards`, `evaluations`, `roadmap`, plus an index). Fixed stale/incorrect references (a
+  non-existent `discover --provider` flag in the plugin README, "two interfaces" → three, `out/` →
+  `.requivo/`) and added a local-Web exposure note to `SECURITY.md`. No behaviour change.
+
 ## [0.8.2] - 2026-08-01
 
 Pre-Cloud correctness at the session boundary — the layer requivo-cloud will sit on. From the same

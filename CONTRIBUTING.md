@@ -8,10 +8,10 @@ Before a large change, please open an issue to discuss it first — it saves eve
 
 ## Project layout in one line
 
-Requivo is one engine behind several surfaces (CLI, Claude Code plugin, later a web UI). The layers
-form a strict DAG: `core/` (no LLM, no I/O) → `providers/` (the only LLM callers) → `services/` (the
-single validated apply path) → `render/` + `cli.py`. The full map is in
-[CLAUDE.md](CLAUDE.md#architecture), and the distribution boundary is in
+Requivo is one engine behind three interfaces (CLI, Claude Code plugin, local Web). The layers form a
+strict DAG: `core/` (no LLM, no I/O) → `providers/` (the only LLM callers) → `services/` (the single
+validated apply path) → `render/` + `cli.py` + `web/`. The full map is in
+[docs/architecture.md](docs/architecture.md), and the distribution boundary is in
 [docs/open-source-strategy.md](docs/open-source-strategy.md). Read those before a structural change.
 
 ## Setup
