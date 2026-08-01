@@ -52,19 +52,28 @@ def _is_deferred(s: Slot) -> bool:
 
 
 def _readiness_blockers(out: EngineOutput) -> list[str]:
-    """High-impact slots not yet explicitly confirmed — what stands between here and build.
+    """High-impact slots not yet confirmed AND covered — what stands between here and build.
 
     Iterates the schema's required slots, not just the ones the model returned: a required slot the
     model omitted is treated as unknown at its baseline impact, so a missing high-impact dimension
     reads as a blocker instead of vanishing. This is the readiness guarantee — 'ready' can never be
-    reached with a high-impact gap, whether the gap is empty-but-present or absent entirely."""
+    reached with a high-impact gap, whether the gap is empty-but-present or absent entirely.
+
+    Confirmation is two-dimensional: a slot must be both `explicit` (provenance) *and* covered
+    (completeness at/above the soft boundary). An `explicit` slot at completeness 5 is a stated-but-
+    thin answer, not a resolved dimension — it still blocks. This keeps provenance and coverage from
+    collapsing into one signal, so a high-impact topic can't read as 'confirmed' on a one-word reply."""
     _, required = schema_slot_ids()
     blockers = []
     for sid in required:
         s = out.model.get(sid)
         impact = s.impact if s is not None else _default_impacts().get(sid, Impact.low)
-        explicit = s is not None and s.confidence is Confidence.explicit
-        if impact is Impact.high and not explicit:
+        confirmed = (
+            s is not None
+            and s.confidence is Confidence.explicit
+            and s.completeness >= SOFT_COMPLETENESS
+        )
+        if impact is Impact.high and not confirmed:
             blockers.append(sid)
     return [sid for sid in _slot_meta()[1] if sid in set(blockers)]  # schema order
 

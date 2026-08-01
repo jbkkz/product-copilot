@@ -242,6 +242,19 @@ def test_readiness_flags_a_missing_high_impact_slot_as_blocker():
     assert "business_rules" in _readiness_blockers(model)
 
 
+def test_readiness_blocks_a_thin_high_impact_slot_even_when_explicit():
+    # Provenance is not coverage: a high-impact slot stated in one word (completeness below the soft
+    # boundary) is NOT resolved, even if its confidence is explicit — it must still block, not read as
+    # confirmed. Guards the readiness fix that gates on completeness, not confidence alone.
+    model = out({
+        "business_rules": slot(5, "explicit", "high"),   # explicit but thin → still a blocker
+        "problem": slot(90, "explicit", "high"),         # explicit AND covered → not blocking
+    })
+    blockers = _readiness_blockers(model)
+    assert "business_rules" in blockers
+    assert "problem" not in blockers
+
+
 def test_state_of_maps_confidence():
     assert _state_of(Slot(completeness=90, confidence="explicit", impact="high")) == "confirmed"
     assert _state_of(Slot(completeness=50, confidence="inferred", impact="high")) == "inferred"
@@ -564,12 +577,12 @@ def test_derive_stories_returns_structured_stories():
 
 def test_artifact_paths_and_names():
     # Guards R1: save_model / write_artifact resolve to out/<slug>/<file> and round-trip.
-    p = save_model(out({"problem": slot(80, "explicit", "high")}), "_chartest_slug")
+    p = save_model(out({"problem": slot(80, "explicit", "high")}), "chartest-slug")
     try:
         assert p.name == "model.json"
-        assert p.parent.name == "_chartest_slug"
+        assert p.parent.name == "chartest-slug"
         assert p.parent.parent.name == "out"
-        a = write_artifact("_chartest_slug", "prd.md", "# X\n")
+        a = write_artifact("chartest-slug", "prd.md", "# X\n")
         assert a.parent == p.parent and a.name == "prd.md"
         assert a.read_text() == "# X\n"
         assert load_model(p).model["problem"].completeness == 80
@@ -683,7 +696,7 @@ def test_pc_unknown_command_errors():
 
 
 def test_pc_status_runs_offline():
-    with _model_in_out("_clitest_status") as p:
+    with _model_in_out("clitest-status") as p:
         assert "UNDERSTANDING" in _run_app(["status", str(p)])  # no client built
 
 
@@ -699,7 +712,7 @@ def test_pc_demo_runs_offline_from_saved_example():
 
 
 def test_pc_brief_uses_injected_client():
-    with _model_in_out("_clitest_brief") as p:
+    with _model_in_out("clitest-brief") as p:
         text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
         assert "SOLUTION ASSESSMENT" in text
 
@@ -721,7 +734,7 @@ def test_demo_payload_matches_the_browsable_example():
 def test_pc_brief_persists_reasoning_into_model():
     # Keystone: advise()'s reasoning is absorbed into the model and saved (backfill),
     # so downstream generators inherit it instead of it being regenerated and discarded.
-    with _model_in_out("_clitest_brief_persist") as p:
+    with _model_in_out("clitest-brief-persist") as p:
         brief_json = json.dumps({
             "complexity": "high",
             "decisions": [{"decision": "draft-first", "tradeoff": "review step"}],
@@ -739,13 +752,13 @@ def test_pc_brief_persists_reasoning_into_model():
 
 
 def test_pc_stories_renders():
-    with _model_in_out("_clitest_stories") as p:
+    with _model_in_out("clitest-stories") as p:
         text = _run_app(["stories", str(p)], client=FakeClient(json.dumps({"stories": [{"id": "S1", "title": "T"}]})))
         assert "=== USER STORIES ===" in text and "[S1] T" in text
 
 
 def test_pc_estimate_renders():
-    with _model_in_out("_clitest_estimate") as p:
+    with _model_in_out("clitest-estimate") as p:
         fake = FakeClient(
             json.dumps({"stories": [{"id": "S1", "title": "T"}]}),
             json.dumps({"items": [{"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]}),
@@ -754,26 +767,26 @@ def test_pc_estimate_renders():
 
 
 def test_pc_prd_writes_artifact():
-    with _model_in_out("_clitest_prd") as p:
+    with _model_in_out("clitest-prd") as p:
         _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X"})))
         assert (p.parent / "artifacts" / "prd.md").read_text().startswith("# X")
 
 
 def test_pc_criteria_writes_artifact():
-    with _model_in_out("_clitest_criteria") as p:
+    with _model_in_out("clitest-criteria") as p:
         _run_app(["criteria", str(p)], client=FakeClient(json.dumps({"title": "X"})))
         assert (p.parent / "artifacts" / "acceptance-criteria.md").exists()
 
 
 def test_pc_epic_writes_all_views():
-    with _model_in_out("_clitest_epic") as p:
+    with _model_in_out("clitest-epic") as p:
         _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps({"title": "X"})))
         for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
             assert (p.parent / "artifacts" / name).exists()
 
 
 def test_pc_release_stamps_version():
-    with _model_in_out("_clitest_release") as p:
+    with _model_in_out("clitest-release") as p:
         _run_app(["release", str(p), "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
         assert "v1.0" in (p.parent / "artifacts" / "release-notes.md").read_text()
 
@@ -812,7 +825,7 @@ def test_pc_discover_rejects_empty_request():
 
 def test_pc_answer_refines_the_model():
     # A stateless discovery turn: answers + the current model → a refined model.
-    with _model_in_out("_clitest_answer") as p:
+    with _model_in_out("clitest-answer") as p:
         turn2 = json.dumps({
             "model": full_slots(problem=slot(95, "explicit", "high")),
             "questions": [],
@@ -919,7 +932,7 @@ def test_artifact_slots_reference_only_real_slot_ids():
 
 def test_pc_impact_reports_blast_radius_offline():
     # No client needed — impact is a pure DAG query.
-    with _model_in_out("_clitest_impact") as p:
+    with _model_in_out("clitest-impact") as p:
         out_ = _out_with_decisions(
             DesignDecision(decision="Draft-first invoices", derived_from=["permissions"]))
         store.save_revision(p.parent.name, out_)
@@ -928,7 +941,7 @@ def test_pc_impact_reports_blast_radius_offline():
 
 
 def test_pc_impact_no_slots_prints_the_full_map():
-    with _model_in_out("_clitest_impact_map") as p:
+    with _model_in_out("clitest-impact-map") as p:
         store.save_revision(p.parent.name, _out_with_decisions())
         text = _run_app(["impact", str(p)])
         assert "DEPENDENCY MAP" in text
@@ -948,8 +961,74 @@ def test_stale_on_disk_only_flags_present_files_that_consume_a_changed_slot():
     assert "stories" not in names
 
 
+def test_unrelated_slot_change_keeps_artifact_fresh():
+    # The freshness fix: an artifact goes stale only when the change reaches a slot it consumes — not
+    # on every revision bump. criteria consumes {workflow, business_rules, permissions, edge_cases,
+    # acceptance}; success_metrics is outside that set, so a material change to it leaves criteria fresh.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-fresh-unrelated"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"success_metrics": slot(40, "inferred", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria")  # generated at revision 1
+    try:
+        # confidence moves inferred → explicit on an UNRELATED slot: a real change, new revision.
+        svc.update_model(slug, out({"success_metrics": slot(90, "explicit", "high")}).model_dump())
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is False        # revision advanced, but criteria is untouched
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_completeness_only_change_keeps_artifact_fresh():
+    # A completeness-only bump on a CONSUMED slot is not a material change (diff_models ignores
+    # completeness), so it must not invalidate the artifact — completeness is progress noise, not signal.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-fresh-completeness"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(50, "explicit", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria")  # criteria consumes workflow
+    try:
+        svc.update_model(slug, out({"workflow": slot(95, "explicit", "high")}).model_dump())  # only %
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is False
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_related_slot_change_marks_artifact_stale():
+    # The other side: a material change to a slot the artifact DOES consume flags it stale.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-stale-related"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(50, "inferred", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria")  # criteria consumes workflow
+    try:
+        wf = {**slot(95, "explicit", "high"), "value": "draft → issued → archived"}
+        svc.update_model(slug, out({"workflow": wf}).model_dump())
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is True
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_invalid_slug_is_rejected_before_touching_the_filesystem():
+    # The traversal guard: an explicit slug that could escape the session root must raise in Core,
+    # never build a path. Covers the separator, the dot segment, an absolute root, and the empty string.
+    from requivo.core.errors import InvalidSlugError
+    from requivo.core.persistence import canonical_dir, validate_slug
+    for bad in ("../../escaped", "a/b", "..", ".", "", "/abs", "Upper", "under_score"):
+        with pytest.raises(InvalidSlugError):
+            validate_slug(bad)
+        with pytest.raises(InvalidSlugError):
+            canonical_dir(bad)
+    assert validate_slug("leave-approval") == "leave-approval"   # the shape _slug() always emits
+
+
 def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
-    with _model_in_out("_clitest_stale") as p:
+    with _model_in_out("clitest-stale") as p:
         slug = p.parent.name
         # a real slot an artifact consumes, and an already-generated PRD tracked in the session
         wf = {**slot(60, "inferred", "high"), "value": "draft → issued"}
@@ -1072,7 +1151,7 @@ def test_complete_records_usage_into_the_active_ledger():
 
 def test_pc_status_reports_no_usage_offline():
     # An offline verb makes no call → no ledger records → no usage line.
-    with _model_in_out("_clitest_usage") as p:
+    with _model_in_out("clitest-usage") as p:
         text = _run_app(["status", str(p)])
     assert "API USAGE" not in text
 
@@ -1083,7 +1162,7 @@ def test_pc_status_reports_no_usage_offline():
 def test_resolve_slug_avoids_silent_overwrite():
     from requivo.core.persistence import resolve_slug, save_request
 
-    base = "_slugtest_collide"
+    base = "slugtest-collide"
     folder = output_root() /  base
     try:
         assert resolve_slug(base, "first request") == base          # free → clean slug
@@ -1152,7 +1231,7 @@ def test_atomic_write_persists_content_and_leaves_no_tmp(tmp_path):
 
 
 def test_session_roundtrips_provenance_and_cards():
-    slug = "_clitest_session"
+    slug = "clitest-session"
     p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
     try:
         save_session(slug, request="build me a thing", model_name="claude-sonnet-5",
@@ -1169,7 +1248,7 @@ def test_session_roundtrips_provenance_and_cards():
 
 def test_session_cards_is_none_without_a_session_file():
     # Pre-0.6.1 models have no session.json — readers must tolerate its absence and mean "all cards".
-    slug = "_clitest_nosession"
+    slug = "clitest-nosession"
     p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
     try:
         assert load_session(p) == {}

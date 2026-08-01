@@ -68,6 +68,14 @@ class SessionNotFoundError(RequivoError):
     code = "session_not_found"
 
 
+class InvalidSlugError(RequivoError):
+    """A slug is not a safe session identifier. A slug names a directory under the session root, so it
+    must be a strict kebab-case token — anything with a path separator or a dot segment could escape
+    the store (directory traversal). Enforced in Core, so every surface inherits the guarantee."""
+
+    code = "invalid_slug"
+
+
 class StaleArtifactError(RequivoError):
     """An artifact was produced from a revision the model has since moved past."""
 

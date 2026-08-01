@@ -37,7 +37,7 @@ constraint buried at the end:
 See the whole run yourself — **no API key, no setup, no network:**
 
 ```bash
-uv run requivo demo        # or, with nothing installed:  python requivo.py demo
+uv run requivo demo        # or, with nothing installed:  python scripts/requivo_cli.py demo
 ```
 
 ---
@@ -65,9 +65,9 @@ versioned session — is the single source of truth; every surface is a thin lay
 - **Requivo CLI** — inspect, validate, version and export sessions locally: `requivo doctor`,
   `requivo session init`, `requivo model validate|apply|diff`, `requivo status`, `requivo impact`,
   `requivo artifact save`. All deterministic, all offline.
-- **Anthropic provider** — the optional API-powered automation: `requivo discover request.md --provider
-  anthropic`. Install with `pip install 'requivo[anthropic]'`. Same core, same validation, same session
-  format — just a different reasoner.
+- **Anthropic provider** — the optional API-powered automation: `requivo discover request.md` runs
+  discovery end-to-end against the Claude API. Install with `pip install 'requivo[anthropic]'` and set
+  `ANTHROPIC_API_KEY`. Same core, same validation, same session format — just a different reasoner.
 
 A session created by any surface is readable by the others (and by the future Web UI): they share one
 model, one validation, one apply path — there is no fork.
@@ -85,7 +85,7 @@ into the new layout on first change (or in bulk with `requivo session migrate`).
                    AI Discovery   ◀── product + client context
                          │
                          ▼
-                 Structured model   ← the product (out/<slug>/model.json)
+                 Structured model   ← the product (.requivo/sessions/<slug>/model.json)
                          │
     ┌─────────┬──────────┼──────────┬───────────────┐
     ▼         ▼          ▼          ▼               ▼
@@ -221,15 +221,16 @@ client request, the questions the engine raised, the solution assessment it prod
 
 ```bash
 git clone https://github.com/jbkkz/requivo && cd requivo
-uv run requivo demo        # or: python requivo.py demo  (nothing installed) · requivo demo (after an install)
+uv run requivo demo        # or: python scripts/requivo_cli.py demo  (nothing installed) · requivo demo (after an install)
 ```
 
 **Then run your own — with [uv](https://docs.astral.sh/uv/):** no virtualenv to create or activate.
-`uv run` builds the environment from `pyproject.toml` on first run, then runs the command.
+`uv run` builds the environment from `pyproject.toml` on first run, then runs the command. Discovery
+calls the Claude API, so pull in the `anthropic` extra and set a key:
 
 ```bash
 cp .env.example .env                       # set ANTHROPIC_API_KEY
-uv run requivo discover examples/case1_leave.md # first run resolves deps; later runs are instant
+uv run --extra anthropic requivo discover examples/case1_leave.md   # first run resolves deps; later runs are instant
 ```
 
 <details><summary>Or the classic pip + venv install</summary>
@@ -238,7 +239,7 @@ uv run requivo discover examples/case1_leave.md # first run resolves deps; later
 git clone https://github.com/jbkkz/requivo && cd requivo
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools   # a fresh venv may ship a pip too old for editable installs
-pip install -e .                # installs deps + the `requivo` command (and the `pc` alias)
+pip install -e '.[anthropic]'   # deps + the anthropic SDK (discovery) + the `requivo` command (and `pc` alias)
 cp .env.example .env            # set ANTHROPIC_API_KEY
 requivo discover examples/case1_leave.md
 ```
@@ -246,14 +247,15 @@ requivo discover examples/case1_leave.md
 </details>
 
 It runs an interactive loop — showing what's understood, asking the priority questions, folding your
-answers back in — then writes `out/<slug>/model.json` and produces the solution assessment.
-Regenerate any deliverable from a saved model without redoing discovery (prefix each with `uv run`
-if you use uv, or activate the venv first):
+answers back in — then writes the session to `.requivo/sessions/<slug>/` and produces the solution
+assessment. Every verb takes the session **slug** (or a `model.json` path); regenerate any deliverable
+from the saved model without redoing discovery (prefix each with `uv run` if you use uv, or activate
+the venv first):
 
 ```bash
-requivo prd    out/<slug>/model.json                      # also: stories · estimate · criteria · release · brief
-requivo epic   out/<slug>/model.json --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
-requivo impact out/<slug>/model.json permissions          # what rests on a slot: decisions + artifacts that go stale
+requivo prd    <slug>                      # also: stories · estimate · criteria · release · brief
+requivo epic   <slug> --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
+requivo impact <slug> permissions          # what rests on a slot: decisions + artifacts that go stale
 ```
 
 ### Two interfaces, one engine
@@ -261,8 +263,10 @@ requivo impact out/<slug>/model.json permissions          # what rests on a slot
 The product is the engine; the interfaces are thin layers over the same `requivo` core.
 
 - **Terminal** — `requivo <command>` (or `uv run requivo <command>` with no manual venv, or `python
-  requivo.py <command>` with nothing installed at all). The short alias `pc` still works.
-- **Claude Code** — `/pc-discover`, `/pc-status`, `/pc-generate`, `/pc-help` wrap the same CLI.
+  scripts/requivo_cli.py <command>` with nothing installed at all). The short alias `pc` still works.
+- **Claude Code** — `/requivo-discover`, `/requivo-answer`, `/requivo-status`, `/requivo-brief`,
+  `/requivo-prd`, `/requivo-impact` (the [plugin](plugins/claude-code/)) reason in your Claude session
+  and drive the same CLI — no API key needed.
 
 The legacy flag CLI (`python src/engine.py "…" --prd`, `--from out/<slug>/model.json`) still works
 unchanged.
@@ -357,11 +361,11 @@ finance card landed, the engine stopped asking *"what exactly are these totals?"
 - A dependency graph over the model — `requivo impact` shows a change's blast radius, and a discovery turn
   flags the already-generated artifacts a change makes stale
 - Two interfaces over one presentation-free engine — a `requivo` subcommand CLI and Claude Code slash
-  commands (`/pc-discover`, `/pc-status`, `/pc-generate`), each a thin layer over the same core
+  commands (`/requivo-discover`, `/requivo-status`, `/requivo-brief`, …), each a thin layer over the same core
 - A regression harness for prompt and context changes — consensus over repeated runs, so a real effect
   is separable from sampling noise, on the discovery *and* on the assessment
 - A self-contained wheel — prompts, schema and context cards ship inside the package, so `pip install`
-  works outside the clone; outputs go to `./out` in your working directory, never into the install
+  works outside the clone; sessions go to `.requivo/sessions/` in your working directory, never into the install
 - A user-level context directory (`REQUIVO_CONTEXT_DIR`) — add or override product cards on a pip-installed
   setup without a source checkout; user cards merge with the built-ins
 

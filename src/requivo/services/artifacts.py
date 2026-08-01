@@ -58,9 +58,12 @@ class ArtifactService:
         meta = store.read_meta(slug)
         out: dict[str, dict] = {}
         for t, st in meta.artifact_status.items():
-            stale = st.stale or st.revision != meta.current_revision
+            # Freshness is the explicit stale flag, set by `update_model`/`mark_stale` for exactly the
+            # artifacts in a change's blast radius. The source revision is provenance only — an artifact
+            # is NOT stale merely because the model moved on; a change that misses its dependencies
+            # leaves it fresh (the whole point of the dependency graph).
             out[t] = {"revision": st.revision, "filename": st.filename,
-                      "updated_at": st.updated_at, "stale": stale}
+                      "updated_at": st.updated_at, "stale": st.stale}
         return out
 
     def show(self, slug: str, artifact_type: str) -> str:

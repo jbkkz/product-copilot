@@ -65,7 +65,7 @@ jobs:
           # Schema loads and every prompt builds from the installed package (not the source tree).
           /tmp/cleanenv/bin/python - <<'PY'
           from requivo.core.contracts import schema_slot_ids
-          from requivo.core.llm import build_prompt, available_cards
+          from requivo.core.context import build_prompt, available_cards
           allowed, _ = schema_slot_ids()
           assert len(allowed) > 0, "schema failed to load from the installed wheel"
           assert available_cards(), "no context cards found in the installed wheel"

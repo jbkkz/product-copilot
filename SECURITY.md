@@ -9,10 +9,10 @@ The engine makes calls to the **Anthropic API** and nothing else. On each run it
 
 - your **client request** (and any answers you provide in refinement turns);
 - the **prompts**, the **model schema**, and the **context cards** (`context/*.md`) that inform the run;
-- the **saved model** (`out/<slug>/model.json`) when you regenerate an artifact from it.
+- the **saved model** (`.requivo/sessions/<slug>/model.json`) when you regenerate an artifact from it.
 
 There is **no telemetry, no analytics, and no other network call**. Nothing is sent to any server
-operated by this project. Your `out/` folder stays local. Do not put secrets (API keys, passwords,
+operated by this project. Your `.requivo/` session store stays local. Do not put secrets (API keys, passwords,
 personal data) into a request or a context card — treat everything you type as prompt content that
 will be sent to the model provider.
 

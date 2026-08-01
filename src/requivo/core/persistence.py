@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from requivo import __version__
 from requivo.core.contracts import EngineOutput
-from requivo.core.errors import InvalidSessionError, SessionNotFoundError
+from requivo.core.errors import InvalidSessionError, InvalidSlugError, SessionNotFoundError
 from requivo.paths import output_root, session_root
 
 SESSION_FORMAT_VERSION = 1
@@ -52,7 +52,7 @@ def resolve_slug(base: str, request: str) -> str:
 
 def save_model(out: EngineOutput, slug: str) -> Path:
     """Persist the model — the durable product. Every artifact is regenerated from this file."""
-    folder = output_root() / slug
+    folder = legacy_dir(slug)
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / "model.json", out.model_dump_json(indent=2))
 
@@ -72,7 +72,7 @@ def save_session(slug: str, *, request: str, model_name: str,
         "request_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
-    folder = output_root() / slug
+    folder = legacy_dir(slug)
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / "session.json", json.dumps(session, indent=2))
 
@@ -102,7 +102,7 @@ def load_model(path: Path) -> EngineOutput:
 
 def write_artifact(slug: str, filename: str, content: str) -> Path:
     """Write a generated artifact next to its model in out/<slug>/."""
-    folder = output_root() / slug
+    folder = legacy_dir(slug)
     folder.mkdir(parents=True, exist_ok=True)
     return _atomic_write(folder / filename, content)
 
@@ -121,7 +121,7 @@ def load_request(model_path: Path) -> str:
 def present_artifacts(slug: str) -> set[str]:
     """Filenames currently in out/<slug>/ — so change-detection only flags artifacts that were
     actually generated, not the whole theoretical blast radius."""
-    folder = output_root() / slug
+    folder = legacy_dir(slug)
     return {p.name for p in folder.iterdir() if p.is_file()} if folder.exists() else set()
 
 
@@ -172,14 +172,42 @@ def _hash(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# A slug names a directory under the session root; it must never be able to escape it. `_slug()` and
+# `resolve_slug()` always emit this shape, but an *explicit* `--slug` (or a future API caller) is
+# untrusted input — so the two path constructors below validate before joining. The pattern forbids
+# every traversal vector at once: `/`, `\`, `.`, `..`, a leading root, and the empty string.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def validate_slug(slug: str) -> str:
+    """Return `slug` if it is a safe session identifier, else raise `InvalidSlugError`. Lives in Core
+    so every surface (CLI, provider, a future web service) inherits the same directory-traversal guard,
+    not just FastAPI. Belt-and-suspenders: callers additionally confirm the resolved path stays under
+    the root, but the pattern alone already makes a separator or dot segment unrepresentable."""
+    if not isinstance(slug, str) or not _SLUG_RE.match(slug):
+        raise InvalidSlugError(
+            f"invalid session slug {slug!r}; expected kebab-case [a-z0-9-], e.g. 'leave-approval'",
+            details={"slug": slug})
+    return slug
+
+
+def _child_of(root: Path, slug: str) -> Path:
+    """`root / slug`, having validated the slug and confirmed the resolved path is genuinely a child of
+    `root` — the defence-in-depth check the traversal guard is built around."""
+    d = root / validate_slug(slug)
+    if not d.resolve().is_relative_to(root.resolve()):
+        raise InvalidSlugError(f"slug {slug!r} resolves outside the session root", details={"slug": slug})
+    return d
+
+
 def canonical_dir(slug: str) -> Path:
     """The canonical session directory `<workspace>/.requivo/sessions/<slug>/`."""
-    return session_root() / slug
+    return _child_of(session_root(), slug)
 
 
 def legacy_dir(slug: str) -> Path:
     """The legacy `out/<slug>/` directory — read-only, migrated on first mutation."""
-    return output_root() / slug
+    return _child_of(output_root(), slug)
 
 
 def session_exists(slug: str) -> bool:

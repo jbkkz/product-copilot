@@ -6,6 +6,42 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-01
+
+Correctness pass at the surface boundaries, from a full external review of the 0.8.0 snapshot. No
+model-format change; the fixes are about *when* an artifact is stale, *when* a session is ready,
+*where* a session can be written, and keeping the docs honest. All six pre-release findings from the
+review are addressed.
+
+### Fixed
+- **Artifact freshness now respects the dependency graph.** `ArtifactService.list` (and `status`)
+  flagged *every* artifact stale on *any* revision bump (`revision != current_revision`), defeating the
+  selective blast-radius calculation. Freshness is now the explicit `stale` flag, set by
+  `update_model`/`mark_stale` for exactly the artifacts a change reaches — an unrelated or
+  completeness-only change leaves an artifact fresh. Revision is provenance, not an invalidation rule.
+- **Readiness gates on coverage, not just provenance.** A high-impact slot could read as confirmed on
+  `confidence == explicit` alone, even at completeness 5. `_readiness_blockers` now requires both
+  `explicit` **and** completeness at/above the soft boundary, so a stated-but-thin high-impact
+  dimension still blocks.
+- **Session slugs are validated in Core (directory-traversal guard).** An explicit `--slug` was joined
+  onto the session root unchecked, so `--slug ../../escaped` could write outside `.requivo/sessions/`.
+  `validate_slug()` now enforces a strict kebab-case token (and confirms the resolved path stays under
+  the root) at the two path constructors, so every surface — CLI, provider, a future web service —
+  inherits the guard. New error: `invalid_slug`.
+- **CI wheel-install job no longer imports a dead module.** It imported `requivo.core.llm`
+  (`build_prompt`, `available_cards`), which the refactor moved to `requivo.core.context`.
+
+### Changed
+- **Install-free launcher moved to `scripts/requivo_cli.py`.** A root-level `requivo.py` shadowed the
+  `requivo` package on `import requivo` from a checkout (a footgun for editable installs). The root
+  `requivo.py` and `pc.py` launchers are removed; use `uv run requivo`, the installed `requivo`, or
+  `python scripts/requivo_cli.py` from a bare clone.
+- **Documentation reconciled with the shipped 0.8 surface.** README/`CLAUDE.md`/`SECURITY.md` now name
+  the canonical `.requivo/sessions/<slug>/` store (not `out/`), the `/requivo-*` plugin commands (not
+  `/pc-*`), and the `pip install '.[anthropic]'` / `uv run --extra anthropic` path that discovery
+  actually needs. The stale `.claude/commands/pc-*` command files (which called the removed `pc.py`)
+  are deleted in favour of the `plugins/claude-code/` plugin.
+
 ## [0.8.0] - 2026-08-01
 
 Architectural refactor into **three surfaces over one engine** — Core, CLI, and Claude Code — in

@@ -38,9 +38,11 @@ live from the model, assessment read from disk) — the zero-friction way to fee
 impact <model> [slots…]` is a pure offline query over the dependency DAG (no API call): the blast
 radius of a change (the decisions to re-validate + artifacts that go stale), or the full map with no
 slots. Without an
-install, `python requivo.py <cmd>`
-(a repo-root launcher that puts `src/` on the path) is equivalent — this is what the Claude Code
-`/pc-*` commands call. The **legacy flag CLI is preserved**: `python src/engine.py "…" [--once]
+install, `python scripts/requivo_cli.py <cmd>`
+(a launcher under `scripts/` that puts `src/` on the path — not at the repo root, where it would shadow
+the `requivo` package) is equivalent. The Claude Code plugin under `plugins/claude-code/` (the
+`/requivo-*` skills) drives the installed `requivo` command directly. The **legacy flag CLI is
+preserved**: `python src/engine.py "…" [--once]
 [--prd] [--stories] …` and `python src/engine.py --from out/<slug>/model.json --prd` still work
 identically (`src/engine.py` is now a backward-compat shim).
 

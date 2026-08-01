@@ -222,8 +222,9 @@ class SessionService:
         artifacts = {}
         if meta:
             for t, st in meta.artifact_status.items():
-                stale = st.stale or st.revision != meta.current_revision
-                artifacts[t] = {"revision": st.revision, "filename": st.filename, "stale": stale}
+                # Explicit stale flag only — revision is provenance, not an invalidation rule. See
+                # ArtifactService.list for the rationale (dependency-graph freshness, not revision drift).
+                artifacts[t] = {"revision": st.revision, "filename": st.filename, "stale": st.stale}
         return {
             "slug": slug,
             "revision": meta.current_revision if meta else None,
