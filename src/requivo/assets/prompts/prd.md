@@ -108,3 +108,7 @@ Reply with **only** a valid JSON object, no surrounding text:
   "risks": ["…"]
 }
 ```
+
+**Required fields.** `title` and `problem` must be present and non-empty. A PRD that does not state the problem it
+solves is not a PRD — if the model is thin, write what the problem *is understood to be* and
+record the uncertainty in `assumptions` or `open_questions`. Never emit an empty string.

@@ -261,3 +261,50 @@ def test_reasoning_merely_omitted_by_a_turn_is_not_a_change(workspace):
     assert result.changed_decisions == []
     assert result.stale_artifacts == []
     assert art.list("s")["prd"]["stale"] is False
+
+
+# ── the second version contract: the slot vocabulary ──────────────────────────
+
+
+def test_a_session_from_a_newer_slot_schema_is_refused_clearly(workspace):
+    """`schema_version` was recorded on every session and read by nothing. A model authored against a
+    newer vocabulary can hold slots this build has no definition for, and the first symptom was an
+    `unknown_slot` error naming a slot the user never typed."""
+    from requivo.core.errors import InvalidSessionError
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    p = store.canonical_dir("s") / "session.json"
+    raw = json.loads(p.read_text())
+    raw["schema_version"] = store.SCHEMA_VERSION + 1
+    p.write_text(json.dumps(raw))
+
+    with pytest.raises(InvalidSessionError) as e:
+        store.read_meta("s")
+    assert e.value.details["schema_version"] == store.SCHEMA_VERSION + 1
+    # An older schema is ordinary backward compatibility, not an error.
+    raw["schema_version"] = 0
+    p.write_text(json.dumps(raw))
+    assert store.read_meta("s").slug == "s"
+
+
+# ── reasoning identity ────────────────────────────────────────────────────────
+
+
+def test_a_repeated_reasoning_item_is_refused_rather_than_deduplicated(workspace):
+    """Ids are content-derived, so two identical decisions collide on one id. The id is what a diff
+    keys on and what a user cites a decision by — a collision makes one of the pair invisible to change
+    detection. The engine restating itself is a defect in the reply, which the retry loop can fix;
+    quietly keeping one of the two cannot be undone."""
+    from requivo.core.errors import RequivoError
+
+    model = _full_model()
+    model["decisions"] = [
+        {"decision": "Draft-first", "derived_from": ["permissions"]},
+        {"decision": "Draft-first", "derived_from": ["workflow"]},   # same text → same id
+    ]
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    with pytest.raises(RequivoError) as e:
+        svc.update_model("s", model)
+    assert "repeated" in str(e.value).lower()

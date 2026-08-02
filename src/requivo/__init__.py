@@ -1,10 +1,10 @@
 """Requivo — the requirements engine.
 
-The engine is the product; every interface (terminal CLI, and later Claude Code,
-API, web) is a thin layer over the same core. Business logic, prompts, context
-cards, Pydantic contracts and model.json are the single source of truth — see
-CLAUDE.md. This package is being carved out of the historical src/engine.py; that
-module now re-exports from here for backward compatibility.
+The model is the product; every interface — the terminal CLI, the Claude Code
+plugin, Requivo Web — is a thin layer over the same core, reaching it through the
+shared services. Business logic, prompts, context cards, Pydantic contracts and
+model.json are the single source of truth; see CLAUDE.md for the architecture and
+the invariants a change must not break.
 """
 
-__version__ = "0.9.4"
+__version__ = "0.9.5"

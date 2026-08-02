@@ -17,11 +17,15 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
+import sys
+import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, resolve_cards
+from requivo.core.contracts import EngineOutput
 from requivo.core.errors import InvalidModelError, SessionNotFoundError
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, session_root, workspace_root
@@ -34,12 +38,42 @@ def _print_json(obj) -> None:
 
 
 def _read_source(arg: str) -> str:
-    """A request/answers argument that may be an inline string or a path to a file."""
+    """A request/answers argument that may be an inline string, a path to a file, or `-` for stdin."""
+    if arg == "-":
+        return _read_stdin()
     try:
         is_file = bool(arg.strip()) and Path(arg).is_file()
     except OSError:
         is_file = False
     return Path(arg).read_text() if is_file else arg
+
+
+def _read_stdin() -> str:
+    """Everything on stdin, as text. Refused when stdin is a terminal, which would otherwise hang
+    waiting for input the caller never meant to type."""
+    if sys.stdin is None or sys.stdin.isatty():
+        raise InvalidModelError(
+            "'-' means read from stdin, but stdin is a terminal — pipe the content in, "
+            "or pass a file path instead")
+    return sys.stdin.read()
+
+
+def _read_document(arg: str) -> str:
+    """A *document* argument: a path, or `-` for stdin. Unlike `_read_source`, the text is never
+    itself the content — `model apply <session> proposal.json` takes a path, so a non-existent path is
+    a mistake to report, not a proposal whose body happens to be a filename.
+
+    Stdin exists so a caller with content in hand does not have to invent a temp file for it. The
+    Claude Code skills used to write `/tmp/requivo:prd.md`: a path that is not writable on Windows
+    (`:` is illegal in a filename there), that needed `rm` to clean up — a command the plugin does not
+    grant itself — and that two concurrent sessions would have shared."""
+    if arg == "-":
+        return _read_stdin()
+    p = Path(arg)
+    if not p.is_file():
+        raise InvalidModelError(f"no such file: {arg} (use '-' to read from stdin)",
+                                details={"path": arg})
+    return p.read_text()
 
 
 # ── doctor ──────────────────────────────────────────────────────────────────────
@@ -102,13 +136,25 @@ def _cmd_schema(a, client) -> None:
 
 def _cmd_context(a, client) -> None:
     """List or print the context cards — the product knowledge that grounds impact estimation. A
-    reasoning caller reads this to weigh information value; pure asset I/O, no LLM."""
+    reasoning caller reads this to weigh information value; pure asset I/O, no LLM.
+
+    `--session` prints the cards *that session* was created with. A session's card selection is held
+    constant across its turns on purpose — it is what the impact estimates were made against, and it
+    keeps the cached prompt prefix alive — so a later turn that reads all the cards is reasoning from a
+    wider context than the one the model was built on. Asking for it by session removes the step where
+    a caller has to carry the list by hand and can quietly widen it."""
     from requivo.core.context import load_context
     if a.list:
         for c in available_cards():
             print(c)
         return
-    cards = _resolve_cards(a.cards) if a.cards else None
+    if a.session:
+        if a.cards:
+            raise InvalidModelError("--session and --cards are alternatives; pass only one")
+        svc = SessionService()
+        cards = svc.cards(svc.resolve_slug(a.session))   # None == the session uses every card
+    else:
+        cards = _resolve_cards(a.cards) if a.cards else None
     print(load_context(cards))
 
 
@@ -247,25 +293,129 @@ def _cmd_session_export(a, client) -> None:
     print(f"Exported session '{slug}' → {dest}")
 
 
+# Ceilings for an imported archive. A session is a handful of small JSON and Markdown files; anything
+# near these is not one. They exist so a hostile or corrupt archive fails on a bound rather than on the
+# filesystem filling up, and so decompression cannot be used as an amplifier.
+MAX_ARCHIVE_FILES = 2_000
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+
+
+def _inspect_archive(z: zipfile.ZipFile) -> str:
+    """Validate an export archive *before* anything is written, and return the single session slug it
+    contains. Raises `InvalidModelError` on anything unexpected.
+
+    Checking names by string prefix (the previous guard: `str(target).startswith(str(root))`) is not a
+    containment test — `/…/sessions-evil` starts with `/…/sessions`. Here every entry is decomposed
+    into path components instead, so a separator, a drive letter, a root, or a `..` segment is
+    unrepresentable rather than merely unlikely."""
+    infos = [i for i in z.infolist() if not i.is_dir()]
+    if not infos:
+        raise InvalidModelError("the archive contains no files")
+    if len(infos) > MAX_ARCHIVE_FILES:
+        raise InvalidModelError(
+            f"the archive holds {len(infos)} files; the maximum is {MAX_ARCHIVE_FILES}",
+            details={"files": len(infos), "max_files": MAX_ARCHIVE_FILES})
+    total = sum(i.file_size for i in infos)
+    if total > MAX_ARCHIVE_BYTES:
+        raise InvalidModelError(
+            f"the archive expands to {total} bytes; the maximum is {MAX_ARCHIVE_BYTES}",
+            details={"bytes": total, "max_bytes": MAX_ARCHIVE_BYTES})
+
+    slugs = set()
+    for i in infos:
+        name = i.filename
+        if "\\" in name:  # a Windows-style separator is not a component boundary to zipfile
+            raise InvalidModelError(f"unsafe path in archive: {name!r}", details={"entry": name})
+        parts = PurePosixPath(name).parts
+        if len(parts) < 2:
+            raise InvalidModelError(
+                f"archive entry {name!r} is not inside a session directory; an export contains "
+                "<slug>/session.json and friends", details={"entry": name})
+        if any(p in ("", ".", "..") for p in parts) or PurePosixPath(name).is_absolute():
+            raise InvalidModelError(f"unsafe path in archive: {name!r}", details={"entry": name})
+        slugs.add(parts[0])
+
+    if len(slugs) != 1:
+        raise InvalidModelError(
+            f"the archive holds {len(slugs)} session directories ({', '.join(sorted(slugs))}); "
+            "import takes exactly one", details={"slugs": sorted(slugs)})
+    slug = slugs.pop()
+    # The directory name becomes a session slug, so it faces the same validation as any other — this is
+    # what stopped an archive whose folder was called `bad slug` from being unpacked into the store and
+    # breaking every later `session list`.
+    return store.validate_slug(slug)
+
+
+def _validate_extracted(d: Path, slug: str) -> None:
+    """Confirm an extracted directory really is a session before it is allowed into the store. Import
+    used to declare success on the strength of the extraction alone, so a malformed archive became a
+    malformed session that only failed later, somewhere unrelated."""
+    meta_path = d / "session.json"
+    if not meta_path.is_file():
+        raise InvalidModelError(f"the archive has no {slug}/session.json", details={"slug": slug})
+    try:
+        meta = store.migrate_session(json.loads(meta_path.read_text()))
+    except json.JSONDecodeError as e:
+        raise InvalidModelError(f"{slug}/session.json is not valid JSON: {e}",
+                                details={"slug": slug}) from e
+    if meta.slug != slug:
+        raise InvalidModelError(
+            f"the archive's directory is {slug!r} but its session.json says {meta.slug!r} — "
+            "the session does not agree with itself about its own identity",
+            details={"directory": slug, "session_json": meta.slug})
+    if meta.current_revision > 0:
+        model_path = d / "model.json"
+        if not model_path.is_file():
+            raise InvalidModelError(
+                f"{slug}/session.json is at revision {meta.current_revision} but there is no model.json",
+                details={"slug": slug})
+        try:
+            EngineOutput.model_validate_json(model_path.read_text())
+        except (ValueError, json.JSONDecodeError) as e:
+            raise InvalidModelError(f"{slug}/model.json is not a valid model: {e}",
+                                    details={"slug": slug}) from e
+
+
 def _cmd_session_import(a, client) -> None:
+    """Import a session archive: inspect → extract to a scratch directory → validate → move into place.
+
+    Nothing lands in the session store until the whole archive has been checked and what came out of it
+    has been confirmed to be a session. The old flow did the reverse — `extractall` straight into the
+    store, then report success — so a bad archive was already unpacked by the time anyone could object.
+    (If a second surface ever needs this, it moves to core; today the CLI is the only importer.)"""
     archive = Path(a.archive)
     if not archive.is_file():
         raise SessionNotFoundError(f"archive not found: {archive}", details={"archive": str(archive)})
     root = session_root()
     root.mkdir(parents=True, exist_ok=True)
+
     with zipfile.ZipFile(archive) as z:
-        names = z.namelist()
-        # Guard against path traversal (a crafted zip must not escape the sessions root).
-        for n in names:
-            target = (root / n).resolve()
-            if not str(target).startswith(str(root.resolve())):
-                raise InvalidModelError(f"unsafe path in archive: {n}")
-        z.extractall(root)
-    top = sorted({n.split("/")[0] for n in names if "/" in n})
+        slug = _inspect_archive(z)
+        if store.session_exists(slug) and not a.force:
+            raise InvalidModelError(
+                f"session '{slug}' already exists in this workspace — pass --force to replace it",
+                details={"slug": slug})
+        # Scratch space beside the store, not inside it: same filesystem, so the final move is a
+        # rename, but never visible to `session list` while it is still half-written.
+        scratch = Path(tempfile.mkdtemp(prefix=".import-", dir=root.parent))
+        try:
+            for info in z.infolist():
+                z.extract(info, scratch)
+            extracted = scratch / slug
+            _validate_extracted(extracted, slug)
+            target = store.canonical_dir(slug)
+            replaced = target.exists()
+            if replaced:
+                shutil.rmtree(target)
+            extracted.replace(target)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     if a.json:
-        _print_json({"imported": top, "into": str(root)})
+        _print_json({"imported": slug, "into": str(root), "replaced": replaced})
         return
-    print(f"Imported {', '.join(top) or '(nothing)'} → {root}")
+    print(f"Imported session '{slug}' → {store.canonical_dir(slug)}"
+          + (" (replaced an existing session)" if replaced else ""))
 
 
 # ── model ────────────────────────────────────────────────────────────────────────
@@ -280,7 +430,7 @@ def _cmd_model_show(a, client) -> None:
 def _cmd_model_validate(a, client) -> None:
     """Validate a proposal file — the gate Claude Code runs before applying. On success prints a tiny
     confirmation (or `--json` {status: valid}); on failure the structured error surfaces via app()."""
-    data = Path(a.proposal).read_text()
+    data = _read_document(a.proposal)
     require = not a.allow_partial
     out = validate_proposal(data, require_complete=require)
     n_slots = len(out.model)
@@ -293,7 +443,7 @@ def _cmd_model_validate(a, client) -> None:
 def _cmd_model_apply(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    data = Path(a.proposal).read_text()
+    data = _read_document(a.proposal)
     result = svc.update_model(slug, data, require_complete=not a.allow_partial,
                               expected_revision=a.expected_revision,
                               provenance={"provider": "claude-code", "surface": "cli-apply"})
@@ -316,7 +466,7 @@ def _cmd_model_apply(a, client) -> None:
 def _cmd_model_diff(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    data = Path(a.proposal).read_text()
+    data = _read_document(a.proposal)
     result = svc.diff(slug, data, require_complete=not a.allow_partial)
     if a.json:
         _print_json(result.to_dict())
@@ -333,7 +483,7 @@ def _cmd_model_diff(a, client) -> None:
 def _cmd_artifact_save(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    content = Path(a.file).read_text()
+    content = _read_document(a.file)
     st = ArtifactService().save(slug, a.type, content, source_revision=a.revision)
     if a.json:
         # `stale` is reported on the *save*, not only on a later `artifact list`. Saving an artifact
@@ -387,6 +537,8 @@ def register(sub) -> None:
     cx = sub.add_parser("context", help="list or print the product context cards")
     cx.add_argument("--list", action="store_true", help="list available card stems instead of content")
     cx.add_argument("--cards", metavar="CARDS", help="comma-separated subset to print (default: all)")
+    cx.add_argument("--session", metavar="SESSION",
+                    help="print exactly the cards this session was created with")
     cx.set_defaults(func=_cmd_context)
 
     # session
@@ -394,7 +546,7 @@ def register(sub) -> None:
     ss = sp.add_subparsers(dest="subcommand", required=True, metavar="<action>")
 
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
-    si.add_argument("request", help="the request, or a path to a file containing it")
+    si.add_argument("request", help="the request, a path to a file containing it, or '-' for stdin")
     si.add_argument("--slug", help="explicit session slug (default: derived from the request)")
     si.add_argument("--context", metavar="CARDS", help="comma-separated context cards to record")
     si.add_argument("--provider", default=None, help="informational provider tag (e.g. claude-code)")
@@ -422,6 +574,8 @@ def register(sub) -> None:
 
     sig = ss.add_parser("import", help="import a session archive into the workspace")
     sig.add_argument("archive", help="path to a .zip produced by `session export`")
+    sig.add_argument("--force", action="store_true",
+                     help="replace a session of the same slug that already exists here")
     sig.add_argument("--json", action="store_true")
     sig.set_defaults(func=_cmd_session_import)
 
@@ -434,7 +588,7 @@ def register(sub) -> None:
     msh.set_defaults(func=_cmd_model_show)
 
     mv = ms.add_parser("validate", help="validate a proposal file (no session write)")
-    mv.add_argument("proposal", help="path to a proposed model JSON")
+    mv.add_argument("proposal", help="path to a proposed model JSON, or '-' to read it from stdin")
     # (A `--session` flag lived here, promising validation "against a session's context", and was read
     # by nothing. Whatever it was going to mean, `model diff <slug> <proposal>` already means it: it
     # reports exactly what applying the proposal to that session would change, without writing.)
@@ -445,7 +599,7 @@ def register(sub) -> None:
 
     ma = ms.add_parser("apply", help="validate a proposal and apply it as a new revision")
     ma.add_argument("session", help="session slug or path")
-    ma.add_argument("proposal", help="path to a proposed model JSON")
+    ma.add_argument("proposal", help="path to a proposed model JSON, or '-' to read it from stdin")
     ma.add_argument("--allow-partial", action="store_true", help="do not require the full slot set")
     ma.add_argument("--expected-revision", type=int, default=None,
                     help="only apply if the session is still at this revision (optimistic lock)")
@@ -454,7 +608,7 @@ def register(sub) -> None:
 
     md = ms.add_parser("diff", help="show what a proposal would change (no write)")
     md.add_argument("session", help="session slug or path")
-    md.add_argument("proposal", help="path to a proposed model JSON")
+    md.add_argument("proposal", help="path to a proposed model JSON, or '-' to read it from stdin")
     md.add_argument("--allow-partial", action="store_true", help="do not require the full slot set")
     md.add_argument("--json", action="store_true")
     md.set_defaults(func=_cmd_model_diff)
@@ -467,7 +621,7 @@ def register(sub) -> None:
     asv.add_argument("session", help="session slug or path")
     asv.add_argument("--type", required=True, choices=sorted(ARTIFACT_FILENAMES),
                      help="artifact type")
-    asv.add_argument("--file", required=True, help="path to the artifact content")
+    asv.add_argument("--file", required=True, help="path to the artifact content, or '-' to read it from stdin")
     asv.add_argument("--revision", type=int, default=None,
                      help="source model revision (default: the session's current revision)")
     asv.add_argument("--json", action="store_true")

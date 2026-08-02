@@ -44,13 +44,38 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 |---|---|
 | `requivo demo` | Replay a bundled run — no key, no network |
 | `requivo doctor [--json]` | Environment + install check |
-| `requivo schema` / `requivo context` | Inspect the slot schema / available context cards |
-| `requivo session init\|list\|show\|migrate\|export\|import` | Session lifecycle |
+| `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
+| `requivo session init\|list\|show\|migrate\|export\|import` | Session lifecycle (`import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
-| `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts |
+| `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` for the revision it was reasoned from) |
 
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.
+
+### Documents on stdin
+
+Every command that takes a document accepts `-` in place of a path, and reads it from stdin:
+
+```bash
+requivo model apply <slug> - --expected-revision 3 --json <<'JSON'
+{ "model": { … }, "questions": [], "summary": { … } }
+JSON
+
+requivo artifact save <slug> --type prd --file - --revision 3 --json < prd.md
+echo "We need a leave approval system." | requivo session init -
+```
+
+This is what the Claude Code skills use. A caller that already holds the content should not have to
+invent a file for it — the temp files the skills used to write were a shared path (two sessions
+overwrote each other), used a filename that is illegal on Windows, and needed `rm` to clean up.
+
+### Importing a session
+
+`session import` validates before it writes anything: the archive must hold exactly one session
+directory whose name is a valid slug, within a file-count and expanded-size ceiling, with no entry
+that could escape the session root. It is then extracted to scratch space, confirmed to be a real
+session (`session.json` parses, its slug agrees with the directory, a claimed revision has a
+`model.json`), and only then moved into place. A slug that already exists is refused unless `--force`.
 
 ## Legacy flag CLI (deprecated)
 

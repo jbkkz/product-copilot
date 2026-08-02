@@ -45,7 +45,10 @@ What requires a `format_version` bump, an entry in the changelog, and a migratio
 - Changing the directory layout or a file's role.
 - Any change that would make an older session read *incorrectly* rather than merely incompletely.
 
-Slot ids are a separate contract with its own `schema_version`, recorded on every session.
+Slot ids are a separate contract with its own `schema_version`, recorded on every session — and, since
+0.9.5, actually enforced: a session authored against a *newer* slot schema is refused with the same
+clarity as a newer `format_version`, instead of failing later as an `unknown_slot` error naming a slot
+the user never typed. An older `schema_version` keeps loading.
 
 ## The `--json` outputs are public
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import zipfile
 from contextlib import redirect_stdout
 
 import pytest
@@ -244,3 +245,207 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
 
     fresh = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc), "--json"])
     assert fresh["revision"] == 2 and fresh["stale"] is False
+
+
+# ── documents on stdin ──────────────────────────────────────────────────────────
+# `-` exists so a caller holding content does not have to invent a file for it. The Claude Code skills
+# used to write `/tmp/requivo:prd.md` — a shared path, illegal on Windows, needing `rm` to clean up.
+
+
+def _run_stdin(argv, text, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    return _run(argv)
+
+
+def test_a_proposal_can_be_applied_from_stdin(workspace, monkeypatch):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    proposal = json.dumps(_full_model())
+    r = json.loads(_run_stdin(["model", "validate", "-", "--json"], proposal, monkeypatch))
+    assert r["status"] == "valid"
+    applied = json.loads(_run_stdin(["model", "apply", "s", "-", "--expected-revision", "0", "--json"],
+                                    proposal, monkeypatch))
+    assert applied["revision"] == 1
+
+
+def test_an_artifact_can_be_saved_from_stdin(workspace, monkeypatch):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    r = json.loads(_run_stdin(["artifact", "save", "s", "--type", "prd", "--file", "-", "--json"],
+                              "# PRD\nwritten straight to stdin\n", monkeypatch))
+    assert r["revision"] == 1 and r["stale"] is False
+    assert "straight to stdin" in _run(["artifact", "show", "s", "--type", "prd"])
+
+
+def test_a_request_can_be_created_from_stdin(workspace, monkeypatch):
+    r = json.loads(_run_stdin(["session", "init", "-", "--slug", "s", "--json"],
+                              "We need a leave approval system.\n", monkeypatch))
+    assert r["slug"] == "s"
+    assert "leave approval" in store.session_request("s")
+
+
+def test_a_missing_document_path_is_an_error_not_content(workspace):
+    # `model apply <session> <path>` takes a path. Treating an unreadable one as the proposal itself
+    # would turn a typo into a confusing schema error about a body that happens to be a filename.
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    with pytest.raises(SystemExit) as exc:
+        _run(["model", "apply", "s", "no-such-file.json", "--json"])
+    assert exc.value.code != 0
+
+
+def test_stdin_is_refused_when_it_is_a_terminal(workspace, monkeypatch):
+    class _Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    monkeypatch.setattr("sys.stdin", _Tty(""))
+    # Without this guard the command blocks forever waiting for input nobody meant to type.
+    with pytest.raises(SystemExit) as exc:
+        _run(["model", "apply", "s", "-", "--json"])
+    assert exc.value.code != 0
+
+
+def test_context_can_be_asked_for_by_session(workspace):
+    # A session's card selection is held constant across its turns; a later turn that reads every card
+    # reasons from a wider context than the model was built on. Asking by session makes that unmissable.
+    _run(["session", "init", "Something.", "--slug", "narrow", "--context", "b2b-platform", "--json"])
+    _run(["session", "init", "Something else.", "--slug", "wide", "--json"])
+    narrow = _run(["context", "--session", "narrow"])
+    wide = _run(["context", "--session", "wide"])
+    assert "## b2b-platform" in narrow
+    assert len(narrow) < len(wide)          # the subset really is a subset
+    assert narrow == _run(["context", "--cards", "b2b-platform"])
+
+    with pytest.raises(SystemExit):         # the two selectors are alternatives
+        _run(["context", "--session", "narrow", "--cards", "b2b-platform"])
+
+
+# ── session import ──────────────────────────────────────────────────────────────
+# Import takes a file from outside the workspace and turns it into a session, so it is the one command
+# whose input is genuinely untrusted. Nothing may land in the store before the archive has been checked.
+
+
+def _zip(path, entries: dict) -> None:
+    with zipfile.ZipFile(path, "w") as z:
+        for name, content in entries.items():
+            z.writestr(name, content)
+
+
+def _good_entries(slug="imported", revision=0):
+    meta = {"format_version": 1, "session_id": "abc", "slug": slug, "created_at": "t",
+            "updated_at": "t", "current_revision": revision}
+    entries = {f"{slug}/session.json": json.dumps(meta), f"{slug}/request.md": "A request."}
+    if revision:
+        entries[f"{slug}/model.json"] = json.dumps(_full_model())
+    return entries
+
+
+def test_export_import_round_trip(workspace, tmp_path, monkeypatch):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _run(["session", "export", "s", "-o", str(tmp_path / "s.zip"), "--json"])
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path / "elsewhere"))
+    r = _run_json(["session", "import", str(tmp_path / "s.zip"), "--json"])
+    assert r["imported"] == "s" and r["replaced"] is False
+    assert store.read_meta("s").current_revision == 1
+
+
+def test_import_refuses_a_directory_name_that_is_not_a_valid_slug(workspace, tmp_path):
+    """The reviewer's case: an archive whose folder is `bad slug` unpacked happily and then broke every
+    later `session list`. A directory name becomes a slug, so it faces the same validation as any."""
+    _zip(tmp_path / "bad.zip", _good_entries("bad slug"))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "bad.zip"), "--json"])
+    assert store.list_session_slugs() == []          # and nothing was written
+    assert _run_json(["session", "list", "--json"]) == []
+
+
+@pytest.mark.parametrize("entry", [
+    "../escape/session.json",          # traversal via a parent segment
+    "/absolute/session.json",          # an absolute path
+    "..\\windows\\session.json",       # a Windows separator zipfile does not treat as a boundary
+    "loose.json",                      # not inside a session directory at all
+])
+def test_import_refuses_unsafe_entries(workspace, tmp_path, entry):
+    _zip(tmp_path / "evil.zip", {entry: "{}"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "evil.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_holding_more_than_one_session(workspace, tmp_path):
+    _zip(tmp_path / "two.zip", {**_good_entries("one"), **_good_entries("two")})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "two.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_that_is_too_large_or_too_many_files(workspace, tmp_path):
+    from requivo.deterministic import MAX_ARCHIVE_FILES
+
+    many = {f"s/artifacts/f{i}.md": "x" for i in range(MAX_ARCHIVE_FILES + 1)}
+    _zip(tmp_path / "many.zip", many)
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "many.zip"), "--json"])
+
+    # A zip bomb compresses to nothing and expands past the ceiling; the cap is on the expanded size.
+    _zip(tmp_path / "big.zip", {"s/session.json": "0" * (64 * 1024 * 1024 + 1)})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "big.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_that_is_not_a_session(workspace, tmp_path):
+    # Extraction succeeding is not the same as having imported a session. Import used to declare
+    # success on the strength of the extraction alone.
+    _zip(tmp_path / "nometa.zip", {"s/notes.md": "hello"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "nometa.zip"), "--json"])
+
+    _zip(tmp_path / "badjson.zip", {"s/session.json": "{not json"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "badjson.zip"), "--json"])
+
+    # A session that disagrees with itself about its own identity.
+    _zip(tmp_path / "mismatch.zip", {**_good_entries("claimed")})
+    with zipfile.ZipFile(tmp_path / "mismatch2.zip", "w") as z:
+        meta = json.loads(_good_entries("claimed")["claimed/session.json"])
+        meta["slug"] = "something-else"
+        z.writestr("claimed/session.json", json.dumps(meta))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "mismatch2.zip"), "--json"])
+
+    # A session claiming a model it does not carry.
+    _zip(tmp_path / "noModel.zip", {"s/session.json": json.dumps(
+        {"format_version": 1, "session_id": "a", "slug": "s", "created_at": "t", "updated_at": "t",
+         "current_revision": 3})})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "noModel.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_a_collision_unless_forced(workspace, tmp_path, monkeypatch):
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _run_stdin(["model", "apply", "dup", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "dup.zip"), "--json"])
+    assert store.read_meta("dup").current_revision == 1        # the original is untouched
+    assert "The original." in store.session_request("dup")
+
+    r = _run_json(["session", "import", str(tmp_path / "dup.zip"), "--force", "--json"])
+    assert r["replaced"] is True
+    assert store.read_meta("dup").current_revision == 0        # genuinely replaced, not merged
+    assert "A request." in store.session_request("dup")
+
+
+def test_a_refused_import_leaves_no_scratch_directory(workspace, tmp_path):
+    _zip(tmp_path / "bad.zip", _good_entries("bad slug"))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "bad.zip"), "--json"])
+    _zip(tmp_path / "nometa.zip", {"s/notes.md": "hello"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "nometa.zip"), "--json"])
+    assert list((workspace / ".requivo").glob(".import-*")) == []

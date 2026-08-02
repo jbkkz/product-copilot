@@ -396,6 +396,17 @@ def migrate_session(data: dict) -> SessionMeta:
             "— upgrade requivo.",
             details={"format_version": fv},
         )
+    # The slot vocabulary is a second, independent contract, and it was recorded on every session and
+    # then read by nothing. A model authored against a newer schema can hold slots this build has no
+    # definition for; without this check the first symptom is an `unknown_slot` error naming a slot the
+    # user never typed. An *older* schema is fine — that is ordinary backward compatibility.
+    sv = data.get("schema_version", SCHEMA_VERSION)
+    if isinstance(sv, int) and sv > SCHEMA_VERSION:
+        raise InvalidSessionError(
+            f"this session was authored against slot schema v{sv}, newer than this Requivo understands "
+            f"(v{SCHEMA_VERSION}) — upgrade requivo.",
+            details={"schema_version": sv, "supported_schema_version": SCHEMA_VERSION},
+        )
     return SessionMeta.model_validate({k: v for k, v in data.items() if k not in _RETIRED_KEYS})
 
 

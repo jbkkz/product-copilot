@@ -1,7 +1,7 @@
 ---
 name: prd
 description: Generate a PRD from a Requivo session's model — a view of the model, with unknowns kept visible and open decisions left open — and save it as a tracked artifact. Use when the user wants a Product Requirements Document from a discovered model.
-allowed-tools: Bash(requivo:*), Read, Write
+allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:prd
@@ -28,11 +28,12 @@ assumptions, open questions, risks). Rules that keep it faithful to the model:
 - **Traceability.** Each requirement should be traceable to the slot(s) it comes from; keep them
   grounded in the model, not added from outside it.
 
-Write the PRD markdown to `/tmp/requivo:prd.md`.
-
 ## 3. Save it as a tracked artifact
-```
-requivo artifact save <slug> --type prd --file /tmp/requivo:prd.md --revision N
+Pass the PRD markdown in on stdin — no temp file:
+```bash
+requivo artifact save <slug> --type prd --file - --revision N --json <<'MD'
+# … the PRD you just wrote …
+MD
 ```
 `--revision N` is the revision you read in step 1 — the model you actually reasoned from. Writing a
 PRD takes a while, and if the session moved in between, Core compares the two and records the PRD
@@ -40,5 +41,4 @@ stale rather than filing a superseded document as current.
 
 The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
 on flags it stale (`requivo status` will show it). Read `stale` back from the save output: if it is
-`true`, the model moved while you were writing — say so plainly and offer to regenerate. Confirm the
-save; clean up the temp file.
+`true`, the model moved while you were writing — say so plainly and offer to regenerate.

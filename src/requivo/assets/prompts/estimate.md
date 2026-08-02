@@ -41,3 +41,5 @@ Reply with **only** a valid JSON object, no surrounding text:
   "risks": ["…"]
 }
 ```
+
+**Required fields.** `items` must hold at least one item, each with a non-empty `story_id` and `title`.

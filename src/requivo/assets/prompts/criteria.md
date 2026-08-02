@@ -97,3 +97,7 @@ Reply with **only** a valid JSON object, no surrounding text:
   "open_questions": ["…"]
 }
 ```
+
+**Required fields.** `title` is required, and `features` must hold at least one feature. Every scenario needs a
+non-empty `id`, `title` and `when`, plus at least one `then` — a scenario that asserts nothing
+is not testable, which is the only thing acceptance criteria are for.

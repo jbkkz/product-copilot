@@ -161,12 +161,24 @@ class EngineOutput(StrictModel):
         )
         if bad_refs:
             raise ValueError(f"reasoning references unknown slots (not in schema): {bad_refs}")
+        # Ids are content-derived, so two identical items collide on one id. That is not a harmless
+        # duplicate: the id is what a diff keys on and what a user refers a decision back by, so a
+        # collision makes one of the pair invisible to change detection and ambiguous to cite. The
+        # engine restating the same decision twice is the realistic cause, and it is a defect in the
+        # reply — the retry loop can fix it, silently dropping one cannot.
+        for label, items in (("decisions", self.decisions), ("challenges", self.challenges),
+                             ("opportunities", self.opportunities)):
+            ids = [i.id for i in items]
+            dupes = sorted({i for i in ids if ids.count(i) > 1})
+            if dupes:
+                raise ValueError(
+                    f"{label} contains repeated entries (identical content yields one id): {dupes}")
         return self
 
 
 class Story(StrictModel):
-    id: str
-    title: str
+    id: NonEmpty
+    title: NonEmpty
     as_a: str = ""
     i_want: str = ""
     so_that: str = ""
@@ -175,7 +187,7 @@ class Story(StrictModel):
 
 
 class Stories(StrictModel):
-    stories: list[Story]
+    stories: list[Story] = Field(min_length=1)
 
 
 class Complexity(str, Enum):
@@ -185,8 +197,8 @@ class Complexity(str, Enum):
 
 
 class EstimateItem(StrictModel):
-    story_id: str
-    title: str
+    story_id: NonEmpty
+    title: NonEmpty
     complexity: Complexity
     days_low: float = Field(ge=0)
     days_high: float = Field(ge=0)
@@ -288,9 +300,9 @@ class Requirement(StrictModel):
 
 
 class PRD(StrictModel):
-    title: str
+    title: NonEmpty
     summary: str = ""
-    problem: str = ""
+    problem: NonEmpty
     goals: list[str] = Field(default_factory=list)
     users: list[str] = Field(default_factory=list)
     in_scope: list[str] = Field(default_factory=list)
@@ -315,46 +327,46 @@ class ScenarioKind(str, Enum):
 
 
 class Scenario(StrictModel):
-    id: str
-    title: str
+    id: NonEmpty
+    title: NonEmpty
     kind: ScenarioKind = ScenarioKind.happy_path
     given: list[str] = Field(default_factory=list)
-    when: str = ""
-    then: list[str] = Field(default_factory=list)
+    when: NonEmpty
+    then: list[str] = Field(min_length=1)
 
 
 class Feature(StrictModel):
-    name: str
+    name: NonEmpty
     scenarios: list[Scenario] = Field(default_factory=list)
 
 
 class AcceptanceCriteria(StrictModel):
-    title: str
-    features: list[Feature] = Field(default_factory=list)
+    title: NonEmpty
+    features: list[Feature] = Field(min_length=1)
     open_questions: list[str] = Field(default_factory=list)
 
 
 class EpicIssue(StrictModel):
-    id: str
-    title: str
+    id: NonEmpty
+    title: NonEmpty
     description: str = ""
     labels: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
 
 
 class Epic(StrictModel):
-    title: str
+    title: NonEmpty
     goal: str = ""
     business_value: str = ""
     in_scope: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     milestone: str = ""
-    issues: list[EpicIssue] = Field(default_factory=list)
+    issues: list[EpicIssue] = Field(min_length=1)
     open_questions: list[str] = Field(default_factory=list)
 
 
 class ReleaseNotes(StrictModel):
-    title: str
+    title: NonEmpty
     version: str = ""
     summary: str = ""
     highlights: list[str] = Field(default_factory=list)

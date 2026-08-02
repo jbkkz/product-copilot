@@ -1,7 +1,7 @@
 ---
 name: discover
 description: Start a Requivo discovery from a client request. Reason with this Claude session (no API key), produce a validated requirements model, and ask only the high-information questions. Use when the user wants to turn a vague product request into a structured, traceable model.
-allowed-tools: Bash(requivo:*), Read, Write
+allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:discover
@@ -31,23 +31,30 @@ product context cards.)
 ## 4. Learn the vocabulary and the product
 - `requivo schema` — the slot ids, each slot's impact default and signals, and the driver rule
   (`information_value = uncertainty × impact`).
-- `requivo context` — the product knowledge that grounds your impact estimates.
+- `requivo context --session <slug>` — the product knowledge that grounds your impact estimates,
+  narrowed to the cards this session was created with (all of them unless `--context` was given
+  at init). Do not read the others: the selection is part of the session.
 
 ## 5. Reason → propose
 Build the model in your head from the request + context: for **every** schema slot, decide its
 `value`, `confidence` (explicit / inferred / empty), `completeness` (0–100), and `impact`. Follow the
 honesty rules — mark inferences as inferred, leave true unknowns empty, invent nothing. Include a
 `summary` and, where information value is high, 3–6 `questions` (each targeting a real slot id, with a
-one-line `why`). Write this to `/tmp/requivo-proposal.json`.
+one-line `why`).
 
 ## 6. Validate → fix → apply
-```
-requivo model validate /tmp/requivo-proposal.json --json
+Pass the proposal on stdin — no temp file:
+```bash
+requivo model validate - --json <<'JSON'
+{ … your proposal … }
+JSON
 ```
 If it fails, read the error `code`/`details`, fix the proposal, and re-validate until it passes
 (`missing_required_slot` → emit every required slot; `unknown_slot` → correct the id). Then:
-```
-requivo model apply <slug> /tmp/requivo-proposal.json --expected-revision N --json
+```bash
+requivo model apply <slug> - --expected-revision N --json <<'JSON'
+{ … the proposal that just validated … }
+JSON
 ```
 `N` is the revision from step 3. On a new session that is `0`, which asserts what you assumed: nothing
 had been applied while you were reasoning. A `revision_conflict` means someone else wrote to the
@@ -61,5 +68,3 @@ Run `requivo status <slug> --json` and relay, in plain language:
 
 Then **stop and wait** for the user's answers. Do not answer for them. When they reply, continue with
 `/requivo:answer <slug>`.
-
-Clean up `/tmp/requivo-proposal.json` when done.

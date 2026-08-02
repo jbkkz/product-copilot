@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Requivo{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  {# htmx injects a <style> block for its request indicator unless told not to. Our CSP is
+     `style-src 'self'`, which blocks it — the page still works, but every load logs a violation, and a
+     CSP that cries wolf is one nobody reads. Nothing here uses .htmx-indicator, so the styles are pure
+     cost. This meta tag is htmx's documented config channel and is read before it initialises. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/js/app.js" defer></script>
 </head>

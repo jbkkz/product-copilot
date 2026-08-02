@@ -1,7 +1,7 @@
 ---
 name: brief
 description: Produce a solution assessment (brief) from a Requivo session's current model, using this Claude session for the judgment, and save it as a tracked artifact tied to the model revision. Use when discovery has converged and the user wants the senior-PM read of the requirements.
-allowed-tools: Bash(requivo:*), Read, Write
+allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:brief
@@ -22,7 +22,7 @@ a thin model must flag its assumptions — never present an `inferred` slot or a
 ## 2. Load the model
 ```
 requivo model show <slug>
-requivo context --cards <the session's cards>   # if the session recorded a card selection
+requivo context --session <slug>    # exactly the cards this session was created with
 ```
 
 ## 3. Reason → write the assessment
@@ -36,18 +36,45 @@ Produce a two-tier document in PM language:
 Voice rule: no slot ids, no percentages, no confidence labels in the prose. Distinguish facts from
 assumptions explicitly; mark every assumption as an assumption.
 
-Write the assessment markdown to `/tmp/requivo:brief.md`.
+## 4. Fold the reasoning back into the model — do not skip this
+The prose is the *view*. The **reasoning behind it is part of the model**, and every later generator
+(PRD, epic, criteria, release notes) is prompted with the model, so a PRD written after this brief
+should inherit the decisions and challenges you just made — not rediscover them.
 
-## 4. Save it as a tracked artifact
+Take the model from step 2 unchanged and add the structured form of your reasoning:
+
+```bash
+requivo model apply <slug> - --expected-revision N --json <<'JSON'
+{
+  "model": { … exactly as it was … },
+  "questions": [ … ],
+  "summary": { … },
+  "decisions":     [{"decision": "…", "why": "…", "alternative": "…", "tradeoff": "…",
+                     "derived_from": ["<slot ids the decision rests on>"]}],
+  "challenges":    [{"headline": "…", "premise": "…", "alternative": "…", "consequence": "…",
+                     "recommendation": "…", "contests": ["<slot ids whose premise this contests>"]}],
+  "opportunities": [{"text": "…", "leverage": "low|medium|high", "modules": ["…"]}]
+}
+JSON
 ```
-requivo artifact save <slug> --type brief --file /tmp/requivo:brief.md --revision N
+
+These are the same items as in your prose, stated structurally. `derived_from` and `contests` are the
+dependency edges: they are what lets Requivo tell the user *which* later change unseats *which*
+decision. A decision with no edges still records fine, but it can never be reported as invalidated.
+
+Note the revision the apply returns — call it `M`. Slots may not have moved at all; the reasoning is
+the change, and Requivo tracks it as one.
+
+## 5. Save the document as a tracked artifact
+```bash
+requivo artifact save <slug> --type brief --file - --revision M --json <<'MD'
+# … the assessment you wrote in step 3 …
+MD
 ```
-`--revision N` is the revision you read in step 1 — the model you actually reasoned from, not
-whatever the session has reached by the time you finish writing. If the session moved in between,
-Core compares the two and records the assessment stale on the spot, which is the honest outcome.
-Omitting the flag claims the current revision and files a superseded assessment as fresh.
+`M` is the revision the apply just created — the model the assessment actually describes, reasoning
+included. (If you skipped step 4, use `N` from step 1: the honest revision is whichever one you truly
+reasoned from, never simply the latest.)
 
 The assessment is a judgment over the whole model, so any later material change to it flags the saved
 copy stale. Read `stale` back from the save output: if it is `true`, the model moved while you were
-writing — tell the user plainly that the assessment is already behind and offer to redo it. Then clean
-up the temp file.
+writing — tell the user plainly that the assessment is already behind and offer to redo it.

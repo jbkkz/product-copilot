@@ -348,6 +348,7 @@ def test_state_of_maps_confidence():
 def test_prd_markdown_renders_title_and_requirement_table():
     prd = PRD(
         title="Leave approval",
+        problem="Approvals are lost in email.",
         requirements=[{"id": "FR-1", "requirement": "Submit a request", "priority": "must"}],
     )
     md = prd_markdown(prd)
@@ -642,7 +643,7 @@ def test_generate_prd_from_saved_model_roundtrip(tmp_path):
     loaded = load_model(path)
     assert loaded.model["problem"].completeness == 80
 
-    prd = generate_prd(FakeClient(json.dumps({"title": "Leave approval"})), loaded)
+    prd = generate_prd(FakeClient(json.dumps({"title": "Leave approval", "problem": "Approvals are lost in email."})), loaded)
     assert isinstance(prd, PRD) and prd.title == "Leave approval"
     md = prd_markdown(prd)
     assert md.startswith("# Leave approval")
@@ -914,21 +915,31 @@ def test_pc_generators_record_which_prompt_reasoned(tmp_path):
         assert rec.prompt_version and rec.prompt_version.startswith("sha256:")
 
 
+# Minimal-but-legal artifact replies. The contracts require what makes each artifact *be* that
+# artifact — a PRD states a problem, a scenario has a `when` and at least one `then`, an epic
+# decomposes into at least one issue — so a stub reply has to carry those and nothing more.
+_CRITERIA = {"title": "X", "features": [
+    {"name": "Requesting leave", "scenarios": [
+        {"id": "SC-1", "title": "Manager approves", "when": "the manager approves",
+         "then": ["the request is marked approved"]}]}]}
+_EPIC = {"title": "X", "issues": [{"id": "I-1", "title": "Build the request form"}]}
+
+
 def test_pc_prd_writes_artifact():
     with _model_in_out("clitest-prd") as p:
-        _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X"})))
+        _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X", "problem": "P"})))
         assert (p.parent / "artifacts" / "prd.md").read_text().startswith("# X")
 
 
 def test_pc_criteria_writes_artifact():
     with _model_in_out("clitest-criteria") as p:
-        _run_app(["criteria", str(p)], client=FakeClient(json.dumps({"title": "X"})))
+        _run_app(["criteria", str(p)], client=FakeClient(json.dumps(_CRITERIA)))
         assert (p.parent / "artifacts" / "acceptance-criteria.md").exists()
 
 
 def test_pc_epic_writes_all_views():
     with _model_in_out("clitest-epic") as p:
-        _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps({"title": "X"})))
+        _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps(_EPIC)))
         for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
             assert (p.parent / "artifacts" / name).exists()
 
@@ -1453,7 +1464,7 @@ def test_resolve_slug_avoids_silent_overwrite():
 
 def test_prd_markdown_escapes_pipes_in_table_cells():
     # A requirement containing a literal | would otherwise split the Markdown table row.
-    prd = PRD(title="X", requirements=[
+    prd = PRD(title="X", problem="P", requirements=[
         {"id": "FR-1", "requirement": "Export as CSV | XLSX | PDF", "priority": "must"}])
     md = prd_markdown(prd)
     assert "| FR-1 | Export as CSV \\| XLSX \\| PDF | Must |" in md

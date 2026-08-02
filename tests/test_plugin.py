@@ -127,18 +127,43 @@ def test_skills_reference_only_real_cli_commands():
             assert cmd in commands, f"{p.parent.name}: references unknown `requivo {cmd}`"
 
 
-def test_mutating_skills_use_a_proposal_file_not_direct_edits():
-    # discover/answer change the model — they MUST go through validate/apply on a temp proposal, never
-    # by editing model.json directly.
+def test_mutating_skills_validate_and_apply_through_the_cli():
+    # discover/answer change the model — they MUST go through validate/apply, never by editing
+    # model.json directly.
     for name in ("discover", "answer"):
         text = (SKILLS / name / "SKILL.md").read_text()
         assert "model apply" in text, f"{name}: must apply via the CLI"
         assert "model validate" in text, f"{name}: must validate before applying"
-        assert "/tmp/requivo-proposal.json" in text, f"{name}: must write a temp proposal file"
+        assert "model apply <slug> -" in text, f"{name}: must pass the proposal on stdin"
     # No skill should instruct writing/editing model.json directly.
     for p in _skill_files():
         assert not re.search(r"(edit|write)\s+[^\n]*model\.json", p.read_text(), re.IGNORECASE), \
             f"{p.parent.name}: must not hand-edit model.json"
+
+
+def test_no_skill_stages_content_through_a_temp_file():
+    """Temp files cost more than they looked. `/tmp/requivo-proposal.json` was one shared path, so two
+    sessions working at once overwrote each other; `/tmp/requivo:prd.md` is not even a legal filename on
+    Windows; and cleanup needed `rm`, which the plugin does not grant itself. Content the skill already
+    holds goes in on stdin — so the convention is pinned here rather than left to habit."""
+    for p in _skill_files():
+        text = p.read_text()
+        assert "/tmp" not in text, f"{p.parent.name}: must not stage content in /tmp"
+        assert not re.search(r"^\s*rm\s", text, re.MULTILINE), \
+            f"{p.parent.name}: must not need `rm` — it is not in allowed-tools"
+    # And the grant should not outlive the need: nothing writes files any more.
+    for p in _skill_files():
+        front = p.read_text().split("---")[1]
+        assert "Write" not in front, f"{p.parent.name}: no skill needs the Write tool now"
+
+
+def test_session_scoped_skills_read_the_session_s_context_cards():
+    """A session's card selection is held constant across its turns — it is what the impact estimates
+    were made against. A later turn calling bare `requivo context` reads every card and reasons from a
+    wider context than the model was built on, which the golden harness has measured as a real cost."""
+    for name in ("answer", "brief"):
+        text = (SKILLS / name / "SKILL.md").read_text()
+        assert "context --session" in text, f"{name}: must read context scoped to the session"
 
 
 def test_artifact_saving_skills_use_the_cli():

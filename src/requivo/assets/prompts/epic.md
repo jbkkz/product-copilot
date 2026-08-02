@@ -99,3 +99,6 @@ Reply with **only** a valid JSON object, no surrounding text:
   "open_questions": ["…"]
 }
 ```
+
+**Required fields.** `title` is required, and `issues` must hold at least one issue with a non-empty `id` and
+`title`. An epic is a decomposition; an epic with no issues has not decomposed anything.

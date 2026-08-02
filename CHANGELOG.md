@@ -6,6 +6,64 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-08-02
+
+The second half of the 0.9.3 review: untrusted input, output that is worth saving, and the Claude Code
+surface reaching parity with the provider path.
+
+### Fixed
+- **`session import` wrote before it checked.** It called `extractall` straight into the session store
+  and then reported success, so a bad archive was already unpacked by the time anything could object.
+  Its traversal guard compared path *strings* (`str(target).startswith(str(root))`), which is not a
+  containment test — `/…/sessions-evil` starts with `/…/sessions`. And an archive whose folder was
+  named `bad slug` imported happily and then broke every later `session list`. Import is now
+  inspect → extract to scratch → validate → move: exactly one session directory, its name validated as
+  a slug, file-count and expanded-size ceilings, every entry decomposed into path components rather
+  than string-matched, and the extracted directory confirmed to be a real session (its `session.json`
+  parses, its slug agrees with the directory, a claimed revision has a `model.json`) before it is moved
+  into place. A collision is refused unless `--force`. A refused import leaves nothing behind.
+- **The Claude Code brief produced prose and dropped its reasoning.** The provider path absorbs the
+  assessment's decisions, challenges and opportunities into `model.json` so every later generator
+  inherits them; the skill only wrote Markdown. A PRD generated after a brief in Claude Code therefore
+  could not build on it. The skill now folds the structured reasoning back through `model apply`
+  first — no CLI change was needed, the apply path already accepted it — and saves the document
+  against the revision that created.
+- **Skills staged content in `/tmp`.** One shared path, so two sessions working at once overwrote each
+  other; `/tmp/requivo:prd.md` is not a legal filename on Windows; and cleanup needed `rm`, which the
+  plugin does not grant itself. Every command that takes a document now accepts `-` for stdin, and no
+  skill writes a file at all — the `Write` grant is gone with the need for it.
+- **Skills read every context card, whatever the session was created with.** A session's card selection
+  is held constant across its turns because it is what the impact estimates were made against; a later
+  turn reading all of them reasons from a wider context than the model was built on, which the golden
+  harness has measured as a real cost. `requivo context --session <slug>` prints exactly that
+  session's cards, and the skills use it.
+- **`schema_version` was decorative** — recorded on every session, read by nothing. A session authored
+  against a newer slot vocabulary is now refused as clearly as a newer `format_version`.
+- **Two identical reasoning items collided on one id.** Ids are content-derived, so a repeated decision
+  produces a duplicate key — and the id is what a diff keys on and what a user cites a decision by. It
+  is now a validation error that rides the retry loop, rather than one of the pair going invisible.
+- **htmx injected a `<style>` block the CSP blocked** on every page load. Nothing uses
+  `.htmx-indicator`, so the styles were pure cost and the violation was pure noise — and a CSP that
+  cries wolf is one nobody reads. Disabled via htmx's config meta tag.
+- Docstring and comment corrections: the package no longer describes Claude Code and the Web as
+  future work, and `ArtifactService` no longer claims the assessment is exempt from staleness.
+
+### Changed
+- **Artifact contracts require what makes each artifact *be* that artifact.** A PRD with an empty
+  `title` or no `problem`, a Gherkin scenario with no `when` or no `then`, an epic that decomposes into
+  zero issues, a nameless story — all were structurally valid and none were usable. These fields are
+  now non-empty by contract, so a degraded generation fails loudly and retries instead of being saved.
+  The bar is deliberately low: only what is definitionally required, never a judgment about whether an
+  artifact is *good enough*. The generator prompts state the same requirements, so the model is told
+  the rule rather than discovering it through a retry. `engine.md` and `brief.md` are untouched — the
+  golden baselines still apply.
+
+### Added
+- `-` reads a document from stdin on `model validate`, `model apply`, `model diff`,
+  `artifact save --file`, and `session init`.
+- `requivo context --session <slug>` — the cards that session was created with.
+- `session import --force` — replace a session of the same slug.
+
 ## [0.9.4] - 2026-08-02
 
 Integrity: the session store is now trustworthy under concurrent writers, and freshness and forward

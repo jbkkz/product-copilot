@@ -1,7 +1,7 @@
 ---
 name: answer
 description: Fold the user's answers into an existing Requivo session and refine the model one turn. Reasoning is this Claude session (no API key); the refined model is validated and applied, and any now-stale artifacts are reported. Use after /requivo:discover when the user has answered the open questions.
-allowed-tools: Bash(requivo:*), Read, Write
+allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:answer
@@ -14,7 +14,10 @@ Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 ```
 requivo model show <slug>          # the current model
 requivo status <slug> --json       # the open questions / blockers, and the current revision
+requivo context --session <slug>   # the same cards the model was built against
 ```
+Read the context by session, not with a bare `requivo context`: the selection is part of the session,
+and refining a model against a wider set than it was built on shifts the impact estimates underneath it.
 Note the `revision` from the status JSON — call it `N`. That is the model you are about to reason
 from, and you will state it when you apply (see the revision contract in REASONING.md).
 
@@ -27,13 +30,18 @@ Start from the current model. For each slot the answers touch: raise `completene
 `explicit` where the client confirmed it, and update `value`. Leave untouched slots as they are. Keep
 **every** required slot present. Add follow-up `questions` only where information value is still high;
 emit `[]` when nothing is both uncertain and high-impact (discovery has converged). Pass the client's
-answers through faithfully — do not embellish them. Write the full updated model to
-`/tmp/requivo-proposal.json`.
+answers through faithfully — do not embellish them.
 
 ## 3. Validate → fix → apply
-```
-requivo model validate /tmp/requivo-proposal.json --json
-requivo model apply <slug> /tmp/requivo-proposal.json --expected-revision N --json
+Feed the full updated model in on stdin — no temp file:
+```bash
+requivo model validate - --json <<'JSON'
+{ … the full updated model … }
+JSON
+
+requivo model apply <slug> - --expected-revision N --json <<'JSON'
+{ … the same model, once it validates … }
+JSON
 ```
 Fix and re-validate on any error before applying (see REASONING.md). If the apply returns
 `revision_conflict`, someone changed the session while you were reasoning: re-read the model, tell the

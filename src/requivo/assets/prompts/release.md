@@ -48,3 +48,5 @@ Reply with **only** a valid JSON object, no surrounding text:
   "notes": ["…"]
 }
 ```
+
+**Required fields.** `title` must be present and non-empty.

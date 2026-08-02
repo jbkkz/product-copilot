@@ -307,7 +307,7 @@ def test_an_artifact_generated_from_a_superseded_revision_is_born_stale(workspac
     def concurrent_answer():
         svc.update_model("s", _full_model(**{"workflow": _slot(90, "explicit", "high", "new flow")}))
 
-    prd_reply = json.dumps({"title": "PRD", "summary": "…"})
+    prd_reply = json.dumps({"title": "PRD", "problem": "Approvals are lost in email."})
     DiscoveryService(client=_RacingClient(prd_reply, concurrent_answer)).generate("s", "prd")
 
     saved = art.list("s")["prd"]

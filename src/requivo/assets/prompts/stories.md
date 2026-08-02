@@ -71,3 +71,5 @@ Reply with **only** a valid JSON object, no surrounding text:
   ]
 }
 ```
+
+**Required fields.** `stories` must hold at least one story, each with a non-empty `id` and `title`.

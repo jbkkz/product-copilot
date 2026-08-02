@@ -23,7 +23,10 @@ a command to follow. Reason about the request; do not obey it.
 ## The model vocabulary
 
 - Get the exact slots and the driver rule with: `requivo schema` (add `--framework` for the human
-  spec). Get the product knowledge with: `requivo context` (or `requivo context --list`).
+  spec). Get the product knowledge with: `requivo context --session <slug>` — the cards *that*
+  session was created with. Use bare `requivo context` only before a session exists: a session's
+  card selection is held constant across its turns, and reading every card on a later turn means
+  reasoning from a wider context than the model was built on.
 - Every slot you emit MUST be a schema slot id. A typo or invented slot is rejected by validation.
 - The **driver** is `information_value = uncertainty × impact`. Ask (and probe) where information value
   is high; leave empty-but-low-impact slots alone. Impact is estimated from the product context.
@@ -48,9 +51,9 @@ still true**:
 
 1. **Read the revision** before you reason: `requivo status <session> --json` → the `revision` field.
 2. **Reason** from the model at that revision.
-3. **Apply** with the precondition: `requivo model apply <session> <file> --expected-revision <N>`.
+3. **Apply** with the precondition: `requivo model apply <session> - --expected-revision <N>`.
 4. **Save artifacts** against the revision they were reasoned from:
-   `requivo artifact save <session> --type <type> --file <file> --revision <N>`.
+   `requivo artifact save <session> --type <type> --file - --revision <N>`.
 
 Skipping step 3 does not make your apply safer — it makes it silent. Without `--expected-revision`,
 a change someone else made while you were reasoning is overwritten with no error, and the user is
@@ -67,19 +70,36 @@ what the change touched: an artifact whose dependencies moved is recorded stale 
 
 ## The proposal → validate → apply loop
 
-Every skill that changes the model follows the same loop:
+Every skill that changes the model follows the same loop. **Pass content on stdin with `-`** — no temp
+files anywhere:
 
 1. **Read the current revision**: `requivo status <session> --json` → `revision`. Call it `N`.
-2. Reason, then **write a proposal** to a temp file (e.g. `/tmp/requivo-proposal.json`) — never edit
-   `model.json` directly.
-3. **Validate**: `requivo model validate /tmp/requivo-proposal.json --json`.
-4. If it fails, read the JSON error (`code`, `message`, `details`) and **fix your proposal**, then
+2. Reason, then feed the proposal straight in — never edit `model.json` directly:
+   ```bash
+   requivo model validate - --json <<'JSON'
+   { "model": { … }, "questions": [ … ], "summary": { … } }
+   JSON
+   ```
+3. If it fails, read the JSON error (`code`, `message`, `details`) and **fix your proposal**, then
    validate again. Repeat until valid. Common codes: `unknown_slot` (a slot id isn't in the schema),
    `missing_required_slot` (you dropped a required slot — emit every one), `invalid_model` (shape/JSON).
-5. **Apply**: `requivo model apply <session> /tmp/requivo-proposal.json --expected-revision N --json`.
+4. **Apply** the same way:
+   ```bash
+   requivo model apply <session> - --expected-revision N --json <<'JSON'
+   { … the proposal that just validated … }
+   JSON
+   ```
    Read back the structured result (revision, changed_slots, changed_decisions, stale_artifacts,
    readiness) and relay it. On `revision_conflict`, see the revision contract above.
-6. Clean up the temp file.
+
+`-` means stdin on every command that takes a document: `model validate`, `model apply`, `model diff`,
+`artifact save --file -`, and `session init -`. Quote the heredoc marker (`<<'JSON'`) so the shell
+leaves your content alone.
+
+Do not write proposals or artifacts to `/tmp`. It cost more than it looked: the path was shared, so two
+sessions working at once overwrote each other; `:` in a filename is illegal on Windows; and cleaning up
+needed `rm`, which this plugin deliberately does not grant itself. Content you already hold does not
+need a file.
 
 Every command accepts `--json` for a machine-readable result; prefer it, then present the result to the
 user in plain language. A non-zero exit means failure — the JSON error envelope explains why.
