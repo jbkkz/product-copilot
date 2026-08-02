@@ -441,11 +441,14 @@ def _cmd_model_validate(a, client) -> None:
 
 
 def _cmd_model_apply(a, client) -> None:
+    """Apply a proposal as a new revision. Always the complete slot set: `apply` *replaces* the model,
+    and `--allow-partial` used to read as if it merged — it did not, so applying one slot left a
+    one-slot model where fifteen had been. Validating a projection is `model validate --allow-partial`;
+    a real partial update needs a merge semantics this command never had."""
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     data = _read_document(a.proposal)
-    result = svc.update_model(slug, data, require_complete=not a.allow_partial,
-                              expected_revision=a.expected_revision,
+    result = svc.update_model(slug, data, expected_revision=a.expected_revision,
                               provenance={"provider": "claude-code", "surface": "cli-apply"})
     if a.json:
         _print_json(result.to_dict())
@@ -467,7 +470,9 @@ def _cmd_model_diff(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     data = _read_document(a.proposal)
-    result = svc.diff(slug, data, require_complete=not a.allow_partial)
+    # `diff` is the dry run of `apply`, so it holds the proposal to the same bar — a projection that
+    # `apply` would refuse must not be previewed here as though it would land.
+    result = svc.diff(slug, data)
     if a.json:
         _print_json(result.to_dict())
         return
@@ -593,14 +598,14 @@ def register(sub) -> None:
     # by nothing. Whatever it was going to mean, `model diff <slug> <proposal>` already means it: it
     # reports exactly what applying the proposal to that session would change, without writing.)
     mv.add_argument("--allow-partial", action="store_true",
-                    help="do not require the full slot set (partial projection)")
+                    help="check a partial projection for well-formedness only — `apply` and `diff` "
+                         "always require the full slot set, because applying replaces the model")
     mv.add_argument("--json", action="store_true")
     mv.set_defaults(func=_cmd_model_validate)
 
     ma = ms.add_parser("apply", help="validate a proposal and apply it as a new revision")
     ma.add_argument("session", help="session slug or path")
     ma.add_argument("proposal", help="path to a proposed model JSON, or '-' to read it from stdin")
-    ma.add_argument("--allow-partial", action="store_true", help="do not require the full slot set")
     ma.add_argument("--expected-revision", type=int, default=None,
                     help="only apply if the session is still at this revision (optimistic lock)")
     ma.add_argument("--json", action="store_true")
@@ -609,7 +614,6 @@ def register(sub) -> None:
     md = ms.add_parser("diff", help="show what a proposal would change (no write)")
     md.add_argument("session", help="session slug or path")
     md.add_argument("proposal", help="path to a proposed model JSON, or '-' to read it from stdin")
-    md.add_argument("--allow-partial", action="store_true", help="do not require the full slot set")
     md.add_argument("--json", action="store_true")
     md.set_defaults(func=_cmd_model_diff)
 

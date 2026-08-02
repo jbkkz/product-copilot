@@ -52,13 +52,22 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.
 
+### What `model apply` takes
+
+A proposal replaces the model, so it carries the **complete** slot set and a non-empty
+`summary.objective`. The three reasoning collections are the exception, and they are tri-state: leave
+`decisions`, `challenges` or `opportunities` out and the established ones stand; send `[]` and they are
+deleted (and what rested on them goes stale); send a list and it replaces. A refinement normally says
+nothing about them. To check a partial projection without applying it, use
+`model validate --allow-partial`. See [compatibility.md](compatibility.md#what-a-proposal-means).
+
 ### Documents on stdin
 
 Every command that takes a document accepts `-` in place of a path, and reads it from stdin:
 
 ```bash
 requivo model apply <slug> - --expected-revision 3 --json <<'JSON'
-{ "model": { … }, "questions": [], "summary": { … } }
+{ "model": { … }, "questions": [], "summary": { "objective": "…" } }
 JSON
 
 requivo artifact save <slug> --type prd --file - --revision 3 --json < prd.md

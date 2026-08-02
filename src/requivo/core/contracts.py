@@ -4,7 +4,7 @@ import functools
 import hashlib
 import json
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -120,7 +120,25 @@ class Summary(StrictModel):
     blind_spot: str = ""
 
 
-class EngineOutput(StrictModel):
+class ModelProposal(StrictModel):
+    """A *proposed* model — what a surface sends to be applied: a discovery reply, a Claude Code
+    proposal file, a Web form. Identical to the `EngineOutput` it resolves into, except in one
+    load-bearing way: the three reasoning collections are **tri-state**.
+
+        absent   the proposal says nothing about them — the established reasoning stands
+        []       an explicit removal — the established reasoning is dropped
+        [ … ]    a replacement
+
+    That distinction has to live in the contract, not in a prompt. A refinement turn answers a
+    question; it does not re-derive the brief, so `engine.md` asks only for `model`, `questions` and
+    `summary`. Read as a whole `EngineOutput`, such a reply silently *deleted* every decision,
+    challenge and opportunity the assessment had established — the one part of the model that carries
+    the reasoning behind the facts — and, because the deletion arrived as an omission, nothing
+    downstream could tell it apart from "nothing changed": the diff reported no reasoning movement and
+    every artifact stayed marked fresh. `resolve()` is where the three states are collapsed against
+    the model being refined, once, for every surface.
+    """
+
     # protected_namespaces=() lets us keep the field literally named `model`; extra="forbid" is
     # inherited from StrictModel and restated here so the whole config is visible in one place.
     model_config = ConfigDict(protected_namespaces=(), extra="forbid")
@@ -129,13 +147,32 @@ class EngineOutput(StrictModel):
     # not a suggestion — a turn that floods 12 questions has stopped prioritising by information value.
     questions: list[Question] = Field(default_factory=list, max_length=6)
     summary: Summary
-    # The reasoning layer — persisted so generators inherit it, not just the facts.
-    # Filled at discovery finalization by absorbing advise()'s Brief. These types are
-    # defined below (Brief section); forward-referenced here, resolved by
-    # EngineOutput.model_rebuild() at the end of this module.
-    decisions: list[DesignDecision] = Field(default_factory=list)
-    challenges: list[Challenge] = Field(default_factory=list)
-    opportunities: list[Opportunity] = Field(default_factory=list)
+    # The reasoning layer — persisted so generators inherit it, not just the facts. Filled at discovery
+    # finalization by absorbing advise()'s Brief. These types are defined below (Brief section);
+    # forward-referenced here, resolved by model_rebuild() at the end of this module.
+    decisions: Optional[list[DesignDecision]] = None
+    challenges: Optional[list[Challenge]] = None
+    opportunities: Optional[list[Opportunity]] = None
+
+    def resolve(self, current: Optional[EngineOutput] = None) -> EngineOutput:
+        """Collapse the proposal onto the model it refines, yielding a complete `EngineOutput`.
+
+        Every collection the proposal left unstated is carried forward from `current`; every one it
+        stated — including as an empty list — replaces what was there. With no `current` (a first
+        discovery) an unstated collection is simply empty: there is nothing to carry."""
+        prior = current or EngineOutput(model={}, summary=Summary())
+
+        def keep(stated, established):
+            return list(established) if stated is None else list(stated)
+
+        return EngineOutput(
+            model=self.model,
+            questions=self.questions,
+            summary=self.summary,
+            decisions=keep(self.decisions, prior.decisions),
+            challenges=keep(self.challenges, prior.challenges),
+            opportunities=keep(self.opportunities, prior.opportunities),
+        )
 
     @model_validator(mode="after")
     def _validate_slot_vocabulary(self):
@@ -156,8 +193,8 @@ class EngineOutput(StrictModel):
         # dependency graph (propagate / impact) look rigorous while pointing at nothing — so the same
         # vocabulary rule applies to every reference, not just the model and the questions.
         bad_refs = sorted(
-            {sid for d in self.decisions for sid in d.derived_from if sid not in allowed}
-            | {sid for c in self.challenges for sid in c.contests if sid not in allowed}
+            {sid for d in (self.decisions or []) for sid in d.derived_from if sid not in allowed}
+            | {sid for c in (self.challenges or []) for sid in c.contests if sid not in allowed}
         )
         if bad_refs:
             raise ValueError(f"reasoning references unknown slots (not in schema): {bad_refs}")
@@ -168,12 +205,25 @@ class EngineOutput(StrictModel):
         # reply — the retry loop can fix it, silently dropping one cannot.
         for label, items in (("decisions", self.decisions), ("challenges", self.challenges),
                              ("opportunities", self.opportunities)):
-            ids = [i.id for i in items]
+            ids = [i.id for i in (items or [])]
             dupes = sorted({i for i in ids if ids.count(i) > 1})
             if dupes:
                 raise ValueError(
                     f"{label} contains repeated entries (identical content yields one id): {dupes}")
         return self
+
+
+class EngineOutput(ModelProposal):
+    """A *resolved* model — the durable product, and what every reader downstream sees.
+
+    The difference from `ModelProposal` is exactly the tri-state: here the three reasoning collections
+    are always concrete lists, so no renderer, generator or diff has to ask whether "no decisions"
+    means none or means unstated. A proposal becomes one through `resolve()`, which is the only place
+    that question is answered."""
+
+    decisions: list[DesignDecision] = Field(default_factory=list)
+    challenges: list[Challenge] = Field(default_factory=list)
+    opportunities: list[Opportunity] = Field(default_factory=list)
 
 
 class Story(StrictModel):
@@ -374,5 +424,6 @@ class ReleaseNotes(StrictModel):
     notes: list[str] = Field(default_factory=list)
 
 
-# EngineOutput's reasoning fields forward-reference the types defined above; resolve them.
+# The reasoning fields forward-reference the types defined above; resolve them on both contracts.
+ModelProposal.model_rebuild()
 EngineOutput.model_rebuild()

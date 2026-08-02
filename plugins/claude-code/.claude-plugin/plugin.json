@@ -1,6 +1,6 @@
 {
   "name": "requivo",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Turn vague product requests into a validated, traceable requirements model — using your existing Claude Code session for the reasoning. No Anthropic API key required.",
   "author": {
     "name": "jbkkz"

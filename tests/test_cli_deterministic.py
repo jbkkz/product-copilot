@@ -16,6 +16,7 @@ import pytest
 from requivo.cli import _build_parser, app
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
+from requivo.services.sessions import SessionService
 
 
 @pytest.fixture
@@ -33,7 +34,9 @@ def _full_model(**overrides):
     _, required = schema_slot_ids()
     model = {sid: _slot() for sid in _schema_order() if sid in required}
     model.update(overrides)
-    return {"model": model, "questions": [], "summary": {}}
+    # A complete model owes an objective as much as it owes its slots (see `completeness_gap`),
+    # so the shared fixture carries one.
+    return {"model": model, "questions": [], "summary": {"objective": "A leave approval system"}}
 
 
 def _run(argv):
@@ -79,6 +82,28 @@ def test_model_validate_ok_and_invalid_exit(workspace, tmp_path):
     with pytest.raises(SystemExit) as e:
         _run(["model", "validate", str(bad), "--json"])
     assert e.value.code == 1
+
+
+def test_apply_refuses_a_partial_model_instead_of_replacing_the_whole_one(workspace, tmp_path):
+    """`--allow-partial` on `apply` read as "apply a patch"; it merged nothing. It only relaxed the
+    completeness check, and the incomplete model then *replaced* the complete one — a fifteen-slot
+    model became a one-slot model, reported as fourteen changed slots. `apply` replaces, so it takes
+    the full slot set and nothing else; validating a projection is `model validate --allow-partial`."""
+    _run(["session", "init", "Something.", "--slug", "s"])
+    full = tmp_path / "full.json"
+    full.write_text(json.dumps(_full_model()))
+    _run(["model", "apply", "s", str(full)])
+    before = len(SessionService().load_model("s").model)
+
+    partial = tmp_path / "partial.json"
+    partial.write_text(json.dumps({"model": {"workflow": _slot(80, "explicit", "high", "scan")},
+                                   "summary": {"objective": "Something"}}))
+    with pytest.raises(SystemExit) as e:
+        _run(["model", "apply", "s", str(partial), "--json"])
+    assert e.value.code == 1
+    assert len(SessionService().load_model("s").model) == before   # the model is untouched
+    # The projection is still checkable on its own — that is what the flag means now, and where it lives.
+    assert _run_json(["model", "validate", str(partial), "--allow-partial", "--json"])["slots"] == 1
 
 
 def test_model_apply_and_status_and_artifact_flow(workspace, tmp_path):

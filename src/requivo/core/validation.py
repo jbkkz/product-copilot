@@ -14,21 +14,61 @@ means the deterministic CLI path (which never calls an LLM) applies the identica
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from requivo.core.contracts import EngineOutput, missing_required_slots, unknown_slots
+from requivo.core.contracts import EngineOutput, ModelProposal, missing_required_slots, unknown_slots
 from requivo.core.errors import InvalidModelError, MissingRequiredSlotError, UnknownSlotError
 
 
-def validate_proposal(data: dict | str, *, require_complete: bool = True) -> EngineOutput:
+@dataclass(frozen=True)
+class Incompleteness:
+    """A completeness rule a proposal breaks — the message plus what a structured error needs."""
+    message: str
+    path: str
+    details: dict = field(default_factory=dict)
+
+
+def completeness_gap(out: ModelProposal) -> Incompleteness | None:
+    """The first completeness rule `out` breaks, or None if it is a complete model.
+
+    One definition of "complete", shared by the two boundaries that enforce it: the provider's retry
+    hook (which raises a plain `ValueError` so `_complete()` can nudge the model into self-correcting)
+    and `validate_proposal` (which raises a structured `RequivoError` so a CLI or Claude Code caller
+    can act on the `code`). They used to state the rules separately, and drifted: the provider required
+    an objective, the CLI did not, so the same model was complete on one surface and not the other.
+
+    Both rules exist because their absence fails *silently*. A missing required slot becomes invisible
+    to readiness and to every view, so a high-impact gap can pass as 'ready'; an empty objective leaves
+    a set of slots with nothing naming what they are about, and renders as a blank heading everywhere.
+    """
+    missing = missing_required_slots(set(out.model))
+    if missing:
+        return Incompleteness(
+            f"model is missing required slots: {missing}. Emit every schema slot.",
+            path=f"model.{missing[0]}", details={"slots": missing})
+    if not out.summary.objective.strip():
+        return Incompleteness(
+            "summary.objective is empty — state in one line what this is meant to achieve.",
+            path="summary.objective")
+    return None
+
+
+def validate_proposal(data: dict | str, *, require_complete: bool = True,
+                      current: EngineOutput | None = None) -> EngineOutput:
     """Validate a proposed model (a dict or a JSON string) into an `EngineOutput`, raising a
     structured `RequivoError` on any failure.
 
     `require_complete` gates the completeness boundary: True (the default, matching discovery) rejects
-    a model missing any required slot; False allows a partial projection (used where a caller knowingly
-    works with a subset). The vocabulary check (unknown slots) always runs — a hallucinated key is
-    never acceptable."""
+    a model missing any required slot or an empty objective; False allows a partial projection (used
+    where a caller knowingly works with a subset). The vocabulary check (unknown slots) always runs —
+    a hallucinated key is never acceptable.
+
+    `current` is the model being refined, and it is what makes the reasoning layer's tri-state real
+    (see `ModelProposal`): a proposal that does not mention `decisions` leaves the established ones
+    standing, rather than deleting them by omission. Pass it wherever there is one — the callers that
+    apply to a session always have it."""
     if isinstance(data, str):
         try:
             data = json.loads(data)
@@ -50,16 +90,16 @@ def validate_proposal(data: dict | str, *, require_complete: bool = True) -> Eng
             )
 
     try:
-        out = EngineOutput.model_validate(data)
+        proposal = ModelProposal.model_validate(data)
+        # Resolve against what is already there *before* the completeness check, so the rules judge the
+        # model that would actually be stored, not the delta that was sent.
+        out = proposal.resolve(current)
     except ValidationError as e:
         raise InvalidModelError(f"proposal does not match the schema: {e}", path="model") from e
 
     if require_complete:
-        missing = missing_required_slots(set(out.model))
-        if missing:
-            raise MissingRequiredSlotError(
-                f"model is missing required slots: {missing}. Emit every schema slot.",
-                path=f"model.{missing[0]}",
-                details={"slots": missing},
-            )
+        gap = completeness_gap(out)
+        if gap is not None:
+            error = MissingRequiredSlotError if gap.details.get("slots") else InvalidModelError
+            raise error(gap.message, path=gap.path, details=gap.details)
     return out

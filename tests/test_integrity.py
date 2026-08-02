@@ -27,7 +27,9 @@ def _full_model(**overrides) -> dict:
     _, required = schema_slot_ids()
     model = {sid: _slot() for sid in _schema_order() if sid in required}
     model.update(overrides)
-    return {"model": model, "questions": [], "summary": {}}
+    # A complete model owes an objective as much as it owes its slots (see `completeness_gap`),
+    # so the shared fixture carries one.
+    return {"model": model, "questions": [], "summary": {"objective": "A leave approval system"}}
 
 
 @pytest.fixture
@@ -89,6 +91,42 @@ def test_racing_applies_conflict_cleanly_instead_of_crashing(workspace):
     assert meta.current_revision == 2
     assert len(meta.revisions) == 2
     assert (store.canonical_dir("s") / "revisions" / "0002-model.json").exists()
+
+
+def test_racing_creations_of_one_session_all_agree_on_it(workspace):
+    """Creation is idempotent by design — the same request reuses its session — so concurrent callers
+    creating the same discovery is ordinary, not exotic. It was decided by a `has_meta` check followed
+    by a create, and a dozen callers all passed the check: each then wrote its own `session.json` over
+    the last, so the session's id, provider and context cards were whichever writer finished last, and
+    a reader in between could see a session directory with no metadata in it at all. The claim is now
+    the rename that moves a fully-assembled session into place, so exactly one caller creates it and
+    the rest are handed the one that exists."""
+    svc = SessionService()
+    n = 12
+    start = threading.Barrier(n)
+    got: list[object] = []
+    guard = threading.Lock()
+
+    def create(i: int) -> None:
+        start.wait()
+        try:
+            meta = svc.create_session("Same request.", slug="s", provider=f"p{i}")
+            outcome: object = meta.session_id
+        except BaseException as e:  # noqa: BLE001 - a race must not surface as a crash
+            outcome = f"crash:{type(e).__name__}"
+        with guard:
+            got.append(outcome)
+
+    threads = [threading.Thread(target=create, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(set(got)) == 1                                # one session, seen identically by all
+    assert not str(got[0]).startswith("crash:")
+    assert store.read_meta("s").session_id == got[0]
+    assert store.list_session_slugs() == ["s"]               # no staging directory left behind
 
 
 def test_concurrent_atomic_writes_do_not_collide_on_a_temp_file(workspace):
@@ -248,19 +286,59 @@ def test_reasoning_that_changes_without_a_slot_moving_still_invalidates(workspac
     assert "changed_decisions" in result.to_dict()
 
 
-def test_reasoning_merely_omitted_by_a_turn_is_not_a_change(workspace):
+def test_reasoning_merely_omitted_by_a_turn_is_preserved(workspace):
     """A refinement turn answers a question; it does not re-derive the brief, so its reply routinely
-    arrives with no decisions at all. Reading that silence as a deletion would mark every artifact
-    stale on nearly every turn — a freshness signal that fires constantly says nothing."""
+    arrives with no decisions at all. That silence must leave the established reasoning standing.
+
+    It used to erase it. `engine.md` asks only for model/questions/summary, the reply was read as a
+    whole `EngineOutput` (empty lists by default), and the apply path stored it verbatim — so an
+    ordinary answer turn deleted every decision, challenge and opportunity the assessment had
+    produced. Worse, the deletion was silent in both directions: the diff reported no reasoning
+    movement and the PRD stayed marked fresh, because the diff absorbed the populated → empty case to
+    keep exactly this turn from marking everything stale. The two defects hid each other."""
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
     art.save("s", "prd", "# PRD\n")
 
     result = svc.update_model("s", _full_model())           # same slots, reasoning simply absent
+    assert [d.why for d in svc.load_model("s").decisions] == ["drafts are cheap"]
     assert result.changed_decisions == []
     assert result.stale_artifacts == []
     assert art.list("s")["prd"]["stale"] is False
+
+
+def test_reasoning_explicitly_replaced_is_a_change_that_invalidates(workspace):
+    """The other side of the tri-state: a proposal that *states* its reasoning replaces what was
+    there, and every generator is prompted with the reasoning, so the saved PRD goes stale."""
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
+    art.save("s", "prd", "# PRD\n")
+
+    replacement = {**_full_model(),
+                   "decisions": [{"decision": "Approve-first", "derived_from": ["permissions"]}]}
+    result = svc.update_model("s", replacement)
+    assert [d.decision for d in svc.load_model("s").decisions] == ["Approve-first"]
+    assert len(result.changed_decisions) == 2               # the one dropped, the one added
+    assert "prd" in result.stale_artifacts
+    assert art.list("s")["prd"]["stale"] is True
+
+
+def test_reasoning_explicitly_emptied_is_a_deletion_that_invalidates(workspace):
+    """`"decisions": []` is a statement, not a silence: it deletes, and what rested on the deleted
+    reasoning goes stale. Distinguishing this from an omission is the whole point of the tri-state —
+    before it, a real deletion was indistinguishable from a quiet turn and passed unrecorded."""
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
+    art.save("s", "prd", "# PRD\n")
+
+    result = svc.update_model("s", {**_full_model(), "decisions": []})
+    assert svc.load_model("s").decisions == []
+    assert len(result.changed_decisions) == 1               # the deletion is reported, not absorbed
+    assert "prd" in result.stale_artifacts
+    assert art.list("s")["prd"]["stale"] is True
 
 
 # ── the second version contract: the slot vocabulary ──────────────────────────

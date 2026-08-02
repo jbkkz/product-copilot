@@ -27,7 +27,7 @@ Classic install (equivalent; drop `uv run` once the venv is active):
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
-.venv/bin/python -m pytest tests/ -q    # 197 tests, no API calls, no build step
+.venv/bin/python -m pytest tests/ -q    # 251 tests, no API calls, no build step
 .venv/bin/ruff check src tests          # lint (CI runs the same)
 ```
 
@@ -110,7 +110,9 @@ bug that looked like correct behaviour.
    revisions. Two edge sets feed it: the slots an artifact consumes (`ARTIFACT_SLOTS`) and the
    reasoning layer (`REASONING_CONSUMERS` — every generator, since each is prompted with the full
    model, so `diff_reasoning` invalidates on its own). Reasoning a turn merely *omits* is not a
-   removal: a refinement turn routinely replies without re-stating the brief.
+   removal — but that is resolved *before* the diff, by `ModelProposal.resolve`, not inside it (see
+   invariant 10). By the time two models reach `diff_models`/`diff_reasoning` both are complete, so
+   the diff is symmetric: an empty collection facing a populated one is a real deletion.
 2. **A generation carries the revision it read.** Provider calls take seconds to minutes and the
    session can move underneath them. Capture `current_revision` before the call; pass it as
    `expected_revision` on any apply and as `source_revision` on the artifact write. Saving against an
@@ -141,6 +143,20 @@ bug that looked like correct behaviour.
    providing none. Every compound mutation runs under `repo.lock(slug)`, taken by the service so the
    whole sequence is one unit. The lock is re-entrant per thread, and OS-held, so a crash releases it.
    Any new multi-step write goes inside it; any scratch file gets a unique name.
+10. **A proposal is not a model, and silence is not deletion.** What a surface sends is a
+    `ModelProposal`: the slots are complete (an apply *replaces*, so a partial one is refused, never
+    merged), but `decisions`/`challenges`/`opportunities` are tri-state — absent means "not speaking
+    to it", `[]` means "delete". `resolve(current)` collapses the three states against the model being
+    refined, and it is the *only* place that happens: `validate_proposal(…, current=…)` for every
+    apply, and the provider's `run(…, carry_from=…)` for a turn it reasons itself. Read as an
+    `EngineOutput` instead, an ordinary refinement turn — which `engine.md` never asks to re-state the
+    brief — deleted every decision the assessment had produced, silently.
+11. **Creating a session is one atomic claim on its slug.** `create_session` assembles the session in a
+    staging directory and renames it into place; the rename either wins the slug or raises
+    `SessionExistsError`. Never decide with a preceding existence check — two concurrent creations both
+    pass it, and the second overwrites the first's identity, provider and context cards. Identity is
+    the request **and** its context-card selection: same request, different cards is a different
+    discovery, because the cards are what the impact estimates are read against.
 
 ## The runner
 
@@ -166,17 +182,20 @@ bug that looked like correct behaviour.
 ## The output contract (keep in sync)
 
 Each stage has a Pydantic contract that must agree with its prompt's "Output format" block:
-`EngineOutput` ↔ `engine.md`, `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `EstimateDraft` ↔
+`ModelProposal` ↔ `engine.md` (the reply is a *proposal*; `EngineOutput` is what it resolves into —
+see invariant 10), `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `EstimateDraft` ↔
 `estimate.md`, `PRD` ↔ `prd.md`, `AcceptanceCriteria` ↔ `criteria.md`, `Epic` ↔ `epic.md`,
 `ReleaseNotes` ↔ `release.md`. Slot ids live in `framework/model_schema.json`, which also carries each
 slot's `pillar` and `label` (read back by the renderer via `_slot_meta()`).
 
 The slot vocabulary is enforced in two layers, with `schema_slot_ids()` as the single source:
 
-- *Vocabulary* — `EngineOutput` always rejects unknown slot ids: in the model, in the slot each
+- *Vocabulary* — both contracts always reject unknown slot ids: in the model, in the slot each
   `Question` targets, and in every DAG edge (`derived_from`, `contests`). `questions` is capped at 6.
-- *Completeness* — the discovery boundary (`run()`, via the `validate` hook) requires the full required
-  slot set and a non-empty objective. As defence in depth, `_readiness_blockers()` reasons over the
+- *Completeness* — `completeness_gap()` is the single definition (the full required slot set, plus a
+  non-empty objective), read by both boundaries that enforce it: the discovery `validate` hook, which
+  needs a `ValueError` to ride the retry loop, and `validate_proposal`, which needs a structured
+  `RequivoError`. They used to state it separately, and drifted. As defence in depth, `_readiness_blockers()` reasons over the
   *schema's* required slots rather than the ones returned, and `diff_models()` walks the union of
   old/new keys so a removed slot registers as a change.
 

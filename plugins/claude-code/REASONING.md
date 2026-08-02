@@ -92,6 +92,28 @@ files anywhere:
    Read back the structured result (revision, changed_slots, changed_decisions, stale_artifacts,
    readiness) and relay it. On `revision_conflict`, see the revision contract above.
 
+## The reasoning layer: say nothing, or say it deliberately
+
+A model carries `decisions`, `challenges` and `opportunities` alongside its slots — the judgment over
+the facts, produced by the assessment and inherited by every later generator. In a proposal these three
+are **tri-state**, and the difference is load-bearing:
+
+| in your proposal | meaning |
+| --- | --- |
+| the key is absent | you are not speaking to it — what is established stands |
+| `"decisions": []` | an explicit deletion — what rested on those decisions goes stale |
+| `"decisions": [ … ]` | a replacement |
+
+A refinement turn answers a question; it does not re-derive the brief, so **omitting the three is the
+normal case** and costs nothing. Emit `[]` only when you mean "these no longer hold" — it is recorded
+as a real change, and the user is told what it unseated.
+
+The slots are not tri-state: `model` is always the complete set. `model apply` *replaces* the model, so
+a proposal missing slots is refused rather than merged.
+
+The model is complete when every required slot is present **and** `summary.objective` says in one line
+what the thing is for. An empty objective fails validation with `invalid_model`.
+
 `-` means stdin on every command that takes a document: `model validate`, `model apply`, `model diff`,
 `artifact save --file -`, and `session init -`. Quote the heredoc marker (`<<'JSON'`) so the shell
 leaves your content alone.

@@ -55,7 +55,9 @@ def converse(client, request: str, only: list[str] | None = None) -> EngineOutpu
     out = None
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n──────────── TURN {turn} ────────────")
-        out = run(client, messages, only=only)
+        # `carry_from` is the previous turn's model: a later turn answers questions rather than
+        # re-deriving the reasoning, so anything it leaves unstated is carried, not dropped.
+        out = run(client, messages, only=only, carry_from=out)
         render_turn(out)
 
         if not out.questions:

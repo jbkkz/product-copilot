@@ -33,11 +33,12 @@ from requivo.core.contracts import (
     EngineOutput,
     Epic,
     EstimateDraft,
+    ModelProposal,
     ReleaseNotes,
     Stories,
-    missing_required_slots,
 )
 from requivo.core.errors import ProviderOutputError, RequivoError
+from requivo.core.validation import completeness_gap
 
 try:  # The SDK is an optional extra: the deterministic core + CLI work without it (Claude Code mode).
     from anthropic import Anthropic, APIError
@@ -326,29 +327,33 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
 # ── Discovery ─────────────────────────────────────────────────────────────────
 
 
-def _require_complete_model(out: EngineOutput) -> None:
+def _require_complete_model(out: ModelProposal) -> None:
     """A discovery turn must return the whole required slot set, and must say what the thing is for.
 
-    A model missing a required slot isn't just incomplete — that slot becomes invisible to readiness
-    and every view, so a high-impact gap could pass silently as 'ready'. An empty objective is the same
-    failure one level up: the session is then a set of slots with nothing naming what they are about,
-    and it renders as a blank heading in every view. Both are rejected here rather than in the contract,
-    because a partial `EngineOutput` is a legitimate internal object (a diff basis, a projection) — it
-    is only a *discovery reply* that owes completeness. The retry loop makes the model self-correct.
+    The rules themselves live in `core.validation.completeness_gap`, shared with the deterministic
+    apply path so the two boundaries cannot drift. What is local here is the *shape* of the failure:
+    a plain `ValueError`, which `_complete()`'s retry loop feeds back to the model as a corrective
+    nudge, so it self-corrects instead of the turn dying. Neither rule is in the contract itself,
+    because a partial model is a legitimate internal object (a diff basis, a projection) — it is only
+    a *discovery reply* that owes completeness.
     """
-    missing = missing_required_slots(set(out.model))
-    if missing:
-        raise ValueError(f"model is missing required slots: {missing}. Emit every schema slot.")
-    if not out.summary.objective.strip():
-        raise ValueError("summary.objective is empty — state in one line what this is meant to achieve.")
+    gap = completeness_gap(out)
+    if gap is not None:
+        raise ValueError(gap.message)
 
 
-def run(client, messages: list[dict], retries: int = 2,
-        only: list[str] | None = None) -> EngineOutput:
+def run(client, messages: list[dict], retries: int = 2, only: list[str] | None = None,
+        carry_from: EngineOutput | None = None) -> EngineOutput:
     """Engine turn: request/answers → filled model. `only` restricts which context cards inform the
-    turn (defaults to all); keep it constant across a session's turns so the prompt cache holds."""
-    return _complete(client, build_prompt("engine.md", only), messages, EngineOutput, retries,
-                     validate=_require_complete_model)
+    turn (defaults to all); keep it constant across a session's turns so the prompt cache holds.
+
+    The reply is parsed as a `ModelProposal`, not an `EngineOutput`, because `engine.md` asks for
+    `model`/`questions`/`summary` and nothing else: a turn that says nothing about decisions or
+    challenges is *quiet*, not deleting them. `carry_from` is the model being refined — the established
+    reasoning is carried onto the reply, so what leaves this function is a complete model again."""
+    proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
+                         validate=_require_complete_model)
+    return proposal.resolve(carry_from)
 
 
 def answer_turn(client, out: EngineOutput, request: str, answers: str,
@@ -366,7 +371,7 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
         {"role": "assistant", "content": out.model_dump_json()},
         {"role": "user", "content": "Client answers:\n" + answers},
     ]
-    return run(client, messages, only=only)
+    return run(client, messages, only=only, carry_from=out)
 
 
 # ── Generators (model → artifact) ───────────────────────────────────────────────

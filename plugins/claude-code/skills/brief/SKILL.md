@@ -53,7 +53,7 @@ requivo model apply <slug> - --expected-revision N --json <<'JSON'
                      "derived_from": ["<slot ids the decision rests on>"]}],
   "challenges":    [{"headline": "…", "premise": "…", "alternative": "…", "consequence": "…",
                      "recommendation": "…", "contests": ["<slot ids whose premise this contests>"]}],
-  "opportunities": [{"text": "…", "leverage": "low|medium|high", "modules": ["…"]}]
+  "opportunities": [{"text": "…", "leverage": "high|medium|future", "modules": ["…"]}]
 }
 JSON
 ```

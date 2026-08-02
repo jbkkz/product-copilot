@@ -81,9 +81,12 @@ Two kinds of dependency feed that judgment:
   prompted with the complete model, reasoning included, so a rewritten decision can change a PRD with
   no slot touched. A model whose slots are identical but whose judgment moved is a different model.
 
-One asymmetry is deliberate: reasoning that a turn simply *omits* is not a removal. A refinement turn
-answers a question rather than re-deriving the brief, so its reply routinely carries no decisions at
-all; reading that silence as a deletion would mark every artifact stale on nearly every turn.
+Reasoning that a turn simply *omits* is not a removal — a refinement turn answers a question rather
+than re-deriving the brief, so its reply routinely carries no decisions at all. That is resolved when
+the proposal is validated, not when it is diffed: the three collections are tri-state in a proposal
+(absent = keep, `[]` = delete, a list = replace), and `ModelProposal.resolve` collapses them against
+the model being refined. The diff itself is symmetric, so an explicit deletion *is* reported and does
+mark what rested on it stale.
 
 Freshness is also computed when an artifact is saved **against an older revision** — `requivo artifact
 save … --revision N`. Reasoning and saving are not the same moment: a provider call takes minutes, and

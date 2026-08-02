@@ -170,3 +170,30 @@ def test_artifact_saving_skills_use_the_cli():
     for name in ("brief", "prd"):
         text = (SKILLS / name / "SKILL.md").read_text()
         assert "artifact save" in text, f"{name}: must save via `requivo artifact save`"
+
+
+def test_skill_enum_placeholders_name_values_the_contracts_accept():
+    """A skill's JSON template is a prompt: Claude fills it in and the deterministic CLI validates the
+    result. So a wrong alternative in a `"field": "a|b|c"` placeholder is not a typo in a comment — it
+    is an instruction to produce output the contract rejects, and the failure lands one step later, on
+    an apply, as a schema error the reader has no reason to connect to the skill.
+
+    The brief skill offered `"leverage": "low|medium|high"`; `Leverage` is high|medium|future. The
+    provider's own prompt was right, which is exactly why this drifted unnoticed — the second surface
+    had no test holding it to the same vocabulary."""
+    from requivo.core.contracts import Complexity, Confidence, Impact, Level, Leverage, Priority, ScenarioKind
+
+    # A field name can be backed by more than one enum across the contracts (`complexity` is S/M/L on
+    # an estimate item and low/medium/high on the brief), so a placeholder is checked against the union.
+    enums = {
+        "leverage": (Leverage,), "confidence": (Confidence,), "impact": (Impact,),
+        "priority": (Priority,), "kind": (ScenarioKind,), "complexity": (Complexity, Level),
+    }
+    for p in _skill_files():
+        for field, value in re.findall(r'"(\w+)"\s*:\s*"([a-zA-Z_]+(?:\|[a-zA-Z_]+)+)"', p.read_text()):
+            if field not in enums:
+                continue
+            allowed = {m.value for e in enums[field] for m in e}
+            bad = sorted(set(value.split("|")) - allowed)
+            assert not bad, (f"{p.parent.name}: \"{field}\" offers {bad}, "
+                             f"but the contract accepts {sorted(allowed)}")

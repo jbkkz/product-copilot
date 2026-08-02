@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from requivo.core.contracts import EngineOutput
+from requivo.core.errors import RevisionConflictError
 from requivo.core.persistence import ArtifactStatus
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
@@ -105,15 +106,27 @@ class DiscoveryService:
                            slug: str | None = None, brief=None, surface: str = "discover") -> str:
         """Create the session and apply a discovered model through the validated path. When a `brief` is
         given (a finalized discovery), its reasoning is absorbed into the model first. Shared by the
-        CLI's interactive loop (which produced `out` itself) and `start()`."""
+        CLI's interactive loop (which produced `out` itself) and `start()`.
+
+        A first discovery lands on revision 0 and nothing else. Session creation is idempotent — the
+        same request reuses its session — so without that precondition a re-run would quietly replace a
+        model that had been refined over several turns with a naive first-turn one, and a write that
+        landed while the provider was reasoning would be overwritten the same way. Both cases are a
+        `revision_conflict`, which is recoverable; a silent replacement is not."""
         provider = self._need_provider()
         meta = self.sessions.create_session(
             request, context_cards=cards, slug=slug,
             provider=provider.name, model_name=provider.model_name())
+        if meta.current_revision > 0:
+            raise RevisionConflictError(
+                f"session '{meta.slug}' already carries a model (revision {meta.current_revision}) — "
+                f"a fresh discovery would replace it. Refine it instead (`requivo answer {meta.slug} "
+                f'"…"`), or run this discovery under another slug.',
+                details={"slug": meta.slug, "expected": 0, "actual": meta.current_revision})
         if brief is not None:
             absorb_reasoning(out, brief)
         self.sessions.update_model(
-            meta.slug, out.model_dump_json(),
+            meta.slug, out.model_dump_json(), expected_revision=0,
             provenance=self._provenance("analyze", cards=cards, surface=surface))
         return meta.slug
 
@@ -128,12 +141,17 @@ class DiscoveryService:
 
     def run_discovery(self, slug: str, *, surface: str = "discover") -> UpdateResult:
         """Run the first discovery turn on an already-created session (the 'create session only' path
-        run later): read its stored request + cards, reason, and apply the model as revision 1."""
+        run later): read its stored request + cards, reason, and apply the model as revision 1.
+
+        Like every other provider-backed operation, this captures the revision it reasoned from and
+        applies against it: the call takes seconds to minutes, and a session that moved meanwhile must
+        produce a conflict rather than have the change written from the older state on top of it."""
         request = self.sessions.request_text(slug)
         cards = self.sessions.cards(slug)
+        source_revision = self.sessions.meta(slug).current_revision
         out = self._need_provider().analyze(request, only=cards)
         return self.sessions.update_model(
-            slug, out.model_dump_json(),
+            slug, out.model_dump_json(), expected_revision=source_revision,
             provenance=self._provenance("analyze", cards=cards, surface=surface))
 
     # ── refinement ───────────────────────────────────────────────────────────────

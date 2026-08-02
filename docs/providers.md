@@ -49,6 +49,13 @@ A provider implements the `ReasoningProvider` protocol in `providers/base.py`:
 | `model_name()` | the reasoning model, recorded on the session |
 | `provenance(op, only=…)` | provider / model / prompt identity, recorded on each revision |
 
+`analyze` returns a *resolved* model: a refinement reply says nothing about `decisions`, `challenges`
+and `opportunities` (the engine prompt does not ask a turn to re-derive the brief), so a provider
+parses its reply as a `ModelProposal` and resolves it against the `current_model` it was given —
+carrying the established reasoning forward instead of returning a model that appears to have deleted
+it. A provider that skips this step hands back a model with an empty reasoning layer, and the apply
+path will faithfully store it.
+
 `DiscoveryService` talks to the protocol and nothing else, so a second provider is a constructor
 argument rather than a fork of the orchestration:
 

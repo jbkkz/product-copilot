@@ -25,7 +25,9 @@ def _full_model(**overrides) -> dict:
     _, required = schema_slot_ids()
     model = {sid: _slot() for sid in _schema_order() if sid in required}
     model.update(overrides)
-    return {"model": model, "questions": [], "summary": {}}
+    # A complete model owes an objective as much as it owes its slots (see `completeness_gap`),
+    # so the shared fixture carries one.
+    return {"model": model, "questions": [], "summary": {"objective": "A leave approval system"}}
 
 
 @pytest.fixture
@@ -60,6 +62,21 @@ def test_validate_rejects_missing_required_slot():
         validate_proposal(partial)
     assert e.value.code == "missing_required_slot"
     assert a_required in e.value.details["slots"]
+
+
+def test_validate_rejects_a_complete_model_with_no_objective():
+    """Completeness is the full slot set *and* an objective. The provider's retry hook required both;
+    the deterministic path required only the slots, so the same model was complete when Anthropic
+    produced it and complete-enough when Claude Code applied it — and a session of fifteen filled
+    slots with nothing naming what they are for renders as a blank heading in every view. Both
+    boundaries now read the one definition (`completeness_gap`)."""
+    from requivo.core.errors import InvalidModelError
+
+    with pytest.raises(InvalidModelError) as e:
+        validate_proposal({**_full_model(), "summary": {"objective": "   "}})
+    assert e.value.path == "summary.objective"
+    # A projection is a different claim — it never promised completeness in the first place.
+    validate_proposal({**_full_model(), "summary": {}}, require_complete=False)
 
 
 def test_validate_allows_partial_when_not_required():
@@ -294,6 +311,84 @@ def test_an_answers_turn_holds_the_revision_it_read(workspace):
     disco = DiscoveryService(client=_RacingClient(json.dumps(reply), concurrent_apply))
     with pytest.raises(RevisionConflictError):
         disco.answer("s", "here are my answers")
+    assert svc.load_model("s").model["risks"].value == "rollout risk"
+
+
+def test_an_answers_turn_that_says_nothing_about_reasoning_keeps_it(workspace):
+    """The full user journey the tri-state exists for: discovery → assessment → an ordinary answer.
+
+    `engine.md` asks a turn for model/questions/summary only, so a refinement reply carries no
+    decisions — and this whole path (provider parse → apply → diff → freshness) used to read that as a
+    deletion, wiping the reasoning the assessment had just established while reporting no change and
+    leaving the PRD marked fresh. The reply below is exactly what the engine returns; nothing about
+    the reasoning is mentioned in it."""
+    from requivo.services.discovery import DiscoveryService
+
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", {**_full_model(), "decisions": [
+        {"decision": "Managers approve in-app", "derived_from": ["permissions"]}]})
+    art.save("s", "prd", "# PRD\n")
+
+    reply = {**_full_model(**{"workflow": _slot(90, "explicit", "high", "request → approve")}),
+             "summary": {"objective": "A leave approval system"}}
+    DiscoveryService(client=_RacingClient(json.dumps(reply), lambda: None)).answer("s", "in-app")
+
+    after = svc.load_model("s")
+    assert [d.decision for d in after.decisions] == ["Managers approve in-app"]
+    assert after.model["workflow"].value == "request → approve"   # the facts did move
+    assert art.list("s")["prd"]["stale"] is True                  # …and that alone marks the PRD stale
+
+
+def test_the_same_request_under_different_cards_is_a_different_session(workspace):
+    """Context cards are provenance, not decoration: the same request read against `b2b-platform` and
+    against `event-ops` gets different impact estimates, so different questions. Creation keyed on the
+    request alone, so the second call silently handed back the first session — with a card selection
+    the caller had not asked for and no way to notice."""
+    svc = SessionService()
+    first = svc.create_session("Same request.", context_cards=["b2b-platform"])
+    again = svc.create_session("Same request.", context_cards=["b2b-platform"])
+    other = svc.create_session("Same request.", context_cards=["event-ops"])
+
+    assert again.slug == first.slug                       # same discovery: still idempotent
+    assert other.slug != first.slug
+    assert svc.cards(other.slug) == ["event-ops"]         # and it got the cards it asked for
+
+
+def test_a_fresh_discovery_refuses_to_replace_a_model_that_already_exists(workspace):
+    """Session creation is idempotent, so re-running `discover` on the same request lands on the same
+    session — and used to overwrite whatever it held, replacing a model refined over several turns
+    with a naive first-turn one. A conflict is recoverable; a silent replacement is not."""
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    disco = DiscoveryService(_FakeProvider())
+    slug = disco.start("A leave approval system.", slug="dup")
+    SessionService().update_model(slug, _full_model(**{"workflow": _slot(90, "explicit", "high", "kept")}))
+
+    with pytest.raises(RevisionConflictError):
+        disco.start("A leave approval system.", slug="dup")
+    assert SessionService().load_model(slug).model["workflow"].value == "kept"
+
+
+def test_a_first_discovery_that_races_a_concurrent_write_conflicts(workspace):
+    """`run_discovery` reasons from revision N and applies; the call takes minutes, so it captures the
+    revision it read and holds the write to it — the same precondition every other provider-backed
+    operation carries. Without it the concurrent model was replaced by one reasoned from the older
+    state, which is exactly the case optimistic locking exists for."""
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+
+    def concurrent_apply():
+        svc.update_model("s", _full_model(**{"risks": _slot(70, "explicit", "high", "rollout risk")}))
+
+    reply = {**_full_model(), "summary": {"objective": "A leave approval system"}}
+    disco = DiscoveryService(client=_RacingClient(json.dumps(reply), concurrent_apply))
+    with pytest.raises(RevisionConflictError):
+        disco.run_discovery("s")
     assert svc.load_model("s").model["risks"].value == "rollout risk"
 
 

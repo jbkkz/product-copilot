@@ -23,6 +23,7 @@ from requivo.core.dependencies import (
     diff_reasoning,
     propagate,
 )
+from requivo.core.errors import SessionExistsError
 from requivo.core.persistence import SessionMeta
 from requivo.core.validation import validate_proposal
 from requivo.services.repository import SessionRepository, default_repository
@@ -109,27 +110,53 @@ class SessionService:
                         slug: str | None = None, provider: str | None = None,
                         model_name: str | None = None) -> SessionMeta:
         """Create a fresh session from a request (no model yet). If `slug` is omitted it is derived
-        from the request and made collision-safe against existing sessions."""
+        from the request and made collision-safe against existing sessions.
+
+        Creation is idempotent on *identity*, and identity is the request **and its context cards** —
+        not the request alone. The cards are part of the provenance of everything a session will
+        reason: the same request read against `b2b-platform` and against `event-ops` gets different
+        impact estimates, so different questions. Keying on the request alone meant the second call
+        silently returned the first session, with cards the caller had not asked for and had no way to
+        notice. A different selection now gets its own session instead.
+
+        The claim on a slug is `repo.create` itself, which is atomic — a check-then-create here would
+        let two concurrent callers both decide the session was theirs to make."""
         base = slug or store._slug(request)
-        chosen = self._unique_slug(base, request)
-        if self.repo.has_meta(chosen):
-            return self.repo.read_meta(chosen)  # idempotent: re-discovering the same request reuses it
-        return self.repo.create(chosen, request, provider=provider, model_name=model_name,
-                                context_cards=context_cards)
+        for candidate in (base, f"{base}-{self._identity_hash(request, context_cards)}"):
+            try:
+                return self.repo.create(candidate, request, provider=provider, model_name=model_name,
+                                        context_cards=context_cards)
+            except SessionExistsError:
+                if self._same_identity(candidate, request, context_cards):
+                    return self.repo.read_meta(candidate)  # idempotent re-init of the same discovery
+        raise SessionExistsError(
+            f"sessions '{base}' and '{base}-{self._identity_hash(request, context_cards)}' both exist "
+            "with a different request or context selection — pass an explicit slug",
+            details={"slug": base})
 
     def ensure_canonical(self, slug: str) -> None:
         """Public form of the migrate-on-first-mutation guard — call before writing an artifact to a
         session that may still live only in the legacy `out/` store."""
         self._ensure_canonical(slug)
 
-    def _unique_slug(self, base: str, request: str) -> str:
-        """Reuse the session for the same request (idempotent re-init); otherwise suffix a short hash so
-        two different requests never collide on one slug."""
-        if not self.repo.has_meta(base):
-            return base
-        if self.repo.request_text(base).strip() == request.strip():
-            return base
-        return f"{base}-{hashlib.sha1(request.encode('utf-8')).hexdigest()[:6]}"
+    @staticmethod
+    def _identity_hash(request: str, context_cards: list[str] | None) -> str:
+        """The fallback slug suffix: a short hash over what makes a discovery distinct. The cards join
+        the hash only when there are some, so the ordinary no-cards case keeps the slugs it had."""
+        parts = [request.strip()]
+        if context_cards:
+            parts.append(",".join(sorted(context_cards)))
+        return hashlib.sha1("␟".join(parts).encode("utf-8")).hexdigest()[:6]
+
+    def _same_identity(self, slug: str, request: str, context_cards: list[str] | None) -> bool:
+        """Whether an existing session is the same discovery: same request, same context selection.
+        `None` (every card) and an explicit list are different selections, not the same one."""
+        if not self.repo.has_meta(slug):
+            return False  # a legacy-only session has no recorded cards to compare
+        existing = self.repo.context_cards(slug)
+        return (self.repo.request_text(slug).strip() == request.strip()
+                and (sorted(existing) if existing else existing)
+                == (sorted(context_cards) if context_cards else context_cards))
 
     # ── reads ─────────────────────────────────────────────────────────────────
     def meta(self, slug: str) -> SessionMeta:
@@ -166,8 +193,8 @@ class SessionService:
     def diff(self, slug: str, proposal: dict | str, *, require_complete: bool = True) -> UpdateResult:
         """Dry run of `update_model`: validate the proposal and report what *would* change, without
         writing anything (`model diff`). `revision` is the revision that would be created."""
-        new = validate_proposal(proposal, require_complete=require_complete)
         current = self.load_model(slug) if self.exists(slug) else None
+        new = validate_proposal(proposal, require_complete=require_complete, current=current)
         return self._plan(slug, current, new, apply=False)
 
     def update_model(self, slug: str, proposal: dict | str, *, require_complete: bool = True,
@@ -179,14 +206,19 @@ class SessionService:
         `expected_revision` is the optimistic-locking precondition (see `persistence.save_revision`):
         omit it for the single-user CLI, pass the client's last-known revision from a concurrent
         service. `provenance` records who produced the revision (provider / surface / model)."""
-        new = validate_proposal(proposal, require_complete=require_complete)
         self._ensure_canonical(slug)
         # One lock for the whole update. Reading the current model, saving the revision and rewriting
         # the artifact flags are three storage calls that must see one consistent session: without
         # this, a writer that lands between the read and the flag rewrite has its staleness silently
         # reverted by ours.
+        #
+        # Validation is *inside* the lock rather than before it, because a proposal is resolved against
+        # the model it refines (`ModelProposal.resolve`): the reasoning it carries forward has to come
+        # from the same model the diff is computed against, or a concurrent write could slip between
+        # the two and the carried reasoning would describe a model that is no longer there.
         with self.repo.lock(slug):
             current = self.load_model(slug) if self.repo.read_meta(slug).current_revision > 0 else None
+            new = validate_proposal(proposal, require_complete=require_complete, current=current)
             return self._plan(slug, current, new, apply=True,
                               expected_revision=expected_revision, provenance=provenance)
 

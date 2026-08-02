@@ -32,6 +32,11 @@ Start from the current model. For each slot the answers touch: raise `completene
 emit `[]` when nothing is both uncertain and high-impact (discovery has converged). Pass the client's
 answers through faithfully — do not embellish them.
 
+Say nothing about `decisions`, `challenges` and `opportunities` — leave the keys out entirely. A
+refinement turn is not re-deriving the assessment, and what is established stands on its own (see the
+reasoning layer in REASONING.md). Emitting `[]` for them means "these no longer hold", which is a real
+deletion and marks what rested on them stale.
+
 ## 3. Validate → fix → apply
 Feed the full updated model in on stdin — no temp file:
 ```bash
@@ -57,4 +62,4 @@ From the `model apply` JSON, tell the user in plain language:
 - the new readiness (ready, or which slots still block it),
 - the next small group of questions, verbatim, or that discovery has converged.
 
-If converged, suggest `/requivo:brief <slug>`. Clean up the temp file.
+If converged, suggest `/requivo:brief <slug>`.

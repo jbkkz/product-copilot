@@ -176,14 +176,15 @@ class ReasoningDiff:
 def _diff_items(old_items: list, new_items: list) -> list[str]:
     """Ids that were added, removed, or edited between two reasoning collections.
 
-    One asymmetry is deliberate: a collection that goes from populated to *empty* reports nothing. A
-    refinement turn routinely replies without re-stating the reasoning it already established (the
-    engine is answering a question, not re-deriving the brief), and the apply path carries the prior
-    reasoning forward rather than deleting it. Reading that omission as a removal would mark every
-    artifact stale on almost every turn — a freshness signal that fires constantly says nothing.
+    This is symmetric, including the populated → empty case, and that is only safe because both sides
+    are *resolved* models. A refinement turn routinely replies without re-stating the reasoning it
+    already established (the engine is answering a question, not re-deriving the brief) — but that
+    omission is collapsed upstream, by `ModelProposal.resolve`, which carries the established
+    reasoning forward. So by the time two models reach this function, an empty collection facing a
+    populated one means the reasoning was genuinely dropped, and it should mark what rests on it
+    stale. This function used to absorb that case itself, which made a real deletion indistinguishable
+    from a turn that simply stayed quiet.
     """
-    if old_items and not new_items:
-        return []
     old_by_id = {i.id: i.model_dump_json() for i in old_items}
     new_by_id = {i.id: i.model_dump_json() for i in new_items}
     # Compare content, not just ids: `id` is derived from a *subset* of each item's fields (a

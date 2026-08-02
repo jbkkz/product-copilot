@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ from requivo.core.errors import (
     InvalidSessionError,
     InvalidSlugError,
     RevisionConflictError,
+    SessionExistsError,
     SessionLockedError,
     SessionNotFoundError,
 )
@@ -424,18 +426,40 @@ def read_meta(slug: str) -> SessionMeta:
 def create_session(slug: str, request: str, *, provider: str | None = None,
                    model_name: str | None = None, context_cards: list[str] | None = None) -> SessionMeta:
     """Create a fresh session directory from a request — no model yet (current_revision 0). The
-    model is applied later via `save_revision` (deterministic `model apply`, or a provider turn)."""
-    d = canonical_dir(slug)
-    (d / "revisions").mkdir(parents=True, exist_ok=True)
-    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    model is applied later via `save_revision` (deterministic `model apply`, or a provider turn).
+
+    The session is assembled beside its destination and moved in with a single rename, which is the
+    *claim* on the slug: either this call created the session, or it learns one was already there
+    (`SessionExistsError`). Two things follow, and both were bugs before. Creation is atomic, where a
+    preceding `has_meta` check was not — two concurrent creations both passed it, and the second
+    rewrote the first's metadata, giving the session a new id and losing the provider and context
+    cards the first had recorded. And a session becomes visible *complete*: with a directory created
+    first and the metadata written after, a concurrent reader could find a session whose `session.json`
+    did not exist yet."""
     now = _now()
     meta = SessionMeta(
         session_id=uuid.uuid4().hex, slug=slug, created_at=now, updated_at=now,
         provider=provider, model_name=model_name, context_cards=context_cards,
         request_hash=_hash(request),
     )
-    _atomic_write(d / "request.md", request)
-    write_meta(slug, meta)
+    d = canonical_dir(slug)
+    d.parent.mkdir(parents=True, exist_ok=True)
+    # Dot-prefixed, so a staging directory can never be mistaken for a session: slugs are validated and
+    # cannot start with a dot, and `list_session_slugs` skips them.
+    staging = d.with_name(f".{d.name}.new-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    try:
+        (staging / "revisions").mkdir(parents=True)
+        (staging / "artifacts").mkdir()
+        _atomic_write(staging / "request.md", request)
+        _atomic_write(staging / "session.json", meta.model_dump_json(indent=2))
+        try:
+            staging.rename(d)
+        except OSError as e:
+            if not d.exists():  # the rename failed for some other reason — don't mislabel it
+                raise
+            raise SessionExistsError(f"session '{slug}' already exists", details={"slug": slug}) from e
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return meta
 
 
@@ -557,7 +581,10 @@ def list_session_slugs() -> list[str]:
     root = session_root()
     if not root.exists():
         return []
-    return sorted(p.name for p in root.iterdir() if (p / "session.json").exists())
+    # Dot-prefixed directories are never sessions (a slug cannot start with one) — they are the
+    # staging areas `create_session` assembles a session in before renaming it into place.
+    return sorted(p.name for p in root.iterdir()
+                  if not p.name.startswith(".") and (p / "session.json").exists())
 
 
 def migrate_legacy(slug: str) -> SessionMeta:

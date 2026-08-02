@@ -106,6 +106,14 @@ class RevisionConflictError(RequivoError):
     code = "revision_conflict"
 
 
+class SessionExistsError(RequivoError):
+    """A session already occupies that slug. Raised by the *creation* itself rather than found by a
+    prior existence check, so two callers creating the same session concurrently cannot both believe
+    they made it: the claim is the directory creation, and exactly one of them wins it."""
+
+    code = "session_exists"
+
+
 class SessionLockedError(RequivoError):
     """Another writer holds the session lock and did not release it within the timeout. Distinct from
     `RevisionConflictError`: nothing raced to a conclusion here, the write never got to start, so

@@ -6,6 +6,62 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-08-02
+
+The 0.9.5 review, and the last release before 1.0. Two correctness bugs sat where the product's own
+promise lives — one erased the reasoning layer during an ordinary turn, the other replaced a whole
+model with a fragment of it — plus the preconditions and the session identity that a second writer
+makes matter.
+
+### Fixed
+- **A refinement turn silently erased every decision, challenge and opportunity.** `engine.md` asks a
+  turn for `model`/`questions`/`summary` and nothing else — a refinement answers a question, it does
+  not re-derive the brief. That reply was read as a complete `EngineOutput`, whose reasoning fields
+  default to empty lists, and the apply path stored it verbatim: one ordinary `requivo answer` after a
+  brief deleted the entire reasoning layer. It was silent in both directions, because
+  `diff_reasoning` deliberately absorbed the populated → empty case to stop exactly this turn from
+  marking everything stale — so the apply reported no reasoning change and left the PRD marked fresh
+  over a model whose decisions no longer existed. The two defects had been hiding each other. A
+  proposal is now its own contract (`ModelProposal`) in which the three collections are tri-state:
+  absent keeps what is established, `[]` deletes it, a list replaces it. `resolve()` collapses them
+  against the model being refined, once, for every surface — and with omission resolved before the
+  diff, the diff is symmetric again, so a real deletion is reported and does invalidate what rested
+  on it.
+- **`model apply --allow-partial` replaced the model with the fragment.** The name read as a patch; it
+  merged nothing. It only relaxed the completeness check, and the partial model then replaced the
+  complete one — applying a single slot left a one-slot model where fifteen had been, reported as
+  fourteen changed slots. The flag is gone from `apply` and from `diff` (its dry run). Checking a
+  projection is still `model validate --allow-partial`, which is what the flag always actually meant.
+- **A first discovery had no precondition.** `run_discovery` and `finalize_discovery` reasoned from a
+  session and applied without stating the revision they read, the one gap left after 0.9.4 closed
+  `answer` and `generate`. A write that landed during the provider call was overwritten by a model
+  reasoned from the older state. Both now carry it — and because creation is idempotent, re-running
+  `discover` on a request whose session already holds a model is a `revision_conflict` naming
+  `requivo answer`, rather than a naive first-turn model quietly replacing a refined one.
+- **Session creation ignored its context cards, and was not atomic.** Two creations of the same request
+  returned the same session even when they asked for different cards — but the cards are the provenance
+  of every impact estimate the session will make, so the same request read against `b2b-platform` and
+  against `event-ops` is not the same discovery; the caller got a session with cards it had not asked
+  for and no way to notice. Identity is now the request *and* its card selection. Creation itself was a
+  `has_meta` check followed by a write, which a dozen concurrent callers all passed: each wrote its own
+  `session.json` over the last, so the session's id, provider and cards were whichever writer finished
+  last. A session is now assembled in a staging directory and renamed into place — the rename is the
+  claim on the slug, so exactly one caller creates it and the rest are handed what exists.
+- **An empty objective was complete on one surface and not the other.** The provider's retry hook
+  required `summary.objective`; the deterministic apply path required only the slots. The same model
+  was therefore acceptable from Claude Code and refused from Anthropic. Both boundaries now read one
+  definition (`completeness_gap`), which also keeps a session of fifteen filled slots from rendering a
+  blank heading in every view.
+- **The brief skill offered an enum the contract rejects** — `"leverage": "low|medium|high"`, where
+  `Leverage` is `high|medium|future`. A skill's JSON template is an instruction, so the failure landed
+  one step later as a schema error on an apply. Fixed, and a static test now holds every skill's enum
+  placeholders to the contracts' vocabulary.
+
+### Changed
+- `plugins/claude-code/REASONING.md` states the proposal contract the skills work against: complete
+  slots, a real objective, and the tri-state reasoning layer. The `answer` skill is explicit that
+  leaving the three collections out is the normal case.
+
 ## [0.9.5] - 2026-08-02
 
 The second half of the 0.9.3 review: untrusted input, output that is worth saving, and the Claude Code

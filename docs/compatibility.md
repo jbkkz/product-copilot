@@ -59,10 +59,27 @@ not change meaning without a note in the changelog.
 
 Error `code` values are stable identifiers — assert on the code, never on the message text.
 
+## What a proposal means
+
+The JSON you hand to `model validate`, `model diff` and `model apply` is a **proposal**, and since
+0.9.6 its shape is stated rather than implied:
+
+- `model` is the complete slot set. An apply *replaces* the model — it does not merge — so a partial
+  one is refused. Check a projection with `model validate --allow-partial`; that flag is gone from
+  `apply` and `diff`, where it read as "apply a patch" and silently replaced a fifteen-slot model
+  with whatever subset was sent.
+- `summary.objective` must say something. A model of filled slots with nothing naming what it is for
+  renders as a blank heading everywhere, so it is refused as incomplete (`invalid_model`).
+- `decisions`, `challenges` and `opportunities` are **tri-state**: leaving the key out means "not
+  speaking to it" and keeps what is established; `[]` deletes; a list replaces. Before 0.9.6 an
+  omission was read as an empty list, so an ordinary refinement turn deleted the whole reasoning
+  layer — and reported no change while doing it.
+
 ## Deprecations
 
 | What | Status | Since | Removal | Instead |
 |---|---|---|---|---|
+| **`model apply --allow-partial`, `model diff --allow-partial`** | Removed — it merged nothing, it replaced | 0.9.6 | gone | `model validate --allow-partial` to check a projection; send the full slot set to apply |
 | **Legacy flag CLI** (`python src/engine.py "…" --prd`) | Deprecated, frozen, prints a notice | 0.9.2 | **1.1.0** | `requivo discover` + `requivo prd` — see [cli.md](cli.md) |
 | **`pc` command alias** | Deprecated alias for `requivo` | 0.7.0 (rename) | next major | `requivo` |
 | **Legacy `out/<slug>/` sessions** | Read-only, migrated on first write | 0.8.0 | no date | `.requivo/sessions/`; bulk-convert with `requivo session migrate` |

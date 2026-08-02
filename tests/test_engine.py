@@ -87,7 +87,9 @@ def out(model):
     # Pad to the full required slot set: a real EngineOutput always carries every slot, and the
     # discovery boundary enforces it. Tests that care about one slot just override that one.
     return EngineOutput.model_validate(
-        {"model": full_slots(**model), "questions": [], "summary": {}}
+        {"model": full_slots(**model), "questions": [],
+         # A complete model owes an objective as much as it owes its slots (`completeness_gap`).
+         "summary": {"objective": "A leave approval system"}}
     )
 
 
@@ -1211,7 +1213,7 @@ def test_first_apply_does_not_invalidate_its_own_reasoning():
     model = EngineOutput.model_validate({
         "model": full_slots(workflow=slot(80, "explicit", "high"),
                             permissions=slot(75, "explicit", "high")),
-        "questions": [], "summary": {},
+        "questions": [], "summary": {"objective": "Invoice lifecycle"},
         "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
                                      derived_from=["workflow", "permissions"]).model_dump()],
         "challenges": [Challenge(headline="Invoice at signature", premise="p", alternative="a",
@@ -1235,7 +1237,7 @@ def test_second_apply_invalidates_prior_reasoning_a_change_unseats():
     store.create_session(slug, "req")
     first = EngineOutput.model_validate({
         "model": full_slots(workflow=slot(80, "inferred", "high")),
-        "questions": [], "summary": {},
+        "questions": [], "summary": {"objective": "Invoice lifecycle"},
         "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
                                      derived_from=["workflow"]).model_dump()],
     })
