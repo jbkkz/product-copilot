@@ -60,6 +60,13 @@ ARTIFACT_FILES: dict[str, str | None] = {
     "criteria": "acceptance-criteria.md", "epic": "epic.md", "release": "release-notes.md",
 }
 
+# Artifacts that rest on the *reasoning* layer (decisions / challenges / opportunities), not only on
+# slots. This is every generator, and deliberately so: each one is prompted with the complete
+# EngineOutput — `model_dump_json()`, reasoning included — so a decision that changes can change the
+# artifact even when no slot moved. The slot map above is a genuine narrowing because a generator
+# reads only some *facts*; there is no comparable narrowing here, because they all read all of it.
+REASONING_CONSUMERS: frozenset[str] = frozenset(_ARTIFACT_SLOTS_RAW)
+
 
 def artifact_slots() -> dict[str, set[str]]:
     """Resolve the artifact→slots map, expanding `*` to every slot id."""
@@ -148,6 +155,53 @@ def stale_on_disk(out: EngineOutput, changed: list[str], present: set[str]) -> l
     hit = set(propagate(out, changed).artifacts)
     return [(name, ARTIFACT_FILES[name]) for name in _ARTIFACT_SLOTS_RAW
             if name in hit and ARTIFACT_FILES.get(name) in present]
+
+
+@dataclass
+class ReasoningDiff:
+    """What moved in the reasoning layer between two model versions — ids, per collection."""
+    decisions: list[str] = field(default_factory=list)
+    challenges: list[str] = field(default_factory=list)
+    opportunities: list[str] = field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.decisions or self.challenges or self.opportunities)
+
+    def to_dict(self) -> dict:
+        return {"decisions": self.decisions, "challenges": self.challenges,
+                "opportunities": self.opportunities}
+
+
+def _diff_items(old_items: list, new_items: list) -> list[str]:
+    """Ids that were added, removed, or edited between two reasoning collections.
+
+    One asymmetry is deliberate: a collection that goes from populated to *empty* reports nothing. A
+    refinement turn routinely replies without re-stating the reasoning it already established (the
+    engine is answering a question, not re-deriving the brief), and the apply path carries the prior
+    reasoning forward rather than deleting it. Reading that omission as a removal would mark every
+    artifact stale on almost every turn — a freshness signal that fires constantly says nothing.
+    """
+    if old_items and not new_items:
+        return []
+    old_by_id = {i.id: i.model_dump_json() for i in old_items}
+    new_by_id = {i.id: i.model_dump_json() for i in new_items}
+    # Compare content, not just ids: `id` is derived from a *subset* of each item's fields (a
+    # decision's text, a challenge's headline + premise), so an edit to a rationale or a tradeoff
+    # keeps the id and would otherwise be invisible.
+    return sorted(k for k in old_by_id.keys() | new_by_id.keys()
+                  if old_by_id.get(k) != new_by_id.get(k))
+
+
+def diff_reasoning(old: EngineOutput, new: EngineOutput) -> ReasoningDiff:
+    """The reasoning-layer counterpart of `diff_models`. Slots carry the facts; decisions, challenges
+    and opportunities carry the judgment over them, and both reach the generators. A model whose
+    slots are untouched but whose design decisions changed is a materially different model."""
+    return ReasoningDiff(
+        decisions=_diff_items(old.decisions, new.decisions),
+        challenges=_diff_items(old.challenges, new.challenges),
+        opportunities=_diff_items(old.opportunities, new.opportunities),
+    )
 
 
 def diff_models(old: EngineOutput, new: EngineOutput) -> list[str]:

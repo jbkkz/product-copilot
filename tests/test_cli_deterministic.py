@@ -188,3 +188,59 @@ def test_new_verbs_are_bound_in_the_parser():
     ]
     for argv, fname in cases:
         assert _build_parser().parse_args(argv).func.__name__ == fname
+
+
+# ── the revision contract on the CLI surface ────────────────────────────────────
+# These are the primitives the Claude Code skills drive, so their JSON shape is part of the contract:
+# a skill reads `revision`, reasons, then hands it back on apply and on save.
+
+
+def test_session_init_json_reports_the_revision(workspace, tmp_path):
+    r = _run_json(["session", "init", "Build a leave approval system.", "--json"])
+    assert r["revision"] == 0  # a fresh session has no model yet
+
+    (tmp_path / "p.json").write_text(json.dumps(_full_model()))
+    _run(["model", "apply", r["slug"], str(tmp_path / "p.json"), "--json"])
+    # `init` is idempotent: re-running it on the same request returns the session as it now stands,
+    # so a caller about to apply learns it is no longer at revision 0.
+    again = _run_json(["session", "init", "Build a leave approval system.", "--json"])
+    assert again["slug"] == r["slug"]
+    assert again["revision"] == 1
+
+
+def test_model_apply_honours_the_expected_revision_precondition(workspace, tmp_path):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps(_full_model()))
+    _run(["model", "apply", "s", str(p), "--expected-revision", "0", "--json"])  # fresh: asserts 0
+
+    p2 = tmp_path / "p2.json"
+    p2.write_text(json.dumps(_full_model(**{"workflow": _slot(80, "explicit", "high", "new")})))
+    _run(["model", "apply", "s", str(p2), "--expected-revision", "1", "--json"])
+
+    # Applying again from the same base is refused with a structured, actionable error.
+    with pytest.raises(SystemExit) as exc:
+        _run(["model", "apply", "s", str(p2), "--expected-revision", "1", "--json"])
+    assert exc.value.code != 0
+
+
+def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps(_full_model()))
+    _run(["model", "apply", "s", str(p), "--json"])                       # revision 1
+    p2 = tmp_path / "p2.json"
+    p2.write_text(json.dumps(_full_model(**{"workflow": _slot(80, "explicit", "high", "new")})))
+    _run(["model", "apply", "s", str(p2), "--json"])                      # revision 2
+
+    doc = tmp_path / "prd.md"
+    doc.write_text("# PRD\n")
+    # Reasoned from revision 1, saved once the session is at 2: the answer is knowable, so it is given
+    # here rather than only on a later `artifact list`.
+    r = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc),
+                   "--revision", "1", "--json"])
+    assert r["revision"] == 1 and r["stale"] is True
+    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is True
+
+    fresh = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc), "--json"])
+    assert fresh["revision"] == 2 and fresh["stale"] is False

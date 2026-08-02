@@ -104,3 +104,20 @@ class RevisionConflictError(RequivoError):
     local CLI user (which omits the precondition); a hard requirement for a concurrent Web service."""
 
     code = "revision_conflict"
+
+
+class SessionLockedError(RequivoError):
+    """Another writer holds the session lock and did not release it within the timeout. Distinct from
+    `RevisionConflictError`: nothing raced to a conclusion here, the write never got to start, so
+    retrying it unchanged is the correct response."""
+
+    code = "session_locked"
+
+
+class ProviderOutputError(RequivoError):
+    """A provider could not be made to return output matching the contract, after every retry. The
+    retry loop's own failure is a Requivo condition with a cause the user can act on (usually: try
+    again, or a model that cannot hold the schema) — not an internal defect, so it must not reach a
+    surface as a bare traceback."""
+
+    code = "provider_output_invalid"

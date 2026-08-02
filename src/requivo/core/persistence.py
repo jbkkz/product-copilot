@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import threading
+import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -12,8 +17,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from requivo import __version__
 from requivo.core.contracts import EngineOutput
-from requivo.core.errors import InvalidSessionError, InvalidSlugError, RevisionConflictError, SessionNotFoundError
+from requivo.core.errors import (
+    InvalidSessionError,
+    InvalidSlugError,
+    RevisionConflictError,
+    SessionLockedError,
+    SessionNotFoundError,
+)
 from requivo.paths import output_root, session_root
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+try:  # Windows
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 SESSION_FORMAT_VERSION = 1
 # The framework's slot schema version. Bumped when the slot vocabulary changes shape; recorded on
@@ -24,16 +44,116 @@ SCHEMA_VERSION = 1
 def _atomic_write(path: Path, content: str) -> Path:
     """Write via a temp file + atomic rename, so an interruption can never leave a half-written file
     where a good one was. model.json is the durable product — a truncated JSON would be unrecoverable,
-    and `os.replace` (via Path.replace) is atomic on the same filesystem."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)
+    and `os.replace` (via Path.replace) is atomic on the same filesystem.
+
+    The temp name is unique per writer. A fixed one (`.model.json.tmp`) made concurrent writers share
+    a scratch file: two of them interleaved write-then-rename, and the second `replace()` raised
+    `FileNotFoundError` on a temp file the first had already renamed away — a crash where the caller
+    should have seen either a clean write or a `RevisionConflictError`."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # never leave scratch behind on a failed write
+        raise
     return path
+
+
+# ── Session locking ────────────────────────────────────────────────────────────
+# A session mutation is a *compound* write: read the metadata, check the revision precondition, write
+# model.json, write revisions/NNNN-model.json, then rewrite session.json. Between the check and the
+# last write, another writer reading the same revision would produce a second revision from the same
+# base and silently overwrite the first. `expected_revision` alone cannot prevent that — it is checked
+# and then acted on, and the gap between the two is the race. These helpers close it.
+#
+# `flock` (and its Windows equivalent) is held by the *open file description*, so the kernel releases
+# it when the process dies — a crash cannot leave a session permanently locked, which is the failure
+# mode a lockfile-by-existence scheme has. Held locks are tracked per thread so the service layer can
+# nest `lock()` around several core calls that each take it.
+
+_LOCK_TIMEOUT_SECONDS = 30.0
+_held_locks = threading.local()
+
+
+def _acquire(fd: int, slug: str) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:  # pragma: no cover - Windows
+        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # blocks ~10s per attempt, then raises
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise SessionLockedError(
+                        f"session '{slug}' is locked by another process; retry in a moment",
+                        details={"slug": slug}) from None
+
+
+def _release(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    elif msvcrt is not None:  # pragma: no cover - Windows
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def session_lock(slug: str) -> Iterator[None]:
+    """Hold the exclusive lock on a session for the duration of the block.
+
+    Re-entrant within a thread: a service that wraps a whole update can take the lock once, and the
+    core calls inside it (`save_revision`, `save_session_artifact`) re-enter without deadlocking.
+    Across threads and across processes the lock is genuinely exclusive."""
+    depths: dict[str, int] = getattr(_held_locks, "depths", None) or {}
+    _held_locks.depths = depths
+    if depths.get(slug):
+        depths[slug] += 1
+        try:
+            yield
+        finally:
+            depths[slug] -= 1
+        return
+
+    d = canonical_dir(slug)
+    d.mkdir(parents=True, exist_ok=True)
+    fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    try:
+        _acquire(fd, slug)
+        acquired = True
+        depths[slug] = 1
+        yield
+    finally:
+        depths[slug] = 0
+        try:
+            if acquired:
+                _release(fd)
+        finally:
+            os.close(fd)
+
+
+# A slug becomes a directory name, so it is bounded by what the filesystem accepts (~255 bytes on ext4
+# and APFS, and the whole *path* on Windows). 80 leaves generous room for the session subtree beneath
+# it. `_slug()` stays under the smaller base ceiling so a uniqueness suffix still fits inside the cap.
+MAX_SLUG_LENGTH = 80
+_SLUG_BASE_LENGTH = 64
 
 
 def _slug(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())[:5]
-    return "-".join(words) or "discovery"
+    base = "-".join(words) or "discovery"
+    if len(base) <= _SLUG_BASE_LENGTH:
+        return base
+    # Five words are usually short, but nothing guarantees it: one 300-character token yields a
+    # 300-character directory name and the filesystem refuses it with a bare OSError. Truncate
+    # deterministically, then re-attach identity as a short hash so two different long requests can
+    # never collapse onto the same session directory.
+    keep = base[:_SLUG_BASE_LENGTH - 7].rstrip("-")
+    return f"{keep}-{hashlib.sha1(text.encode('utf-8')).hexdigest()[:6]}"
 
 
 def resolve_slug(base: str, request: str) -> str:
@@ -160,9 +280,15 @@ class RevisionRecord(BaseModel):
 
 
 class SessionMeta(BaseModel):
-    """The versioned session metadata (`session.json`). `extra="ignore"` keeps an older reader from
-    choking on a field a newer Requivo added; `migrate_session()` is the explicit version frontier."""
-    model_config = ConfigDict(extra="ignore")
+    """The versioned session metadata (`session.json`). `migrate_session()` is the explicit version
+    frontier.
+
+    `extra="allow"` — matching `RevisionRecord` — so a field a *newer* Requivo added survives a
+    round-trip through an older one. Under `extra="ignore"` the older reader loaded the session fine
+    and then dropped the unknown field the moment it wrote the file back, which turns "an old reader
+    tolerates a new field" into "an old reader silently destroys it on first use". Forward
+    compatibility is a promise about the file, not just about the load."""
+    model_config = ConfigDict(extra="allow")
 
     format_version: int = SESSION_FORMAT_VERSION
     requivo_version: str = __version__
@@ -177,7 +303,7 @@ class SessionMeta(BaseModel):
     schema_version: int = SCHEMA_VERSION
     # (A session-level `prompt_versions` map lived here and was never written. Prompt identity belongs
     # to the revision that was reasoned with it, not to the session — see RevisionRecord.prompt_version.
-    # `extra="ignore"` means sessions written before 0.9.2 still load; the dead key is simply dropped.)
+    # It is listed in _RETIRED_KEYS so `extra="allow"` doesn't carry the dead key forever.)
     current_revision: int = 0            # 0 == session created but no model applied yet
     revisions: list[RevisionRecord] = Field(default_factory=list)  # provenance log, one per applied revision
     artifact_status: dict[str, ArtifactStatus] = Field(default_factory=dict)
@@ -208,6 +334,14 @@ def validate_slug(slug: str) -> str:
         raise InvalidSlugError(
             f"invalid session slug {slug!r}; expected kebab-case [a-z0-9-], e.g. 'leave-approval'",
             details={"slug": slug})
+    # Length is part of validity, not a separate concern: an over-long slug is a directory name the
+    # filesystem rejects, and it fails deep inside a write as an OSError instead of at the boundary.
+    # `_slug()` never emits one; an explicit --slug or an API caller can.
+    if len(slug) > MAX_SLUG_LENGTH:
+        raise InvalidSlugError(
+            f"session slug is {len(slug)} characters; the maximum is {MAX_SLUG_LENGTH}",
+            details={"slug": slug[:MAX_SLUG_LENGTH], "length": len(slug),
+                     "max_length": MAX_SLUG_LENGTH})
     return slug
 
 
@@ -244,10 +378,17 @@ def write_meta(slug: str, meta: SessionMeta) -> Path:
     return _atomic_write(d / "session.json", meta.model_dump_json(indent=2))
 
 
+# Keys a past Requivo wrote (or declared) and no longer means anything. `extra="allow"` preserves
+# every unknown key, which is right for a key from the *future* and wrong for one from the past — so
+# retirement is explicit here, in the migration, rather than implicit in the model config.
+_RETIRED_KEYS = ("prompt_versions",)
+
+
 def migrate_session(data: dict) -> SessionMeta:
     """The version frontier: turn a raw session.json dict into a `SessionMeta`, upgrading old formats.
     Only v1 exists today, but the boundary is explicit — a session written by a *newer* Requivo is
-    rejected clearly rather than silently mis-read."""
+    rejected clearly rather than silently mis-read. Unknown keys are carried through untouched (see
+    `SessionMeta`); known-retired ones are dropped."""
     fv = data.get("format_version", SESSION_FORMAT_VERSION)
     if fv > SESSION_FORMAT_VERSION:
         raise InvalidSessionError(
@@ -255,7 +396,7 @@ def migrate_session(data: dict) -> SessionMeta:
             "— upgrade requivo.",
             details={"format_version": fv},
         )
-    return SessionMeta.model_validate(data)
+    return SessionMeta.model_validate({k: v for k, v in data.items() if k not in _RETIRED_KEYS})
 
 
 def read_meta(slug: str) -> SessionMeta:
@@ -297,34 +438,40 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
     `RevisionConflictError` unless the session is still at that revision — so two updates racing from
     the same base can't both land silently. The single-user CLI omits it (last-writer-wins is fine
     locally); a concurrent Web service passes the revision the client read. `provenance` carries the
-    surface-supplied fields (provider / model_name / surface / prompt_version) for the revision log."""
-    meta = read_meta(slug)  # raises SessionNotFoundError if the session isn't there
-    if expected_revision is not None and meta.current_revision != expected_revision:
-        raise RevisionConflictError(
-            f"session '{slug}' is at revision {meta.current_revision}, not the expected {expected_revision}"
-            " — reload the current model and re-apply",
-            details={"slug": slug, "expected": expected_revision, "actual": meta.current_revision})
-    d = canonical_dir(slug)
-    (d / "revisions").mkdir(parents=True, exist_ok=True)
-    rev = meta.current_revision + 1
-    payload = model.model_dump_json(indent=2)
-    _atomic_write(d / "model.json", payload)
-    _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
-    prov = dict(provenance or {})
-    meta.revisions.append(RevisionRecord(
-        revision=rev,
-        created_at=_now(),
-        previous_revision=meta.current_revision or None,
-        model_hash=_hash(payload),
-        provider=prov.get("provider"),
-        model_name=prov.get("model_name"),
-        surface=prov.get("surface"),
-        prompt_version=prov.get("prompt_version"),
-    ))
-    meta.current_revision = rev
-    meta.updated_at = _now()
-    write_meta(slug, meta)
-    return rev, meta
+    surface-supplied fields (provider / model_name / surface / prompt_version) for the revision log.
+
+    The precondition and every write it guards run under `session_lock`, because a check that is not
+    held across the writes it authorises is not a precondition — two writers could both read revision
+    N, both pass the check, and both write revision N+1."""
+    with session_lock(slug):
+        meta = read_meta(slug)  # raises SessionNotFoundError if the session isn't there
+        if expected_revision is not None and meta.current_revision != expected_revision:
+            raise RevisionConflictError(
+                f"session '{slug}' is at revision {meta.current_revision}, not the expected "
+                f"{expected_revision} — reload the current model and re-apply",
+                details={"slug": slug, "expected": expected_revision,
+                         "actual": meta.current_revision})
+        d = canonical_dir(slug)
+        (d / "revisions").mkdir(parents=True, exist_ok=True)
+        rev = meta.current_revision + 1
+        payload = model.model_dump_json(indent=2)
+        _atomic_write(d / "model.json", payload)
+        _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+        prov = dict(provenance or {})
+        meta.revisions.append(RevisionRecord(
+            revision=rev,
+            created_at=_now(),
+            previous_revision=meta.current_revision or None,
+            model_hash=_hash(payload),
+            provider=prov.get("provider"),
+            model_name=prov.get("model_name"),
+            surface=prov.get("surface"),
+            prompt_version=prov.get("prompt_version"),
+        ))
+        meta.current_revision = rev
+        meta.updated_at = _now()
+        write_meta(slug, meta)
+        return rev, meta
 
 
 def load_session_model(slug: str) -> EngineOutput:
@@ -351,28 +498,32 @@ def session_request(slug: str) -> str:
 
 
 def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
-                          source_revision: int) -> ArtifactStatus:
+                          source_revision: int, *, stale: bool = False) -> ArtifactStatus:
     """Write an artifact under artifacts/ and record its provenance (source revision) in session.json.
 
     The revision is validated against the session's history first: provenance that cannot be true is
     worse than none, because every freshness question downstream is answered from it. A revision in
     the future (or before the first model) is refused rather than recorded.
+
+    `stale` is supplied by the caller, which is the layer that knows the dependency graph — see
+    `ArtifactService.save`. Core records freshness; it does not decide it.
     """
-    meta = read_meta(slug)
-    if not 1 <= source_revision <= meta.current_revision:
-        raise InvalidSessionError(
-            f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' has "
-            f"revisions 1..{meta.current_revision or 0}",
-            details={"slug": slug, "source_revision": source_revision,
-                     "current_revision": meta.current_revision})
-    d = canonical_dir(slug)
-    (d / "artifacts").mkdir(parents=True, exist_ok=True)
-    _atomic_write(d / "artifacts" / filename, content)
-    st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=False)
-    meta.artifact_status[artifact_type] = st
-    meta.updated_at = _now()
-    write_meta(slug, meta)
-    return st
+    with session_lock(slug):
+        meta = read_meta(slug)
+        if not 1 <= source_revision <= meta.current_revision:
+            raise InvalidSessionError(
+                f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' "
+                f"has revisions 1..{meta.current_revision or 0}",
+                details={"slug": slug, "source_revision": source_revision,
+                         "current_revision": meta.current_revision})
+        d = canonical_dir(slug)
+        (d / "artifacts").mkdir(parents=True, exist_ok=True)
+        _atomic_write(d / "artifacts" / filename, content)
+        st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=stale)
+        meta.artifact_status[artifact_type] = st
+        meta.updated_at = _now()
+        write_meta(slug, meta)
+        return st
 
 
 def write_artifact_file(slug: str, filename: str, content: str) -> Path:

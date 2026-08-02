@@ -54,9 +54,11 @@ Either way, verify with `/help` → **Custom commands**: the six skills appear u
 namespace. They are invoked as `/requivo:discover`, `/requivo:answer`, and so on — Claude Code always
 namespaces plugin skills as `/<plugin>:<skill>`.
 
-**Versioning:** the plugin version tracks the Requivo release it was tested against (0.9.2 here). The
-skills call the `requivo` CLI, so keep the two roughly in step — an older CLI may not have a verb a
-newer skill uses.
+**Versioning:** the plugin version tracks the Requivo release it was tested against — see
+`version` in `.claude-plugin/plugin.json`, which a test pins to the package's own version. (It is
+deliberately not repeated in this sentence: the number was written out here once and had drifted a
+release behind by the next tag.) The skills call the `requivo` CLI, so keep the two in step — an older
+CLI may not have a verb a newer skill uses.
 
 ## How it works — two modes
 

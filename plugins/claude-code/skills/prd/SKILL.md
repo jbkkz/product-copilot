@@ -14,6 +14,8 @@ tracks it. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 requivo model show <slug>
 requivo status <slug> --json
 ```
+Note the `revision` — call it `N`. It is the model this PRD will rest on, and you will state it when
+you save.
 
 ## 2. Reason → write the PRD
 Turn the model into a PRD (title, summary, problem, goals, users, in/out of scope, requirements with
@@ -30,7 +32,13 @@ Write the PRD markdown to `/tmp/requivo:prd.md`.
 
 ## 3. Save it as a tracked artifact
 ```
-requivo artifact save <slug> --type prd --file /tmp/requivo:prd.md
+requivo artifact save <slug> --type prd --file /tmp/requivo:prd.md --revision N
 ```
+`--revision N` is the revision you read in step 1 — the model you actually reasoned from. Writing a
+PRD takes a while, and if the session moved in between, Core compares the two and records the PRD
+stale rather than filing a superseded document as current.
+
 The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
-on flags it stale (`requivo status` will show it). Confirm the save; clean up the temp file.
+on flags it stale (`requivo status` will show it). Read `stale` back from the save output: if it is
+`true`, the model moved while you were writing — say so plainly and offer to regenerate. Confirm the
+save; clean up the temp file.

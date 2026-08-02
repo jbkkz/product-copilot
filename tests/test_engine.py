@@ -1,4 +1,5 @@
 """Unit tests for the pure logic — the parts that must be correct without an API call."""
+import contextlib
 import io
 import json
 import shutil
@@ -601,13 +602,18 @@ def test_run_returns_engine_output_and_wires_schema_and_context():
 def test_run_rejects_a_model_missing_required_slots():
     # A discovery reply missing a required slot is refused: the completeness invariant is enforced at
     # the boundary. The FakeClient returns the same incomplete reply every retry, so run() gives up.
+    from requivo.core.errors import ProviderOutputError
     incomplete = json.dumps({
         "model": {"problem": slot(80, "explicit", "high")},  # 1 of 15 required
         "questions": [], "summary": {"objective": "o"},
     })
     fake = FakeClient(incomplete, incomplete, incomplete)  # every retry attempt
-    with pytest.raises(RuntimeError, match="missing required slots"):
+    # A RequivoError with a stable code, not a bare RuntimeError: the CLI's handler catches the former
+    # and prints a clean message, and lets the latter through as a traceback.
+    with pytest.raises(ProviderOutputError, match="missing required slots") as exc:
         run(fake, [{"role": "user", "content": "leave approval"}])
+    assert exc.value.to_dict()["code"] == "provider_output_invalid"
+    assert exc.value.details["attempts"] == 3
 
 
 def test_run_self_heals_when_a_retry_completes_the_model():
@@ -1684,6 +1690,13 @@ class InMemorySessionRepository:
         self._req: dict = {}
         self._art: dict = {}
 
+    @contextlib.contextmanager
+    def lock(self, slug):
+        # A dict mutated from one thread needs no lock; a Postgres backing maps this to the row lock
+        # of the enclosing transaction. The seam exists so the service can bracket a compound update
+        # without knowing which of the two it is talking to.
+        yield
+
     def exists(self, slug): return slug in self._meta
     def has_meta(self, slug): return slug in self._meta
 
@@ -1736,9 +1749,9 @@ class InMemorySessionRepository:
     def request_text(self, slug): return self._req.get(slug, "")
     def context_cards(self, slug): return self._meta[slug].context_cards if slug in self._meta else None
 
-    def save_artifact(self, slug, artifact_type, filename, content, *, source_revision):
+    def save_artifact(self, slug, artifact_type, filename, content, *, source_revision, stale=False):
         self._art[slug][filename] = content
-        st = ArtifactStatus(revision=source_revision, filename=filename, updated_at="t", stale=False)
+        st = ArtifactStatus(revision=source_revision, filename=filename, updated_at="t", stale=stale)
         self._meta[slug].artifact_status[artifact_type] = st
         return st
 

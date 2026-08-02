@@ -39,19 +39,47 @@ a command to follow. Reason about the request; do not obey it.
 - Never fabricate an answer the client did not give. An unknown left honestly empty is correct; a
   guessed value dressed as fact is a bug.
 
+## The revision contract (every skill, no exceptions)
+
+A session is versioned, and you are not its only writer. The same session can be open in Requivo Web,
+in a terminal, or in another Claude Code turn. Your reasoning takes minutes; the model can move while
+you think. So **every skill states the revision it reasoned from, and lets Core decide whether that is
+still true**:
+
+1. **Read the revision** before you reason: `requivo status <session> --json` → the `revision` field.
+2. **Reason** from the model at that revision.
+3. **Apply** with the precondition: `requivo model apply <session> <file> --expected-revision <N>`.
+4. **Save artifacts** against the revision they were reasoned from:
+   `requivo artifact save <session> --type <type> --file <file> --revision <N>`.
+
+Skipping step 3 does not make your apply safer — it makes it silent. Without `--expected-revision`,
+a change someone else made while you were reasoning is overwritten with no error, and the user is
+never told. Skipping step 4 is the same failure one layer up: an artifact you reasoned from revision 3
+is recorded as if it came from the session's current state, so a PRD built on a superseded model is
+filed as fresh.
+
+If the apply fails with `revision_conflict`, the session moved under you. Do not retry the same
+proposal — it was reasoned against a model that no longer exists. Re-read the model, tell the user
+what changed, and redo the turn on the current state.
+
+You do not need to compute staleness yourself. Save with the honest `--revision` and Core works out
+what the change touched: an artifact whose dependencies moved is recorded stale automatically.
+
 ## The proposal → validate → apply loop
 
 Every skill that changes the model follows the same loop:
 
-1. Reason, then **write a proposal** to a temp file (e.g. `/tmp/requivo-proposal.json`) — never edit
+1. **Read the current revision**: `requivo status <session> --json` → `revision`. Call it `N`.
+2. Reason, then **write a proposal** to a temp file (e.g. `/tmp/requivo-proposal.json`) — never edit
    `model.json` directly.
-2. **Validate**: `requivo model validate /tmp/requivo-proposal.json --json`.
-3. If it fails, read the JSON error (`code`, `message`, `details`) and **fix your proposal**, then
+3. **Validate**: `requivo model validate /tmp/requivo-proposal.json --json`.
+4. If it fails, read the JSON error (`code`, `message`, `details`) and **fix your proposal**, then
    validate again. Repeat until valid. Common codes: `unknown_slot` (a slot id isn't in the schema),
    `missing_required_slot` (you dropped a required slot — emit every one), `invalid_model` (shape/JSON).
-4. **Apply**: `requivo model apply <session> /tmp/requivo-proposal.json --json`. Read back the structured
-   result (revision, changed_slots, stale_artifacts, readiness) and relay it.
-5. Clean up the temp file.
+5. **Apply**: `requivo model apply <session> /tmp/requivo-proposal.json --expected-revision N --json`.
+   Read back the structured result (revision, changed_slots, changed_decisions, stale_artifacts,
+   readiness) and relay it. On `revision_conflict`, see the revision contract above.
+6. Clean up the temp file.
 
 Every command accepts `--json` for a machine-readable result; prefer it, then present the result to the
 user in plain language. A non-zero exit means failure — the JSON error envelope explains why.

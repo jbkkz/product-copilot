@@ -13,6 +13,9 @@ analysis; Requivo tracks the artifact. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md`
 ```
 requivo status <slug> --json
 ```
+Note the `revision` — call it `N`. It is the model this assessment will rest on, and you will state it
+when you save.
+
 If critical unknowns remain (blocking slots), **say so up front** in the assessment. A brief written on
 a thin model must flag its assumptions — never present an `inferred` slot or an open decision as settled.
 
@@ -37,8 +40,14 @@ Write the assessment markdown to `/tmp/requivo:brief.md`.
 
 ## 4. Save it as a tracked artifact
 ```
-requivo artifact save <slug> --type brief --file /tmp/requivo:brief.md
+requivo artifact save <slug> --type brief --file /tmp/requivo:brief.md --revision N
 ```
-This ties the assessment to the model revision it was written from. The assessment is a judgment over
-the whole model, so any later material change to it flags the saved copy stale. Confirm the save, then
-clean up the temp file.
+`--revision N` is the revision you read in step 1 — the model you actually reasoned from, not
+whatever the session has reached by the time you finish writing. If the session moved in between,
+Core compares the two and records the assessment stale on the spot, which is the honest outcome.
+Omitting the flag claims the current revision and files a superseded assessment as fresh.
+
+The assessment is a judgment over the whole model, so any later material change to it flags the saved
+copy stale. Read `stale` back from the save output: if it is `true`, the model moved while you were
+writing — tell the user plainly that the assessment is already behind and offer to redo it. Then clean
+up the temp file.

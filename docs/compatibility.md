@@ -24,10 +24,16 @@ Concretely, guaranteed:
   frozen 0.8.2 `session.json` verbatim.
 - **A session written by a newer Requivo is refused, clearly** (`invalid_session`, "upgrade requivo")
   rather than half-understood.
+- **An older Requivo preserves a field it does not understand.** Since 0.9.4, an unknown key in
+  `session.json` survives a round-trip: the older reader loads the session, mutates it, writes it back,
+  and the newer version's field is still there. This is stronger than "readers ignore what they do not
+  know", and it is what makes adding a field genuinely safe — before 0.9.4 the unknown key was dropped
+  the first time an older Requivo wrote the file, so a mixed-version workspace quietly destroyed it.
+  Keys that Requivo has *retired* are the deliberate exception: those are dropped, in `migrate_session()`.
 
 What may change without a `format_version` bump:
 
-- **Adding** a field, anywhere. Readers ignore what they do not know.
+- **Adding** a field, anywhere. Readers ignore what they do not know, and preserve it on write.
 - **Retiring** a field that was never populated (this is how the unused session-level
   `prompt_versions` map was removed in 0.9.2).
 - Adding a slot to the schema, a new artifact type, or a new value in a provenance field.

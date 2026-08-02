@@ -37,7 +37,7 @@ from requivo.core.contracts import (
     Stories,
     missing_required_slots,
 )
-from requivo.core.errors import RequivoError
+from requivo.core.errors import ProviderOutputError, RequivoError
 
 try:  # The SDK is an optional extra: the deterministic core + CLI work without it (Claude Code mode).
     from anthropic import Anthropic, APIError
@@ -313,7 +313,14 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
             ]
     rec.latency_ms = int((time.perf_counter() - started) * 1000)
     _record(rec)  # record the spend even on give-up — those tokens were still billed
-    raise RuntimeError(f"No schema-valid JSON after {retries + 1} attempts: {last_err}")
+    # A structured Requivo error, not a bare RuntimeError: exhausting the retry loop is a *known*
+    # provider condition with an actionable cause, and every surface catches RequivoError. Raised as
+    # anything else, it escaped the CLI's handler and reached the user as a traceback.
+    raise ProviderOutputError(
+        f"the provider returned output that did not match the {out_model.__name__} contract after "
+        f"{retries + 1} attempts — the last failure was: {last_err}",
+        details={"contract": out_model.__name__, "attempts": retries + 1, "last_error": str(last_err)},
+    ) from last_err
 
 
 # ── Discovery ─────────────────────────────────────────────────────────────────

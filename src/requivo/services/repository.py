@@ -16,6 +16,8 @@ no legacy notion: there, `has_meta` == `exists` and `ensure_writable` is a no-op
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from typing import Optional, Protocol, runtime_checkable
 
 from requivo.core import persistence as store
@@ -28,6 +30,17 @@ from requivo.core.persistence import ArtifactStatus, SessionMeta
 class SessionRepository(Protocol):
     """The storage operations the service layer depends on — nothing more. Implementations map these
     onto a concrete backing (files today, Postgres in Cloud). Every method keys on a validated slug."""
+
+    def lock(self, slug: str) -> AbstractContextManager[None]:
+        """Hold exclusive write access to a session for the duration of the block.
+
+        A model update is several storage calls — read the metadata, save a revision, rewrite the
+        artifact flags — and it is only correct if no other writer can interleave with them. The
+        service takes this lock around the whole sequence rather than trusting each call to be
+        individually safe. Implementations must be re-entrant within a thread, since the calls inside
+        the block take it again. A file backing maps this to an OS file lock; a Postgres backing maps
+        it to the row lock of the enclosing transaction."""
+        ...
 
     def exists(self, slug: str) -> bool:
         """True if a usable session exists at all (for a file backing, canonical OR legacy)."""
@@ -84,8 +97,9 @@ class SessionRepository(Protocol):
         ...
 
     def save_artifact(self, slug: str, artifact_type: str, filename: str, content: str, *,
-                      source_revision: int) -> ArtifactStatus:
-        """Persist a generated artifact and record its provenance (source revision)."""
+                      source_revision: int, stale: bool = False) -> ArtifactStatus:
+        """Persist a generated artifact and record its provenance (source revision) and freshness.
+        `stale` is decided by the service from the dependency graph, never by the storage layer."""
         ...
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
@@ -98,6 +112,11 @@ class FileSessionRepository:
     fallback and migrate-on-first-mutation. A thin adapter over `core.persistence` — it holds no state,
     so it is safe to construct per call. The canonical-vs-legacy logic that used to live in
     `SessionService` lives here, where it belongs (a storage detail, not orchestration)."""
+
+    @contextmanager
+    def lock(self, slug: str) -> Iterator[None]:
+        with store.session_lock(slug):
+            yield
 
     def exists(self, slug: str) -> bool:
         return store.session_exists(slug) or store.legacy_exists(slug)
@@ -156,9 +175,9 @@ class FileSessionRepository:
         return None
 
     def save_artifact(self, slug: str, artifact_type: str, filename: str, content: str, *,
-                      source_revision: int) -> ArtifactStatus:
+                      source_revision: int, stale: bool = False) -> ArtifactStatus:
         return store.save_session_artifact(slug, artifact_type, filename, content,
-                                           source_revision=source_revision)
+                                           source_revision=source_revision, stale=stale)
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
         p = store.canonical_dir(slug) / "artifacts" / filename

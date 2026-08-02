@@ -104,12 +104,18 @@ migrated on first mutation.
 These are the rules a change must not quietly break. Each one exists because breaking it produced a
 bug that looked like correct behaviour.
 
-1. **Staleness is the dependency graph, never the revision number.** An artifact is stale when a slot
-   it rests on changed — not because the session moved past its source revision. The source revision is
-   *provenance*. Report `ArtifactStatus.stale`; never infer staleness by comparing revisions.
+1. **Staleness is the dependency graph, never the revision number.** An artifact is stale when
+   something it rests on changed — not because the session moved past its source revision. The source
+   revision is *provenance*. Report `ArtifactStatus.stale`; never infer staleness by comparing
+   revisions. Two edge sets feed it: the slots an artifact consumes (`ARTIFACT_SLOTS`) and the
+   reasoning layer (`REASONING_CONSUMERS` — every generator, since each is prompted with the full
+   model, so `diff_reasoning` invalidates on its own). Reasoning a turn merely *omits* is not a
+   removal: a refinement turn routinely replies without re-stating the brief.
 2. **A generation carries the revision it read.** Provider calls take seconds to minutes and the
    session can move underneath them. Capture `current_revision` before the call; pass it as
-   `expected_revision` on any apply and as `source_revision` on the artifact write.
+   `expected_revision` on any apply and as `source_revision` on the artifact write. Saving against an
+   older revision stays legal — `ArtifactService.save` then computes freshness against the current
+   model rather than assuming it. Never record `stale=False` because the caller didn't say otherwise.
 3. **Refuse, don't truncate; refuse, don't filter.** Over-long input is rejected, not cut — half a
    request reads exactly like a whole one. An unknown context card is an error, not something to drop:
    dropping it leaves an empty selection, and an empty selection means *every* card.
@@ -126,7 +132,15 @@ bug that looked like correct behaviour.
    between every surface, at `format_version` 1. Adding a field is free; renaming or repurposing a
    *populated* one needs a version bump and a migration in `migrate_session()`. A frozen 0.8.2
    `session.json` in `tests/test_sessions.py` pins the backward-compatibility half of that promise, and
-   `docs/compatibility.md` is the written contract — update it in the same change, not later.
+   `docs/compatibility.md` is the written contract — update it in the same change, not later. Forward
+   compatibility is the other half: persisted models are `extra="allow"`, so a field from a *newer*
+   Requivo survives a round-trip through an older one. Retiring a key is explicit, in `_RETIRED_KEYS`.
+9. **A precondition is held across the writes it authorises.** `save_revision` checks
+   `expected_revision` and then performs five writes; without `session_lock` around both, two writers
+   pass the same check and the second overwrites the first — the check reads as protection while
+   providing none. Every compound mutation runs under `repo.lock(slug)`, taken by the service so the
+   whole sequence is one unit. The lock is re-entrant per thread, and OS-held, so a crash releases it.
+   Any new multi-step write goes inside it; any scratch file gets a unique name.
 
 ## The runner
 

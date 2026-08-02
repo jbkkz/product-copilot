@@ -22,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from requivo.core.contracts import EngineOutput
-from requivo.core.dependencies import diff_models
 from requivo.core.persistence import ArtifactStatus
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
@@ -208,17 +207,12 @@ class DiscoveryService:
         return Generated(status=status, artifact=artifact, model=out)
 
     def _save_generated(self, slug: str, artifact_type: str, content: str, source_revision: int):
-        """Save a generated artifact against the revision it was actually produced from, then replay any
-        change that landed during generation through the dependency graph.
+        """Save a generated artifact against the revision it was actually produced from.
 
-        Without the replay, an artifact written from revision 1 while revision 2 was being applied would
-        be recorded at the current revision and inherit that revision's freshness — the one case where
-        a stale document reports itself as up to date."""
-        status = self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)
-        current = self.sessions.meta(slug).current_revision
-        if current != source_revision:
-            changed = diff_models(self.sessions.load_revision(slug, source_revision),
-                                  self.sessions.load_model(slug))
-            self.artifacts.mark_stale(slug, changed)
-            status = self.sessions.meta(slug).artifact_status[artifact_type]
-        return status
+        An artifact written from revision 1 while revision 2 was landing must not inherit revision 2's
+        freshness — that is the one case where a stale document reports itself as up to date. This used
+        to be handled here, by re-diffing after the write and replaying the change through the graph.
+        It now belongs to `ArtifactService.save`, which does it for *every* caller rather than only the
+        provider path: the same hazard reaches a Claude Code turn saving a document it wrote earlier.
+        Passing the honest source revision is the whole contribution this layer needs to make."""
+        return self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)

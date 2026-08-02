@@ -156,8 +156,12 @@ def _cmd_session_init(a, client) -> None:
     meta = SessionService().create_session(
         request, context_cards=cards, slug=a.slug, provider=a.provider)
     if a.json:
+        # `revision` is 0 for a genuinely new session — but init is idempotent, so re-running it on the
+        # same request returns an *existing* session that may already carry a model. A caller about to
+        # apply needs to know which of the two it got, and this is where it finds out.
         _print_json({"slug": meta.slug, "session_id": meta.session_id,
-                     "path": str(store.canonical_dir(meta.slug)), "context_cards": meta.context_cards})
+                     "path": str(store.canonical_dir(meta.slug)), "context_cards": meta.context_cards,
+                     "revision": meta.current_revision})
         return
     print(f"Created session '{meta.slug}' → {store.canonical_dir(meta.slug)}")
     print("  No model yet. Produce a proposal and run:")
@@ -332,9 +336,17 @@ def _cmd_artifact_save(a, client) -> None:
     content = Path(a.file).read_text()
     st = ArtifactService().save(slug, a.type, content, source_revision=a.revision)
     if a.json:
-        _print_json({"type": a.type, "filename": st.filename, "revision": st.revision})
+        # `stale` is reported on the *save*, not only on a later `artifact list`. Saving an artifact
+        # reasoned from a superseded revision is legitimate and now recorded honestly — but the caller
+        # that just did it is the one who can act on it, and it should not have to ask again to find out.
+        _print_json({"type": a.type, "filename": st.filename, "revision": st.revision,
+                     "stale": st.stale})
         return
-    print(f"Saved {a.type} → {store.canonical_dir(slug) / 'artifacts' / st.filename} (from revision {st.revision})")
+    where = store.canonical_dir(slug) / "artifacts" / st.filename
+    print(f"Saved {a.type} → {where} (from revision {st.revision})")
+    if st.stale:
+        print(f"  Marked stale: the model has moved past revision {st.revision} in ways this "
+              f"{a.type} rests on. Regenerate it to bring it current.")
 
 
 def _cmd_artifact_list(a, client) -> None:

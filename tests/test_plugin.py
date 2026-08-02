@@ -73,6 +73,19 @@ def test_repo_is_a_marketplace_pointing_at_this_plugin():
     assert entry["version"] == manifest["version"]
 
 
+def test_the_plugin_version_tracks_the_package_version():
+    """Four files declare a version — pyproject, the package, the plugin manifest, the marketplace
+    catalog — and each release edits them by hand. The plugin's had silently fallen a release behind,
+    which matters because the skills call CLI verbs and the version is the only thing telling a user
+    which CLI they were tested against. A hand-edited number needs a test, not a convention."""
+    from requivo import __version__
+
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert manifest["version"] == __version__
+    # And the prose must not restate it: the copy in the README is exactly what drifted before.
+    assert __version__ not in (PLUGIN / "README.md").read_text()
+
+
 def test_documented_skill_invocations_are_namespaced():
     # Claude Code always namespaces plugin skills as `/<plugin>:<skill>`. The README documented
     # `/requivo-discover`, which no user could ever type successfully.

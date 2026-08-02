@@ -15,7 +15,14 @@ from pathlib import Path
 from requivo.core import persistence as store
 from requivo.core.analysis import _readiness_blockers, model_status
 from requivo.core.contracts import EngineOutput
-from requivo.core.dependencies import diff_models, propagate
+from requivo.core.dependencies import (
+    ARTIFACT_FILES,
+    REASONING_CONSUMERS,
+    ReasoningDiff,
+    diff_models,
+    diff_reasoning,
+    propagate,
+)
 from requivo.core.persistence import SessionMeta
 from requivo.core.validation import validate_proposal
 from requivo.services.repository import SessionRepository, default_repository
@@ -40,12 +47,21 @@ class UpdateResult:
     invalidated_challenges: list[str] = field(default_factory=list)  # challenge headlines now in question
     stale_artifacts: list[str] = field(default_factory=list)        # artifact types now out of date
     readiness: Readiness = field(default_factory=lambda: Readiness(False, []))
+    # What moved in the reasoning layer — ids, per collection. Reported separately from
+    # `changed_slots` because they answer different questions: the slots say the *facts* moved, these
+    # say the *judgment over them* moved. Either can invalidate an artifact on its own.
+    changed_decisions: list[str] = field(default_factory=list)
+    changed_challenges: list[str] = field(default_factory=list)
+    changed_opportunities: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "status": self.status,
             "revision": self.revision,
             "changed_slots": self.changed_slots,
+            "changed_decisions": self.changed_decisions,
+            "changed_challenges": self.changed_challenges,
+            "changed_opportunities": self.changed_opportunities,
             "invalidated_decisions": self.invalidated_decisions,
             "invalidated_challenges": self.invalidated_challenges,
             "stale_artifacts": self.stale_artifacts,
@@ -165,15 +181,24 @@ class SessionService:
         service. `provenance` records who produced the revision (provider / surface / model)."""
         new = validate_proposal(proposal, require_complete=require_complete)
         self._ensure_canonical(slug)
-        current = self.load_model(slug) if self.repo.read_meta(slug).current_revision > 0 else None
-        return self._plan(slug, current, new, apply=True,
-                          expected_revision=expected_revision, provenance=provenance)
+        # One lock for the whole update. Reading the current model, saving the revision and rewriting
+        # the artifact flags are three storage calls that must see one consistent session: without
+        # this, a writer that lands between the read and the flag rewrite has its staleness silently
+        # reverted by ours.
+        with self.repo.lock(slug):
+            current = self.load_model(slug) if self.repo.read_meta(slug).current_revision > 0 else None
+            return self._plan(slug, current, new, apply=True,
+                              expected_revision=expected_revision, provenance=provenance)
 
     def _plan(self, slug: str, current: EngineOutput | None, new: EngineOutput, *, apply: bool,
               expected_revision: int | None = None, provenance: dict | None = None) -> UpdateResult:
         # A first model (no prior) counts every present slot as changed, so the whole blast radius is
         # reported; otherwise only the slots that materially moved.
         changed = diff_models(current, new) if current is not None else list(new.model.keys())
+        # The reasoning layer moves independently of the slots, and every generator is prompted with
+        # it, so it invalidates artifacts on its own. On a first apply there is nothing to compare
+        # against — the reasoning arrived with the model it describes.
+        reasoning = diff_reasoning(current, new) if current is not None else ReasoningDiff()
         # Artifacts rest on slots via the static ARTIFACT_SLOTS map, so the blast radius is basis-neutral
         # — any model with these `changed` slots yields the same artifact set.
         report = propagate(new, changed)
@@ -192,11 +217,12 @@ class SessionService:
             invalidated_decisions, invalidated_challenges = [], []
 
         def _resolve_stale(generated: set[str]) -> list[str]:
-            # The blast radius, intersected with what actually exists on disk. The saved assessment
-            # needs no special case here: it rests on every slot in `ARTIFACT_SLOTS`, so a change that
-            # unseats a decision or a challenge — which is always a change to some slot — reaches it
-            # through the same map as every other artifact.
-            return [t for t in report.artifacts if t in generated]
+            # The blast radius, intersected with what actually exists on disk. Two edge sets feed it:
+            # the slots an artifact consumes (ARTIFACT_SLOTS), and — when the reasoning layer moved —
+            # REASONING_CONSUMERS, which is every generator, since each is prompted with the full
+            # model. The saved assessment needs no special case in either: it rests on every slot.
+            hit = set(report.artifacts) | (REASONING_CONSUMERS if reasoning.changed else set())
+            return [t for t in ARTIFACT_FILES if t in hit and t in generated]
 
         if apply:
             revision, meta = self.repo.save_revision(
@@ -219,6 +245,9 @@ class SessionService:
             invalidated_challenges=invalidated_challenges,
             stale_artifacts=stale,
             readiness=_readiness(new),
+            changed_decisions=reasoning.decisions,
+            changed_challenges=reasoning.challenges,
+            changed_opportunities=reasoning.opportunities,
         )
 
     # ── status ──────────────────────────────────────────────────────────────────

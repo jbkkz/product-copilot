@@ -20,13 +20,18 @@ plugin and the Web app all read and write the same layout.
         ├── model.json          the current model — the durable product
         ├── revisions/
         │   └── 0001-model.json  one frozen file per applied revision
-        └── artifacts/           generated views (PRD, assessment, …)
+        ├── artifacts/           generated views (PRD, assessment, …)
+        └── .lock                the write lock (empty; safe to delete when nothing is running)
 ```
 
 - **model.json** is the product; every artifact is regenerated from it.
 - **revisions/** freezes each applied model, so history is inspectable and `requivo impact` can reason
   from a past point.
-- Every write is atomic (temp file + rename), so an interruption can't leave a half-written model.
+- Every write is atomic (temp file + rename), so an interruption can't leave a half-written model. The
+  temp file is unique per writer, so concurrent writers cannot collide on it.
+- **.lock** is an empty file held with an OS-level lock for the duration of a write. The kernel
+  releases it when the process ends, so a crash cannot leave a session permanently locked — there is
+  no stale-lock state to clean up, and no timeout to wait out.
 
 ## Revisions and provenance
 
@@ -51,15 +56,40 @@ Updates go through the single validated apply path and support an **optimistic-l
 Provider-backed operations set it for you — a generation or an answers turn holds the revision it read,
 so a change that lands while the provider is reasoning is a clean conflict rather than a lost update.
 
+A whole update — read the metadata, check the precondition, write the model, freeze the revision,
+rewrite the flags — runs under the session's write lock. The precondition and the writes it authorises
+have to be held together: checked and then acted on with a gap in between, two writers can both pass
+the same check and the second silently overwrites the first. Two Requivo processes on one session
+therefore serialise; the loser gets `revision_conflict`, which is a real answer, and never a
+half-applied session.
+
 ## Artifacts and freshness
 
 `session.json` tracks each generated artifact: its file, when it was written, the **source revision**
 it was generated from, and a `stale` flag.
 
-The source revision is *provenance*, not a verdict. An artifact is stale when a slot it rests on
-actually changed — computed from the dependency graph at apply time — not because the session has moved
-past its source revision. An old artifact whose inputs never moved is still fresh, and every surface
-reports the flag rather than comparing numbers.
+The source revision is *provenance*, not a verdict. An artifact is stale when something it rests on
+actually changed — computed from the dependency graph — not because the session has moved past its
+source revision. An old artifact whose inputs never moved is still fresh, and every surface reports the
+flag rather than comparing numbers.
+
+Two kinds of dependency feed that judgment:
+
+- **Slots** — the facts an artifact consumes, per artifact (`ARTIFACT_SLOTS`). The saved assessment is
+  the one that rests on all of them: it is a judgment over the whole model.
+- **The reasoning layer** — the design decisions, challenges and opportunities. Every generator is
+  prompted with the complete model, reasoning included, so a rewritten decision can change a PRD with
+  no slot touched. A model whose slots are identical but whose judgment moved is a different model.
+
+One asymmetry is deliberate: reasoning that a turn simply *omits* is not a removal. A refinement turn
+answers a question rather than re-deriving the brief, so its reply routinely carries no decisions at
+all; reading that silence as a deletion would mark every artifact stale on nearly every turn.
+
+Freshness is also computed when an artifact is saved **against an older revision** — `requivo artifact
+save … --revision N`. Reasoning and saving are not the same moment: a provider call takes minutes, and
+Claude Code may save a document it wrote several turns ago. The honest answer is knowable, so it is
+given: the source revision is diffed against the current model, and the artifact is recorded stale on
+the spot if its dependencies moved. `artifact save --json` returns the `stale` it recorded.
 
 ## Stable identifiers
 

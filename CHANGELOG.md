@@ -6,6 +6,67 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-08-02
+
+Integrity: the session store is now trustworthy under concurrent writers, and freshness and forward
+compatibility are guarantees rather than intentions. From an external review of 0.9.3 — everything
+here is a case where the store could lose a change or report something it could not know.
+
+### Fixed
+- **Two writers could both win.** `save_revision` checked `expected_revision` and *then* performed its
+  writes, with nothing holding the two together, so two processes reading the same revision both
+  passed the check and the second silently overwrote the first. Worse, they also shared one scratch
+  filename (`.model.json.tmp`), so the usual symptom was not a lost update but a `FileNotFoundError`
+  from `Path.replace` — a conflict presented as a bug in Requivo. Every compound mutation now runs
+  under a per-session OS lock (`.lock`, re-entrant per thread, released by the kernel on crash) and
+  every atomic write uses a temp name private to the writer. The loser gets `revision_conflict`, which
+  is a real answer. Reproduced by a twelve-thread regression test.
+- **An artifact saved against an older revision was recorded fresh.** `ArtifactService.save` took the
+  caller's `source_revision` and wrote `stale=False` beside it, so a PRD reasoned from revision 1 and
+  saved once the session had reached 3 sat on disk marked current. Reasoning and saving are not the
+  same moment — a provider call takes minutes, and Claude Code may save a document from several turns
+  ago — and the answer is knowable: the source revision is now diffed against the current model and
+  the artifact is recorded stale if its dependencies moved. `artifact save --json` returns the `stale`
+  it recorded, rather than making the caller ask again.
+- **A change to the reasoning layer alone left every artifact fresh.** Staleness was computed from
+  `diff_models`, which compares slots. But every generator is prompted with the complete model,
+  reasoning included, so a rewritten design decision can change a PRD with no slot touched — and the
+  apply reported `changed_slots: []` and marked nothing stale. `diff_reasoning` now covers decisions,
+  challenges and opportunities, comparing content rather than only ids (an id derives from a subset of
+  each item's fields, so an edited rationale kept its id and was invisible). Reasoning a turn merely
+  *omits* is deliberately not a removal: a refinement turn replies without re-stating the brief, and
+  reading that silence as a deletion would mark everything stale on nearly every turn.
+- **An older Requivo destroyed a field a newer one had added.** `SessionMeta` used `extra="ignore"`,
+  so an unknown key loaded fine and was then dropped the moment the older version wrote the file back
+  — turning the documented "adding a field is compatible" into "the first mutation by an older reader
+  deletes it". Persisted metadata is now `extra="allow"`, matching `RevisionRecord`, which had made
+  this choice for exactly this reason. Keys Requivo has genuinely retired are dropped explicitly, in
+  `_RETIRED_KEYS`, so forward compatibility does not mean carrying dead keys forever.
+- **A long request produced a slug the filesystem refused.** `_slug` took the first five words with no
+  length bound, so a single 300-character token became a 300-character directory name and the write
+  failed deep inside with a bare `OSError`. Slugs are now capped (80 characters, enforced in
+  `validate_slug` so an explicit `--slug` is bounded too) with deterministic truncation plus a content
+  hash, so two different long requests cannot collapse onto one session.
+- **The provider raised a bare `RuntimeError` after exhausting its retries.** Every surface catches
+  `RequivoError`, so this one reached the user as a traceback. It is now `ProviderOutputError`
+  (`provider_output_invalid`), carrying the contract, the attempt count and the last failure.
+- **The Claude Code skills ignored the locking primitives the CLI already had.** `model apply` accepts
+  `--expected-revision` and `artifact save` accepts `--revision`, and no skill passed either — so a
+  Claude Code turn could overwrite a change made in the Web while it was reasoning, with no error. The
+  revision contract is now stated once in `REASONING.md` and followed by every skill: read the
+  revision, reason from it, hand it back on apply and on save.
+- **The plugin version had drifted a release behind** because it was also written out in prose. The
+  prose no longer restates it, and a test pins the manifest to the package version.
+
+### Added
+- `session init --json` reports `revision`. Init is idempotent, so it can hand back an *existing*
+  session that already carries a model; a caller about to apply needs to know which of the two it got.
+- `model apply --json` reports `changed_decisions`, `changed_challenges` and `changed_opportunities`
+  alongside `changed_slots`. The slots say the facts moved; these say the judgment over them moved.
+- `SessionRepository.lock(slug)` — the storage seam gains the one operation the service needs to make
+  a compound update atomic. The file backing maps it to an OS file lock; a Postgres backing maps it to
+  the row lock of the enclosing transaction.
+
 ## [0.9.3] - 2026-08-01
 
 Pre-1.0 consolidation: the session format is declared public and pinned by a test, the deprecations
