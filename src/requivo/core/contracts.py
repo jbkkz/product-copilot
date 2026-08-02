@@ -50,6 +50,15 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{digest[:10]}"
 
 
+def _reject_duplicate_ids(label: str, ids: list[str]) -> None:
+    """Ids are pointers — a story id is cited by an estimate, an issue id by a `depends_on`, a scenario
+    id by a test run. A repeated one does not read as a duplicate downstream; it reads as one item,
+    and whichever copy is found first wins silently."""
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        raise ValueError(f"{label} repeat the same id: {dupes}")
+
+
 @functools.lru_cache(maxsize=1)
 def schema_slot_ids() -> tuple[frozenset[str], frozenset[str]]:
     """(allowed, required) slot ids from framework/model_schema.json. `required` excludes any slot
@@ -233,11 +242,29 @@ class Story(StrictModel):
     i_want: str = ""
     so_that: str = ""
     acceptance: list[str] = Field(default_factory=list)
+    # Which slots this story is traceable to. Checked against the schema like every other slot
+    # reference: an id that names nothing makes the story *look* grounded in the model while linking
+    # to nothing, and the trace is the reason the field exists.
     slots: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_slot_references(self):
+        allowed, _ = schema_slot_ids()
+        bad = sorted({sid for sid in self.slots if sid not in allowed})
+        if bad:
+            raise ValueError(f"story {self.id!r} references unknown slots (not in schema): {bad}")
+        return self
 
 
 class Stories(StrictModel):
     stories: list[Story] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_unique_ids(self):
+        # Ids are how an estimate item points back at a story. Two stories sharing one make that
+        # pointer ambiguous, and the estimate silently attaches to whichever came first.
+        _reject_duplicate_ids("stories", [st.id for st in self.stories])
+        return self
 
 
 class Complexity(str, Enum):
@@ -255,12 +282,28 @@ class EstimateItem(StrictModel):
     drives: list[str] = Field(default_factory=list)
     note: str = ""
 
+    @model_validator(mode="after")
+    def _validate_range(self):
+        # An inverted range is not a wide estimate, it is a broken one: the totals sum both ends, so
+        # `5–1` quietly drags the project low bound above its high bound, and the spread — which is
+        # how uncertainty is *communicated* here — reads backwards.
+        if self.days_low > self.days_high:
+            raise ValueError(
+                f"estimate for {self.story_id!r} has days_low ({self.days_low}) above days_high "
+                f"({self.days_high}) — low is the optimistic end")
+        return self
+
 
 class EstimateDraft(StrictModel):
     # What the LLM produces. Totals, confidence and spread_drivers are computed in Python
     # (from real slot data) so they can't be hallucinated.
     items: list[EstimateItem]
     risks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_unique_stories(self):
+        _reject_duplicate_ids("estimate items", [i.story_id for i in self.items])
+        return self
 
 
 class Leverage(str, Enum):
@@ -344,8 +387,10 @@ class Priority(str, Enum):
 
 
 class Requirement(StrictModel):
-    id: str
-    requirement: str
+    # A requirement with no text is a priority attached to nothing, and it still renders as a numbered
+    # line in the PRD — an empty row a reader has to decide the meaning of.
+    id: NonEmpty
+    requirement: NonEmpty
     priority: Priority
 
 
@@ -368,6 +413,11 @@ class PRD(StrictModel):
     open_questions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _validate_unique_requirement_ids(self):
+        _reject_duplicate_ids("requirements", [r.id for r in self.requirements])
+        return self
+
 
 class ScenarioKind(str, Enum):
     happy_path = "happy_path"
@@ -387,13 +437,22 @@ class Scenario(StrictModel):
 
 class Feature(StrictModel):
     name: NonEmpty
-    scenarios: list[Scenario] = Field(default_factory=list)
+    # A feature *is* its scenarios here — the document is a recette checklist, and a feature with none
+    # is a heading someone has to test by intuition.
+    scenarios: list[Scenario] = Field(min_length=1)
 
 
 class AcceptanceCriteria(StrictModel):
     title: NonEmpty
     features: list[Feature] = Field(min_length=1)
     open_questions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_unique_scenario_ids(self):
+        # Scenario ids are cited in test runs and bug reports, across features — so they are unique
+        # across the document, not per feature.
+        _reject_duplicate_ids("scenarios", [sc.id for f in self.features for sc in f.scenarios])
+        return self
 
 
 class EpicIssue(StrictModel):
@@ -413,6 +472,23 @@ class Epic(StrictModel):
     milestone: str = ""
     issues: list[EpicIssue] = Field(min_length=1)
     open_questions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_dependency_graph(self):
+        # `depends_on` is exported as a real link — a GitLab issue relation, a line in a GitHub body,
+        # an ordering an n8n flow acts on. An edge to an id this epic does not contain is a dependency
+        # on nothing, and it survives the export looking exactly like a real one.
+        ids = [i.id for i in self.issues]
+        _reject_duplicate_ids("epic issues", ids)
+        known = set(ids)
+        dangling = sorted({dep for i in self.issues for dep in i.depends_on if dep not in known})
+        if dangling:
+            raise ValueError(
+                f"epic issues depend on ids the epic does not define: {dangling}")
+        self_dep = sorted({i.id for i in self.issues if i.id in i.depends_on})
+        if self_dep:
+            raise ValueError(f"epic issues depend on themselves: {self_dep}")
+        return self
 
 
 class ReleaseNotes(StrictModel):

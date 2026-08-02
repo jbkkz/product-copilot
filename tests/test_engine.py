@@ -13,12 +13,10 @@ from pydantic import ValidationError
 
 from requivo.cli import _build_parser, _is_file_arg, app
 from requivo.core import persistence as store
-from requivo.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
-from requivo.core.persistence import _atomic_write, load_session, save_session, session_cards
-from requivo.paths import output_root
-from requivo.providers.anthropic import EngineError, _complete, _response_text, advise, answer_turn, current_model_name
-from requivo.services.artifacts import ArtifactService
-from src.engine import (
+from requivo.core.adapters import epic_export, epic_export_json, to_github, to_gitlab
+from requivo.core.analysis import _readiness_blockers, _state_of, estimate_confidence, soft_slots
+from requivo.core.context import load_context
+from requivo.core.contracts import (
     PRD,
     AcceptanceCriteria,
     Brief,
@@ -26,35 +24,30 @@ from src.engine import (
     DesignDecision,
     EngineOutput,
     Epic,
+    EstimateDraft,
     Leverage,
     Opportunity,
     ReleaseNotes,
     Slot,
     Stories,
-    _extract_json,
-    _readiness_blockers,
-    _slug,
-    _state_of,
-    criteria_markdown,
-    derive_stories,
-    epic_export,
-    epic_export_json,
-    epic_markdown,
-    estimate_confidence,
-    generate_prd,
-    load_context,
-    load_model,
-    prd_markdown,
-    release_markdown,
-    render_brief,
-    render_stories,
-    run,
-    save_model,
-    soft_slots,
-    to_github,
-    to_gitlab,
-    write_artifact,
 )
+from requivo.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
+from requivo.core.persistence import _atomic_write, _slug, load_model
+from requivo.providers.anthropic import (
+    EngineError,
+    _complete,
+    _extract_json,
+    _response_text,
+    advise,
+    answer_turn,
+    current_model_name,
+    derive_stories,
+    generate_prd,
+    run,
+)
+from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
+from requivo.render.terminal import render_brief, render_stories
+from requivo.services.artifacts import ArtifactService
 
 
 @pytest.fixture(autouse=True)
@@ -664,21 +657,6 @@ def test_derive_stories_returns_structured_stories():
     assert "=== USER STORIES ===" in text and "[S1] Submit a leave request" in text
 
 
-def test_artifact_paths_and_names():
-    # Guards R1: save_model / write_artifact resolve to out/<slug>/<file> and round-trip.
-    p = save_model(out({"problem": slot(80, "explicit", "high")}), "chartest-slug")
-    try:
-        assert p.name == "model.json"
-        assert p.parent.name == "chartest-slug"
-        assert p.parent.parent.name == "out"
-        a = write_artifact("chartest-slug", "prd.md", "# X\n")
-        assert a.parent == p.parent and a.name == "prd.md"
-        assert a.read_text() == "# X\n"
-        assert load_model(p).model["problem"].completeness == 80
-    finally:
-        shutil.rmtree(p.parent, ignore_errors=True)
-
-
 def test_slug_is_first_five_word_tokens():
     assert _slug("We'd like an invoice created automatically when signed") == "we-d-like-an-invoice"
     assert _slug("!!!") == "discovery"
@@ -1138,16 +1116,6 @@ def test_pc_impact_no_slots_prints_the_full_map():
 # ── Tier 2 (B): change-detection — stale artifacts on disk ────────────────────
 
 
-def test_stale_on_disk_only_flags_present_files_that_consume_a_changed_slot():
-    from requivo.core.dependencies import stale_on_disk
-    out_ = _out_with_decisions()
-    # workflow is consumed by prd, stories, estimate, criteria, epic, release
-    pairs = stale_on_disk(out_, ["workflow"], present={"prd.md", "epic.md", "model.json"})
-    names = {n for n, _f in pairs}
-    assert names == {"prd", "epic"}  # only the ones with a file present
-    # stories consumes workflow but has no file → never flagged even if "present"
-    assert "stories" not in names
-
 
 def test_unrelated_slot_change_keeps_artifact_fresh():
     # The freshness fix: an artifact goes stale only when the change reaches a slot it consumes — not
@@ -1448,22 +1416,6 @@ def test_pc_status_reports_no_usage_offline():
 # ── Tier 4: finishing polish (slug collisions, table escaping, card selection) ─
 
 
-def test_resolve_slug_avoids_silent_overwrite():
-    from requivo.core.persistence import resolve_slug, save_request
-
-    base = "slugtest-collide"
-    folder = output_root() /  base
-    try:
-        assert resolve_slug(base, "first request") == base          # free → clean slug
-        save_request(base, "first request")                         # base now owned by this request
-        assert resolve_slug(base, "first request") == base          # same request re-run → reuse
-        suffixed = resolve_slug(base, "a different request entirely")
-        assert suffixed != base and suffixed.startswith(base + "-")  # collision → hash suffix
-        assert resolve_slug(base, "a different request entirely") == suffixed  # deterministic
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
-
-
 def test_prd_markdown_escapes_pipes_in_table_cells():
     # A requirement containing a literal | would otherwise split the Markdown table row.
     prd = PRD(title="X", problem="P", requirements=[
@@ -1523,33 +1475,6 @@ def test_atomic_write_persists_content_and_leaves_no_tmp(tmp_path):
     # The temp sidecar is renamed onto the target, never left behind.
     assert not (tmp_path / ".model.json.tmp").exists()
     assert list(tmp_path.iterdir()) == [dest]
-
-
-def test_session_roundtrips_provenance_and_cards():
-    slug = "clitest-session"
-    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
-    try:
-        save_session(slug, request="build me a thing", model_name="claude-sonnet-5",
-                     context_cards=["financial-reporting"])
-        session = load_session(p)
-        assert session["requivo_version"]           # stamped from the package version
-        assert session["model_name"] == "claude-sonnet-5"
-        assert session["context_cards"] == ["financial-reporting"]
-        assert len(session["request_sha256"]) == 64          # a real sha256 hex digest
-        assert session_cards(p) == ["financial-reporting"]
-    finally:
-        shutil.rmtree(p.parent, ignore_errors=True)
-
-
-def test_session_cards_is_none_without_a_session_file():
-    # Pre-0.6.1 models have no session.json — readers must tolerate its absence and mean "all cards".
-    slug = "clitest-nosession"
-    p = save_model(out({"problem": slot(80, "explicit", "high")}), slug)
-    try:
-        assert load_session(p) == {}
-        assert session_cards(p) is None
-    finally:
-        shutil.rmtree(p.parent, ignore_errors=True)
 
 
 def test_response_text_concatenates_text_blocks_and_skips_others():
@@ -1667,18 +1592,6 @@ def test_cli_help_exits_cleanly():
     with pytest.raises(SystemExit) as ei:
         app(["--help"])
     assert ei.value.code == 0
-
-
-def test_console_scripts_alias_shares_one_entry_point():
-    # `requivo` is primary; `pc` is a temporary alias. Both must map to the exact same entry point.
-    from pathlib import Path
-
-    import requivo
-
-    repo_root = Path(requivo.__file__).resolve().parents[2]  # src/requivo/__init__.py → repo
-    pyproject = (repo_root / "pyproject.toml").read_text()
-    assert 'requivo = "requivo.cli:app"' in pyproject
-    assert 'pc = "requivo.cli:app"' in pyproject
 
 
 # ── SessionRepository: the storage seam (proves the service is backing-agnostic) ──
@@ -1799,3 +1712,69 @@ def test_session_service_runs_unchanged_on_a_non_file_repository():
     assert st["revision"] == 2 and "understanding" in st
     # provenance is recorded per revision on the non-file backing
     assert [rr.surface for rr in svc.meta("leave-mem").revisions] == ["cli-discover", None]
+
+
+# ── artifact contracts: references that point at something ───────────────────
+# These are *structural* rules, never judgments about content. Each one exists because the field is a
+# pointer that something downstream follows: an estimate finds its story by id, a tracker turns
+# `depends_on` into a real link, a story's `slots` is the trace back to the model. A pointer that
+# resolves to nothing survives every render looking exactly like one that resolves.
+
+
+def test_a_story_cannot_be_traced_to_a_slot_that_does_not_exist():
+    from requivo.core.contracts import Story
+
+    Story(id="S1", title="Approve leave", slots=["workflow"])           # a real slot is fine
+    with pytest.raises(ValidationError):
+        Story(id="S1", title="Approve leave", slots=["not-a-slot"])
+
+
+def test_stories_and_estimate_items_cannot_repeat_an_id():
+    from requivo.core.contracts import EstimateItem, Stories, Story
+
+    with pytest.raises(ValidationError):
+        Stories(stories=[Story(id="S1", title="One"), Story(id="S1", title="Two")])
+    with pytest.raises(ValidationError):
+        EstimateDraft(items=[
+            EstimateItem(story_id="S1", title="One", complexity="M", days_low=1, days_high=2),
+            EstimateItem(story_id="S1", title="Two", complexity="M", days_low=1, days_high=2)])
+
+
+def test_an_estimate_range_cannot_be_inverted():
+    from requivo.core.contracts import EstimateItem
+
+    EstimateItem(story_id="S1", title="X", complexity="M", days_low=1, days_high=5)
+    with pytest.raises(ValidationError):
+        # Not a wide estimate — a broken one. The totals sum both ends, so this drags the project's
+        # low bound above its high bound and the spread reads backwards.
+        EstimateItem(story_id="S1", title="X", complexity="M", days_low=5, days_high=1)
+
+
+def test_an_epic_cannot_depend_on_an_issue_it_does_not_contain():
+    from requivo.core.contracts import EpicIssue
+
+    ok = Epic(title="E", issues=[EpicIssue(id="#1", title="First"),
+                                 EpicIssue(id="#2", title="Second", depends_on=["#1"])])
+    assert len(ok.issues) == 2
+    with pytest.raises(ValidationError):
+        Epic(title="E", issues=[EpicIssue(id="#2", title="Second", depends_on=["#404"])])
+    with pytest.raises(ValidationError):
+        Epic(title="E", issues=[EpicIssue(id="#1", title="First", depends_on=["#1"])])
+
+
+def test_acceptance_criteria_need_a_scenario_per_feature_and_unique_scenario_ids():
+    from requivo.core.contracts import Feature, Scenario
+
+    sc = Scenario(id="AC-1", title="Happy", when="the manager approves", then=["it is approved"])
+    with pytest.raises(ValidationError):
+        Feature(name="Approval", scenarios=[])           # a heading with nothing to test
+    with pytest.raises(ValidationError):
+        AcceptanceCriteria(title="T", features=[Feature(name="A", scenarios=[sc]),
+                                                Feature(name="B", scenarios=[sc])])
+
+
+def test_a_prd_requirement_cannot_be_an_empty_row():
+    from requivo.core.contracts import Requirement
+
+    with pytest.raises(ValidationError):
+        Requirement(id="", requirement="", priority="must")

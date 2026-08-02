@@ -72,7 +72,7 @@ CLI may not have a verb a newer skill uses.
    Claude reasoning   deterministic  local UI
 ```
 
-- **Claude Code mode (this plugin):** Claude reasons in your session, writes a proposal file, and calls
+- **Claude Code mode (this plugin):** Claude reasons in your session, pipes the proposal in on stdin, and calls
   `requivo model validate` / `requivo model apply`. Requivo Core enforces the schema, versions the
   session, and computes readiness/impact. **No API key.**
 - **API mode (optional):** `requivo discover request.md` uses the Anthropic API to do the reasoning

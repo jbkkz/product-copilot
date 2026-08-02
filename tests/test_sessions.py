@@ -628,26 +628,33 @@ def test_update_missing_session_raises(workspace):
 # ── legacy migration on first mutation ──────────────────────────────────────────
 
 
-def test_legacy_session_is_migrated_on_first_apply(workspace):
-    # Seed a legacy out/<slug>/ session by hand (model + request + a generated artifact).
+def test_a_legacy_session_is_named_in_the_error_rather_than_migrated_behind_your_back(workspace):
+    """`out/` was the store until 0.8.0, and until 0.9.8 every read silently fell back to it and every
+    mutation migrated one in place. That kept old sessions working without the user knowing, which is
+    also what was wrong with it: the fallback ran on every read of every session for a layout nothing
+    has written in two minor versions, and "where does this session live?" had two answers throughout
+    the code. Migration is explicit now — so the one thing this layer still owes is an error that says
+    which command to run, instead of a bare "no session"."""
     legacy = store.legacy_dir("old")
-    (legacy).mkdir(parents=True)
+    legacy.mkdir(parents=True)
     (legacy / "model.json").write_text(json.dumps(_full_model()))
     (legacy / "request.txt").write_text("Legacy request.")
     (legacy / "prd.md").write_text("# Legacy PRD\n")
 
     svc = SessionService()
-    assert svc.exists("old")  # visible via the legacy root
-    # A read does not migrate.
-    svc.load_model("old")
-    assert not store.session_exists("old")
+    assert not svc.exists("old")
+    with pytest.raises(SessionNotFoundError) as e:
+        svc.load_model("old")
+    assert e.value.details.get("legacy") is True
+    assert "session migrate" in str(e.value)
 
-    # First mutation migrates in place, preserving the originals.
-    result = svc.update_model("old", _full_model(**{"problem": _slot(90, "explicit", "high", "P")}))
+    # And the explicit migration is intact: the model becomes revision 1, artifacts come with it,
+    # and the originals are left where they were.
+    store.migrate_legacy("old")
     assert store.session_exists("old")
-    assert (legacy / "model.json").exists()  # legacy left untouched
-    # The migrated model became revision 1, and the apply is revision 2.
+    assert (legacy / "model.json").exists()
+    result = svc.update_model("old", _full_model(**{"problem": _slot(90, "explicit", "high", "P")}))
     assert result.revision == 2
     d = store.canonical_dir("old")
     assert (d / "revisions" / "0001-model.json").exists()
-    assert (d / "artifacts" / "prd.md").read_text() == "# Legacy PRD\n"  # artifact carried over
+    assert (d / "artifacts" / "prd.md").read_text() == "# Legacy PRD\n"

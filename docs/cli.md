@@ -3,9 +3,8 @@
 > Every `requivo` command. For a first run, see [getting-started.md](getting-started.md).
 
 Run as `requivo <command>` after an install, `uv run requivo <command>` with uv, or
-`python scripts/requivo_cli.py <command>` from a bare clone. The short alias `pc` is a deprecated
-synonym. Commands that call the Anthropic API need the `anthropic` extra and `ANTHROPIC_API_KEY`;
-everything else is offline.
+`python scripts/requivo_cli.py <command>` from a bare clone. Commands that call the Anthropic API need
+the `anthropic` extra and `ANTHROPIC_API_KEY`; everything else is offline.
 
 Most verbs take a session **slug** or a path to a saved `model.json`.
 
@@ -45,7 +44,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo demo` | Replay a bundled run — no key, no network |
 | `requivo doctor [--json]` | Environment + install check |
 | `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
-| `requivo session init\|list\|show\|migrate\|export\|import` | Session lifecycle (`import --force` to replace a session of the same slug) |
+| `requivo session init\|list\|show\|verify\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
 | `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` for the revision it was reasoned from) |
 
@@ -82,27 +81,31 @@ overwrote each other), used a filename that is illegal on Windows, and needed `r
 
 `session import` validates before it writes anything: the archive must hold exactly one session
 directory whose name is a valid slug, within a file-count and expanded-size ceiling, with no entry
-that could escape the session root. It is then extracted to scratch space, confirmed to be a real
-session (`session.json` parses, its slug agrees with the directory, a claimed revision has a
-`model.json`), and only then moved into place. A slug that already exists is refused unless `--force`.
+that could escape the session root. It is then extracted to scratch space and put through the same
+integrity check as `session verify` — the revision log accounts for the model, every revision file is
+there and matches the hash recorded for it, the current model *is* the last revision, every artifact
+has a file — and only then moved into place.
 
-## Legacy flag CLI (deprecated)
+A slug that already exists is refused unless `--force`, and a forced replacement is a swap: the
+existing session steps aside and is deleted only once the new one is in place, so a failure leaves you
+with the session you had rather than neither.
 
-The original flag interface still runs, unchanged:
+`session export` reads under the session's write lock, so an archive can never combine an old
+`session.json` with a newer `model.json`, and it excludes `.lock` and any scratch file.
+
+## Sessions from the `out/` layout
+
+Before the versioned session store, discovery wrote to `out/<slug>/`. Nothing has written there since
+0.8.0, and since 0.9.8 nothing reads it implicitly either — the automatic fallback and the
+migrate-on-first-write are gone, along with the flag CLI (`python src/engine.py …`) that produced that
+layout.
+
+One command remains, and it is the only thing that opens an `out/` directory:
 
 ```bash
-python src/engine.py "…request…" --prd
-python src/engine.py --from out/<slug>/model.json --prd
+requivo session migrate        # convert every out/<slug>/ session into .requivo/sessions/
 ```
 
-It is **frozen and scheduled for removal in 1.1.0**, and it prints a deprecation notice when used. It
-writes to the old `out/<slug>/` layout rather than the versioned session store, so its output has no
-revisions, no provenance and no staleness tracking — everything the subcommand CLI above gives you.
-The equivalents:
-
-| Legacy | Modern |
-|---|---|
-| `python src/engine.py "request" --prd` | `requivo discover "request"` then `requivo prd <slug>` |
-| `python src/engine.py --from out/x/model.json --epic` | `requivo epic x` |
-
-The code lives in `requivo/legacy.py`; deleting that file is the whole removal.
+It copies rather than moves — the originals stay where they are — and the converted model becomes
+revision 1, with its artifacts recorded against it. A session still only in `out/` is reported as
+missing with that command named in the error, rather than silently working at half capability.

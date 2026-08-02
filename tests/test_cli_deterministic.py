@@ -10,6 +10,7 @@ import io
 import json
 import zipfile
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 
@@ -474,3 +475,106 @@ def test_a_refused_import_leaves_no_scratch_directory(workspace, tmp_path):
     with pytest.raises(SystemExit):
         _run(["session", "import", str(tmp_path / "nometa.zip"), "--json"])
     assert list((workspace / ".requivo").glob(".import-*")) == []
+
+
+# ── session integrity at the boundary ────────────────────────────────────────
+
+
+def test_session_verify_reports_a_broken_history_and_exits_non_zero(workspace, tmp_path, monkeypatch):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    assert _run_json(["session", "verify", "s", "--json"])["ok"] is True
+
+    (store.canonical_dir("s") / "revisions" / "0001-model.json").unlink()
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s", "--json"], client=None)
+    assert e.value.code == 1
+    report = json.loads(buf.getvalue())
+    assert report["ok"] is False
+    assert [p["code"] for p in report["problems"]] == ["missing_revision_file"]
+
+
+def test_import_refuses_an_archive_whose_history_is_missing(workspace, tmp_path):
+    """An archive can announce revision 2 and carry no `revisions/` at all — every file in it valid,
+    every relationship between them false. Import checked shapes, so it accepted this and the damage
+    surfaced later, somewhere unrelated. It now runs the same integrity check as `session verify`."""
+    entries = _good_entries("s", revision=1)
+    entries["s/session.json"] = json.dumps({
+        "format_version": 1, "session_id": "abc", "slug": "s", "created_at": "t", "updated_at": "t",
+        "current_revision": 2})                        # …with no revision log and no revision files
+    _zip(tmp_path / "hollow.zip", entries)
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "hollow.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_a_file_that_is_not_an_archive(workspace, tmp_path):
+    """`zipfile.BadZipFile` reached the user as a traceback. Every way a supplied file can be wrong
+    has to arrive as a Requivo error."""
+    bad = tmp_path / "notazip.zip"
+    bad.write_text("this is not a zip")
+    with pytest.raises(SystemExit) as e:
+        _run(["session", "import", str(bad), "--json"])
+    assert e.value.code == 1
+
+
+def test_a_failed_forced_replacement_puts_the_original_back(workspace, tmp_path, monkeypatch):
+    """`--force` used to `rmtree` the existing session and *then* move the new one in. If the move
+    failed the user was left with neither: the archive refused, and the session they already had
+    deleted. The old session now steps aside and only dies once the new one is in place."""
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _run_stdin(["model", "apply", "dup", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    real_replace = Path.replace
+
+    def failing_replace(self, target):
+        # Only the move that brings the *imported* session into place fails; the step-aside and the
+        # rollback must still work, which is the whole point.
+        if ".import-" in str(self):
+            raise OSError("simulated failure moving the imported session into place")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "dup.zip"), "--force", "--json"])
+
+    assert store.session_exists("dup")
+    assert store.read_meta("dup").current_revision == 1        # the original, intact
+    assert "The original." in store.session_request("dup")
+    assert _run_json(["session", "verify", "dup", "--json"])["ok"] is True
+
+
+def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_path, monkeypatch):
+    """An export reads several files that must agree with each other. Read outside the lock, it can
+    combine an old session.json with a new model.json — an archive that is internally inconsistent and
+    only says so on import. And `.lock` is this machine's coordination, not part of the session: it
+    has no meaning in an archive and would import as a session component."""
+    import threading
+    import time
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    assert (store.canonical_dir("s") / ".lock").exists()       # the writer left one behind
+
+    held = threading.Event()
+
+    def hold_the_lock():
+        with store.session_lock("s"):
+            time.sleep(0.4)
+            held.set()
+
+    t = threading.Thread(target=hold_the_lock)
+    t.start()
+    time.sleep(0.05)                                           # let it take the lock first
+    dest = tmp_path / "s.zip"
+    _run(["session", "export", "s", "-o", str(dest), "--json"])
+    t.join(timeout=10)
+
+    assert held.is_set(), "the export read the session while a writer held it"
+    with zipfile.ZipFile(dest) as z:
+        names = z.namelist()
+    assert not [n for n in names if ".lock" in n]
+    assert "s/model.json" in names and "s/revisions/0001-model.json" in names

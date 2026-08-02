@@ -98,6 +98,9 @@ Reply with **only** a valid JSON object, no surrounding text:
 }
 ```
 
-**Required fields.** `title` is required, and `features` must hold at least one feature. Every scenario needs a
-non-empty `id`, `title` and `when`, plus at least one `then` — a scenario that asserts nothing
-is not testable, which is the only thing acceptance criteria are for.
+**Required fields.** `title` is required, and `features` must hold at least one feature, each with at
+least one scenario — a feature is its scenarios here, and one with none is a heading someone has to
+test by intuition. Every scenario needs a non-empty `id`, `title` and `when`, plus at least one `then`
+— a scenario that asserts nothing is not testable, which is the only thing acceptance criteria are
+for. Scenario ids are unique across the whole document, not per feature: they get cited in test runs
+and bug reports.

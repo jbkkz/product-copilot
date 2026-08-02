@@ -101,4 +101,7 @@ Reply with **only** a valid JSON object, no surrounding text:
 ```
 
 **Required fields.** `title` is required, and `issues` must hold at least one issue with a non-empty `id` and
-`title`. An epic is a decomposition; an epic with no issues has not decomposed anything.
+`title`. An epic is a decomposition; an epic with no issues has not decomposed anything. Issue ids are
+unique, and every `depends_on` entry names an issue **in this epic** — the dependencies are exported as
+real links (a GitLab issue relation, an ordering a tracker acts on), so an edge to an id that is not
+here is a dependency on nothing that looks exactly like a real one. Nothing depends on itself.

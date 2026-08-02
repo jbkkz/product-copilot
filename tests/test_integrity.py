@@ -15,6 +15,7 @@ import pytest
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RevisionConflictError
+from requivo.core.integrity import check_session
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
 
@@ -429,3 +430,75 @@ def test_a_snapshot_cannot_report_one_revision_and_another_revisions_model(works
 
     assert snap.revision == 1
     assert snap.model.model["workflow"].value == "first"   # the model *of* revision 1, not a later one
+
+
+# ── session integrity: does a session tell the truth about itself? ────────────
+
+
+def _healthy(slug: str = "s") -> SessionService:
+    svc = SessionService()
+    svc.create_session("Something.", slug=slug)
+    svc.update_model(slug, _full_model())
+    svc.update_model(slug, _full_model(**{"workflow": _slot(80, "explicit", "high", "moved")}))
+    ArtifactService().save(slug, "prd", "# PRD\n")
+    return svc
+
+
+def test_a_coherent_session_reports_no_problems(workspace):
+    _healthy()
+    assert check_session("s") == []
+
+
+def test_a_session_whose_history_is_gone_is_caught(workspace):
+    """The reviewer's repro, and the one shape that used to pass every check: session.json announces
+    revision 2, `revisions/` is empty, and nothing is malformed — model.json parses, the metadata
+    parses, the slug agrees. Only the *relationships* are broken, which is precisely what validating
+    each file on its own cannot see."""
+    _healthy()
+    for f in (store.canonical_dir("s") / "revisions").glob("*.json"):
+        f.unlink()
+    codes = {p.code for p in check_session("s")}
+    assert codes == {"missing_revision_file"}
+
+
+def test_a_model_swapped_out_from_under_its_hash_is_caught(workspace):
+    """Every revision records the hash of what was written. A model.json replaced by hand still parses
+    as a perfectly good model — it is simply no longer the revision the session says it is at, so the
+    history and the current state describe different things."""
+    _healthy()
+    d = store.canonical_dir("s")
+    (d / "model.json").write_text(json.dumps(_full_model(**{"problem": _slot(90, "explicit", "high", "other")})))
+    codes = {p.code for p in check_session("s")}
+    assert "model_is_not_the_last_revision" in codes
+
+
+def test_a_hand_edited_revision_file_is_caught(workspace):
+    _healthy()
+    f = store.canonical_dir("s") / "revisions" / "0001-model.json"
+    f.write_text(f.read_text().replace('"completeness": 0', '"completeness": 5', 1))
+    assert "revision_hash_mismatch" in {p.code for p in check_session("s")}
+
+
+def test_a_recorded_artifact_with_no_file_is_caught(workspace):
+    _healthy()
+    (store.canonical_dir("s") / "artifacts" / "prd.md").unlink()
+    assert "missing_artifact_file" in {p.code for p in check_session("s")}
+
+
+def test_a_structurally_invalid_session_json_is_a_problem_not_a_traceback(workspace):
+    """A session.json that is valid JSON but not valid metadata raised a bare Pydantic
+    `ValidationError` through the CLI. Every failure a user can cause has to arrive as a Requivo
+    problem — the checker's whole job is to describe what is wrong, not to fail at it."""
+    _healthy()
+    (store.canonical_dir("s") / "session.json").write_text('{"slug": "s"}')  # no session_id, no dates
+    codes = {p.code for p in check_session("s")}
+    assert codes == {"invalid_session_json"}
+
+
+def test_a_revision_log_that_does_not_match_the_revision_count_is_caught(workspace):
+    _healthy()
+    p = store.canonical_dir("s") / "session.json"
+    raw = json.loads(p.read_text())
+    raw["revisions"] = raw["revisions"][:1]          # claims revision 2, logs one
+    p.write_text(json.dumps(raw))
+    assert "revision_count_mismatch" in {p_.code for p_ in check_session("s")}

@@ -19,7 +19,16 @@ from golden_lib import (  # noqa: E402
     stability,
 )
 
-from src.engine import Brief, Challenge, Confidence, EngineOutput, Impact, Level, Slot, Summary  # noqa: E402
+from requivo.core.contracts import (  # noqa: E402
+    Brief,
+    Challenge,
+    Confidence,
+    EngineOutput,
+    Impact,
+    Level,
+    Slot,
+    Summary,
+)
 
 # ── builders ─────────────────────────────────────────────────────────────────────────────────────
 

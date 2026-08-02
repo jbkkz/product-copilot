@@ -109,8 +109,25 @@ A slug names the session directory, so it is validated in the Core: strict kebab
 (`^[a-z0-9]+(?:-[a-z0-9]+)*$`), no path separators or dot segments. An explicit `--slug ../../escaped`
 is rejected before any path is built.
 
-## Legacy `out/` sessions
+## Verifying a session
 
-Before this layout, sessions lived in `out/<slug>/`. Those are **read-only** and migrated into
-`.requivo/sessions/` on first change — or in bulk with `requivo session migrate`. New work always uses
-`.requivo/`.
+A session is several files that have to agree: the revision count in `session.json`, the revision file
+per revision, the current model that should equal the last of them, each artifact pointing back at a
+revision that exists. Each file can be perfectly valid while the relationships between them are not —
+an archive that lost its `revisions/`, a hand-edited `session.json`, a `model.json` swapped out from
+under the hash its revision recorded.
+
+```bash
+requivo session verify <slug>          # exits non-zero, and says which claim is false
+requivo session verify <slug> --json   # {"ok": false, "problems": [{"code": …, "message": …}]}
+```
+
+The same check gates `session import` (an archive is held to exactly the standard a live session is)
+and appears in `requivo doctor`, which names any session in the workspace that no longer adds up.
+
+## Sessions from the `out/` layout
+
+Before this layout, sessions lived in `out/<slug>/`. Nothing has written there since 0.8.0, and since
+0.9.8 nothing reads it implicitly: `requivo session migrate` converts them into `.requivo/sessions/`
+(copying, not moving), and a session found only in `out/` is reported as missing with that command
+named in the error.

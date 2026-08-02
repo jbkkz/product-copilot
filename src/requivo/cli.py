@@ -19,10 +19,6 @@ from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
 from requivo.deterministic import register as register_deterministic
-
-# The legacy flag CLI is deprecated and frozen in `requivo.legacy`; `main` is re-exported here only
-# because `src/engine.py` has imported it from this module since before the split.
-from requivo.legacy import _flag_value, main  # noqa: F401  (re-export for the legacy entry point)
 from requivo.paths import DEMO
 from requivo.providers.anthropic import EngineError, advise, estimate, new_client, run, track_usage
 from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown

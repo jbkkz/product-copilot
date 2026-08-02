@@ -60,6 +60,21 @@ ARTIFACT_FILES: dict[str, str | None] = {
     "criteria": "acceptance-criteria.md", "epic": "epic.md", "release": "release-notes.md",
 }
 
+# type → filename under <session>/artifacts/, for everything that can be *persisted*. It differs from
+# ARTIFACT_FILES above in `stories`, which is saveable (Claude Code writes one) but has no file in the
+# dependency map because the provider path renders it to the terminal, and in `estimate`, which is
+# terminal-only on both counts. Core holds it because three layers ask the same question — the service
+# that saves, the CLI that offers `--type`, and the integrity checker that verifies what a session
+# claims to hold — and a vocabulary that exists in two places drifts.
+ARTIFACT_FILENAMES: dict[str, str] = {
+    "brief": "solution-assessment.md",
+    "prd": "prd.md",
+    "stories": "stories.md",
+    "criteria": "acceptance-criteria.md",
+    "epic": "epic.md",
+    "release": "release-notes.md",
+}
+
 # Artifacts that rest on the *reasoning* layer (decisions / challenges / opportunities), not only on
 # slots. This is every generator, and deliberately so: each one is prompted with the complete
 # EngineOutput — `model_dump_json()`, reasoning included — so a decision that changes can change the
@@ -145,16 +160,6 @@ def propagate(out: EngineOutput, changed: list[str]) -> ImpactReport:
     amap = artifact_slots()
     report.artifacts = [name for name in _ARTIFACT_SLOTS_RAW if amap[name] & changed_set]
     return report
-
-
-def stale_on_disk(out: EngineOutput, changed: list[str], present: set[str]) -> list[tuple[str, str]]:
-    """The subset of the blast radius that actually exists: artifacts whose slot set is touched by
-    `changed` AND whose file is currently on disk (`present` = filenames in out/<slug>/). Returns
-    [(artifact_name, filename)]. I/O stays with the caller — this is a pure filter — so the module
-    keeps no filesystem dependency. Terminal-only artifacts (no file) can't be detected as stale."""
-    hit = set(propagate(out, changed).artifacts)
-    return [(name, ARTIFACT_FILES[name]) for name in _ARTIFACT_SLOTS_RAW
-            if name in hit and ARTIFACT_FILES.get(name) in present]
 
 
 @dataclass

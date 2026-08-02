@@ -42,4 +42,6 @@ Reply with **only** a valid JSON object, no surrounding text:
 }
 ```
 
-**Required fields.** `items` must hold at least one item, each with a non-empty `story_id` and `title`.
+**Required fields.** `items` must hold at least one item, each with a non-empty `story_id` and `title`,
+one item per story. `days_low` is the optimistic end and never exceeds `days_high` — the totals sum
+both ends, and the spread is how uncertainty is communicated.

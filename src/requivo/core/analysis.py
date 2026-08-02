@@ -107,7 +107,7 @@ def model_status(out: EngineOutput) -> dict:
 def understanding_view(out: EngineOutput) -> dict[str, list[dict]]:
     """The per-slot understanding grouped by state (confirmed / inferred / unknown), each entry carrying
     its pillar, label, completeness and impact. This is the machine form of the `render_turn` checklist:
-    the JSON status and a future Web client read the same computed view rather than rebuilding the
+    the JSON status and the Web read the same computed view rather than rebuilding the
     presentation logic. `thin` marks a confirmed-but-below-coverage slot — the exact case readiness now
     still blocks on, surfaced so a client can render 'stated but partial' without re-deriving it."""
     pillars, _labels = _slot_meta()

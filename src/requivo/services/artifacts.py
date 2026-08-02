@@ -8,25 +8,14 @@ provider (or Claude Code) produces the text; this service persists and tracks it
 
 from __future__ import annotations
 
-from requivo.core.dependencies import REASONING_CONSUMERS, diff_models, diff_reasoning, propagate
+from requivo.core.dependencies import ARTIFACT_FILENAMES, REASONING_CONSUMERS, diff_models, diff_reasoning, propagate
 from requivo.core.errors import InvalidSessionError, RequivoError, SessionNotFoundError
 from requivo.core.persistence import ArtifactStatus
 from requivo.services.repository import SessionRepository, default_repository
 
-# The saveable artifact vocabulary: type → filename under <session>/artifacts/. This is the union of
-# the buildable deliverables. It differs from `dependencies.ARTIFACT_FILES` only in `stories`, which is
-# saveable here but has no file there because it is a terminal analysis. The assessment *does*
-# participate in staleness — it rests on every slot, so any material change unseats it — despite an
-# older comment here claiming otherwise; that claim outlived the day the assessment became a saved
-# artifact rather than a live view.
-ARTIFACT_FILENAMES: dict[str, str] = {
-    "brief": "solution-assessment.md",
-    "prd": "prd.md",
-    "stories": "stories.md",
-    "criteria": "acceptance-criteria.md",
-    "epic": "epic.md",
-    "release": "release-notes.md",
-}
+# The saveable artifact vocabulary (type → filename under <session>/artifacts/) lives in Core, where
+# the CLI's `--type` choices and the integrity checker read the same one. Re-exported here because
+# this is where callers expect to find it.
 
 
 class UnknownArtifactTypeError(RequivoError):

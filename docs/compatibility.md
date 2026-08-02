@@ -80,13 +80,20 @@ The JSON you hand to `model validate`, `model diff` and `model apply` is a **pro
 | What | Status | Since | Removal | Instead |
 |---|---|---|---|---|
 | **`model apply --allow-partial`, `model diff --allow-partial`** | Removed — it merged nothing, it replaced | 0.9.6 | gone | `model validate --allow-partial` to check a projection; send the full slot set to apply |
-| **Legacy flag CLI** (`python src/engine.py "…" --prd`) | Deprecated, frozen, prints a notice | 0.9.2 | **1.1.0** | `requivo discover` + `requivo prd` — see [cli.md](cli.md) |
-| **`pc` command alias** | Deprecated alias for `requivo` | 0.7.0 (rename) | next major | `requivo` |
-| **Legacy `out/<slug>/` sessions** | Read-only, migrated on first write | 0.8.0 | no date | `.requivo/sessions/`; bulk-convert with `requivo session migrate` |
+| **Legacy flag CLI** (`python src/engine.py "…" --prd`) | **Removed** | deprecated 0.9.2 | 0.9.8 | `requivo discover` + `requivo prd` — see [cli.md](cli.md) |
+| **`pc` command alias** | **Removed** | deprecated 0.7.0 (rename) | 0.9.8 | `requivo` |
+| **Implicit `out/<slug>/` fallback** | **Removed** — migration is explicit | deprecated 0.8.0 | 0.9.8 | `requivo session migrate`, then `.requivo/sessions/` |
 | **`/requivo-<skill>` plugin skill names** | Renamed | 0.9.2 | gone | `/requivo:<skill>` — Claude Code namespaces plugin skills |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where
 that is possible, and names its replacement here. Nothing is removed in a patch release.
+
+**The 0.9.8 removals.** These three were the last of the pre-store architecture, all deprecated for
+several versions and none of them with a known user. They were carried on a "removal in 1.1.0" plan,
+which would have meant maintaining them *through* 1.0 and the Cloud beta — the moment you least want
+two answers to "where does a session live?". The public interface is unchanged: `requivo` and the
+session store were already the only supported path. If you have `out/` sessions, `requivo session
+migrate` still converts them, and it is now the only thing that reads that layout.
 
 ## What is explicitly *not* stable
 

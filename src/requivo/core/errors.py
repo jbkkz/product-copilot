@@ -2,7 +2,7 @@
 
 These exist so a failure can be surfaced four ways from one raise: printed cleanly in the CLI,
 interpreted by Claude Code (via `.to_dict()` on a `--json` boundary), converted to an HTTP response
-by the future Web layer, and asserted in a test **by code**, not by matching a fragile message string.
+by Requivo Web, and asserted in a test **by code**, not by matching a fragile message string.
 
 The base carries a stable machine `code` and an optional `path` (dotted, into the model/session that
 failed) plus a `details` dict. `RequivoError.to_dict()` is the serializable envelope the spec fixes:

@@ -6,6 +6,68 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-08-02
+
+The clean-up release. The pre-store architecture is gone, sessions can be checked against themselves,
+and the artifact contracts hold their own references. Nothing here changes what Requivo does — it
+removes the ways it could be wrong about what it has.
+
+### Removed
+- **The legacy flag CLI** (`python src/engine.py "…" --prd`) and its `src/engine.py` shim, deprecated
+  since 0.9.2. It wrote the pre-versioned `out/<slug>/` layout: no revisions, no provenance, no
+  staleness — everything the subcommand CLI exists to provide.
+- **The `pc` command alias**, deprecated since the 0.7.0 rename. `requivo` is the command.
+- **The implicit `out/<slug>/` fallback.** Every read of every session used to fall back to that
+  layout, and a mutation migrated one in place — so old sessions kept working without the user
+  knowing, which is also what was wrong with it: the fallback ran on every read for a layout nothing
+  had written since 0.8.0, and "where does this session live?" had two answers throughout the code.
+  Migration is explicit (`requivo session migrate`, unchanged, still copying rather than moving) and
+  all that remains is detection: a session found only in `out/` is reported as missing *with that
+  command named in the error*. The three removals were scheduled for 1.1.0, which would have meant
+  carrying them through 1.0 and the Cloud beta.
+- The legacy write path in `persistence` (`save_model`, `save_session`, `write_artifact`, …) and
+  `stale_on_disk`, which answered "which files in `out/<slug>/` are stale?" — a question the session
+  store answers from `artifact_status`. Nothing but the flag CLI had called them.
+
+### Added
+- **`requivo session verify <slug>`** and `core/integrity.py` behind it. A session is several files
+  that have to agree — the revision count, one file per revision, a current model that *is* the last
+  of them, artifacts pointing back at revisions that exist — and every one of those claims can be
+  false while each individual file is valid JSON. Validating shapes cannot see any of it. The checker
+  reports every broken relationship with a stable code rather than raising on the first, so `verify`
+  can list them, `import` can refuse an archive, and `doctor` can name the sessions worth looking at.
+
+### Fixed
+- **`session import` accepted archives that did not add up.** It checked that `session.json` parsed,
+  that its slug agreed and that a claimed revision had a `model.json` — shape, not truth. An archive
+  announcing revision 2 with no `revisions/` at all imported cleanly, and so did one whose `model.json`
+  had been swapped for a different model. Import now runs the same integrity check as `session verify`.
+- **A structurally invalid `session.json`, a corrupt zip and an I/O failure reached the user as
+  tracebacks.** Every way a supplied archive can be wrong now arrives as a Requivo error.
+- **`import --force` deleted before it replaced.** `rmtree` then rename leaves nothing at all if the
+  rename fails: the archive refused *and* the session the user already had gone. The existing session
+  now steps aside and is deleted only once the new one is in place, with a rollback if it is not.
+- **`session export` read the session without its lock**, so an archive could combine an old
+  `session.json` with a newer `model.json` — internally inconsistent, and only discovered on import.
+  It now reads under the same lock every writer takes, writes to a temp archive renamed into place,
+  and excludes `.lock`, which is this machine's coordination and meant nothing in an archive.
+- **Artifact contracts held references that pointed at nothing.** A story could be traced to a slot
+  the schema does not define; an epic issue could `depends_on` an id the epic did not contain (and be
+  exported as a real tracker link); an estimate could run 5 to 1 days, dragging the project's low
+  bound above its high bound; a PRD requirement could be an empty numbered row; ids could repeat, which
+  downstream reads as one item rather than two. Each of these is a pointer something follows, so each
+  is now checked — structural coherence only, never a judgment about content. The generator prompts
+  state the same rules, so the model self-corrects rather than burning retries.
+
+### Changed
+- Dependencies carry upper bounds on the majors (`pydantic>=2,<3`, `anthropic>=0.40,<1`, …). A
+  dependency's next major is by definition allowed to break us, and without a ceiling it does so on a
+  fresh install of an *unchanged* Requivo — the one failure a user cannot correlate with anything.
+- The Claude Code `discover` skill passes the request on stdin instead of interpolating it into a
+  shell command. A client request is untrusted text; quotes, newlines and `$(…)` are ordinary in prose.
+- `ARTIFACT_FILENAMES` moved to Core, where the service that saves, the CLI's `--type` choices and the
+  integrity checker read one vocabulary instead of two.
+
 ## [0.9.7] - 2026-08-02
 
 The 0.9.6 review: the two seams where a provider call meets a session that can move under it, and the

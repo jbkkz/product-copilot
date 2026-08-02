@@ -27,14 +27,14 @@ Classic install (equivalent; drop `uv run` once the venv is active):
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
-.venv/bin/python -m pytest tests/ -q    # 257 tests, no API calls, no build step
+.venv/bin/python -m pytest tests/ -q    # 269 tests, no API calls, no build step
 .venv/bin/ruff check src tests          # lint (CI runs the same)
 ```
 
-`requivo` is the command (`pc` is a legacy alias for the same entry point). Verbs: `discover`,
+`requivo` is the command. Verbs: `discover`,
 `answer`, `demo`, `status`, `impact`, `brief`, `prd`, `stories`, `estimate`, `criteria`,
 `epic` (`--json/--github/--gitlab`), `release`, `web`, plus the offline ones in `deterministic.py`
-(`doctor`, `schema`, `context`, `session`, `model`, `artifact`). `impact` is a pure query over the
+(`doctor`, `schema`, `context`, `session` incl. `verify`, `model`, `artifact`). `impact` is a pure query over the
 dependency DAG — no API call. Without an install, `python scripts/requivo_cli.py <cmd>` is equivalent
 (the launcher lives under `scripts/`, not at the repo root, where it would shadow the package).
 
@@ -67,14 +67,15 @@ services. There is never a second implementation of an apply, a generation, or a
 
 ```
 requivo/
-  paths.py         ASSETS (read-only) + workspace_root()/session_root() + output_root() (legacy)
+  paths.py         ASSETS (read-only) + workspace_root()/session_root() + output_root() (retired out/)
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the deterministic engine — no LLM, no provider, no argv/stdout
     contracts.py     Pydantic contracts (StrictModel base) + stable ids + slot vocabulary
     analysis.py      readiness / soft slots / blockers    context.py   card + prompt assembly (no LLM)
     persistence.py   session store: .requivo layout, revisions, migrate_legacy, atomic writes
     validation.py    validate_proposal → structured errors  errors.py  RequivoError (+ .to_dict())
-    dependencies.py  the dependency DAG: propagate / diff_models / stale_on_disk
+    dependencies.py  the dependency DAG: propagate / diff_models / diff_reasoning
+    integrity.py     does a session directory tell the truth about itself?
     adapters.py      epic_export + GitHub/GitLab tracker plans
   providers/       the only LLM callers
     base.py          ReasoningProvider protocol
@@ -87,7 +88,6 @@ requivo/
   render/          views (data → str/stdout, no side effects)
   cli.py           the `requivo` CLI: provider verbs (discover/answer/generators/web)
   deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact
-  legacy.py        the deprecated flag CLI — frozen, removal scheduled for 1.1.0
   web/             Requivo Web — FastAPI + Jinja2 + HTMX over the services (the `[web]` extra)
     app.py           create_app()   security.py  cross-site guard   routes/  viewmodels/  templates/
 plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shipped in the wheel
@@ -96,8 +96,8 @@ plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shippe
 Assets (`prompts/`, `framework/`, `context/`, the demo payload) live **inside the package** at
 `src/requivo/assets/`, so they ship in the wheel and a `pip install` works outside a clone. Sessions
 are written to `.requivo/sessions/<slug>/` under the caller's **workspace** (cwd, or
-`--workspace`/`REQUIVO_WORKSPACE`), never inside the install. The legacy `./out` root is read-only and
-migrated on first mutation.
+`--workspace`/`REQUIVO_WORKSPACE`), never inside the install. The retired `./out` root is opened by
+nothing but `requivo session migrate`.
 
 ## Invariants
 

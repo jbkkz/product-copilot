@@ -1,7 +1,7 @@
 """SessionService — create sessions and apply model updates through one validated pipeline.
 
 `update_model` is the single write path for the model, whatever produced the proposal (the Anthropic
-provider, a Claude Code proposal file, a future Web client): validate → diff against the current
+provider, a Claude Code proposal file, Requivo Web): validate → diff against the current
 model → propagate the blast radius → save a new revision → flag the artifacts that went stale →
 compute readiness. It returns a structured `UpdateResult` so any caller can render it or emit `--json`.
 """
@@ -102,7 +102,7 @@ class SessionService:
     """Create, resolve, load, and mutate sessions through one validated pipeline. Storage is injected
     as a `SessionRepository` (files by default, Postgres in Cloud), so this orchestration is reused
     verbatim across backings. Stateless beyond that handle — safe to construct per call (the CLI does)
-    or hold as a singleton (a future Web app might)."""
+    or hold as a singleton (Requivo Web does)."""
 
     def __init__(self, repo: SessionRepository | None = None):
         self.repo: SessionRepository = repo or default_repository()
@@ -332,7 +332,7 @@ class SessionService:
     # ── status ──────────────────────────────────────────────────────────────────
     def status(self, slug: str) -> dict:
         """A machine-readable status snapshot for `status --json` — rich enough that Claude Code and a
-        future Web client render the full picture (understanding checklist, priority questions, gaps,
+        the Web render the full picture (understanding checklist, priority questions, gaps,
         context) without rebuilding the presentation logic in another language. Everything here is a
         pure projection of the model plus the session metadata."""
         model = self.load_model(slug)

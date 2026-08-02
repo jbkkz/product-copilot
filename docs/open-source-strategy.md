@@ -40,7 +40,7 @@ holds:
 
 ### Requivo CLI — open source
 
-The local `requivo` / `pc` command. Initialise a session, validate a model, apply an update, compute
+The local `requivo` command. Initialise a session, validate a model, apply an update, compute
 impact, manage and regenerate artifacts, import and export sessions. Runs entirely on the user's
 machine.
 
@@ -112,9 +112,13 @@ requivo-cloud/    private repository — hosted service backend
 requivo-lab/      private repository — evaluation data, experiments, learnings
 ```
 
-The `requivo-cloud` and `requivo-lab` repositories exist and are private; both are currently empty
-placeholders that materialise the open-core boundary — no code has been split out of the public
-repository yet. No Git submodules link them, and no GitHub organisation is used.
+The `requivo-cloud` and `requivo-lab` repositories exist and are private. `requivo-cloud` has been
+scaffolded: it consumes the public package as a dependency — the same `SessionService`,
+`DiscoveryService` and `SessionRepository` protocol, with a Postgres repository behind it — rather
+than forking any of it. That is the boundary working as intended, and it is why the service layer
+holds the integrity rules instead of the interfaces. `requivo-lab` is still an empty placeholder. No
+code has been moved *out* of the public repository, no Git submodules link them, and no GitHub
+organisation is used.
 
 ## License and trademark
 

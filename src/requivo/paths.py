@@ -42,15 +42,17 @@ def workspace_root() -> Path:
 def session_root() -> Path:
     """Canonical home for sessions: `<workspace>/.requivo/sessions/`. Each session is a `<slug>/`
     directory under here (session.json + model.json + revisions/ + request.md + artifacts/). This is
-    where all *new* data is written; the legacy `output_root()` (`./out`) is read-only and migrated on
-    first mutation."""
+    where every session lives; the retired `output_root()` (`./out`) is read only by
+    `requivo session migrate`."""
     return workspace_root() / ".requivo" / "sessions"
 
 
 def output_root() -> Path:
-    """**Legacy** directory for generated models/artifacts (`./out`), from before the versioned
-    `.requivo/sessions/` layout. Still read for backward compatibility and used by the pre-refactor
-    provider CLI path; new sessions are written under `session_root()`. Override with
+    """The **retired** `./out` layout, from before the versioned `.requivo/sessions/` store.
+
+    Nothing writes here, and since 0.9.8 nothing reads it implicitly either: `requivo session migrate`
+    converts these sessions into the store, and that is the only path that opens them. It kept
+    existing because deleting the migrator would strand anyone who still has one. Override with
     `REQUIVO_OUTPUT_DIR`. Evaluated per call."""
     override = os.getenv("REQUIVO_OUTPUT_DIR")
     return Path(override) if override else Path.cwd() / "out"

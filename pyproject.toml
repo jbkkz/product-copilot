@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "requivo"
-version = "0.9.7"
+version = "0.9.8"
 description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,20 +26,24 @@ classifiers = [
 ]
 # Core has no LLM dependency: the deterministic engine + CLI + the Claude Code plugin all run with
 # just these. The Anthropic SDK is an optional extra (below) — only the API-powered CLI mode needs it.
+# Upper bounds on the majors. A dependency's next major is by definition allowed to break us, and
+# without a ceiling it does so on a *fresh install of an unchanged Requivo* — the one failure a user
+# cannot correlate with anything they did. The floors say what we need; the ceilings say what we have
+# actually been run against.
 dependencies = [
-    "python-dotenv>=1.0.0",
-    "pydantic>=2.0",
+    "python-dotenv>=1.0.0,<2",
+    "pydantic>=2.0,<3",
 ]
 
 [project.optional-dependencies]
 # API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
-anthropic = ["anthropic>=0.40.0"]
+anthropic = ["anthropic>=0.40.0,<1"]
 # Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
-web = ["fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "python-multipart>=0.0.9"]
-dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0", "httpx",
-       "fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "python-multipart>=0.0.9"]
+web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
+dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0,<1", "httpx",
+       "fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
 
 [project.urls]
 Homepage = "https://github.com/jbkkz/requivo"
@@ -48,9 +52,6 @@ Changelog = "https://github.com/jbkkz/requivo/blob/main/CHANGELOG.md"
 
 [project.scripts]
 requivo = "requivo.cli:app"
-# `pc` is a deprecated backward-compat alias for `requivo` (the project was renamed from Product
-# Copilot). It calls the exact same entry point and may be removed in a future major version.
-pc = "requivo.cli:app"
 
 [tool.setuptools]
 # THIRD-PARTY-NOTICES.md rides along with the license into the wheel's dist-info. The wheel carries a

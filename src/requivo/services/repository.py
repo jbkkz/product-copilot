@@ -8,10 +8,15 @@ that line: a `SessionRepository` protocol names exactly the storage operations t
 
 The point is requivo-cloud: it can supply a `PostgresSessionRepository` with the same protocol and
 reuse the service orchestration verbatim, instead of bypassing the service or faking a filesystem. The
-protocol is deliberately backing-neutral — the canonical-vs-legacy `out/` split is a *file* detail, so
-it lives entirely inside `FileSessionRepository` (`exists`/`load_model`/`request_text`/`context_cards`
-fall back to a legacy session; `ensure_writable` migrates it on first mutation). A Postgres backing has
-no legacy notion: there, `has_meta` == `exists` and `ensure_writable` is a no-op.
+protocol is deliberately backing-neutral.
+
+The pre-0.9.8 file backing carried a second store: every read fell back to a legacy `out/<slug>/`
+session, and a mutation migrated one in place. That kept old sessions working without the user
+knowing — which is also what was wrong with it. The fallback ran on every read of every session for
+the benefit of a layout nothing has written since 0.8.0, and it made "where does this session live?"
+a question with two answers everywhere in the code. Migration is now explicit (`requivo session
+migrate`), and all that remains here is *detection*: a legacy directory turns "no session" into an
+error that names the command to run.
 """
 
 from __future__ import annotations
@@ -43,17 +48,16 @@ class SessionRepository(Protocol):
         ...
 
     def exists(self, slug: str) -> bool:
-        """True if a usable session exists at all (for a file backing, canonical OR legacy)."""
+        """True if a usable session exists."""
         ...
 
     def has_meta(self, slug: str) -> bool:
-        """True if the session is in the mutation-backed store — i.e. `read_meta` would succeed. For a
-        file backing this is the canonical store only (a legacy-only session has no revisions/meta)."""
+        """True if the session is in the mutation-backed store — i.e. `read_meta` would succeed. Kept
+        distinct from `exists` because a backing may hold a session it cannot yet describe."""
         ...
 
     def ensure_writable(self, slug: str) -> None:
-        """Prepare a session for its first mutation, raising `SessionNotFoundError` if there is none.
-        For a file backing this migrates a legacy `out/<slug>/` session into the canonical store."""
+        """Prepare a session for its first mutation, raising `SessionNotFoundError` if there is none."""
         ...
 
     def create(self, slug: str, request: str, *, provider: Optional[str] = None,
@@ -108,10 +112,20 @@ class SessionRepository(Protocol):
 
 
 class FileSessionRepository:
-    """The default backing: the `.requivo/sessions/<slug>/` layout, with read-only legacy `out/<slug>/`
-    fallback and migrate-on-first-mutation. A thin adapter over `core.persistence` — it holds no state,
-    so it is safe to construct per call. The canonical-vs-legacy logic that used to live in
-    `SessionService` lives here, where it belongs (a storage detail, not orchestration)."""
+    """The default backing: the `.requivo/sessions/<slug>/` layout. A thin adapter over
+    `core.persistence` — it holds no state, so it is safe to construct per call."""
+
+    @staticmethod
+    def _missing(slug: str) -> SessionNotFoundError:
+        """The one place "there is no such session" is phrased — including the case where there *is*
+        one, in the retired `out/` layout, which is a different problem with a specific answer."""
+        if store.legacy_exists(slug):
+            return SessionNotFoundError(
+                f"'{slug}' exists only in the retired out/ layout. Bring it into the session store "
+                "with `requivo session migrate`, which converts every out/ session in one pass and "
+                "leaves the originals in place.",
+                details={"slug": slug, "legacy": True})
+        return SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
 
     @contextmanager
     def lock(self, slug: str) -> Iterator[None]:
@@ -119,18 +133,14 @@ class FileSessionRepository:
             yield
 
     def exists(self, slug: str) -> bool:
-        return store.session_exists(slug) or store.legacy_exists(slug)
+        return store.session_exists(slug)
 
     def has_meta(self, slug: str) -> bool:
         return store.session_exists(slug)
 
     def ensure_writable(self, slug: str) -> None:
-        if store.session_exists(slug):
-            return
-        if store.legacy_exists(slug):
-            store.migrate_legacy(slug)
-            return
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        if not store.session_exists(slug):
+            raise self._missing(slug)
 
     def create(self, slug: str, request: str, *, provider: Optional[str] = None,
                model_name: Optional[str] = None, context_cards: Optional[list[str]] = None) -> SessionMeta:
@@ -147,11 +157,9 @@ class FileSessionRepository:
         return store.list_session_slugs()
 
     def load_model(self, slug: str) -> EngineOutput:
-        if store.session_exists(slug):
-            return store.load_session_model(slug)
-        if store.legacy_exists(slug):
-            return EngineOutput.model_validate_json((store.legacy_dir(slug) / "model.json").read_text())
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        if not store.session_exists(slug):
+            raise self._missing(slug)
+        return store.load_session_model(slug)
 
     def load_revision(self, slug: str, revision: int) -> EngineOutput:
         return store.load_revision_model(slug, revision)
@@ -161,18 +169,10 @@ class FileSessionRepository:
         return store.save_revision(slug, model, expected_revision=expected_revision, provenance=provenance)
 
     def request_text(self, slug: str) -> str:
-        if store.session_exists(slug):
-            return store.session_request(slug)
-        if store.legacy_exists(slug):
-            return store.load_request(store.legacy_dir(slug) / "model.json")
-        return ""
+        return store.session_request(slug) if store.session_exists(slug) else ""
 
     def context_cards(self, slug: str) -> Optional[list[str]]:
-        if store.session_exists(slug):
-            return store.read_meta(slug).context_cards
-        if store.legacy_exists(slug):
-            return store.session_cards(store.legacy_dir(slug) / "model.json")
-        return None
+        return store.read_meta(slug).context_cards if store.session_exists(slug) else None
 
     def save_artifact(self, slug: str, artifact_type: str, filename: str, content: str, *,
                       source_revision: int, stale: bool = False) -> ArtifactStatus:

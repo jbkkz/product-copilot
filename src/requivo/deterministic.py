@@ -3,7 +3,7 @@
 These verbs (`doctor`, `session …`, `model …`, `artifact …`) are the offline half of Requivo: they
 create and inspect sessions, validate and apply proposed models, and record artifacts, all through
 the same `SessionService`/`ArtifactService` the provider path uses. Claude Code drives *these* — it
-reasons with its own Claude, writes a proposal file, and calls `model validate`/`model apply` — so no
+reasons with its own Claude, pipes the proposal in on stdin, and calls `model validate`/`model apply` — so no
 `ANTHROPIC_API_KEY` is ever required in that mode.
 
 `register(sub)` attaches the parsers to the main `requivo` argparse tree; each handler takes
@@ -25,8 +25,8 @@ from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, resolve_cards
-from requivo.core.contracts import EngineOutput
-from requivo.core.errors import InvalidModelError, SessionNotFoundError
+from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionNotFoundError
+from requivo.core.integrity import check_session, check_session_dir
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, session_root, workspace_root
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
@@ -121,7 +121,28 @@ def doctor_report() -> dict:
             "api_key_present": bool(os.getenv("ANTHROPIC_API_KEY")),
         },
         "workspace": {"root": str(workspace_root()), "sessions": str(session_root())},
+        # Sessions that no longer add up. Cheap (a session is a handful of small files) and this is
+        # where a user asks "is anything wrong?" — a broken history is exactly that, and it otherwise
+        # only surfaces later, as a refused artifact save with no obvious cause.
+        "sessions": _session_health(),
     }
+
+
+def _session_health() -> dict:
+    """{"total": N, "inconsistent": {slug: [codes]}} over the workspace's sessions."""
+    inconsistent = {}
+    try:
+        slugs = store.list_session_slugs()
+    except Exception:  # noqa: BLE001 - doctor reports, it does not fail
+        return {"total": 0, "inconsistent": {}}
+    for slug in slugs:
+        try:
+            problems = check_session(slug)
+        except Exception as e:  # noqa: BLE001
+            problems = [type("P", (), {"code": "unreadable", "message": str(e)})()]
+        if problems:
+            inconsistent[slug] = [p.code for p in problems]
+    return {"total": len(slugs), "inconsistent": inconsistent}
 
 
 def _cmd_schema(a, client) -> None:
@@ -182,6 +203,12 @@ def _cmd_doctor(a, client) -> None:
         print("        Not needed for Claude Code mode.")
     print(f"  {ok} workspace       {r['workspace']['root']}")
     print(f"     sessions        {r['workspace']['sessions']}")
+    h = r["sessions"]
+    bad = h["inconsistent"]
+    print(f"  {ok if not bad else '❌'} sessions        {h['total']} in this workspace"
+          + (f" · {len(bad)} inconsistent" if bad else ""))
+    for slug, codes in bad.items():
+        print(f"     └─ {slug}: {', '.join(codes)} — run `requivo session verify {slug}`")
 
 
 # ── session ──────────────────────────────────────────────────────────────────────
@@ -277,20 +304,59 @@ def _cmd_session_migrate(a, client) -> None:
 
 
 def _cmd_session_export(a, client) -> None:
+    """Archive a session as a .zip — under its lock, and complete or not at all.
+
+    A session is a handful of files that must agree with each other: session.json's revision count,
+    the revision files it names, the model that should equal the last of them. Reading them one by one
+    while another surface applies a revision produces an archive that combines an old metadata with a
+    new model — internally inconsistent, and only discovered on import. So the read happens under the
+    session lock, the same one every writer takes.
+
+    `.lock` and the scratch files of an interrupted write are excluded: they are local artefacts of
+    *this* machine's coordination, meaningless in an archive, and the lock file in particular would
+    import as a session component. The archive itself is written beside its destination and renamed
+    into place, so an interrupted export leaves no half-written .zip looking like a real one."""
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
         raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
     d = store.canonical_dir(slug)
     dest = Path(a.output) if a.output else Path.cwd() / f"{slug}.requivo.zip"
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in sorted(d.rglob("*")):
-            if f.is_file():
-                z.write(f, f.relative_to(d.parent))
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.part")
+    try:
+        with store.session_lock(slug):
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+                for f in sorted(d.rglob("*")):
+                    if f.is_file() and not any(part.startswith(".") for part in f.relative_to(d).parts):
+                        z.write(f, f.relative_to(d.parent))
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
     if a.json:
         _print_json({"slug": slug, "archive": str(dest)})
         return
     print(f"Exported session '{slug}' → {dest}")
+
+
+def _cmd_session_verify(a, client) -> None:
+    """Check that a session tells the truth about itself — the relationships between its files, which
+    validating each file on its own cannot see. Exits non-zero when something is wrong, so it can gate
+    a script."""
+    svc = SessionService()
+    slug = svc.resolve_slug(a.session)
+    if not store.session_exists(slug):
+        raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
+    problems = check_session(slug)
+    if a.json:
+        _print_json({"slug": slug, "ok": not problems, "problems": [p.to_dict() for p in problems]})
+    elif not problems:
+        print(f"✅ Session '{slug}' is internally consistent.")
+    else:
+        print(f"❌ Session '{slug}' has {len(problems)} problem(s):")
+        for p in problems:
+            print(f"  · [{p.code}] {p.message}")
+    if problems:
+        raise SystemExit(1)
 
 
 # Ceilings for an imported archive. A session is a handful of small JSON and Markdown files; anything
@@ -347,33 +413,19 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
 
 
 def _validate_extracted(d: Path, slug: str) -> None:
-    """Confirm an extracted directory really is a session before it is allowed into the store. Import
-    used to declare success on the strength of the extraction alone, so a malformed archive became a
-    malformed session that only failed later, somewhere unrelated."""
-    meta_path = d / "session.json"
-    if not meta_path.is_file():
-        raise InvalidModelError(f"the archive has no {slug}/session.json", details={"slug": slug})
-    try:
-        meta = store.migrate_session(json.loads(meta_path.read_text()))
-    except json.JSONDecodeError as e:
-        raise InvalidModelError(f"{slug}/session.json is not valid JSON: {e}",
-                                details={"slug": slug}) from e
-    if meta.slug != slug:
-        raise InvalidModelError(
-            f"the archive's directory is {slug!r} but its session.json says {meta.slug!r} — "
-            "the session does not agree with itself about its own identity",
-            details={"directory": slug, "session_json": meta.slug})
-    if meta.current_revision > 0:
-        model_path = d / "model.json"
-        if not model_path.is_file():
-            raise InvalidModelError(
-                f"{slug}/session.json is at revision {meta.current_revision} but there is no model.json",
-                details={"slug": slug})
-        try:
-            EngineOutput.model_validate_json(model_path.read_text())
-        except (ValueError, json.JSONDecodeError) as e:
-            raise InvalidModelError(f"{slug}/model.json is not a valid model: {e}",
-                                    details={"slug": slug}) from e
+    """Confirm an extracted directory really is a *coherent* session before it is allowed in.
+
+    This used to check that session.json parsed, that its slug agreed, and that a claimed revision had
+    a model.json — which is shape, not truth. An archive announcing revision 2 with no `revisions/` at
+    all passed, and so did one whose model.json had been swapped for a different model: nothing is
+    malformed in either, only the relationships are broken. `check_session_dir` is the same check
+    `requivo session verify` runs, so an archive is held to exactly the standard a live session is."""
+    problems = check_session_dir(d, expected_slug=slug)
+    if problems:
+        raise InvalidSessionError(
+            f"the archive's session '{slug}' is not internally consistent: "
+            + "; ".join(p.message for p in problems),
+            details={"slug": slug, "problems": [p.to_dict() for p in problems]})
 
 
 def _cmd_session_import(a, client) -> None:
@@ -389,7 +441,12 @@ def _cmd_session_import(a, client) -> None:
     root = session_root()
     root.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(archive) as z:
+    try:
+        z = zipfile.ZipFile(archive)
+    except (zipfile.BadZipFile, OSError) as e:
+        raise InvalidSessionError(f"{archive} is not a readable .zip archive: {e}",
+                                  details={"archive": str(archive)}) from e
+    with z:
         slug = _inspect_archive(z)
         if store.session_exists(slug) and not a.force:
             raise InvalidModelError(
@@ -405,9 +462,24 @@ def _cmd_session_import(a, client) -> None:
             _validate_extracted(extracted, slug)
             target = store.canonical_dir(slug)
             replaced = target.exists()
-            if replaced:
-                shutil.rmtree(target)
-            extracted.replace(target)
+            # Replacement is a swap, not a delete-then-move. `rmtree` followed by a rename leaves
+            # nothing at all if the rename fails — the archive is refused *and* the session the user
+            # already had is gone. The old one steps aside first and only dies once the new one is in
+            # place; anything going wrong in between puts it back.
+            backup = target.with_name(f".{target.name}.replaced-{os.getpid()}") if replaced else None
+            if backup is not None:
+                target.replace(backup)
+            try:
+                extracted.replace(target)
+            except OSError as e:
+                if backup is not None:
+                    backup.replace(target)
+                raise InvalidSessionError(
+                    f"could not move the imported session into place: {e}"
+                    + (" — the session that was already here has been restored" if backup else ""),
+                    details={"slug": slug}) from e
+            if backup is not None:
+                shutil.rmtree(backup, ignore_errors=True)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -547,7 +619,7 @@ def register(sub) -> None:
     cx.set_defaults(func=_cmd_context)
 
     # session
-    sp = sub.add_parser("session", help="create, list, show, migrate, export/import sessions")
+    sp = sub.add_parser("session", help="create, list, show, verify, migrate, export/import sessions")
     ss = sp.add_subparsers(dest="subcommand", required=True, metavar="<action>")
 
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
@@ -576,6 +648,11 @@ def register(sub) -> None:
     se.add_argument("-o", "--output", help="destination archive path")
     se.add_argument("--json", action="store_true")
     se.set_defaults(func=_cmd_session_export)
+
+    sv = ss.add_parser("verify", help="check that a session's files agree with each other")
+    sv.add_argument("session", help="session slug or path")
+    sv.add_argument("--json", action="store_true")
+    sv.set_defaults(func=_cmd_session_verify)
 
     sig = ss.add_parser("import", help="import a session archive into the workspace")
     sig.add_argument("archive", help="path to a .zip produced by `session export`")

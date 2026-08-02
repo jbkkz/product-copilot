@@ -73,3 +73,6 @@ Reply with **only** a valid JSON object, no surrounding text:
 ```
 
 **Required fields.** `stories` must hold at least one story, each with a non-empty `id` and `title`.
+Story ids are unique — the estimate points back at them. Every entry in a story's `slots` must be a
+slot id from the model schema; that list is the traceability back to the model, so an id naming
+nothing makes the story look grounded while linking to nothing.

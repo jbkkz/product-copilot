@@ -1,0 +1,177 @@
+"""Session integrity — does this session directory tell the truth about itself?
+
+A session is not one file. It is metadata claiming a revision count, a history of one file per
+revision, a current model that should equal the last of them, and artifacts each pointing back at the
+revision they came from. Every one of those claims can be false while each individual file is
+perfectly valid JSON — an archive that lost its `revisions/`, a hand-edited `session.json`, an
+interrupted copy, a model.json swapped out from under its own hash.
+
+Validating the *shape* of each file (which is all `session import` used to do) cannot see any of that,
+because nothing is malformed. Only the relationships are broken. This module checks the relationships,
+and it is deliberately separate from `persistence`: the same function has to serve a session in the
+store (`requivo session verify`, `doctor`) and a directory extracted from an archive that has not been
+allowed into the store yet — so it takes a *path*, and it never writes.
+
+It reports rather than raises. A caller decides what a problem means: `session verify` prints them all
+and exits non-zero, `session import` refuses the archive, `doctor` names the sessions worth looking at.
+Raising on the first one would answer a different, less useful question — "is it broken?" instead of
+"what is broken?".
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from requivo.core.contracts import EngineOutput
+from requivo.core.dependencies import ARTIFACT_FILENAMES
+from requivo.core.errors import RequivoError
+from requivo.core.persistence import _hash, canonical_dir, migrate_session
+
+
+@dataclass(frozen=True)
+class IntegrityProblem:
+    """One broken claim. `code` is a stable machine token (assert on it, not on the message)."""
+    code: str
+    message: str
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "message": self.message}
+
+
+def _read_json(path: Path) -> tuple[dict | None, str | None]:
+    try:
+        return json.loads(path.read_text()), None
+    except (OSError, json.JSONDecodeError) as e:
+        return None, str(e)
+
+
+def _is_revision(filename: str, n: int) -> bool:
+    """Whether `NNNN-model.json` names a revision this session claims to have."""
+    head = filename.split("-", 1)[0]
+    return head.isdigit() and 1 <= int(head) <= n
+
+
+def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[IntegrityProblem]:
+    """Every internal inconsistency in the session directory `d`, in reading order. Empty == coherent.
+
+    `expected_slug` is the name the caller believes the session has — the directory name in the store,
+    or the folder name inside an archive. A session that disagrees with its own container about its
+    identity is the first thing to catch, because every later check keys on it.
+    """
+    problems: list[IntegrityProblem] = []
+
+    def bad(code: str, message: str) -> None:
+        problems.append(IntegrityProblem(code, message))
+
+    meta_path = d / "session.json"
+    if not meta_path.is_file():
+        bad("no_session_json", f"{d.name}/session.json is missing — this is not a session directory")
+        return problems
+    raw, err = _read_json(meta_path)
+    if raw is None:
+        bad("unreadable_session_json", f"session.json cannot be read: {err}")
+        return problems
+    try:
+        meta = migrate_session(raw)
+    except (RequivoError, ValidationError) as e:
+        # Both are expected here and neither should escape as a traceback: a *future* format is a
+        # RequivoError by design, and a structurally wrong session.json is a Pydantic ValidationError.
+        bad("invalid_session_json", f"session.json is not valid session metadata: {e}")
+        return problems
+
+    if expected_slug is not None and meta.slug != expected_slug:
+        bad("slug_mismatch",
+            f"the directory is {expected_slug!r} but session.json says {meta.slug!r} — the session "
+            "does not agree with itself about its own identity")
+
+    # ── the revision log ────────────────────────────────────────────────────────
+    n = meta.current_revision
+    if n < 0:
+        bad("negative_revision", f"current_revision is {n}")
+        return problems
+    if len(meta.revisions) != n:
+        bad("revision_count_mismatch",
+            f"session.json says revision {n} but its log holds {len(meta.revisions)} record(s) — the "
+            "history does not account for the model that is there")
+
+    seen_hashes: dict[int, str] = {}
+    for i, rec in enumerate(meta.revisions, start=1):
+        if rec.revision != i:
+            bad("revision_out_of_order",
+                f"revision record {i} is numbered {rec.revision} — the log must be 1..N in order")
+            continue
+        expected_prev = None if i == 1 else i - 1
+        if rec.previous_revision != expected_prev:
+            bad("revision_chain_broken",
+                f"revision {i} records previous_revision={rec.previous_revision}, expected "
+                f"{expected_prev}")
+        seen_hashes[i] = rec.model_hash
+
+        f = d / "revisions" / f"{i:04d}-model.json"
+        if not f.is_file():
+            bad("missing_revision_file", f"revisions/{i:04d}-model.json is missing")
+            continue
+        payload = f.read_text()
+        if rec.model_hash and _hash(payload) != rec.model_hash:
+            bad("revision_hash_mismatch",
+                f"revisions/{i:04d}-model.json does not match the hash recorded for it — the file "
+                "was changed after it was written")
+        try:
+            EngineOutput.model_validate_json(payload)
+        except (ValidationError, ValueError) as e:
+            bad("invalid_revision_model", f"revisions/{i:04d}-model.json is not a valid model: {e}")
+
+    rev_dir = d / "revisions"
+    if rev_dir.is_dir():
+        extra = sorted(p.name for p in rev_dir.glob("*-model.json") if not _is_revision(p.name, n))
+        if extra:
+            bad("orphan_revision_file",
+                f"revisions/ holds file(s) beyond revision {n}: {', '.join(extra)}")
+
+    # ── the current model ───────────────────────────────────────────────────────
+    model_path = d / "model.json"
+    if n == 0:
+        if model_path.is_file():
+            bad("model_without_revision",
+                "model.json exists but session.json is at revision 0 — a model that no revision "
+                "accounts for has no provenance at all")
+    elif not model_path.is_file():
+        bad("missing_model", f"session.json is at revision {n} but there is no model.json")
+    else:
+        payload = model_path.read_text()
+        try:
+            EngineOutput.model_validate_json(payload)
+        except (ValidationError, ValueError) as e:
+            bad("invalid_model", f"model.json is not a valid model: {e}")
+        last_hash = seen_hashes.get(n)
+        if last_hash and _hash(payload) != last_hash:
+            bad("model_is_not_the_last_revision",
+                f"model.json does not match revision {n}, the revision it is supposed to be — "
+                "the current model and the history describe different states")
+
+    # ── artifacts ───────────────────────────────────────────────────────────────
+    for atype, st in meta.artifact_status.items():
+        if atype not in ARTIFACT_FILENAMES:
+            bad("unknown_artifact_type", f"session.json records an artifact of unknown type {atype!r}")
+        elif st.filename != ARTIFACT_FILENAMES[atype]:
+            bad("artifact_filename_mismatch",
+                f"the {atype!r} artifact is recorded as {st.filename!r}, but that type is stored as "
+                f"{ARTIFACT_FILENAMES[atype]!r}")
+        if not (d / "artifacts" / st.filename).is_file():
+            bad("missing_artifact_file",
+                f"session.json records a {atype!r} artifact but artifacts/{st.filename} is missing")
+        if not 1 <= st.revision <= n:
+            bad("artifact_revision_out_of_range",
+                f"the {atype!r} artifact claims to come from revision {st.revision}, which this "
+                f"session does not have (it has 1..{n or 0})")
+
+    return problems
+
+
+def check_session(slug: str) -> list[IntegrityProblem]:
+    """`check_session_dir` for a session in the store."""
+    return check_session_dir(canonical_dir(slug), expected_slug=slug)
