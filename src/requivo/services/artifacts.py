@@ -9,7 +9,7 @@ provider (or Claude Code) produces the text; this service persists and tracks it
 from __future__ import annotations
 
 from requivo.core.dependencies import REASONING_CONSUMERS, diff_models, diff_reasoning, propagate
-from requivo.core.errors import RequivoError, SessionNotFoundError
+from requivo.core.errors import InvalidSessionError, RequivoError, SessionNotFoundError
 from requivo.core.persistence import ArtifactStatus
 from requivo.services.repository import SessionRepository, default_repository
 
@@ -72,15 +72,30 @@ class ArtifactService:
                      current_revision: int) -> bool:
         """Whether an artifact generated from `source_revision` is already out of date at
         `current_revision` — the same dependency-graph question `update_model` answers, asked after
-        the fact. False when the source is current (nothing moved) or the history is unreadable: an
-        unanswerable freshness question must not manufacture a stale flag."""
+        the fact. False when the source *is* the current revision: nothing has moved since.
+
+        An unreadable history is refused rather than answered. This used to return False, on the
+        reasoning that an unanswerable question must not manufacture a stale flag — but `False` is not
+        the absence of an answer, it is the claim "this artifact is up to date", and it was being made
+        about a session whose history could not be read at all. Both directions invent something; only
+        one of them is silent. The honest outcome is that the save does not happen, because the
+        provenance it would record cannot be verified."""
         if source_revision >= current_revision:
             return False
+        if source_revision < 1:
+            return False  # out of range — `save_session_artifact` refuses it with the precise message
         try:
             was = self.repo.load_revision(slug, source_revision)
             now = self.repo.load_model(slug)
-        except RequivoError:
-            return False
+        except RequivoError as e:
+            raise InvalidSessionError(
+                f"cannot establish whether this {artifact_type!r} is current: session '{slug}' is at "
+                f"revision {current_revision} but revision {source_revision}, the one it was reasoned "
+                f"from, cannot be read ({e}). The session's history is incomplete — verify it before "
+                "recording an artifact against it.",
+                details={"slug": slug, "source_revision": source_revision,
+                         "current_revision": current_revision, "type": artifact_type},
+            ) from e
         if diff_reasoning(was, now).changed and artifact_type in REASONING_CONSUMERS:
             return True
         return artifact_type in set(propagate(now, diff_models(was, now)).artifacts)

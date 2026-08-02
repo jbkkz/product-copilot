@@ -34,6 +34,29 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
 Every interface — the terminal CLI, the Claude Code plugin, the local Web app — is a thin layer over
 the same Core. There is no second implementation of the apply path.
 
+The services are the **integrity boundary**, not the interfaces. That distinction is easy to blur
+while there are only two callers who are both careful — but requivo-cloud calls this layer directly,
+so a rule the CLI happens to enforce is not enforced. Concretely: context cards are resolved in
+`create_session` rather than trusted; `DiscoveryService`'s artifact service defaults to the *session
+service's* repository, so a Postgres session store cannot end up paired with a local artifact store;
+and a first discovery is refused above revision 0 in the service, not by hiding a button.
+
+## Reading a session before reasoning
+
+Every provider-backed operation reads the session once, through `SessionService.snapshot()`: the
+revision, the model *at* that revision, the request and the card selection, all under the session
+lock. The lock is released before the call — a call takes minutes and cannot be made atomic — so two
+different mechanisms cover two different windows:
+
+| Window | Mechanism |
+|---|---|
+| Between reading the revision and reading the model | the snapshot's lock — otherwise revision N pairs with the model of N+1 |
+| Between reading and writing (the provider call itself) | `expected_revision` — a concurrent change becomes a clean `revision_conflict` |
+
+The first one matters more than it looks: a mismatch there is undetectable afterwards, because the
+recorded revision is perfectly plausible — it simply describes a different model than the artifact was
+written from.
+
 ## The three interfaces
 
 - **CLI** — provider verbs (`discover`, `answer`, generators) plus offline deterministic verbs.

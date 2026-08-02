@@ -14,6 +14,7 @@ from pathlib import Path
 
 from requivo.core import persistence as store
 from requivo.core.analysis import _readiness_blockers, model_status
+from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import (
     ARTIFACT_FILES,
@@ -23,7 +24,7 @@ from requivo.core.dependencies import (
     diff_reasoning,
     propagate,
 )
-from requivo.core.errors import SessionExistsError
+from requivo.core.errors import SessionExistsError, SessionNotFoundError
 from requivo.core.persistence import SessionMeta
 from requivo.core.validation import validate_proposal
 from requivo.services.repository import SessionRepository, default_repository
@@ -36,6 +37,28 @@ class Readiness:
 
     def to_dict(self) -> dict:
         return {"ready": self.ready, "blocking_slots": self.blocking_slots}
+
+
+@dataclass(frozen=True)
+class SessionSnapshot:
+    """One consistent read of a session: its revision, the model *at* that revision, and the inputs a
+    provider call needs. Taken under the session lock, so the parts cannot disagree.
+
+    Reading the revision and the model as two separate calls looks harmless and is not: a write
+    landing between them yields revision N with the model of N+1. The generation then reasons from the
+    newer model and files the artifact as coming from the older revision — content and provenance
+    describing different sources, which is precisely the claim the product cannot afford to get wrong.
+    Worse, it is undetectable afterwards: the number is plausible.
+
+    The lock is released before the provider call. It is not there to make the whole operation atomic —
+    it cannot be, the call takes minutes — but to make the *basis* coherent. `expected_revision` on the
+    write is what handles the session moving afterwards."""
+
+    slug: str
+    revision: int
+    model: EngineOutput | None          # None before the first model (revision 0)
+    request: str
+    context_cards: list[str] | None     # None == every card
 
 
 @dataclass
@@ -120,7 +143,15 @@ class SessionService:
         notice. A different selection now gets its own session instead.
 
         The claim on a slug is `repo.create` itself, which is atomic — a check-then-create here would
-        let two concurrent callers both decide the session was theirs to make."""
+        let two concurrent callers both decide the session was theirs to make.
+
+        The card selection is resolved here rather than trusted. The CLI and the Web both call
+        `resolve_cards` before they get this far, which made it look like the service could rely on
+        them — but "the interfaces are careful" is not an integrity boundary, and requivo-cloud calls
+        exactly this layer. An unknown card recorded on a session is not inert: every later turn reads
+        the selection back, and an empty resolved selection means *every* card, so a bad name silently
+        widens the context instead of narrowing it."""
+        context_cards = resolve_cards(context_cards) if context_cards else None
         base = slug or store._slug(request)
         for candidate in (base, f"{base}-{self._identity_hash(request, context_cards)}"):
             try:
@@ -188,6 +219,22 @@ class SessionService:
     def request_text(self, slug: str) -> str:
         """The originating request text (empty string if none)."""
         return self.repo.request_text(slug)
+
+    def snapshot(self, slug: str) -> SessionSnapshot:
+        """One coherent read of everything a provider call needs — see `SessionSnapshot`. The session
+        must be in the mutation-backed store; call `ensure_canonical` first for one that may still be
+        legacy, which is what every provider-backed operation does anyway before it writes."""
+        if not self.repo.has_meta(slug):
+            raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        with self.repo.lock(slug):
+            meta = self.repo.read_meta(slug)
+            return SessionSnapshot(
+                slug=slug,
+                revision=meta.current_revision,
+                model=self.load_model(slug) if meta.current_revision > 0 else None,
+                request=self.repo.request_text(slug),
+                context_cards=meta.context_cards,
+            )
 
     # ── the write path ──────────────────────────────────────────────────────────
     def diff(self, slug: str, proposal: dict | str, *, require_complete: bool = True) -> UpdateResult:

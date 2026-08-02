@@ -6,6 +6,42 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-08-02
+
+The 0.9.6 review: the two seams where a provider call meets a session that can move under it, and the
+service layer becoming the integrity boundary it has to be before Cloud calls it directly.
+
+### Fixed
+- **A first discovery could still overwrite a refined model.** 0.9.6 gave `run_discovery` the revision
+  it read as an optimistic-lock precondition, which is the wrong instrument for this: discovery reasons
+  from the request *alone* — it never sees the current model — so on a session at revision 2 it reads
+  2, writes against 2, satisfies the precondition perfectly, and replaces two turns of refinement with
+  a naive first analysis. `POST /sessions/{slug}/discover` reaches it directly; the Web only offers
+  the button at revision 0, but a business rule enforced by a hidden button is not enforced. The
+  revision itself is now the rule (`_require_revision_zero`), shared by every entry point, and checked
+  *before* the provider call rather than after — a repeat `discover` used to buy a discovery turn, and
+  an assessment when finalizing, purely to throw both away.
+- **A generation's revision and its model were two separate reads.** A write landing between them gave
+  revision N with the model of N+1: the artifact was generated from the newer model and filed against
+  the older revision. Nothing downstream could catch it, because the recorded number is perfectly
+  plausible — it just describes a different model than the document was written from, which is exactly
+  the claim traceability cannot get wrong. `SessionService.snapshot()` returns revision, model, request
+  and cards from one read under the session lock, and every provider-backed operation takes one.
+- **An unestablishable freshness was reported as "fresh".** `_stale_since` swallowed a `RequivoError`
+  from an unreadable history and returned `False`, on the reasoning that an unanswerable question must
+  not manufacture a stale flag. But `False` is not the absence of an answer — it is the claim that the
+  artifact is up to date, made about a session whose history could not be read at all. The save is now
+  refused: the provenance it would record cannot be verified.
+- **The service trusted its context cards.** The CLI and the Web both resolve them first, which made
+  the service look safe; it is not a boundary until it holds the rule itself. An unknown card recorded
+  on a session is read back by every later turn, and an empty resolved selection means *every* card, so
+  a bad name silently widened the context instead of narrowing it. `create_session` resolves.
+- **`DiscoveryService` could split its storage.** The artifact service defaulted to the process
+  repository rather than the session service's, so `DiscoveryService(sessions=SessionService(postgres))`
+  — the shape requivo-cloud constructs — wrote sessions to Postgres and artifacts to the local
+  filesystem, with every call succeeding. It now follows the session service, and takes a `repo=`
+  argument that configures both at once.
+
 ## [0.9.6] - 2026-08-02
 
 The 0.9.5 review, and the last release before 1.0. Two correctness bugs sat where the product's own

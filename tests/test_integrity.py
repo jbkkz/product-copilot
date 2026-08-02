@@ -386,3 +386,46 @@ def test_a_repeated_reasoning_item_is_refused_rather_than_deduplicated(workspace
     with pytest.raises(RequivoError) as e:
         svc.update_model("s", model)
     assert "repeated" in str(e.value).lower()
+
+
+def test_a_snapshot_cannot_report_one_revision_and_another_revisions_model(workspace):
+    """Every provider-backed operation reads a revision and a model before it reasons. Read as two
+    calls, a write landing between them yields revision N with the model of N+1 — the generation then
+    reasons from the newer model and files the artifact against the older revision. Nothing downstream
+    can detect that: the recorded number is entirely plausible, it just describes a different model
+    than the one the document was written from. `SessionService.snapshot` takes both under the session
+    lock, so the pair is a state that actually existed."""
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model(**{"workflow": _slot(50, "inferred", "medium", "first")}))
+
+    reading, wrote = threading.Event(), threading.Event()
+
+    def concurrent_apply() -> None:
+        reading.wait(timeout=10)
+        try:
+            SessionService().update_model(
+                "s", _full_model(**{"workflow": _slot(90, "explicit", "high", "second")}))
+        finally:
+            wrote.set()
+
+    writer = threading.Thread(target=concurrent_apply)
+    writer.start()
+
+    # Widen the window between the two reads to whatever the writer needs. Under the old two-call read
+    # this is exactly where revision 2 landed; under the lock the writer cannot get in, so the wait
+    # times out and the snapshot completes on the state it started from.
+    real_read_meta = svc.repo.read_meta
+
+    def slow_read_meta(slug):
+        meta = real_read_meta(slug)
+        reading.set()
+        wrote.wait(timeout=0.5)
+        return meta
+
+    svc.repo.read_meta = slow_read_meta
+    snap = svc.snapshot("s")
+    writer.join(timeout=10)
+
+    assert snap.revision == 1
+    assert snap.model.model["workflow"].value == "first"   # the model *of* revision 1, not a later one

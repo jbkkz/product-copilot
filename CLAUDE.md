@@ -27,7 +27,7 @@ Classic install (equivalent; drop `uv run` once the venv is active):
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
-.venv/bin/python -m pytest tests/ -q    # 251 tests, no API calls, no build step
+.venv/bin/python -m pytest tests/ -q    # 257 tests, no API calls, no build step
 .venv/bin/ruff check src tests          # lint (CI runs the same)
 ```
 
@@ -157,6 +157,23 @@ bug that looked like correct behaviour.
     pass it, and the second overwrites the first's identity, provider and context cards. Identity is
     the request **and** its context-card selection: same request, different cards is a different
     discovery, because the cards are what the impact estimates are read against.
+12. **A provider call reasons from one snapshot.** `SessionService.snapshot(slug)` reads the revision,
+    the model, the request and the cards under the session lock; `run_discovery`, `answer`, `generate`
+    and `reason` all take one. Reading the revision and the model separately yields revision N with the
+    model of N+1 when a write lands between them — the artifact is then generated from one model and
+    filed against another, undetectably, because the recorded number is plausible. The lock is released
+    before the call (which takes minutes); `expected_revision` handles what happens *after*, the
+    snapshot handles what the call started *from*.
+13. **A first discovery only lands on revision 0.** Discovery reasons from the request alone — it never
+    sees the current model — so running it on a refined session discards that work rather than
+    improving it, with the optimistic lock satisfied throughout (it reads revision N and writes against
+    N). `_require_revision_zero` is the gate, taken *before* the paid call, by every entry point. A
+    rule that lives in an interface (the Web hides the button after revision 0) is not enforced.
+14. **The service layer is the integrity boundary, not the interfaces.** Context cards are resolved in
+    `create_session`, not trusted from the caller, because the CLI and the Web being careful is not a
+    guarantee — requivo-cloud calls the service directly. For the same reason `DiscoveryService`'s
+    artifact service defaults to the *session service's* repository: on files a split backing is
+    invisible and every call succeeds.
 
 ## The runner
 

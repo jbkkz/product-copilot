@@ -56,6 +56,24 @@ class Generated:
     model: EngineOutput
 
 
+def _require_revision_zero(slug: str, revision: int) -> None:
+    """A first discovery may only land on a session that has no model yet.
+
+    Discovery *replaces* the model — it reasons from the request alone, without the current model —
+    so running it on a session already at revision N does not refine that understanding, it discards
+    it and writes a naive first-turn one over the top. The optimistic lock does not catch this: the
+    call reads revision N and writes against revision N, so the precondition is satisfied while the
+    content is a regression. The revision itself has to be the rule, and it cannot live in an
+    interface (the Web only shows the button at revision 0) — a business rule enforced by a hidden
+    button is not enforced."""
+    if revision > 0:
+        raise RevisionConflictError(
+            f"session '{slug}' already carries a model (revision {revision}) — a fresh discovery "
+            f'would replace it. Refine it instead (`requivo answer {slug} "…"`), or run this '
+            "discovery under another slug.",
+            details={"slug": slug, "expected": 0, "actual": revision})
+
+
 def absorb_reasoning(out: EngineOutput, brief) -> None:
     """Persist the assessment's reasoning (decisions, challenges, opportunities) into the model so every
     generator inherits it, not just the facts. Called wherever the assessment is produced, before the
@@ -75,11 +93,16 @@ class DiscoveryService:
     """
 
     def __init__(self, provider=None, *, client=None, sessions: SessionService | None = None,
-                 artifacts: ArtifactService | None = None):
+                 artifacts: ArtifactService | None = None, repo=None):
         self._provider = provider
         self._client = client
-        self.sessions = sessions or SessionService()
-        self.artifacts = artifacts or ArtifactService()
+        self.sessions = sessions or SessionService(repo)
+        # The artifact service defaults to *this service's* storage, not to the process default. On a
+        # file backing the two were indistinguishable — both resolve to the same workspace — which is
+        # what hid the bug: constructing `DiscoveryService(sessions=SessionService(postgres_repo))`
+        # sent the sessions to Postgres and the artifacts to the local filesystem, and every call
+        # succeeded. One repository per service, chosen once, is the only shape that cannot split.
+        self.artifacts = artifacts or ArtifactService(self.sessions.repo)
 
     def _need_provider(self):
         """The reasoning provider, built on first use so a key is only required for provider actions.
@@ -102,6 +125,20 @@ class DiscoveryService:
         path: capture the request now, run discovery later."""
         return self.sessions.create_session(request, context_cards=cards, slug=slug).slug
 
+    def _claim_session(self, request: str, *, cards: list[str] | None, slug: str | None):
+        """Create (or reuse) the session a first discovery will land on, and hold it to revision 0.
+
+        Idempotent creation and "a discovery replaces the model" are each reasonable alone and unsafe
+        together: the second `discover` of the same request lands on the first one's session. This is
+        the single gate, so every entry point — `start`, `finalize_discovery`, the CLI's interactive
+        loop — refuses the same case in the same words."""
+        provider = self._need_provider()
+        meta = self.sessions.create_session(
+            request, context_cards=cards, slug=slug,
+            provider=provider.name, model_name=provider.model_name())
+        _require_revision_zero(meta.slug, meta.current_revision)
+        return meta
+
     def finalize_discovery(self, request: str, out: EngineOutput, *, cards: list[str] | None = None,
                            slug: str | None = None, brief=None, surface: str = "discover") -> str:
         """Create the session and apply a discovered model through the validated path. When a `brief` is
@@ -113,16 +150,7 @@ class DiscoveryService:
         model that had been refined over several turns with a naive first-turn one, and a write that
         landed while the provider was reasoning would be overwritten the same way. Both cases are a
         `revision_conflict`, which is recoverable; a silent replacement is not."""
-        provider = self._need_provider()
-        meta = self.sessions.create_session(
-            request, context_cards=cards, slug=slug,
-            provider=provider.name, model_name=provider.model_name())
-        if meta.current_revision > 0:
-            raise RevisionConflictError(
-                f"session '{meta.slug}' already carries a model (revision {meta.current_revision}) — "
-                f"a fresh discovery would replace it. Refine it instead (`requivo answer {meta.slug} "
-                f'"…"`), or run this discovery under another slug.',
-                details={"slug": meta.slug, "expected": 0, "actual": meta.current_revision})
+        meta = self._claim_session(request, cards=cards, slug=slug)
         if brief is not None:
             absorb_reasoning(out, brief)
         self.sessions.update_model(
@@ -133,26 +161,36 @@ class DiscoveryService:
     def start(self, request: str, *, cards: list[str] | None = None, slug: str | None = None,
               finalize: bool = False, surface: str = "discover") -> str:
         """Run one discovery turn on a fresh request and apply it, returning the session slug. With
-        `finalize`, also produce and absorb the solution assessment's reasoning."""
+        `finalize`, also produce and absorb the solution assessment's reasoning.
+
+        The session is claimed *before* the provider is called. Creation is idempotent, so re-running
+        a discovery whose session already carries a model is refused — and refusing it after the call
+        means having paid for reasoning (twice, when finalizing) that can only be thrown away. The
+        check is cheap and the call is not."""
         provider = self._need_provider()
+        meta = self._claim_session(request, cards=cards, slug=slug)
         out = provider.analyze(request, only=cards)
         brief = provider.generate("brief", out, only=cards) if finalize else None
-        return self.finalize_discovery(request, out, cards=cards, slug=slug, brief=brief, surface=surface)
+        return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
+                                       surface=surface)
 
     def run_discovery(self, slug: str, *, surface: str = "discover") -> UpdateResult:
         """Run the first discovery turn on an already-created session (the 'create session only' path
         run later): read its stored request + cards, reason, and apply the model as revision 1.
 
-        Like every other provider-backed operation, this captures the revision it reasoned from and
-        applies against it: the call takes seconds to minutes, and a session that moved meanwhile must
-        produce a conflict rather than have the change written from the older state on top of it."""
-        request = self.sessions.request_text(slug)
-        cards = self.sessions.cards(slug)
-        source_revision = self.sessions.meta(slug).current_revision
-        out = self._need_provider().analyze(request, only=cards)
+        Held to revision 0 like every other first discovery, and held *before* the provider call:
+        this reasons from the request alone — it never sees the current model — so on a session that
+        has been refined it would write a naive first-turn model over that work, with the optimistic
+        lock satisfied throughout (it reads revision N and writes against N). The `POST
+        /sessions/{slug}/discover` route reaches this directly; the Web only offers the button at
+        revision 0, but that is a rendering decision, not a rule."""
+        self.sessions.ensure_canonical(slug)
+        snap = self.sessions.snapshot(slug)
+        _require_revision_zero(slug, snap.revision)
+        out = self._need_provider().analyze(snap.request, only=snap.context_cards)
         return self.sessions.update_model(
-            slug, out.model_dump_json(), expected_revision=source_revision,
-            provenance=self._provenance("analyze", cards=cards, surface=surface))
+            slug, out.model_dump_json(), expected_revision=snap.revision,
+            provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface))
 
     # ── refinement ───────────────────────────────────────────────────────────────
     def answer(self, slug: str, answers: str, *, expected_revision: int | None = None,
@@ -162,25 +200,27 @@ class DiscoveryService:
         A turn has the same seam as a generation: the provider reasons over the model as it was, and the
         session can move meanwhile. So the precondition defaults to the revision this turn actually read
         — a caller that knows better (the Web, which carries the revision the user saw in the form) can
-        still pass its own. Only a session with no metadata yet (a legacy `out/` layout, migrated on
-        this write) goes without one, because there is no revision to hold it to."""
-        read_revision = self.sessions.meta(slug).current_revision if self.sessions.exists_meta(slug) else None
-        before = self.sessions.load_model(slug)
-        cards = self.sessions.cards(slug)
+        still pass its own. The turn reasons from one coherent `SessionSnapshot` — the revision it will
+        be held to and the model it reasoned over are the same read, not two. A legacy `out/` session is
+        migrated first, so there is always a real revision to hold it to."""
+        self.sessions.ensure_canonical(slug)
+        snap = self.sessions.snapshot(slug)
         out = self._need_provider().analyze(
-            self.sessions.request_text(slug), current_model=before, answers=answers, only=cards)
+            snap.request, current_model=snap.model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(
             slug, out.model_dump_json(),
-            expected_revision=expected_revision if expected_revision is not None else read_revision,
-            provenance=self._provenance("analyze", cards=cards, surface=surface))
+            expected_revision=expected_revision if expected_revision is not None else snap.revision,
+            provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface))
 
     # ── generation ───────────────────────────────────────────────────────────────
     def reason(self, slug: str, artifact_type: str):
         """Produce an artifact's typed contract without saving anything — for the terminal-only views
         (`stories`, `estimate`) that are analyses rather than deliverables. Still goes through the
-        provider seam, so no interface reaches past it to a vendor's functions."""
-        return self._need_provider().generate(
-            artifact_type, self.sessions.load_model(slug), only=self.sessions.cards(slug))
+        provider seam, so no interface reaches past it to a vendor's functions. Nothing is written, so
+        there is no provenance to get wrong — but the model and the cards it is read against still come
+        from one snapshot, so the analysis is of a session state that actually existed."""
+        snap = self.sessions.snapshot(slug)
+        return self._need_provider().generate(artifact_type, snap.model, only=snap.context_cards)
 
     def generate(self, slug: str, artifact_type: str, *, surface: str = "generate", **kwargs) -> Generated:
         """Generate an artifact through the provider and save it against the session with its source
@@ -196,11 +236,16 @@ class DiscoveryService:
         So the revision the model was read at is captured *before* the call and carried through both
         writes: as the optimistic-lock precondition on any apply (a concurrent change becomes a clean
         conflict instead of silently overwriting that revision) and as the artifact's recorded source
-        (so a document written from revision 1 is never filed as if it came from revision 2)."""
+        (so a document written from revision 1 is never filed as if it came from revision 2).
+
+        The revision and the model come from one `SessionSnapshot`, because reading them separately
+        made the provenance a lie in the other direction: a write landing between the two reads gave
+        revision N with the model of N+1, and the artifact was generated from the newer model and
+        filed against the older revision — a mismatch nothing downstream can detect, since the number
+        is perfectly plausible."""
         self.sessions.ensure_canonical(slug)  # migrate a legacy session before its first artifact write
-        source_revision = self.sessions.meta(slug).current_revision
-        out = self.sessions.load_model(slug)
-        cards = self.sessions.cards(slug)
+        snap = self.sessions.snapshot(slug)
+        source_revision, out, cards = snap.revision, snap.model, snap.context_cards
         provider = self._need_provider()
 
         if artifact_type == "brief":

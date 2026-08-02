@@ -371,6 +371,93 @@ def test_a_fresh_discovery_refuses_to_replace_a_model_that_already_exists(worksp
     assert SessionService().load_model(slug).model["workflow"].value == "kept"
 
 
+def test_run_discovery_refuses_a_session_that_already_has_a_model(workspace):
+    """`run_discovery` reasons from the request alone — it never sees the current model — so on a
+    refined session it does not improve the understanding, it discards it. The optimistic lock does
+    not catch this: the call reads revision N and writes against revision N, so the precondition is
+    satisfied while the content is a regression. `POST /sessions/{slug}/discover` reaches this
+    directly; the Web only shows the button at revision 0, but a rule enforced by a hidden button is
+    not enforced. The refusal is also *before* the call — reasoning that can only be thrown away
+    should not be paid for."""
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model(**{"workflow": _slot(90, "explicit", "high", "refined")}))
+
+    provider = _CountingProvider()
+    with pytest.raises(RevisionConflictError) as e:
+        DiscoveryService(provider).run_discovery("s")
+
+    assert e.value.details["actual"] == 1 and e.value.details["expected"] == 0
+    assert provider.calls == 0                                    # refused before the paid call
+    assert svc.load_model("s").model["workflow"].value == "refined"
+
+
+def test_a_repeat_discovery_is_refused_before_the_provider_is_paid(workspace):
+    """Same rule, the other entry point. `start()` used to reason first and discover the conflict
+    afterwards, so an accidental re-run bought a discovery turn — and, when finalizing, an assessment
+    too — purely to throw both away."""
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    provider = _CountingProvider()
+    disco = DiscoveryService(provider)
+    disco.start("A leave approval system.", slug="dup")
+    assert provider.calls == 1
+
+    with pytest.raises(RevisionConflictError):
+        disco.start("A leave approval system.", slug="dup")
+    assert provider.calls == 1                                    # the second run never reasoned
+
+
+def test_the_artifact_service_defaults_to_the_session_service_s_storage(workspace):
+    """Two services, one backing. On files the default and the injected repository resolve to the same
+    workspace, so a split was invisible — but `DiscoveryService(sessions=SessionService(postgres))`
+    sent sessions to Postgres and artifacts to the local filesystem, and every call succeeded. This is
+    the shape requivo-cloud constructs, so the default has to follow the session service."""
+    from requivo.services.discovery import DiscoveryService
+    from requivo.services.repository import FileSessionRepository
+
+    repo = FileSessionRepository()
+    disco = DiscoveryService(_FakeProvider(), sessions=SessionService(repo))
+    assert disco.artifacts.repo is repo
+    assert DiscoveryService(_FakeProvider(), repo=repo).sessions.repo is repo
+
+
+def test_the_service_refuses_a_context_card_that_does_not_exist(workspace):
+    """The CLI and the Web both resolve cards before they get here, which made the service look safe.
+    It is not a boundary until it holds the rule itself: an unknown card recorded on a session is read
+    back by every later turn, and an empty resolved selection means *every* card — so a bad name
+    silently widens the context instead of narrowing it. requivo-cloud calls exactly this layer."""
+    from requivo.core.errors import UnknownContextCardError
+
+    with pytest.raises(UnknownContextCardError):
+        SessionService().create_session("Something.", context_cards=["made-up"])
+    assert SessionService().create_session(
+        "Something.", context_cards=["b2b-platform"]).context_cards == ["b2b-platform"]
+
+
+def test_an_artifact_is_refused_when_its_freshness_cannot_be_established(workspace):
+    """`False` is not "I don't know" — it is the claim that the artifact is up to date. It was being
+    returned for a session whose history could not be read at all, which is the one case where the
+    answer is genuinely unavailable. Refusing the save is the honest outcome: the provenance it would
+    record cannot be verified."""
+    from requivo.core.errors import RequivoError
+
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())                                   # revision 1
+    svc.update_model("s", _full_model(**{"workflow": _slot(90, "explicit", "high", "moved")}))  # 2
+    (store.canonical_dir("s") / "revisions" / "0001-model.json").unlink()  # the history is now a lie
+
+    with pytest.raises(RequivoError) as e:
+        art.save("s", "prd", "# PRD\n", source_revision=1)
+    assert e.value.code == "invalid_session"
+    assert "prd" not in art.list("s")                                      # nothing was recorded
+
+
 def test_a_first_discovery_that_races_a_concurrent_write_conflicts(workspace):
     """`run_discovery` reasons from revision N and applies; the call takes minutes, so it captures the
     revision it read and holds the write to it — the same precondition every other provider-backed
@@ -431,6 +518,17 @@ class _FakeProvider:
 
     def provenance(self, op, *, only=None):
         return {"provider": self.name, "model_name": self.model_name(), "prompt_version": "sha256:fake"}
+
+
+class _CountingProvider(_FakeProvider):
+    """A provider that records whether it was asked to reason — the point of a pre-flight check."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze(self, request, *, current_model=None, answers=None, only=None):
+        self.calls += 1
+        return super().analyze(request, current_model=current_model, answers=answers, only=only)
 
 
 def test_discovery_runs_on_a_provider_that_is_not_anthropic(workspace):
