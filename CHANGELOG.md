@@ -6,6 +6,24 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-08-04
+
+A documentation release. No contract, no session format, no prompt, no generator and no engine
+behaviour changed — 0.9.10 reasons exactly as 0.9.9 did. It exists because 0.9.9 was tagged but never
+published, and because the quickstart it shipped with did not work on a machine without `uv`.
+
+### Fixed
+
+- **The install instructions assumed a tool the reader may not have.** Every line in the README and in
+  getting-started began with `uv`, and neither said how to obtain it or offered an alternative. `uv`
+  keeps the lead and now carries the one line that installs it; `pipx` is named as the equivalent, and
+  getting-started gained an *Installing* section with a virtualenv route for pip-only setups, tested
+  end to end on a clean Python 3.9. `pip install --user` is called out as the one to avoid: it
+  succeeds while leaving `requivo` off the PATH, which reads as a broken package rather than a PATH
+  problem.
+- **`requivo demo` no longer asks you to clone the repository.** The payload ships in the wheel, so it
+  runs straight after any install; the clone is now the alternative rather than the instruction.
+
 ### Changed
 
 - **The README is an orientation again.** 250 → 160 lines. Requivo Web now opens the document instead
@@ -889,7 +907,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.9.10...HEAD
+[0.9.10]: https://github.com/jbkkz/requivo/releases/tag/v0.9.10
 [0.8.0]: https://github.com/jbkkz/requivo/releases/tag/v0.8.0
 [0.7.0]: https://github.com/jbkkz/requivo/releases/tag/v0.7.0
 [0.6.3]: https://github.com/jbkkz/requivo/releases/tag/v0.6.3
