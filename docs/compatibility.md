@@ -90,7 +90,7 @@ that is possible, and names its replacement here. Nothing is removed in a patch 
 
 **The 0.9.8 removals.** These three were the last of the pre-store architecture, all deprecated for
 several versions and none of them with a known user. They were carried on a "removal in 1.1.0" plan,
-which would have meant maintaining them *through* 1.0 and the Cloud beta — the moment you least want
+which would have meant maintaining them *through* 1.0 — the moment you least want
 two answers to "where does a session live?". The public interface is unchanged: `requivo` and the
 session store were already the only supported path. If you have `out/` sessions, `requivo session
 migrate` still converts them, and it is now the only thing that reads that layout.
@@ -99,7 +99,7 @@ migrate` still converts them, and it is now the only thing that reads that layou
 
 - **Python internals.** `requivo.core`, `requivo.services` and `requivo.providers` are importable and
   documented, but they are the engine's own structure, not a published API. A refactor can move them.
-  requivo-cloud depends on them deliberately and tracks the repo.
+  A downstream consumer that depends on them deliberately tracks the repo.
 - **Prompt and context-card content.** These are tuned continuously — that is the point of the
   [golden harness](evaluations.md). Two versions can reason differently about the same request; the
   provenance recorded on each revision (model + prompt hash) is what makes that traceable.

@@ -35,7 +35,7 @@ Every interface — the terminal CLI, the Claude Code plugin, the local Web app 
 the same Core. There is no second implementation of the apply path.
 
 The services are the **integrity boundary**, not the interfaces. That distinction is easy to blur
-while there are only two callers who are both careful — but requivo-cloud calls this layer directly,
+while there are only two callers who are both careful — but an external consumer calls this layer directly,
 so a rule the CLI happens to enforce is not enforced. Concretely: context cards are resolved in
 `create_session` rather than trusted; `DiscoveryService`'s artifact service defaults to the *session
 service's* repository, so a Postgres session store cannot end up paired with a local artifact store;
@@ -62,8 +62,7 @@ written from.
 - **CLI** — provider verbs (`discover`, `answer`, generators) plus offline deterministic verbs.
 - **Claude Code** — Claude reasons in your session and writes a proposal; the deterministic CLI
   validates and applies it. No API key. Lives in `plugins/claude-code/` (not shipped in the wheel).
-- **Web** — `requivo web`, a local single-user UI over the services. See [web.md](web.md). It is not
-  Requivo Cloud.
+- **Web** — `requivo web`, a local single-user UI over the services. See [web.md](web.md).
 
 ## Bundled assets
 

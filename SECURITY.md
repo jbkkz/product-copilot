@@ -25,7 +25,7 @@ API calls. Keep `.env` out of version control (it is gitignored).
 `127.0.0.1` by default. Do not expose it on an untrusted network (`--host 0.0.0.0` prints a warning).
 The Anthropic key is read from the server environment and is never rendered into a page or logged;
 slugs are validated (no path traversal) and only the interface's own static assets are served — never
-your workspace, `.requivo/`, `.env` or `.git`. It is not Requivo Cloud. See [docs/web.md](docs/web.md).
+your workspace, `.requivo/`, `.env` or `.git`. See [docs/web.md](docs/web.md).
 
 ## Untrusted input / prompt injection
 

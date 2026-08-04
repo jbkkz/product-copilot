@@ -100,7 +100,7 @@ def _readiness(model: EngineOutput) -> Readiness:
 
 class SessionService:
     """Create, resolve, load, and mutate sessions through one validated pipeline. Storage is injected
-    as a `SessionRepository` (files by default, Postgres in Cloud), so this orchestration is reused
+    as a `SessionRepository` (files by default, Postgres elsewhere), so this orchestration is reused
     verbatim across backings. Stateless beyond that handle — safe to construct per call (the CLI does)
     or hold as a singleton (Requivo Web does)."""
 
@@ -147,7 +147,7 @@ class SessionService:
 
         The card selection is resolved here rather than trusted. The CLI and the Web both call
         `resolve_cards` before they get this far, which made it look like the service could rely on
-        them — but "the interfaces are careful" is not an integrity boundary, and requivo-cloud calls
+        them — but "the interfaces are careful" is not an integrity boundary, and an external consumer calls
         exactly this layer. An unknown card recorded on a session is not inert: every later turn reads
         the selection back, and an empty resolved selection means *every* card, so a bad name silently
         widens the context instead of narrowing it."""

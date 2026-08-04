@@ -6,6 +6,18 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The README is an orientation again.** 250 → 160 lines. Requivo Web now opens the document instead
+  of being the second of three equally-weighted quickstarts — the hierarchy is in the space each
+  surface occupies, not only in its heading. *Core concepts* moved to
+  [`docs/requirements-model.md`](docs/requirements-model.md), which gained the product ↔ engine
+  vocabulary table it never had in writing; *What Requivo produces* folded into *How it works*; the
+  13-row documentation table dropped to 5, the rest already being indexed in `docs/`.
+- **The Web install is two lines.** `export ANTHROPIC_API_KEY` left the install block: `cli.py` loads a
+  `.env` and `web/config.py` already reports a missing key in the interface, so presenting it as a
+  prerequisite overstated it — the interface opens and reads existing sessions without one.
+
 ## [0.9.9] - 2026-08-04
 
 The product release. Nothing about the engine changed — no contract, no session format, no prompt, no
@@ -85,7 +97,7 @@ removes the ways it could be wrong about what it has.
   Migration is explicit (`requivo session migrate`, unchanged, still copying rather than moving) and
   all that remains is detection: a session found only in `out/` is reported as missing *with that
   command named in the error*. The three removals were scheduled for 1.1.0, which would have meant
-  carrying them through 1.0 and the Cloud beta.
+  carrying them through 1.0.
 - The legacy write path in `persistence` (`save_model`, `save_session`, `write_artifact`, …) and
   `stale_on_disk`, which answered "which files in `out/<slug>/` are stale?" — a question the session
   store answers from `artifact_status`. Nothing but the flag CLI had called them.
@@ -132,7 +144,7 @@ removes the ways it could be wrong about what it has.
 ## [0.9.7] - 2026-08-02
 
 The 0.9.6 review: the two seams where a provider call meets a session that can move under it, and the
-service layer becoming the integrity boundary it has to be before Cloud calls it directly.
+service layer becoming the integrity boundary it has to be before anything external calls it directly.
 
 ### Fixed
 - **A first discovery could still overwrite a refined model.** 0.9.6 gave `run_discovery` the revision
@@ -161,7 +173,7 @@ service layer becoming the integrity boundary it has to be before Cloud calls it
   a bad name silently widened the context instead of narrowing it. `create_session` resolves.
 - **`DiscoveryService` could split its storage.** The artifact service defaulted to the process
   repository rather than the session service's, so `DiscoveryService(sessions=SessionService(postgres))`
-  — the shape requivo-cloud constructs — wrote sessions to Postgres and artifacts to the local
+  — the shape an external deployment constructs — wrote sessions to Postgres and artifacts to the local
   filesystem, with every call succeeding. It now follows the session service, and takes a `repo=`
   argument that configures both at once.
 
@@ -403,7 +415,7 @@ format — a 0.9.x session is read and written unchanged.
 - **Design decisions, challenges and opportunities carry stable ids** (`dec_…`, `chl_…`, `opp_…`),
   derived from their own content and recomputed on every validation — identical across revisions,
   surfaces and machines while the statement is unchanged, and impossible to forge, since a supplied id
-  is always overwritten. Cloud needs to refer back to a decision; text is a poor handle.
+  is always overwritten. A consumer needs to refer back to a decision; text is a poor handle.
 - **The legacy flag CLI is deprecated** and moved to `requivo/legacy.py`, frozen, with a notice on use
   and removal scheduled for **1.1.0**. It writes the old `out/` layout — no revisions, no provenance,
   no staleness — and deleting that one file is now the whole removal.
@@ -485,8 +497,8 @@ a 0.9.0 session is read and written identically.
 
 **Requivo Web — a third interface.** A local, single-user, self-hostable browser UI over the same Core,
 services and session format as the CLI and Claude Code. It exists for people less comfortable in a
-terminal; it is deliberately *not* Requivo Cloud (no accounts, auth, database, remote storage, or
-telemetry — see `docs/web.md`).
+terminal; it is deliberately bounded — no accounts, auth, database, remote storage, or telemetry
+(see `docs/web.md`).
 
 ### Added
 - **`requivo web`** — launches a local FastAPI + Jinja2 + HTMX interface (the optional `[web]` extra:
@@ -529,14 +541,14 @@ telemetry — see `docs/web.md`).
 
 ## [0.8.2] - 2026-08-01
 
-Pre-Cloud correctness at the session boundary — the layer requivo-cloud will sit on. From the same
-external review's "before you connect Cloud sessions" list.
+Correctness at the session boundary — the layer any external consumer sits on. From the same
+external review's session-boundary list.
 
 ### Added
 - **`SessionRepository` storage seam.** `SessionService` and `ArtifactService` no longer touch the
   filesystem directly — storage is injected as a `SessionRepository` (in `services/repository.py`),
   with `FileSessionRepository` (the default) delegating to `core.persistence`. The canonical-vs-legacy
-  `out/` handling now lives inside the file repository, where it belongs. requivo-cloud can supply a
+  `out/` handling now lives inside the file repository, where it belongs. A deployment can supply a
   `PostgresSessionRepository` with the same protocol and reuse the service orchestration verbatim,
   instead of bypassing the service or faking a filesystem. Proven by an in-memory repository the full
   service cycle (create → apply → stale-flag → status → provenance → locking) runs against with zero
@@ -610,8 +622,8 @@ review are addressed.
 ## [0.8.0] - 2026-08-01
 
 Architectural refactor into **three surfaces over one engine** — Core, CLI, and Claude Code — in
-preparation for a future Web UI, plus the formalized **open-source strategy** (the Community / Cloud /
-Lab boundary). The model format is unchanged and the license stays MIT; the refactor itself changed no
+preparation for a future Web UI, plus the formalized **open-source strategy** (the public / private
+boundary). The model format is unchanged and the license stays MIT; the refactor itself changed no
 behaviour, but this release also ships a robustness fix and a first round of discovery-quality tuning
 from the first end-to-end usage test (below).
 
@@ -637,7 +649,7 @@ from the first end-to-end usage test (below).
   decision or premise the saved **assessment** rests on, that assessment is flagged stale — `model apply`
   reports `invalidated_decisions`/`invalidated_challenges`, and `impact` shows *Premises to re-examine*.
 - **Open-source governance & distribution boundary.** `docs/open-source-strategy.md` (the Core / CLI /
-  Claude Code / Community Web / Cloud / Lab surface map, and the public-vs-private data boundary),
+  Claude Code / Community Web surface map, and the public-vs-private data boundary),
   `CONTRIBUTING.md`, `TRADEMARKS.md`, `GOVERNANCE.md`, and `examples/README.md`. New GitHub templates
   (feature request, pull request, issue-template `config.yml` routing security reports to private
   advisories) and a Gitleaks secret-scan workflow. The README gains **Open source** and **Data and

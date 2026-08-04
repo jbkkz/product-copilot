@@ -416,7 +416,7 @@ def test_the_artifact_service_defaults_to_the_session_service_s_storage(workspac
     """Two services, one backing. On files the default and the injected repository resolve to the same
     workspace, so a split was invisible — but `DiscoveryService(sessions=SessionService(postgres))`
     sent sessions to Postgres and artifacts to the local filesystem, and every call succeeded. This is
-    the shape requivo-cloud constructs, so the default has to follow the session service."""
+    the shape an external deployment constructs, so the default has to follow the session service."""
     from requivo.services.discovery import DiscoveryService
     from requivo.services.repository import FileSessionRepository
 
@@ -430,7 +430,7 @@ def test_the_service_refuses_a_context_card_that_does_not_exist(workspace):
     """The CLI and the Web both resolve cards before they get here, which made the service look safe.
     It is not a boundary until it holds the rule itself: an unknown card recorded on a session is read
     back by every later turn, and an empty resolved selection means *every* card — so a bad name
-    silently widens the context instead of narrowing it. requivo-cloud calls exactly this layer."""
+    silently widens the context instead of narrowing it. An external consumer calls exactly this layer."""
     from requivo.core.errors import UnknownContextCardError
 
     with pytest.raises(UnknownContextCardError):

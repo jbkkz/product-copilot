@@ -3,6 +3,34 @@
 > The model is the product; documents are views of it. This is what the model is made of and how
 > Requivo reasons over it.
 
+## The product vocabulary
+
+These are the names the product uses, in Requivo Web and in the documents it writes. The rest of this
+page is the same ideas in the engine's own, more precise vocabulary — which is what `--json` and the
+technical docs speak.
+
+- **What we know** — stated directly by the client.
+- **What we are assuming** — inferred from context; confirm before building.
+- **Open question** — not yet known, and worth asking when the answer would move the build.
+- **How we know it vs how fully** — whether something was stated or inferred is separate from whether
+  it has been covered in enough detail. Both have to hold before a topic stops blocking.
+- **Decision and assumption to review** — a settled choice with its trade-off; a premise worth
+  contesting before build.
+- **What rests on what** — a decision records the topics it was derived from; a document records the
+  topics it consumes. That graph is what makes "needs updating" an answer rather than a guess.
+- **Are we ready?** — whether a high-impact topic is still unresolved.
+- **Needs updating** — a document the understanding has moved past. `requivo impact` shows a change's
+  blast radius before you make it.
+
+| The product says | The engine says |
+|---|---|
+| what we know / what we are assuming | evidence (`explicit` / `inferred` / `unknown`) |
+| how fully a topic is covered | coverage (completeness) |
+| topic | slot |
+| assumption to review | challenge |
+| needs updating | stale artifact |
+| decision brief | `brief` |
+
 ## Slots and pillars
 
 The model is a set of typed **slots** — the problem, actors, business objects, business rules,

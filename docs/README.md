@@ -24,6 +24,6 @@ depth — each has one clear responsibility; the README links to them rather tha
 ## Project
 
 - [Roadmap](roadmap.md) — what exists and what's next
-- [Open-source strategy](open-source-strategy.md) — the Core / Web / Cloud boundary
+- [Open-source strategy](open-source-strategy.md) — what is public and what stays private
 - [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md) · [Governance](../GOVERNANCE.md) ·
   [Trademarks](../TRADEMARKS.md)

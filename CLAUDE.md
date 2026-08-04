@@ -58,7 +58,7 @@ Python — and that call lives in a **provider**, never in the core. The layers 
   is the single validated apply path (validate → diff → propagate → revision → stale-flag);
   `DiscoveryService` is the single provider-backed orchestration (reason → apply → save).
   Both storage (`SessionRepository`) and reasoning (`ReasoningProvider`) are injected, so the
-  orchestration is backing-agnostic — requivo-cloud reuses it with a Postgres repository verbatim.
+  orchestration is backing-agnostic — a Postgres repository reuses it verbatim.
 - **`render/`** turns data into strings; **`cli.py`**, **`deterministic.py`** and **`web/`** are the
   only layers that touch argv/stdout/HTTP.
 
@@ -177,7 +177,7 @@ bug that looked like correct behaviour.
     rule that lives in an interface (the Web hides the button after revision 0) is not enforced.
 14. **The service layer is the integrity boundary, not the interfaces.** Context cards are resolved in
     `create_session`, not trusted from the caller, because the CLI and the Web being careful is not a
-    guarantee — requivo-cloud calls the service directly. For the same reason `DiscoveryService`'s
+    guarantee — an external consumer can call the service directly. For the same reason `DiscoveryService`'s
     artifact service defaults to the *session service's* repository: on files a split backing is
     invisible and every call succeeds.
 15. **A listing survives its own members.** `session_list` renders every session on the home page, and

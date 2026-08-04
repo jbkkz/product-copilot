@@ -8,7 +8,7 @@ decision brief. Sessions it creates open in the other two, and theirs open here.
 "Primary" is about weight, not capability. The CLI can do everything this can and more; it is
 infrastructure. This is the one to hand someone who has a request and half an hour.
 
-Requivo Web is deliberately small. It is **not** [Requivo Cloud](#requivo-web-is-not-requivo-cloud).
+Requivo Web is deliberately small — see [Scope](#scope).
 
 ## Install
 
@@ -142,12 +142,12 @@ Even though it is a local app:
   concurrent change surfaces as a conflict rather than being overwritten — but the second tab is not
   live-updated; it finds out when it next submits.
 
-## Requivo Web is not Requivo Cloud
+## Scope
 
 Requivo Web is intentionally bounded to: local, single-user, filesystem-backed, no authentication, no
 organizations, no collaboration, no billing, no remote storage, no telemetry, no database, no SaaS
 infrastructure.
 
-The future **Requivo Cloud** is a separate, private product that may add accounts, authentication,
-workspaces, PostgreSQL, collaboration, managed storage, quotas, billing, managed LLM providers, and
-enterprise administration. None of that is part of Requivo Web.
+That is a scope decision, not a missing feature list. Everything the interface does runs against your
+own filesystem, and the boundary is what keeps the security posture simple enough to state in a
+paragraph — see [SECURITY.md](../SECURITY.md).

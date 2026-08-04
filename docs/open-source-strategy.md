@@ -1,15 +1,14 @@
 # Open-source strategy
 
-This document explains how Requivo is distributed: what is open source today, what may become a
-hosted service later, and what is deliberately kept private. It is a **product and distribution**
-document, not a legal one — the code license is [MIT](../LICENSE), and the trademark boundary is in
-[TRADEMARKS.md](../TRADEMARKS.md).
+This document explains how Requivo is distributed: what is open source today and what is deliberately
+kept private. It is a **product and distribution** document, not a legal one — the code license is
+[MIT](../LICENSE), and the trademark boundary is in [TRADEMARKS.md](../TRADEMARKS.md).
 
 ## Why open source
 
 Requivo Core, the CLI, the Claude Code integration and the local Web interface are open source on
 purpose. The goal is to make the requirements *model* portable, inspectable and usable locally —
-without forcing anyone into a hosted service to get value from it. Open source serves adoption, trust,
+without forcing anyone into a service to get value from it. Open source serves adoption, trust,
 local and self-hosted use, use inside Claude Code, contributions, and integration into other workflows.
 
 The main risk for a project at this stage is not that a competitor copies the code. The code is
@@ -17,8 +16,8 @@ generic; the reasoning lives in prompts and context that anyone could rewrite. T
 **no one actually uses the product**. Openness is the cheapest way to reduce that risk.
 
 The durable proprietary value, if any, is expected to come not from the generic engine but from
-**hosting, collaboration, operation, and the learnings drawn from real-world usage** — see
-*Requivo Lab* and *Requivo Cloud* below.
+**operation and the learnings drawn from real-world usage** — see *Requivo Lab* below. No commercial
+or hosted offering is currently promised or available.
 
 ## The surfaces
 
@@ -56,16 +55,7 @@ The local web interface (`requivo web`, the optional `[web]` extra), under `src/
 request, answer the engine's questions, review the understanding, generate a decision brief or a PRD,
 view and export artifacts. It is a thin FastAPI + HTMX layer over the same Core and services as every
 other surface — **local, single-user, filesystem-backed, no authentication, no database, no remote
-storage.** That boundary is exactly what keeps it distinct from Requivo Cloud (below). See
-[web.md](web.md).
-
-### Requivo Cloud — future, potentially proprietary, not in this repository
-
-A future *hosted* offering that may provide managed storage, teams and organisations, governance,
-collaboration, LLM credits, operational security, administration and enterprise features. **No
-commercial hosted offering is currently promised or available.** None of the Cloud backend is built
-in this repository, and the roadmap mentioning Requivo Cloud should not be read as a commitment to
-publish that backend here.
+storage.** That boundary is deliberate and load-bearing. See [web.md](web.md).
 
 ### Requivo Lab — private
 
@@ -73,24 +63,20 @@ A private environment for evaluation data, experiments, real-world cases, propri
 internal metrics. This is where the accumulated understanding of *what a good discovery run looks
 like* lives. Nothing in Lab is published automatically (see the data boundary below).
 
-## The community / cloud / lab boundary
+## The public / private boundary
 
-| Concern | Community (public, MIT) | Cloud (future, private) | Lab (private) |
-|---|---|---|---|
-| Reasoning engine, schema, validation | ✅ | — | — |
-| CLI, Claude Code plugin, local Web, generic providers | ✅ | — | — |
-| Generic prompts & generic context cards | ✅ | — | — |
-| Renderers, GitHub/GitLab exports | ✅ | — | — |
-| Anonymised examples, golden harness | ✅ | — | — |
-| Auth, accounts, multi-tenant, roles | — | ✅ | — |
-| Billing, LLM credits, managed storage | — | ✅ | — |
-| Collaboration, comments, sync, admin | — | ✅ | — |
-| Rate limiting, anti-abuse, prod observability | — | ✅ | — |
-| Real user requests & customer data | — | — | ✅ |
-| Company-specific context cards | — | — | ✅ |
-| Full evaluation corpus, human annotations | — | — | ✅ |
-| Prompt experiments tied to confidential data | — | — | ✅ |
-| Internal product metrics & learnings | — | — | ✅ |
+| Concern | Public (MIT) | Private |
+|---|---|---|
+| Reasoning engine, schema, validation | ✅ | — |
+| CLI, Claude Code plugin, local Web, generic providers | ✅ | — |
+| Generic prompts & generic context cards | ✅ | — |
+| Renderers, GitHub/GitLab exports | ✅ | — |
+| Anonymised examples, golden harness | ✅ | — |
+| Real user requests & customer data | — | ✅ |
+| Company-specific context cards | — | ✅ |
+| Full evaluation corpus, human annotations | — | ✅ |
+| Prompt experiments tied to confidential data | — | ✅ |
+| Internal product metrics & learnings | — | ✅ |
 
 Fully synthetic or properly anonymised examples may stay public to document and test the product.
 
@@ -108,17 +94,12 @@ prompts associated with confidential data.
 
 ```text
 requivo/          public repository (this one) — Core, CLI, Claude Code, local Web, generic assets
-requivo-cloud/    private repository — hosted service backend
 requivo-lab/      private repository — evaluation data, experiments, learnings
 ```
 
-The `requivo-cloud` and `requivo-lab` repositories exist and are private. `requivo-cloud` has been
-scaffolded: it consumes the public package as a dependency — the same `SessionService`,
-`DiscoveryService` and `SessionRepository` protocol, with a Postgres repository behind it — rather
-than forking any of it. That is the boundary working as intended, and it is why the service layer
-holds the integrity rules instead of the interfaces. `requivo-lab` is still an empty placeholder. No
-code has been moved *out* of the public repository, no Git submodules link them, and no GitHub
-organisation is used.
+No code has been moved *out* of the public repository, no Git submodules link the two, and no GitHub
+organisation is used. Anything private consumes the public package as a dependency rather than forking
+it — which is why the service layer holds the integrity rules instead of the interfaces.
 
 ## License and trademark
 

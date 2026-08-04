@@ -6,9 +6,9 @@ that line: a `SessionRepository` protocol names exactly the storage operations t
 `FileSessionRepository` implements them against the `.requivo/sessions/` layout (delegating to
 `core.persistence`, so on-disk behaviour is unchanged).
 
-The point is requivo-cloud: it can supply a `PostgresSessionRepository` with the same protocol and
-reuse the service orchestration verbatim, instead of bypassing the service or faking a filesystem. The
-protocol is deliberately backing-neutral.
+The point is a non-filesystem backing: a deployment can supply a `PostgresSessionRepository` with the
+same protocol and reuse the service orchestration verbatim, instead of bypassing the service or faking
+a filesystem. The protocol is deliberately backing-neutral.
 
 The pre-0.9.8 file backing carried a second store: every read fell back to a legacy `out/<slug>/`
 session, and a mutation migrated one in place. That kept old sessions working without the user
@@ -34,7 +34,7 @@ from requivo.core.persistence import ArtifactStatus, SessionMeta
 @runtime_checkable
 class SessionRepository(Protocol):
     """The storage operations the service layer depends on — nothing more. Implementations map these
-    onto a concrete backing (files today, Postgres in Cloud). Every method keys on a validated slug."""
+    onto a concrete backing (files today, Postgres elsewhere). Every method keys on a validated slug."""
 
     def lock(self, slug: str) -> AbstractContextManager[None]:
         """Hold exclusive write access to a session for the duration of the block.

@@ -252,7 +252,7 @@ def test_contracts_reject_a_challenge_missing_a_load_bearing_part():
 
 
 def test_reasoning_items_carry_a_stable_content_derived_id():
-    # Cloud will want to refer back to a decision — comment on it, mark it accepted, follow it across
+    # A consumer will want to refer back to a decision — comment on it, mark it accepted, follow it across
     # revisions — and text is a poor handle. The id is derived from the content, so it is identical
     # across revisions, surfaces and machines for as long as the statement is unchanged.
     d1 = DesignDecision.model_validate({"decision": "Draft-first", "derived_from": ["permissions"]})
@@ -1595,7 +1595,7 @@ def test_cli_help_exits_cleanly():
 
 
 # ── SessionRepository: the storage seam (proves the service is backing-agnostic) ──
-# The point of the seam is requivo-cloud: the same SessionService orchestration must run on a Postgres
+# The point of the seam is a non-filesystem backing: the same SessionService orchestration must run on
 # backing, not just files. This in-memory repository stands in for that non-file backing — if the
 # service works against it with zero filesystem, the orchestration is genuinely storage-agnostic.
 from requivo.core.errors import RevisionConflictError as _RevConflict  # noqa: E402

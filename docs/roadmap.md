@@ -32,5 +32,4 @@
 ## Direction
 
 - A full artifact chain from a single model — the reasoning layer beneath product delivery
-- Surfaces over one engine: **Requivo Core**, **Requivo for Claude Code**, **Requivo Web**, and
-  eventually a separate hosted **Requivo Cloud** (see [open-source-strategy.md](open-source-strategy.md))
+- Surfaces over one engine: **Requivo Core**, **Requivo for Claude Code**, **Requivo Web**
