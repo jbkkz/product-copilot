@@ -9,14 +9,40 @@ others — so nothing is locked to where you start.
 
 **Start in the browser.** Use Claude Code or the CLI when they fit your workflow better.
 
-## Try it with no key, no setup
+## Installing
 
-`requivo demo` replays a real run from bundled output — no API key, no network.
+Requivo needs Python 3.9 or newer. The examples below use [uv](https://docs.astral.sh/uv/) because it
+is the fastest route, but nothing depends on it — pick whichever line you already have:
 
 ```bash
-git clone https://github.com/jbkkz/requivo && cd requivo
-uv run requivo demo
+uv tool install "requivo[web,anthropic]"     # uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+pipx install "requivo[web,anthropic]"        # equivalent, if you already use pipx
 ```
+
+Both install Requivo in its own environment and put the `requivo` command on your PATH. If you would
+rather use pip directly, install into a virtualenv rather than with `pip install --user` — the latter
+succeeds but frequently leaves `requivo` off the PATH:
+
+```bash
+python3 -m venv ~/.venvs/requivo && source ~/.venvs/requivo/bin/activate
+pip install -U pip
+pip install "requivo[web,anthropic]"         # drop [anthropic] to work offline
+requivo demo
+```
+
+Drop `[anthropic]` from any of these to install without the provider SDK: the interface still opens,
+reads existing sessions and replays the demo — it just cannot analyse or generate.
+
+## Try it with no key, no setup
+
+`requivo demo` replays a real run from bundled output — no API key, no network. It ships inside the
+package, so it works straight after any install above:
+
+```bash
+requivo demo
+```
+
+From a clone instead, with nothing installed: `uv run requivo demo`.
 
 ## 1. Web — start here
 
@@ -25,8 +51,7 @@ The server binds to localhost; the Anthropic key is read from the server environ
 to analyse and generate.
 
 ```bash
-uv tool install "requivo[web,anthropic]"   # or just [web] to review sessions without a provider
-export ANTHROPIC_API_KEY="…"
+export ANTHROPIC_API_KEY="…"               # or put it in a .env file; optional to just read sessions
 requivo web                                # opens http://127.0.0.1:8765
 ```
 
