@@ -21,14 +21,14 @@ A local browser workspace, and the way to use Requivo. Paste a request, answer t
 could change the solution, see what each answer moved, generate one decision brief.
 
 ```bash
-uv tool install "requivo[web,anthropic]"   # no uv? see below
-requivo web                                # opens http://127.0.0.1:8765
+uvx --from "requivo[web,anthropic]" requivo web    # opens http://127.0.0.1:8765
 ```
 
-`uv` is the fastest way in, but it is not a requirement. Get it with
-`curl -LsSf https://astral.sh/uv/install.sh | sh`, or use `pipx install "requivo[web,anthropic]"`
-instead. Both put `requivo` on your PATH — a plain `pip install --user` often does not. If you would
-rather stay with pip, [`docs/getting-started.md`](docs/getting-started.md) has the virtualenv route.
+One command, nothing installed — [uv](https://docs.astral.sh/uv/) fetches Requivo into a temporary
+environment and runs it (`curl -LsSf https://astral.sh/uv/install.sh | sh` if you don't have uv). To
+keep it around, `uv tool install "requivo[web,anthropic]"` and then just `requivo web`; `pipx install`
+works the same way. Prefer plain pip? [`docs/getting-started.md`](docs/getting-started.md) has the
+virtualenv route — avoid `pip install --user`, which succeeds while leaving `requivo` off your PATH.
 
 Set `ANTHROPIC_API_KEY` in your environment or a `.env` file to analyse and generate. Without it the
 interface still opens and reads existing sessions, and tells you what is missing.

@@ -11,11 +11,18 @@ others — so nothing is locked to where you start.
 
 ## Installing
 
-Requivo needs Python 3.9 or newer. The examples below use [uv](https://docs.astral.sh/uv/) because it
-is the fastest route, but nothing depends on it — pick whichever line you already have:
+Requivo needs Python 3.9 or newer. The shortest route installs nothing at all — [uv](https://docs.astral.sh/uv/)
+fetches the package into a temporary environment and runs it:
 
 ```bash
-uv tool install "requivo[web,anthropic]"     # uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+uvx --from "requivo[web,anthropic]" requivo web   # uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+That is the right form for trying Requivo or running it occasionally. To keep the `requivo` command
+around, install it as a tool instead:
+
+```bash
+uv tool install "requivo[web,anthropic]"     # then: requivo web
 pipx install "requivo[web,anthropic]"        # equivalent, if you already use pipx
 ```
 
