@@ -1,27 +1,33 @@
 {% if s.questions %}
-<h2>Priority questions</h2>
+<h2>What could change the solution</h2>
 <div class="card">
   <ol class="questions">
     {% for q in s.questions %}
     <li>
-      <div class="q"><span>{{ q.q }}</span></div>
-      <div class="why">{{ q.why }} · <span class="muted">{{ q.label }}</span></div>
+      <div class="q">{{ q.q }}</div>
+      <div class="why"><b>Why it matters</b> — {{ q.why }}</div>
+      <div class="area muted">Likely impact: {{ q.label }}</div>
     </li>
     {% endfor %}
   </ol>
-  <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#status-region" hx-swap="outerHTML">
+  {% if s.more_questions %}
+  <p class="hint">{{ s.more_questions|length }} further question{{ '' if s.more_questions|length == 1
+    else 's' }} of lower impact — see <em>Traceability details</em> below.</p>
+  {% endif %}
+
+  <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#session-body" hx-swap="outerHTML">
     {% include "_csrf.html" %}
     <input type="hidden" name="expected_revision" value="{{ s.revision }}">
-    <label for="answers">Your answers <span class="hint">(free text — address the questions above in one go)</span></label>
-    <textarea id="answers" name="answers" required maxlength="20000"
-      aria-label="Your answers to the priority questions"></textarea>
+    <label for="answers">Your answers <span class="hint">(free text — address them in one go; say so if you don't know)</span></label>
+    <textarea id="answers" name="answers" required maxlength="20000" rows="5"
+      aria-label="Your answers to the questions above"></textarea>
     <div class="toolbar">
       <button class="btn" type="submit">Submit answers</button>
-      <span class="spinner" role="status">Refining the model…</span>
+      <span class="spinner" role="status">Working through the impact…</span>
     </div>
   </form>
 </div>
 {% else %}
-<div class="notice info">Discovery has converged — no high-value question remains. Generate the
-solution assessment or the PRD below.</div>
+<div class="notice info">No question left that would change the solution. The understanding above is
+as resolved as this request can make it.</div>
 {% endif %}

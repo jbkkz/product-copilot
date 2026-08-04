@@ -29,9 +29,11 @@ def full_model(**overrides) -> dict:
     return model
 
 
-def engine_reply(*, converged: bool = False, **slot_overrides) -> str:
-    questions = [] if converged else [
-        {"q": "How are exceptions handled?", "slot": "business_rules", "why": "uncertainty × impact"}]
+def engine_reply(*, converged: bool = False, questions: list[dict] | None = None,
+                 **slot_overrides) -> str:
+    if questions is None:
+        questions = [] if converged else [
+            {"q": "How are exceptions handled?", "slot": "business_rules", "why": "uncertainty × impact"}]
     return json.dumps({
         "model": full_model(**slot_overrides),
         "questions": questions,

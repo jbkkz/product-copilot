@@ -8,8 +8,8 @@
     {
       "name": "requivo",
       "source": "./plugins/claude-code",
-      "description": "Turn vague product requests into a validated, traceable requirements model — reasoning happens in your Claude Code session, so no Anthropic API key is needed.",
-      "version": "0.9.8",
+      "description": "Find what could change the solution before you commit to the scope — reasoning happens in your Claude Code session, so no Anthropic API key is needed.",
+      "version": "0.9.9",
       "author": {
         "name": "jbkkz"
       }

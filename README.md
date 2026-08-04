@@ -2,12 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> Turn vague requests into validated product decisions.
+> Find what could change the solution before you commit to the scope.
 
-Requivo separates facts, assumptions and unknowns, asks the questions that could change the solution,
-and keeps the resulting decisions traceable — before generating product documentation.
+Paste a client or stakeholder request. Requivo identifies the assumptions and missing decisions that
+could change the workflow, integrations, permissions, timeline or effort — then produces one brief you
+can review before estimating.
 
-**The model is the product. Documents are views of that model.**
+**The shared understanding is the source of truth. Every document is generated from it.**
 
 Built for Product Managers, Solutions Engineers and Business Analysts working on complex, configurable
 B2B products.
@@ -23,6 +24,20 @@ ask, the one that turns a "small feature" into a three-month build.
 Requivo asks a question only when the answer would **materially change the solution**. The rest, it
 infers and marks as an assumption to confirm. You spend discovery time where it moves the needle.
 
+And because it keeps the understanding rather than just the answer, it can tell you what a *changed*
+answer costs:
+
+```text
+You change one answer:
+  "The migration is one-time. After cutover, the legacy system is read-only."
+
+Requivo:
+  What changed        Integrations & notifications
+  Needs review        the two-way sync decision · the reconciliation risk · the decision brief
+```
+
+That is the part a chat transcript cannot do.
+
 ```text
 Request:
   "We'd like a leave approval system."
@@ -34,42 +49,49 @@ Requivo asks only what changes the build:
   - How are requests handled today (paper, email, another tool)?
 ```
 
-It leaves the low-stakes questions (reporting, cosmetics) alone. See a full run in
-[`examples/leave-approval/`](examples/leave-approval/), or a harder, messy one in
-[`examples/event-checkin-reconciliation/`](examples/event-checkin-reconciliation/).
+It leaves the low-stakes questions (reporting, cosmetics) alone.
 
----
-
-## Choose your interface
-
-Requivo is one engine with three interfaces over the same local session format. A session created by
-any of them is readable and editable by the others.
-
-| Interface | Best for | LLM usage |
-|---|---|---|
-| **Claude Code** | Interactive discovery in a session you already have | Uses your Claude Code session — **no extra API key** |
-| **Web** | A local browser interface for non-terminal users | Anthropic provider (optional; key only for LLM actions) |
-| **CLI** | Automation, scripting, deterministic session operations | Anthropic provider (optional; key only for LLM actions) |
-
-**New to Requivo? Start with Claude Code or the local Web interface.**
+**The canonical example is [`examples/leave-approval/`](examples/leave-approval/)** — one line of
+request, taken through the questions, the brief, and a changed answer that moves the scope. Start
+there. A harder, messy multi-feature one lives in
+[`examples/event-checkin-reconciliation/`](examples/event-checkin-reconciliation/), and is what
+`requivo demo` replays.
 
 ---
 
 ## Quickstart
 
+Start in the browser. Use Claude Code or the CLI when they fit your workflow — all three read and
+write the same local sessions, so nothing is locked to the one you start in.
+
 ### Try it with no key, no setup
 
 `requivo demo` replays a real run from saved output — the messy request, the questions it raised, the
-assessment it produced. No API key, no network.
+brief it produced. No API key, no network.
 
 ```bash
 git clone https://github.com/jbkkz/requivo && cd requivo
 uv run requivo demo
 ```
 
-### Claude Code
+### 1. Requivo Web — the easiest way in
 
-Reason with the Claude session you already have — no Anthropic API key needed. In Claude Code:
+A local, single-user browser interface, and the one to start with. Paste a request, answer the few
+questions that could change the solution, see what each answer moved, generate one decision brief.
+
+```bash
+uv tool install "requivo[web,anthropic]"   # or just [web] to review sessions without a provider
+export ANTHROPIC_API_KEY="…"               # only needed to analyse and generate
+requivo web                                # opens http://127.0.0.1:8765
+```
+
+Sessions stay on your machine; the server binds to localhost. Requivo Web is **not** Requivo Cloud —
+no accounts, no database, no remote storage. See [`docs/web.md`](docs/web.md).
+
+### 2. Requivo for Claude Code — an integration
+
+Use the same Requivo sessions inside the Claude Code workflow you already have — reasoning goes
+through your own Claude session, so there is **no extra API key**.
 
 ```text
 /plugin marketplace add jbkkz/requivo
@@ -82,25 +104,14 @@ Reason with the Claude session you already have — no Anthropic API key needed.
 
 See the [plugin README](plugins/claude-code/) for the full skill list and the from-a-checkout install.
 
-### Web
+### 3. Requivo CLI — inspect, automate, script
 
-A local, single-user browser interface. Sessions stay on your machine; the server binds to localhost.
-
-```bash
-uv tool install "requivo[web,anthropic]"   # or just [web] to review sessions without a provider
-export ANTHROPIC_API_KEY="…"               # only needed for discovery / generation
-requivo web                                # opens http://127.0.0.1:8765
-```
-
-Requivo Web is **not** Requivo Cloud — no accounts, no database, no remote storage. See
-[`docs/web.md`](docs/web.md).
-
-### CLI
+The complete surface, for automation and for anything you want to drive from a script or a pipeline.
 
 ```bash
 uv run --extra anthropic requivo discover "We'd like a leave approval system."
-uv run requivo status <slug>               # understanding + readiness (no network)
-uv run requivo prd    <slug>               # a PRD from the saved model
+uv run requivo status <slug>               # the understanding, open questions and readiness (no network)
+uv run requivo brief  <slug>               # a decision brief from the saved understanding
 ```
 
 Full command reference: [`docs/cli.md`](docs/cli.md). Getting started in depth:
@@ -125,8 +136,11 @@ context you give it, so better context means sharper questions. More:
 
 ## What Requivo produces
 
-A **solution assessment** (a senior-PM judgment that pushes back on the request, not a recap), plus
-generated artifacts from the same model, without redoing discovery:
+The main output is a **decision brief** — the smallest document a scope review can be run from: what
+is confirmed, what is being assumed, the decisions on record, the premises worth contesting, and what
+is still open. It is not a PRD; it is what you read *before* writing one.
+
+Everything else is generated from the same understanding, without redoing the discovery:
 
 - PRD
 - User stories
@@ -141,35 +155,41 @@ See [`docs/cli.md`](docs/cli.md) for how each is generated.
 
 ## Core concepts
 
-- **Explicit fact** — stated directly by the client.
-- **Inferred assumption** — assumed from context; confirm before building.
-- **Unknown** — not yet known; may need a question.
-- **Evidence vs coverage** — *how we know* a slot (explicit / inferred) is separate from *how fully*
-  it's covered.
-- **Decision & challenge** — a settled choice with its trade-off; a contested premise worth weighing.
-- **Dependency** — a decision records the slots it's derived from; an artifact records the slots it
-  consumes.
-- **Readiness** — whether a high-impact gap still blocks the build.
-- **Stale artifact** — a generated file the model has moved past. `requivo impact` shows a change's
-  blast radius.
+- **What we know** — stated directly by the client.
+- **What we are assuming** — inferred from context; confirm before building.
+- **Open question** — not yet known, and worth asking when the answer would move the build.
+- **How we know it vs how fully** — whether something was stated or inferred is separate from whether
+  it has been covered in enough detail. Both have to hold before a topic stops blocking.
+- **Decision and assumption to review** — a settled choice with its trade-off; a premise worth
+  contesting before build.
+- **What rests on what** — a decision records the topics it was derived from; a document records the
+  topics it consumes. That graph is what makes "needs updating" an answer rather than a guess.
+- **Are we ready?** — whether a high-impact topic is still unresolved.
+- **Needs updating** — a document the understanding has moved past. `requivo impact` shows a change's
+  blast radius before you make it.
 
-Details: [`docs/requirements-model.md`](docs/requirements-model.md).
+These are the names the product uses. The engine's own vocabulary — slots, evidence, coverage,
+artifacts, staleness, revisions — is the precise form of the same ideas, and it is what the technical
+docs and `--json` speak: [`docs/requirements-model.md`](docs/requirements-model.md).
 
 ---
 
 ## Architecture
 
 ```text
-   Claude Code        Web        CLI / API
-         \             |             /
-                  Requivo Core
-          validated, versioned model
+       Web          Claude Code        CLI / API
+   (the product)   (an integration)  (infrastructure)
+         \               |                /
+                    Requivo Core
+            validated, versioned understanding
 ```
 
 - The **Core** is provider-independent — no LLM, no network. It validates, versions, computes
-  readiness, and tracks staleness.
-- The **Anthropic provider** is optional; it powers automated discovery and generation.
-- Every interface uses the **same session format** and the same validated apply path — there is no fork.
+  readiness, and decides what a change makes stale.
+- The **Anthropic provider** is optional; it powers automated analysis and generation.
+- Every interface uses the **same session format** and the same validated apply path — there is no
+  fork, and no interface holds business logic of its own. The three differ in weight, not in what they
+  can reach.
 
 More: [`docs/architecture.md`](docs/architecture.md).
 
@@ -193,9 +213,10 @@ Full notes: [SECURITY.md](SECURITY.md).
 | Doc | What it covers |
 |---|---|
 | [Getting started](docs/getting-started.md) | Install and first run for each interface |
-| [Claude Code](plugins/claude-code/) | The plugin: skills, workflow, install |
-| [Web](docs/web.md) | The local browser interface |
+| [Web](docs/web.md) | The primary interface — the local browser workspace |
+| [Claude Code](plugins/claude-code/) | The integration: skills, workflow, install |
 | [CLI reference](docs/cli.md) | Every command and flag |
+| [Product validation](docs/product-validation.md) | How to test whether Requivo beats a strong prompt |
 | [Architecture](docs/architecture.md) | Core, services, surfaces |
 | [Requirements model](docs/requirements-model.md) | Slots, evidence/coverage, readiness, dependencies |
 | [Session format](docs/session-format.md) | The `.requivo/` layout and revisions |

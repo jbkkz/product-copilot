@@ -6,8 +6,8 @@ depth — each has one clear responsibility; the README links to them rather tha
 ## Guides
 
 - [Getting started](getting-started.md) — install and first run for each interface
-- [Claude Code plugin](../plugins/claude-code/) — skills, workflow, install (no extra API key)
-- [Web](web.md) — the local, single-user browser interface
+- [Web](web.md) — the primary interface: the local, single-user browser workspace
+- [Claude Code plugin](../plugins/claude-code/) — the integration: skills, workflow, install (no extra API key)
 - [CLI reference](cli.md) — every command and flag
 
 ## Reference
@@ -19,6 +19,7 @@ depth — each has one clear responsibility; the README links to them rather tha
 - [Providers](providers.md) — the Anthropic provider, models, cost
 - [Context cards](context-cards.md) — teaching the engine your product
 - [Evaluations](evaluations.md) — the golden harness for prompt/context changes
+- [Product validation](product-validation.md) — the manual protocol for "is this better than a strong prompt?"
 
 ## Project
 

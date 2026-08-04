@@ -16,7 +16,8 @@ from requivo.services.sessions import SessionService
 from requivo.web.config import provider_status
 from requivo.web.dependencies import get_artifacts, get_discovery, get_sessions, safe_slug
 from requivo.web.templating import templates
-from requivo.web.viewmodels.sessions import ARTIFACT_LABELS, session_detail
+from requivo.web.viewmodels.labels import artifact_label
+from requivo.web.viewmodels.sessions import session_detail
 
 router = APIRouter()
 
@@ -58,6 +59,6 @@ def view_artifact(
             "Content-Disposition": f'attachment; filename="{filename}"'})
     return templates.TemplateResponse(request, "artifacts/detail.html", {
         "slug": slug, "artifact_type": artifact_type,
-        "label": ARTIFACT_LABELS.get(artifact_type, artifact_type), "content": content,
+        "label": artifact_label(artifact_type), "content": content,
         "provider": provider_status(),
     })

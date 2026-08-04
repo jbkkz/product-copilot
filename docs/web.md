@@ -1,9 +1,12 @@
 # Requivo Web
 
-A **local, single-user, self-hostable** browser interface over the same Requivo Core, CLI and session
-format. It exists so someone less comfortable in a terminal can run discovery, answer the priority
-questions, review readiness and reasoning, and generate a solution assessment or a PRD — all against
-sessions that also open in the CLI and Claude Code.
+The **primary Requivo interface**: a local, single-user, self-hostable browser workspace over the same
+Core, services and session format as the CLI and the Claude Code plugin. It is where the product's
+workflow lives — paste a request, work through what could change the solution, and leave with a
+decision brief. Sessions it creates open in the other two, and theirs open here.
+
+"Primary" is about weight, not capability. The CLI can do everything this can and more; it is
+infrastructure. This is the one to hand someone who has a request and half an hour.
 
 Requivo Web is deliberately small. It is **not** [Requivo Cloud](#requivo-web-is-not-requivo-cloud).
 
@@ -41,19 +44,38 @@ By default the server binds to `127.0.0.1`, prints its URL, and opens your brows
 (discovery, generation); reviewing existing sessions needs no key. The key is never shown in the
 browser, never a form field, never logged.
 
-## What you can do
+## The workflow
 
-- **Home** — the product page and a list of local sessions with revision, last change, readiness, and
-  artifact/stale counts. Sessions created by the CLI or Claude Code appear here too.
-- **New discovery** — paste a product request, optionally name the session and pick context cards, then
-  either run discovery now (Anthropic) or *create session only* to capture the request and run it later.
-- **Session** — the understanding split (explicit facts / inferred assumptions / unknowns, with a
-  *partial* marker for stated-but-thin topics), readiness and what blocks it, the priority questions
-  with a single answers form, the persisted decisions / challenges / opportunities, and the artifacts.
-- **Answer** — submit answers; the model is refined as a new revision (optimistic-locked), and the page
-  shows what changed, which reasoning it unseated, and which artifacts went stale.
-- **Generate** — a solution assessment or a PRD, saved with its source revision and marked *Draft* when
-  blocking unknowns remain. View it in the browser or download the Markdown.
+One path leads the product, and the interface is built around it rather than around the model:
+
+```text
+paste a request
+  → read what Requivo understood
+  → answer the few questions that could change the solution
+  → see what those answers moved
+  → generate one decision brief
+  → change an answer later and see what needs review
+```
+
+- **Home** — the request box *is* the home page; there is no separate "new discovery" screen. Below it,
+  the requests already in progress, each showing what was asked, whether it is waiting on you, and
+  whether a document needs updating. Sessions created by the CLI or Claude Code appear here too.
+- **Advanced settings** — session name, product context cards, and whether to analyse now or just save
+  the request. Collapsed by default: the server already knows whether a provider action can run, so it
+  resolves that itself instead of asking. The API key is never a form field.
+- **Session** — the request, what Requivo understood, at most five questions (each with *why it
+  matters* and its likely area of impact), the answer form, *Are we ready?* in one action state with
+  its reasons, and the decision brief.
+- **Answer** — submit answers; the understanding is refined as a new revision (optimistic-locked), and
+  the page leads with **What changed**: which parts of the solution moved, which decisions and
+  assumptions need review, and which documents need updating. All of it computed from the dependency
+  graph, never generated.
+- **Generate** — the decision brief is the one primary action. PRD, acceptance criteria, epic and
+  release notes live under *More documents*. Each is saved with its source revision and marked *Draft*
+  when high-impact topics are still unresolved. Nothing is ever regenerated on your behalf.
+- **Traceability details** — one disclosure holding everything the engine knows: the per-topic
+  understanding, coverage, every open question, the decisions and contested premises, provenance, and
+  the raw model export. The primary flow works without opening it.
 
 ## Architecture
 
@@ -102,7 +124,7 @@ Even though it is a local app:
 
 ## Limits of this first version
 
-- Generation covers every artifact the shared service produces — solution assessment, PRD, acceptance
+- Generation covers every document the shared service produces — decision brief, PRD, acceptance
   criteria, delivery epic, release notes. The buttons come from the service's own vocabulary, so a new
   generator appears here without touching the Web. The epic's tracker exports (`epic.json`,
   `epic.github.json`, `epic.gitlab.json`) remain CLI-only; `stories` and `estimate` are terminal
@@ -110,7 +132,11 @@ Even though it is a local app:
 - Provider calls are synchronous (run in a worker thread so the event loop is not blocked); a request
   waits for the result, with an HTMX loading state. No job queue, no WebSockets.
 - Artifacts are shown as escaped Markdown in a code block, not rendered to HTML.
-- Readiness is binary (ready + blocking topics), as in the Core — no invented "levels".
+- Readiness is binary (ready + unresolved topics), as in the Core — no invented "levels".
+- **What changed** is shown after the answer that caused it, and is not persisted: reloading the page
+  loses the narrative. What *is* persisted is the consequence — each document carries its own "needs
+  updating" flag on disk. Keeping a full impact history would mean a new field in `session.json`, so a
+  format bump and a migration, for a display; that is a decision to take once real use asks for it.
 - Single user, single workspace, no concurrent-editing UI beyond the optimistic-lock conflict message.
   Two tabs cannot corrupt a session — a generation carries the revision it read as a precondition, so a
   concurrent change surfaces as a conflict rather than being overwritten — but the second tab is not

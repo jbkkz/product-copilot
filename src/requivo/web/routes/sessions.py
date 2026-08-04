@@ -5,25 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-from requivo.core.context import available_cards, resolve_cards
+from requivo.core.context import resolve_cards
 from requivo.core.errors import InputTooLargeError, SessionNotFoundError
 from requivo.core.persistence import validate_slug
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS, MAX_SLUG_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
+from requivo.web.routes.home import home_context
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 
 router = APIRouter()
-
-
-@router.get("/sessions/new")
-def new_session(request: Request):
-    return templates.TemplateResponse(request, "sessions/new.html", {
-        "provider": provider_status(),
-        "cards": available_cards(),
-    })
 
 
 @router.post("/sessions")
@@ -32,12 +25,17 @@ def create_session(
     request_text: str = Form(...),
     slug: str = Form(""),
     cards: list[str] = Form(default=[]),
-    provider: str = Form("create_only"),
+    provider: str = Form("auto"),
     sessions: SessionService = Depends(get_sessions),
     discovery: DiscoveryService = Depends(get_discovery),
 ):
-    """Create a session from a product request. `provider=anthropic` runs one discovery turn now;
-    `create_only` just captures the request (no LLM), to run discovery later."""
+    """Create a session from a request and, by default, analyse it straight away.
+
+    `provider` is `auto` unless the reader opened Advanced settings and chose otherwise: the server
+    already knows whether a provider action can run, so asking the reader to declare it was asking
+    them to answer a question the application could answer itself. `create_only` remains as the
+    explicit 'capture it now, analyse later' choice, and is what `auto` resolves to when no provider
+    is configured — a request is still worth keeping when there is nothing to reason with yet."""
     # Bounds are refusals, not truncations: a request silently cut at 20k would be reasoned over as if
     # it were the whole thing, and the user would never learn which half the engine saw.
     text = request_text.strip()
@@ -59,11 +57,12 @@ def create_session(
     picked = resolve_cards(cards)
 
     if not text:
-        return templates.TemplateResponse(request, "sessions/new.html", {
-            "provider": provider_status(), "cards": available_cards(),
-            "error": "A product request is required.",
-        }, status_code=400)
+        return templates.TemplateResponse(request, "home.html", home_context(
+            sessions, error="A request is required — paste the client or stakeholder email, or "
+                            "describe what was asked in your own words."), status_code=400)
 
+    if provider == "auto":
+        provider = "anthropic" if provider_status().available else "create_only"
     if provider == "anthropic":
         new_slug = discovery.start(text, cards=picked, slug=chosen_slug, finalize=False,
                                    surface="web-discover")

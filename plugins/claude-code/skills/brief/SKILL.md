@@ -1,23 +1,25 @@
 ---
 name: brief
-description: Produce a solution assessment (brief) from a Requivo session's current model, using this Claude session for the judgment, and save it as a tracked artifact tied to the model revision. Use when discovery has converged and the user wants the senior-PM read of the requirements.
+description: Produce the decision brief from a Requivo session's current understanding, using this Claude session for the judgment, and save it as a tracked document tied to the revision it was written from. Use when the questions have been worked through and the user needs something to review before estimating or committing to the scope.
 allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:brief
 
-Write the **solution assessment** — a judgment, not a recap — from the session's model. **You** do the
-analysis; Requivo tracks the artifact. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
+Write the **decision brief** — what someone needs to review with a client, a product lead or an
+engineering lead *before* estimating this request. A judgment, not a recap, and not a PRD. **You** do
+the analysis; Requivo tracks the document. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 
 ## 1. Check readiness, honestly
 ```
 requivo status <slug> --json
 ```
-Note the `revision` — call it `N`. It is the model this assessment will rest on, and you will state it
+Note the `revision` — call it `N`. It is the understanding this brief will rest on, and you will state it
 when you save.
 
-If critical unknowns remain (blocking slots), **say so up front** in the assessment. A brief written on
-a thin model must flag its assumptions — never present an `inferred` slot or an open decision as settled.
+If high-impact topics are still unresolved, **say so up front**. A brief written on a thin
+understanding must flag its assumptions — never present an inferred topic or an open decision as
+settled.
 
 ## 2. Load the model
 ```
@@ -25,16 +27,28 @@ requivo model show <slug>
 requivo context --session <slug>    # exactly the cards this session was created with
 ```
 
-## 3. Reason → write the assessment
-Produce a two-tier document in PM language:
-- an **executive summary** (problem / solution / main challenge / top risks / next step) readable in
-  seconds, then
-- the full analysis: what is understood, the **design decisions** (with tradeoffs), the **challenges**
-  (premises worth contesting *before* build — the differentiator), complexity + why, main risks, ranked
-  opportunities, next steps, and a single ready-for-implementation blocker if one remains.
+## 3. Reason → write the brief
+Produce it in PM language, in the order a scope review is run:
 
-Voice rule: no slot ids, no percentages, no confidence labels in the prose. Distinguish facts from
-assumptions explicitly; mark every assumption as an assumption.
+1. **Request and objective** — the underlying problem, what is being built, complexity and its cost driver.
+2. **Current understanding** — the scope in a short paragraph.
+3. **What is confirmed** — the topics the client actually stated, each with its value.
+4. **Important assumptions** — the topics that were *inferred*, each marked as needing confirmation.
+5. **Decisions made** — settled choices, with the alternative weighed and the trade-off accepted.
+6. **Scope implications** — what this genuinely introduces into the system.
+7. **Assumptions worth contesting** — premises worth challenging *before* build. This is the differentiator.
+8. **Main risks**, **unresolved questions**, **opportunities**.
+9. **Ready to estimate?** — yes, or the topics that still move the solution.
+10. **Recommended next steps.**
+
+Sections 3 and 4 are read off the model, not invented: a topic whose evidence is `explicit` is
+confirmed, one that is `inferred` is an assumption. Do not promote an assumption to a fact because it
+sounds settled — that distinction is the most useful thing on the page.
+
+Keep it shorter than a PRD. The question it answers is "what do I need to review before estimating
+this?", not "what should be built".
+
+Voice rule: no slot ids, no percentages, no confidence labels in the prose. Say the business thing.
 
 ## 4. Fold the reasoning back into the model — do not skip this
 The prose is the *view*. The **reasoning behind it is part of the model**, and every later generator
@@ -68,13 +82,13 @@ the change, and Requivo tracks it as one.
 ## 5. Save the document as a tracked artifact
 ```bash
 requivo artifact save <slug> --type brief --file - --revision M --json <<'MD'
-# … the assessment you wrote in step 3 …
+# … the decision brief you wrote in step 3 …
 MD
 ```
-`M` is the revision the apply just created — the model the assessment actually describes, reasoning
+`M` is the revision the apply just created — the understanding the brief actually describes, reasoning
 included. (If you skipped step 4, use `N` from step 1: the honest revision is whichever one you truly
 reasoned from, never simply the latest.)
 
-The assessment is a judgment over the whole model, so any later material change to it flags the saved
+The brief is a judgment over the whole understanding, so any later material change to it flags the saved
 copy stale. Read `stale` back from the save output: if it is `true`, the model moved while you were
-writing — tell the user plainly that the assessment is already behind and offer to redo it.
+writing — tell the user plainly that the brief is already behind and offer to redo it.

@@ -17,15 +17,18 @@ requivo status <slug> --json
 (Add nothing else — the numbers come from Core, not from you.)
 
 ## Relay
-Translate the JSON into plain language:
-- **Readiness**: ready to build, or not — and if not, name the **blocking slots** (use their `label`,
-  not the raw id).
-- **Revision**: the current model revision.
-- **Artifacts**: for each, whether it is fresh or **stale**. Stale means the model has moved in a way
-  that actually touches what that artifact was built from, so it should be regenerated. An older
-  source revision on its own does *not* make an artifact stale — that number is provenance (where it
-  came from), not a verdict. Report the `stale` flag; never infer staleness from the revision.
+Translate the JSON into plain language, in the vocabulary the user reads elsewhere — *what we know*,
+*what we are assuming*, *open question*, *needs updating*. Slot ids are the wire format, not something
+to show:
 
-Be clear about what is still blocking. If the user wants the full understanding checklist and open
-questions, run `requivo status <slug>` without `--json` and show that view. Do not invent detail the
+- **Are we ready?** Two states, no invented middle ground: *ready for a first decision brief*, or
+  *not ready* — and if not ready, name what is still unresolved by its `label`, never the raw id.
+- **Revision**: the session's history position. Mention it only if the user asks or if it matters.
+- **Documents**: for each, whether it is up to date or **needs updating**. "Needs updating" means the
+  understanding has moved in a way that actually touches what that document was built from. An older
+  source revision on its own does *not* mean it needs updating — that number is provenance (where it
+  came from), not a verdict. Report the `stale` flag; never infer it from the revision.
+
+Be clear about what is still unresolved. If the user wants the full per-topic checklist and every open
+question, run `requivo status <slug>` without `--json` and show that view. Do not invent detail the
 command did not return.

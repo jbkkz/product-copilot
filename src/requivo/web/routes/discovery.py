@@ -18,7 +18,7 @@ from requivo.web.config import MAX_ANSWERS_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
-from requivo.web.viewmodels.status import update_result_view
+from requivo.web.viewmodels.status import impact_view
 
 router = APIRouter()
 
@@ -51,8 +51,8 @@ def submit_answers(
             f"the answers exceed {MAX_ANSWERS_CHARS:,} characters — split them across two turns",
             details={"limit": MAX_ANSWERS_CHARS, "length": len(text)})
     result = discovery.answer(slug, text, expected_revision=expected_revision, surface="web-answer")
-    return templates.TemplateResponse(request, "sessions/_status.html", {
+    return templates.TemplateResponse(request, "sessions/_session.html", {
         "s": session_detail(sessions, slug),
-        "update": update_result_view(result),
+        "update": impact_view(result),
         "provider": provider_status(),
     })

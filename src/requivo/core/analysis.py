@@ -25,6 +25,16 @@ def _label(slot_id: str) -> str:
     return _slot_meta()[1].get(slot_id, slot_id)
 
 
+def slot_labels(slot_ids: list[str]) -> list[str]:
+    """Human labels for slot ids, in the order given — the public form of `_label`.
+
+    Every surface that reports a change reports it in slot ids (`UpdateResult.changed_slots`), and
+    every surface that shows it to a reader has to translate. Doing that translation here rather than
+    in each interface is what keeps a slot id out of the Web's prose: the schema's `label` is the one
+    the engine's own Voice rule already writes in."""
+    return [_label(sid) for sid in slot_ids]
+
+
 def soft_slots(out: EngineOutput) -> list[str]:
     """Slots that still carry real uncertainty AND move the solution — the objective drivers of
     the estimate spread. Soft = medium/high impact and (low completeness or not yet explicit)."""

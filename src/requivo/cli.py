@@ -403,7 +403,7 @@ def _cmd_web(a, client) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="requivo",
-        description="Requivo — turns a vague request into a structured solution model.",
+        description="Requivo — find what could change the solution before you commit to the scope.",
     )
     p.add_argument("--workspace", metavar="DIR",
                    help="workspace root for sessions (default: cwd). Sessions live in "
@@ -413,7 +413,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # The deterministic surface (doctor / session / model / artifact) — no LLM, no API key.
     register_deterministic(sub)
 
-    d = sub.add_parser("discover", help="run discovery on a request (a string or a file path)")
+    d = sub.add_parser("discover", help="analyse a request (a string or a file path) and start a session")
     d.add_argument("request", help="the client request, or a path to a file containing it")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
     d.add_argument("--context", metavar="CARDS",
@@ -442,14 +442,14 @@ def _build_parser() -> argparse.ArgumentParser:
             extra(sp)
         sp.set_defaults(func=func)
 
-    model_cmd("answer", "feed the client's answers back and refine the model one more turn",
+    model_cmd("answer", "fold the client's answers in and report what moved",
               _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
-    model_cmd("status", "show the understanding checklist + open questions", _cmd_status,
+    model_cmd("status", "show the understanding, open questions and readiness", _cmd_status,
               lambda sp: sp.add_argument("--json", action="store_true", help="emit a machine status snapshot"))
-    model_cmd("impact", "show what depends on given slots (blast radius); no slots = full map",
+    model_cmd("impact", "show what a change to given topics would reach; no topics = full map",
               _cmd_impact, lambda sp: sp.add_argument("slots", nargs="*",
               help="slot ids or label words (e.g. permissions workflow); omit for the full map"))
-    model_cmd("brief", "generate the solution assessment", _cmd_brief)
+    model_cmd("brief", "generate the decision brief — what to review before estimating", _cmd_brief)
     model_cmd("prd", "generate the PRD", _cmd_prd)
     model_cmd("stories", "derive user stories", _cmd_stories)
     model_cmd("estimate", "derive stories and estimate them (day ranges)", _cmd_estimate)

@@ -33,7 +33,7 @@ emit `[]` when nothing is both uncertain and high-impact (discovery has converge
 answers through faithfully — do not embellish them.
 
 Say nothing about `decisions`, `challenges` and `opportunities` — leave the keys out entirely. A
-refinement turn is not re-deriving the assessment, and what is established stands on its own (see the
+refinement turn is not re-deriving the brief, and what is established stands on its own (see the
 reasoning layer in REASONING.md). Emitting `[]` for them means "these no longer hold", which is a real
 deletion and marks what rested on them stale.
 
@@ -58,7 +58,7 @@ From the `model apply` JSON, tell the user in plain language:
 - any **decisions to re-validate** (`invalidated_decisions`) or **premises to re-examine**
   (`invalidated_challenges`) that rested on a changed slot,
 - any **artifacts that went stale** (`stale_artifacts`) — recommend regenerating those; a saved
-  assessment rests on the whole model, so it goes stale on any material change,
+  brief rests on the whole understanding, so it needs updating on any material change,
 - the new readiness (ready, or which slots still block it),
 - the next small group of questions, verbatim, or that discovery has converged.
 

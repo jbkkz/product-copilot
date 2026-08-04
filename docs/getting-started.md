@@ -4,8 +4,10 @@
 > [main README](../README.md) first.
 
 Requivo is one engine with three interfaces over the same local session format. Sessions live in
-`.requivo/sessions/<slug>/` in your workspace. Pick the interface that fits; a session created by one
-opens in the others.
+`.requivo/sessions/<slug>/` in your workspace, and a session created by one interface opens in the
+others — so nothing is locked to where you start.
+
+**Start in the browser.** Use Claude Code or the CLI when they fit your workflow better.
 
 ## Try it with no key, no setup
 
@@ -16,10 +18,29 @@ git clone https://github.com/jbkkz/requivo && cd requivo
 uv run requivo demo
 ```
 
-## Claude Code
+## 1. Web — start here
 
-Reason with the Claude session you already have — **no Anthropic API key needed**. The deterministic CLI
-validates and applies what Claude proposes.
+A local, single-user browser workspace, and the shortest path from a request to something reviewable.
+The server binds to localhost; the Anthropic key is read from the server environment and is only needed
+to analyse and generate.
+
+```bash
+uv tool install "requivo[web,anthropic]"   # or just [web] to review sessions without a provider
+export ANTHROPIC_API_KEY="…"
+requivo web                                # opens http://127.0.0.1:8765
+```
+
+Then: paste a request on the home page → read what Requivo understood → answer the questions it raises
+→ read what those answers moved → **Generate decision brief**. Come back later, change one answer, and
+it will tell you what needs reviewing.
+
+Details and security notes: [web.md](web.md).
+
+## 2. Claude Code — an integration
+
+Use the same sessions inside the Claude Code workflow you already have — reasoning goes through your
+own Claude session, so **no Anthropic API key is needed**. The deterministic CLI validates and applies
+what Claude proposes.
 
 1. Install the plugin. In Claude Code:
 
@@ -41,20 +62,7 @@ validates and applies what Claude proposes.
 
 See the [plugin README](../plugins/claude-code/) for the full skill list and workflow.
 
-## Web
-
-A local, single-user browser interface. The server binds to localhost; the Anthropic key is read from
-the server environment and only needed for discovery / generation.
-
-```bash
-uv tool install "requivo[web,anthropic]"   # or just [web] to review sessions without a provider
-export ANTHROPIC_API_KEY="…"
-requivo web                                # opens http://127.0.0.1:8765
-```
-
-Details and security notes: [web.md](web.md).
-
-## CLI
+## 3. CLI — inspect, automate, script
 
 With [uv](https://docs.astral.sh/uv/) — no virtualenv to manage. Discovery calls the Anthropic API, so
 pull in the `anthropic` extra and set a key:

@@ -137,10 +137,20 @@ fieldset .check label { display: inline; margin: 0; font-weight: 400; }
 .badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
 .badge.plain::before { display: none; }
 
-/* ── home session grid ───────────────────────────────────────────────────── */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
-.grid .card { margin: 0; transition: border-color .12s ease; }
-.grid .card:hover { border-color: var(--muted); }
+/* ── home: the request form leads the page ───────────────────────────────── */
+.card.start { padding: 1.3rem 1.4rem 1.1rem; }
+.card.start textarea { min-height: 9.5rem; font-size: 1.02rem; }
+
+/* ── home: recent requests, read as a list of documents, not a card grid ─── */
+.session-list > li { padding: 0; }
+.session-item {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 1.2rem;
+  padding: 0.75rem 0.2rem; color: var(--text);
+}
+.session-item:hover { text-decoration: none; background: var(--surface-2); border-radius: var(--radius-sm); }
+.session-title { color: var(--ink); font-weight: 600; letter-spacing: -0.01em; }
+.session-item:hover .session-title { color: var(--accent); }
+.session-meta { display: flex; align-items: center; gap: 0.5rem; flex: none; font-size: 0.82rem; }
 .session-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .session-row a { color: var(--ink); font-weight: 700; letter-spacing: -0.01em; }
 
@@ -180,7 +190,36 @@ ol.questions > li { counter-increment: q; padding: 0.8rem 0; border-bottom: 1px 
 ol.questions > li:last-child { border-bottom: 0; }
 ol.questions .q { font-weight: 600; color: var(--ink); display: flex; gap: 0.6rem; }
 ol.questions .q::before { content: counter(q); font-family: var(--mono); color: var(--accent); font-weight: 700; flex: none; }
-ol.questions .why { color: var(--muted); font-size: 0.85rem; margin: 0.2rem 0 0 1.6rem; }
+ol.questions .why { color: var(--muted); font-size: 0.88rem; margin: 0.25rem 0 0 1.6rem; }
+ol.questions .why b { color: var(--text); font-weight: 600; }
+ol.questions .area { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.03em; margin: 0.25rem 0 0 1.6rem; }
+
+/* ── the request, quoted rather than boxed ───────────────────────────────── */
+h2.quiet { margin-top: 1.2rem; }
+blockquote.request {
+  margin: 0 0 1.4rem; padding: 0.15rem 0 0.15rem 1rem; border-left: 3px solid var(--border);
+  color: var(--text); white-space: pre-wrap; max-width: 68ch;
+}
+
+/* ── what changed: the answer to "did that matter?" ──────────────────────── */
+.changed .card { border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.changed .card .lead { color: var(--ink); font-weight: 600; margin-bottom: 0.6rem; }
+ul.tight > li { padding: 0.2rem 0; border-bottom: 0; }
+
+.blind-spot { color: var(--muted); font-size: 0.9rem; margin: 0.8rem 0 0; }
+.blind-spot b { color: var(--text); }
+.readiness-headline { display: flex; align-items: center; gap: 0.6rem; font-weight: 600; color: var(--ink); margin: 0 0 0.5rem; }
+
+/* ── progressive disclosure ──────────────────────────────────────────────── */
+details.advanced, details.traceability, details.more-documents { margin: 1rem 0 0; }
+details.traceability { margin-top: 2.2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+details > summary {
+  cursor: pointer; font-family: var(--mono); text-transform: uppercase; font-size: 0.72rem;
+  letter-spacing: 0.08em; color: var(--muted); font-weight: 600; list-style-position: outside;
+}
+details > summary:hover { color: var(--accent); }
+.advanced-body, .traceability-body { padding: 0.4rem 0 0.2rem; }
+.coverage { margin: 1rem 0 0.4rem; }
 
 /* ── artifacts ───────────────────────────────────────────────────────────── */
 ul.clean { list-style: none; padding: 0; margin: 0; }
@@ -203,6 +242,12 @@ pre.artifact {
 .toolbar { display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap; margin: 1rem 0 0; }
 .row-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .backlink { font-family: var(--mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* A label a screen reader needs and the layout does not — the request box is self-evident on sight. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 /* Inline dots in the understanding legend. */
 .hint .dot { display: inline-block; vertical-align: middle; margin: 0 0.1rem 0 0.35rem; }

@@ -53,7 +53,7 @@ does the reasoning, the deterministic CLI applies the result.
 ### Requivo Web — open source, self-hostable (shipping)
 
 The local web interface (`requivo web`, the optional `[web]` extra), under `src/requivo/web/`. Submit a
-request, answer the engine's questions, review the model, generate a solution assessment or a PRD,
+request, answer the engine's questions, review the understanding, generate a decision brief or a PRD,
 view and export artifacts. It is a thin FastAPI + HTMX layer over the same Core and services as every
 other surface — **local, single-user, filesystem-backed, no authentication, no database, no remote
 storage.** That boundary is exactly what keeps it distinct from Requivo Cloud (below). See

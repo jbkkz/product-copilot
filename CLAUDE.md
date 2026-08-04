@@ -65,6 +65,11 @@ Python — and that call lives in a **provider**, never in the core. The layers 
 Every interface — the terminal CLI, the Claude Code plugin, Requivo Web — is a thin layer over the same
 services. There is never a second implementation of an apply, a generation, or a staleness rule.
 
+They are equal in capability and **not** equal in weight. **Web is the product experience, Claude Code
+is an integration, the CLI is infrastructure.** That ordering is a product decision, held in the
+README, `docs/`, and the relative prominence of each surface's documentation — never in the code, where
+all three reach the same services.
+
 ```
 requivo/
   paths.py         ASSETS (read-only) + workspace_root()/session_root() + output_root() (retired out/)
@@ -90,6 +95,7 @@ requivo/
   deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact
   web/             Requivo Web — FastAPI + Jinja2 + HTMX over the services (the `[web]` extra)
     app.py           create_app()   security.py  cross-site guard   routes/  viewmodels/  templates/
+    viewmodels/labels.py  the user-facing vocabulary, in one table (see "Two vocabularies" below)
 plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shipped in the wheel
 ```
 
@@ -174,6 +180,32 @@ bug that looked like correct behaviour.
     guarantee — requivo-cloud calls the service directly. For the same reason `DiscoveryService`'s
     artifact service defaults to the *session service's* repository: on files a split backing is
     invisible and every call succeeds.
+15. **A listing survives its own members.** `session_list` renders every session on the home page, and
+    a session at revision 0 has no model — `status()` raises for it. Letting that propagate turned one
+    un-analysed session into a 404 for the *whole* list, hiding every other session behind it. Any
+    aggregate view catches per-item failure and degrades that row, never the page.
+
+## Two vocabularies, one meaning
+
+The engine's vocabulary is precise: slots, evidence, coverage, artifacts, staleness, revisions. It is
+the right one for `core/`, for `--json`, for `docs/` — and the wrong one for a first screen, because it
+asks a reader to learn the model before they can use the product.
+
+So the Web speaks a translation of it, defined once in `web/viewmodels/labels.py` and in
+`viewmodels/status.py` (*what we know* / *what we are assuming* / *open question* / *needs updating* /
+*are we ready?* / *decision brief*). Two rules keep this from becoming a second model:
+
+- **Translation only, never computation.** A view model relabels and *selects* (which five questions
+  lead the page); it never re-derives readiness, coverage or a blast radius. `impact_view` reshapes an
+  `UpdateResult`; it does not recompute one, and it must never ask the provider — a generated list of
+  documents needing an update is a plausible guess where a computed one is an answer.
+- **Nothing stored changes.** `brief` is still `brief` on disk, in the CLI verb, in the contract and in
+  `session.json`; only the caption reads "Decision brief". Renaming a persisted key to change a label
+  would cost a format bump for a word.
+
+The primary screen shows what a reader must act on; everything else lives behind *Traceability
+details*, complete and one click away. Hiding is presentational — the counts are always stated, so it
+is never possible to mistake a short list for the whole list.
 
 ## The runner
 
@@ -250,6 +282,11 @@ the artifact write. `stories` and `estimate` are deliberately terminal-only anal
 `render/markdown.py` (registered in `_WRITERS`) + a subcommand in `cli.py`. Any generator whose text is
 user-facing carries the **Voice** rule: no slot ids, percentages or confidence labels in prose.
 
+`brief_markdown` is deliberately half deterministic. Its *What is confirmed* and *Important
+assumptions* sections are projections of the model (`_stated()` reads each topic's evidence), not
+prose the provider was asked to write — a restatement of facts can drift from the model it restates,
+and a projection cannot. Ask the provider for judgment; read the facts off the model.
+
 A generator can have **more than one writer** on the same contract — a second view, no extra call.
 `Epic` has `epic_markdown()` (human) and `epic_export_json()` (a tool-neutral versioned envelope).
 **Tracker adapters** are pure transforms over that neutral export, not over the internal `Epic`, which
@@ -312,5 +349,7 @@ instance would justify.
 - `framework/elicitation.md` is the human-readable spec of the framework; `model_schema.json` is the
   machine version fed to the model. Keep them consistent when adding or renaming a slot.
 - **Docs live in `docs/`**, one file per subject (`architecture`, `cli`, `web`, `session-format`,
-  `providers`, `context-cards`, `requirements-model`, `evaluations`, `roadmap`). The README is an
-  orientation, not a manual — put depth in `docs/`.
+  `providers`, `context-cards`, `requirements-model`, `evaluations`, `product-validation`, `roadmap`).
+  The README is an orientation, not a manual — put depth in `docs/`. `product-validation.md` is the
+  manual protocol for "is this better than a strong prompt?"; keep it out of the golden harness, which
+  answers a narrow mechanical question and would lend a false precision to a judgment.

@@ -4,8 +4,8 @@
 
 ## Available today
 
-- **Discovery engine** — priority questions, multi-turn refinement, solution assessment (with
-  challenges that contest the premise)
+- **Discovery engine** — the questions that could change the solution, multi-turn refinement, and
+  the decision brief (with challenges that contest the premise)
 - **Artifact generators** — PRD, user stories, uncertainty-aware estimate, acceptance criteria,
   delivery epic, release notes
 - **Tool-neutral epic export** (`epic.json`) and **tracker adapters** — idempotent, n8n-ready

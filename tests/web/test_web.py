@@ -60,7 +60,7 @@ def test_security_headers_present(client):
 
 def test_home_without_sessions(client):
     r = client.get("/")
-    assert r.status_code == 200 and "No sessions yet" in r.text
+    assert r.status_code == 200 and "Nothing here yet" in r.text
 
 
 def test_home_lists_an_existing_session(client):
@@ -73,7 +73,7 @@ def test_session_page_renders_understanding(client):
     _make_session("leave-approval", problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED)
     r = client.get("/sessions/leave-approval")
     assert r.status_code == 200
-    assert "Understanding" in r.text and "Readiness" in r.text
+    assert "What Requivo understood" in r.text and "Are we ready?" in r.text
 
 
 def test_missing_session_is_404(client):
@@ -99,7 +99,8 @@ def test_create_session_runs_discovery(client, with_provider):
                     follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/sessions/leave-approval"
     page = client.get("/sessions/leave-approval")
-    assert "Priority questions" in page.text and "How are exceptions handled" in page.text
+    assert "What could change the solution" in page.text
+    assert "How are exceptions handled" in page.text
 
 
 def test_create_only_then_run_discovery(client, with_provider):
@@ -108,12 +109,12 @@ def test_create_only_then_run_discovery(client, with_provider):
                                        "provider": "create_only"}, follow_redirects=False)
     assert r.status_code == 303
     pending = client.get("/sessions/leave-only")
-    assert "Awaiting discovery" in pending.text
+    assert "Awaiting analysis" in pending.text
     # …then discovery on demand.
     with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT))
     r = client.post("/sessions/leave-only/discover", follow_redirects=False)
     assert r.status_code == 303
-    assert "converged" in client.get("/sessions/leave-only").text
+    assert "No question left that would change the solution" in client.get("/sessions/leave-only").text
 
 
 def test_answers_apply_and_return_status_partial(client, with_provider):
@@ -123,7 +124,7 @@ def test_answers_apply_and_return_status_partial(client, with_provider):
     r = client.post("/sessions/leave-approval/answers",
                     data={"answers": "Exceptions go to HR.", "expected_revision": "1"})
     assert r.status_code == 200
-    assert "Applied revision 2" in r.text  # the status partial reports the new revision
+    assert "What changed" in r.text  # the swapped body leads with the impact of the answers
 
 
 def test_revision_conflict_is_clean(client, with_provider):
@@ -146,7 +147,7 @@ def test_generate_brief_and_prd_and_view(client, with_provider):
     assert client.post("/sessions/leave-approval/artifacts/prd").status_code == 200
     # both are listed, fresh
     page = client.get("/sessions/leave-approval")
-    assert "Solution assessment" in page.text and "PRD" in page.text and "Fresh" in page.text
+    assert "Decision brief" in page.text and "PRD" in page.text and "Up to date" in page.text
     # view + download the PRD
     view = client.get("/sessions/leave-approval/artifacts/prd")
     assert view.status_code == 200 and "Leave approval — PRD" in view.text
@@ -164,18 +165,21 @@ def test_related_change_marks_artifact_stale(client, with_provider):
     client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
     client.post("/sessions/leave-approval/artifacts/prd")
     client.post("/sessions/leave-approval/answers", data={"answers": "explicit now", "expected_revision": "1"})
-    assert "Stale" in client.get("/sessions/leave-approval").text
+    assert "Needs updating" in client.get("/sessions/leave-approval").text
 
 
 def test_the_web_offers_every_artifact_the_service_can_generate(client, with_provider, monkeypatch):
-    # The Web used to keep its own two-entry list while the service could produce five. The buttons now
-    # come from the service's vocabulary, so registering a generator surfaces it on every surface.
+    # The Web used to keep its own two-entry list while the service could produce five. The buttons
+    # still come from the service's vocabulary — what changed is their weight: the decision brief is
+    # the primary action, the rest live under "More documents". Available, not equal.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")   # the toolbar only shows with a provider
     with_provider(CRITERIA_REPLY)
     _make_session("leave-approval", problem=HIGH_EXPLICIT)
 
     page = client.get("/sessions/leave-approval").text
-    for label in ("Solution assessment", "PRD", "Acceptance criteria", "Delivery epic", "Release notes"):
+    assert "Generate decision brief" in page          # the one primary call to action
+    assert "More documents" in page
+    for label in ("PRD", "Acceptance criteria", "Delivery epic", "Release notes"):
         assert label in page, f"no generate button for {label}"
 
     assert client.post("/sessions/leave-approval/artifacts/criteria").status_code == 200
@@ -221,7 +225,7 @@ def test_the_token_works_as_a_form_field(raw_client):
 
 
 def test_forms_render_the_request_token(client):
-    assert csrf_token() in client.get("/sessions/new").text
+    assert csrf_token() in client.get("/").text
 
 
 def test_a_write_from_another_origin_is_refused(client):
@@ -277,3 +281,126 @@ def test_user_content_is_escaped(client, with_provider):
     page = client.get("/sessions/leave-approval").text
     assert "<script>alert(1)</script>" not in page       # escaped
     assert "&lt;script&gt;" in page
+
+
+# ── the MVP flow ──────────────────────────────────────────────────────────────
+# One workflow leads the product: paste a request → read what was understood → answer the few
+# questions that could change the solution → see what moved → generate one decision brief. These
+# tests pin that flow's shape, not just that its routes respond.
+
+def test_home_leads_with_the_request_form(client):
+    page = client.get("/").text
+    assert 'name="request_text"' in page
+    assert "Save request" in page or "Analyse request" in page
+    # The provider is a setting, not a question the reader has to answer: it exists, but only inside
+    # the advanced disclosure. Position is the honest assertion here — server-rendered <details>
+    # keeps its contents in the markup, so "not present" would be a lie.
+    assert page.index("Advanced settings") < page.index('id="provider"')
+
+
+def test_home_survives_a_session_with_no_model(client):
+    """A captured-but-unanalysed session is a normal row. It used to take the whole list down: the row
+    builder asked for a status, `status()` needs a model, and one 404 became the home page's."""
+    from requivo.services.discovery import DiscoveryService
+    DiscoveryService().create_only("A leave approval system", slug="not-analysed-yet")
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Awaiting analysis" in r.text and "not-analysed-yet" not in r.text.split("Recent")[0]
+
+
+def test_sessions_new_redirects_to_the_request_form(client):
+    r = client.get("/sessions/new", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/"
+
+
+def test_only_the_top_questions_lead_the_page(client, with_provider):
+    six = [{"q": f"Question {i}?", "slot": "business_rules", "why": "it moves the build"}
+           for i in range(6)]
+    with_provider(engine_reply(questions=six, problem=HIGH_EXPLICIT))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+    page = client.get("/sessions/leave-approval").text
+    lead = page.split("Traceability details")[0]
+    assert lead.count("Why it matters") == 5           # five lead the page…
+    assert "1 further question" in lead                # …and the sixth is accounted for, not dropped
+    assert "Question 5?" in page                       # still there, under traceability
+
+
+def test_no_raw_slot_ids_reach_the_page(client, with_provider):
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+    page = client.get("/sessions/leave-approval").text
+    # Every slot id with an underscore — the ones no human label contains, so a hit is the engine's
+    # vocabulary leaking into the reader's.
+    for slot_id in ("business_rules", "config_vs_custom", "success_metrics", "current_process",
+                    "edge_cases", "business_objects"):
+        assert slot_id not in page, f"slot id {slot_id!r} rendered to the reader"
+
+
+def test_readiness_is_one_action_state_with_reasons(client, with_provider):
+    with_provider(engine_reply(converged=True, problem=HIGH_INFERRED))   # a high-impact topic unresolved
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+    page = client.get("/sessions/leave-approval").text
+    assert "Not ready to produce a reliable scope" in page
+    assert "Real problem" in page                       # the reason, by its human label
+    assert "Ready for a first decision brief" not in page
+
+
+def test_answers_report_what_changed_and_what_needs_review(client, with_provider):
+    with_provider(
+        engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED),
+        PRD_REPLY,
+        engine_reply(converged=True, problem=HIGH_EXPLICIT, business_rules=HIGH_EXPLICIT),
+    )
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+    client.post("/sessions/leave-approval/artifacts/prd")
+    r = client.post("/sessions/leave-approval/answers",
+                    data={"answers": "Exceptions go to HR.", "expected_revision": "1"})
+    assert r.status_code == 200
+    assert "What changed" in r.text
+    assert "Business rules" in r.text                   # the area that moved, by its human label
+    assert "Needs review" in r.text and "PRD" in r.text  # the document the change reaches
+
+
+def test_an_unrelated_change_leaves_a_document_alone(client, with_provider):
+    """The differentiator cuts both ways: a change that misses a document's dependencies must not
+    flag it. Reporting is not one of the PRD's inputs, so moving it changes nothing the PRD rests on."""
+    with_provider(
+        engine_reply(problem=HIGH_EXPLICIT, reporting={"completeness": 10, "confidence": "empty",
+                                                       "impact": "low"}),
+        PRD_REPLY,
+        engine_reply(converged=True, problem=HIGH_EXPLICIT,
+                     reporting={"completeness": 80, "confidence": "explicit", "impact": "low"}),
+    )
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+    client.post("/sessions/leave-approval/artifacts/prd")
+    r = client.post("/sessions/leave-approval/answers",
+                    data={"answers": "Reporting is a weekly export.", "expected_revision": "1"})
+    assert "Needs review" not in r.text
+    assert "Needs updating" not in client.get("/sessions/leave-approval").text
+
+
+def test_a_changed_answer_moves_the_scope_and_the_brief(client, with_provider):
+    """The canonical scope-change story, end to end: a two-way sync during migration is decided, a
+    brief is written from it, then the answer changes to a one-time cutover — and the integration
+    topic moves, the brief is marked as needing an update, and the page says so."""
+    with_provider(
+        engine_reply(problem=HIGH_EXPLICIT,
+                     integrations={"completeness": 40, "confidence": "inferred", "impact": "high",
+                                   "value": "Both systems stay in sync during the pilot."}),
+        BRIEF_REPLY,
+        engine_reply(converged=True, problem=HIGH_EXPLICIT,
+                     integrations={"completeness": 90, "confidence": "explicit", "impact": "high",
+                                   "value": "One-time migration; the legacy system becomes read-only."}),
+    )
+    client.post("/sessions", data={"request_text": "Migrate leave to the new HR system",
+                                   "slug": "leave-migration", "provider": "anthropic"})
+    assert client.post("/sessions/leave-migration/artifacts/brief").status_code == 200
+    assert "Up to date" in client.get("/sessions/leave-migration").text
+
+    r = client.post("/sessions/leave-migration/answers",
+                    data={"answers": "The migration is one-time — the legacy system becomes read-only.",
+                          "expected_revision": "2"})
+    assert "What changed" in r.text
+    assert "Integrations &amp; notifications" in r.text  # the topic that moved, in the reader's words
+    assert "Decision brief" in r.text                   # …and the document it reaches
+    assert "Needs updating" in client.get("/sessions/leave-migration").text

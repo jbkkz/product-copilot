@@ -23,7 +23,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 
 | Command | Produces |
 |---|---|
-| `requivo brief <slug>` | Solution assessment (the senior-PM judgment) |
+| `requivo brief <slug>` | The decision brief — what to review before estimating |
 | `requivo prd <slug>` | Product Requirements Document |
 | `requivo stories <slug>` | User stories |
 | `requivo criteria <slug>` | Given/When/Then acceptance criteria |

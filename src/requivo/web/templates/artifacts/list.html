@@ -1,44 +1,76 @@
+{# One primary document, everything else behind a disclosure. Six generate buttons of equal weight is
+   not six options, it is no recommendation: the decision brief is the smallest output that answers
+   "what would I need to review before estimating this?", and it is the one the flow leads to. #}
 <div id="artifacts-region">
-  {% if s.artifacts %}
-  <ul class="clean">
-    {% for a in s.artifacts %}
-    <li>
-      <div class="session-row">
-        <span>
-          <strong>{{ a.label }}</strong> <span class="muted">rev {{ a.revision }}</span>
-          {% if a.stale %}<span class="badge danger">Stale</span>
-          {% else %}<span class="badge ok">Fresh</span>{% endif %}
-        </span>
-        <span class="row-actions">
-          <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}">View</a>
-          <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}?download=1">Download</a>
-        </span>
-      </div>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="muted">No artifacts generated yet.</p>
-  {% endif %}
-
-  {% if provider is defined and provider.available %}
-  {% if not s.readiness.ready and s.readiness.blocking %}
-  <p class="hint">Blocking unknowns remain ({{ s.readiness.blocking_labels|join(', ') }}) — a generated
-  document is marked <em>Draft</em> until they are resolved.</p>
-  {% endif %}
-  <div class="toolbar">
-    {% for g in s.generatable %}
-    <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}" hx-target="#artifacts-region" hx-swap="outerHTML">
-      {% include "_csrf.html" %}
-      <button class="btn{% if not loop.first %} secondary{% endif %}" type="submit">{{ g.label }}</button>
-    </form>
-    {% endfor %}
-    <span class="spinner" role="status">Generating…</span>
+  {% macro artifact_row(a) %}
+  <div class="session-row">
+    <span>
+      <strong>{{ a.label }}</strong>
+      {% if a.stale %}<span class="badge danger">Needs updating</span>
+      {% else %}<span class="badge ok">Up to date</span>{% endif %}
+    </span>
+    <span class="row-actions">
+      <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}">View</a>
+      <a class="btn small ghost" href="/sessions/{{ s.slug }}/artifacts/{{ a.type }}?download=1">Download</a>
+    </span>
   </div>
-  <p class="hint">Each is generated from the current model and saved against this revision. The
-  assessment comes first — it bakes its reasoning into the model, so documents generated after it
-  inherit the decisions and challenges, not just the facts.</p>
-  {% elif provider is defined and not provider.available %}
-  <p class="hint">{{ provider.reason }}</p>
-  {% endif %}
+  {% endmacro %}
+
+  <div class="card">
+    {% if s.primary_artifact %}
+    {{ artifact_row(s.primary_artifact) }}
+    {% if s.primary_artifact.stale %}
+    <p class="hint">The understanding moved after this brief was written. Regenerating rewrites it from
+      the current understanding — nothing is regenerated on your behalf.</p>
+    {% endif %}
+    {% else %}
+    <p>The decision brief is what you take into a scope review: what is confirmed, what is being
+      assumed, the decisions on record, and what is still open.</p>
+    {% if not s.readiness.ready and s.readiness.blocking_labels %}
+    <p class="hint">Unresolved topics remain ({{ s.readiness.blocking_labels|join(', ') }}) — the brief
+      will be marked <em>Draft</em> until they are answered.</p>
+    {% endif %}
+    {% endif %}
+
+    {% if provider is defined and provider.available %}
+    <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ s.primary_generatable.type }}"
+          hx-target="#artifacts-region" hx-swap="outerHTML">
+      {% include "_csrf.html" %}
+      <div class="toolbar">
+        <button class="btn" type="submit">{{ "Regenerate decision brief" if s.primary_artifact
+          else "Generate decision brief" }}</button>
+        <span class="spinner" role="status">Writing the brief…</span>
+      </div>
+    </form>
+    {% else %}
+    <p class="hint">{{ provider.reason if provider is defined else "" }}</p>
+    {% endif %}
+  </div>
+
+  <details class="more-documents">
+    <summary>More documents</summary>
+    <div class="advanced-body">
+      {% if s.other_artifacts %}
+      <ul class="clean">
+        {% for a in s.other_artifacts %}<li>{{ artifact_row(a) }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if provider is defined and provider.available %}
+      <p class="hint">Each is generated from the current understanding and recorded against it. Generate
+        the decision brief first — it settles the decisions the others are written from.</p>
+      <div class="toolbar">
+        {% for g in s.more_generatable %}
+        <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}"
+              hx-target="#artifacts-region" hx-swap="outerHTML">
+          {% include "_csrf.html" %}
+          <button class="btn small secondary" type="submit">{{ g.label }}</button>
+        </form>
+        {% endfor %}
+        <span class="spinner" role="status">Generating…</span>
+      </div>
+      {% elif not s.other_artifacts %}
+      <p class="muted">Nothing generated yet.</p>
+      {% endif %}
+    </div>
+  </details>
 </div>

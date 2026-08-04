@@ -1,0 +1,65 @@
+{# The swappable session body. The answers form replaces this whole region rather than the questions
+   alone, because one answer moves everything below it: the understanding, what is still open, whether
+   the scope is ready, and which documents now need updating. Swapping a part would leave the rest of
+   the page quietly describing the previous revision. #}
+<section id="session-body" aria-live="polite">
+
+  {% if update is defined and update %}
+  <section class="changed" aria-labelledby="changed-h">
+    <h2 id="changed-h">What changed</h2>
+    <div class="card">
+      <p class="lead">{{ update.headline }}</p>
+      {% if update.changed_areas %}
+      <ul class="clean tight">
+        {% for a in update.changed_areas %}<li>{{ a }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if update.needs_review %}
+      <h3>Needs review</h3>
+      <ul class="clean tight">
+        {% for d in update.decisions_to_review %}<li>{{ d }} <span class="muted">— decision</span></li>{% endfor %}
+        {% for c in update.assumptions_to_review %}<li>{{ c }} <span class="muted">— assumption</span></li>{% endfor %}
+        {% for doc in update.documents_to_update %}<li>{{ doc }} <span class="muted">— document</span></li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <h2>What Requivo understood</h2>
+  <div class="card">
+    {% if s.understood.has_content %}
+    {% if s.understood.objective %}<p class="lead">{{ s.understood.objective }}</p>{% endif %}
+    {% if s.understood.scope %}<p>{{ s.understood.scope }}</p>{% endif %}
+    {% if s.understood.assumptions %}
+    <h3>What we are assuming</h3>
+    <ul class="clean tight">{% for a in s.understood.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if s.understood.blind_spot %}
+    <p class="blind-spot"><b>Least explored:</b> {{ s.understood.blind_spot }}</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">Nothing captured yet.</p>
+    {% endif %}
+  </div>
+
+  {% include "discovery/_questions.html" %}
+
+  <h2>Are we ready?</h2>
+  <div class="card">
+    <p class="readiness-headline">
+      {% if s.readiness.ready %}<span class="badge ok">Ready</span>
+      {% else %}<span class="badge warn">Not ready</span>{% endif %}
+      {{ s.readiness.headline }}
+    </p>
+    <p>{{ s.readiness.lead }}</p>
+    {% if s.readiness.blocking_labels %}
+    <ul class="clean tight">{% for b in s.readiness.blocking_labels %}<li>{{ b }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+
+  <h2>Documents</h2>
+  {% include "artifacts/list.html" %}
+
+  {% include "sessions/_traceability.html" %}
+</section>

@@ -6,13 +6,17 @@ documentation and as inputs the tests and golden harness rely on.
 
 ## What's here
 
-**Start here — worked examples (request → model → artifacts):**
+**Start here — the canonical example:**
 
-- **`leave-approval/`** — a one-line request taken through the full artifact chain. The simplest way to
-  see the model-to-artifacts flow.
-- **`event-checkin-reconciliation/`** — a messy, multi-feature client email, and the assessment that
-  refuses to conflate its distinct problems. The engine's core differentiator; also the `requivo demo`
-  payload.
+- **`leave-approval/`** — a one-line request taken through the questions, the decision brief, the full
+  document chain, and a changed answer that moves the scope. This is the one to read first; the last
+  section is the change-impact walkthrough, which is the behaviour the whole engine exists for.
+
+**Then, a harder one:**
+
+- **`event-checkin-reconciliation/`** — a messy, multi-feature client email, and the brief that refuses
+  to conflate its distinct problems. Also the `requivo demo` payload, which is why its files are
+  byte-pinned by a test.
 
 **Additional request prompts** (just the input — run them yourself):
 

@@ -6,6 +6,67 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-08-04
+
+The product release. Nothing about the engine changed — no contract, no session format, no prompt, no
+generator. What changed is that the useful part is now the visible part: Requivo Web is built around
+one workflow instead of around the model, and the three interfaces are no longer presented as three
+equal choices. **Web is the product experience, Claude Code is an integration, the CLI is
+infrastructure** — a difference in weight, never in capability.
+
+### Added
+- **"What changed"**, after every answer. The page now leads with what those answers moved: which parts
+  of the solution changed, which decisions and contested premises need re-examining, which documents
+  need updating. All of it is a projection of the `UpdateResult` the Core already returned — computed
+  from the dependency graph, never generated. This was the product's differentiator and it had been
+  rendering as a one-line notice.
+- **`web/viewmodels/labels.py`** — the user-facing vocabulary in one table, so a term that appears in
+  six templates cannot drift in six directions. *What we know*, *what we are assuming*, *open
+  question*, *needs updating*, *are we ready?*, *decision brief*. A translation layer only: nothing
+  stored, emitted by `--json`, or named in a contract changed.
+- **`docs/product-validation.md`** — the manual protocol for the question the test suite cannot answer:
+  is this better than a strong prompt to a capable model? It isolates the two moments where the answer
+  actually lies — coming back to a session two days later, and changing an answer you already gave.
+  Deliberately not folded into the golden harness, which would lend a measurement's precision to a
+  judgment.
+- **Traceability details** — one disclosure on the session page holding everything the engine knows:
+  per-topic understanding, coverage, every open question, decisions, contested premises, provenance,
+  raw model export. Hiding is presentational; the counts are always stated, so a short list can never
+  be mistaken for the whole list.
+- `core.analysis.slot_labels()` — the public form of the internal `_label`, so an interface translates
+  slot ids through the schema instead of inventing its own names.
+
+### Changed
+- **The request box is the home page.** `/sessions/new` is retired (it redirects); the provider is
+  resolved by the server rather than asked of the reader, and joins the session name and the product
+  context cards under *Advanced settings*.
+- **The session page reads in one order**: the request, what Requivo understood, at most five questions
+  (each with *why it matters* and its likely area of impact), the answer form, *Are we ready?* as one
+  action state with its reasons, then the decision brief. Everything else moved behind traceability.
+- **One primary document action.** "Generate decision brief" leads; PRD, acceptance criteria, epic and
+  release notes stay available under *More documents*. Six buttons of equal weight is not six options,
+  it is no recommendation.
+- **The decision brief is half deterministic.** `brief_markdown` now opens with *What is confirmed* and
+  *Important assumptions*, read straight off the model rather than restated by the provider — a
+  restatement can drift from what it restates; a projection cannot. The contract, the prompt and the
+  filename (`solution-assessment.md`) are unchanged, so no session, script or golden baseline moves.
+- **The engine's own `summary` is finally shown.** `scope`, `assumptions` and `blind_spot` were being
+  produced on every turn and thrown away; they are the paragraph a reader needs to judge whether the
+  engine understood them at all.
+- The answers turn swaps the whole session body rather than the questions alone — a partial swap left
+  the "needs updating" badges describing the previous revision, under the reader's eyes.
+- README, `docs/`, the Claude Code plugin and the CLI help all speak the product's vocabulary and the
+  Web → Claude Code → CLI hierarchy. `examples/leave-approval/` is the canonical example, and now ends
+  with the change-impact walkthrough.
+
+### Fixed
+- **One un-analysed session no longer 404s the whole home page.** `session_list` asked every session
+  for a `status()`, which needs a model; a session created through "save the request only" has none, and
+  the exception took the entire listing with it — hiding every *other* session behind one that had
+  simply not been analysed yet. A listing has to survive its own members (invariant 15).
+- Opportunities rendered their leverage as `Leverage.high`: the view model dumped without
+  `mode="json"`, and Jinja renders an enum by its repr.
+
 ## [0.9.8] - 2026-08-02
 
 The clean-up release. The pre-store architecture is gone, sessions can be checked against themselves,
@@ -816,7 +877,7 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.9.9...HEAD
 [0.8.0]: https://github.com/jbkkz/requivo/releases/tag/v0.8.0
 [0.7.0]: https://github.com/jbkkz/requivo/releases/tag/v0.7.0
 [0.6.3]: https://github.com/jbkkz/requivo/releases/tag/v0.6.3

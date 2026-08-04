@@ -1,9 +1,16 @@
-"""Home — the product page and the list of local sessions."""
+"""Home — the primary product experience: paste a request, and the sessions already in progress.
+
+There is no separate 'new discovery' page. A tool whose first screen explains itself and whose second
+screen is the one that does the work has spent its best moment on an introduction; the request box
+belongs where the reader lands.
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse
 
+from requivo.core.context import available_cards
 from requivo.services.sessions import SessionService
 from requivo.web.config import provider_status
 from requivo.web.dependencies import get_sessions
@@ -13,9 +20,20 @@ from requivo.web.viewmodels.sessions import session_list
 router = APIRouter()
 
 
+def home_context(sessions: SessionService, **extra) -> dict:
+    """Everything the home page renders — shared with the create route, which re-renders this page
+    when a submission is refused rather than sending the reader elsewhere to be told."""
+    return {"sessions": session_list(sessions), "provider": provider_status(),
+            "cards": available_cards(), **extra}
+
+
 @router.get("/")
 def home(request: Request, sessions: SessionService = Depends(get_sessions)):
-    return templates.TemplateResponse(request, "home.html", {
-        "sessions": session_list(sessions),
-        "provider": provider_status(),
-    })
+    return templates.TemplateResponse(request, "home.html", home_context(sessions))
+
+
+@router.get("/sessions/new")
+def new_session():
+    """Retired: the request form *is* the home page. Kept as a redirect so an existing bookmark still
+    lands somewhere useful instead of on a 404."""
+    return RedirectResponse(url="/", status_code=307)

@@ -1,11 +1,28 @@
 # Requivo for Claude Code
 
-Turn a vague product request into a **validated, traceable requirements model** — using your existing
-Claude Code session for the reasoning. **No Anthropic API key required.**
+Use the same Requivo sessions inside the Claude Code workflow you already have — your session does the
+reasoning, so **no Anthropic API key is required**.
 
-Requivo's thesis: *the model is the product; documents are views of that model.* This plugin lets
-Claude Code drive that model: Claude does the qualitative reasoning and dialogue, and the deterministic
-`requivo` CLI validates, versions, and tracks everything.
+This is an **integration**, not a separate product. [Requivo Web](../../docs/web.md) is the primary
+interface; this plugin exists so that if you already live in Claude Code, you do not have to leave it.
+A session created here opens in the Web app and the CLI, and vice versa: same format, same validated
+apply path, same understanding.
+
+The division of labour: Claude does the qualitative reasoning and the dialogue; the deterministic
+`requivo` CLI validates, versions, and tracks what rests on what.
+
+## The workflow
+
+```text
+/requivo:discover     paste the request → the understanding + the questions that could change it
+    ↓
+answer the questions  → /requivo:answer folds them in and reports what moved
+    ↓
+/requivo:brief        → the decision brief, saved and tied to the revision it was written from
+```
+
+`/requivo:status` at any point tells you where it stands; `/requivo:impact` tells you what a change
+would reach *before* you make it.
 
 ## What it does
 
@@ -13,12 +30,12 @@ Six skills, each a thin driver over the deterministic `requivo` CLI:
 
 | Skill | What it does | Reasoning? |
 |---|---|---|
-| `/requivo:discover` | Start a session from a request → validated model + priority questions | Claude |
-| `/requivo:answer` | Fold answers back in → refined model, stale-artifact warnings | Claude |
-| `/requivo:status` | Readiness, blocking slots, revision, artifact freshness | none (deterministic) |
-| `/requivo:brief` | Solution assessment (the senior-PM judgment), saved as a tracked artifact | Claude |
-| `/requivo:prd` | PRD as a view of the model, unknowns kept visible, saved and tracked | Claude |
-| `/requivo:impact` | Blast radius of a change (decisions to re-validate, artifacts gone stale) | none (deterministic) |
+| `/requivo:discover` | Start a session from a request → the understanding + what could change the solution | Claude |
+| `/requivo:answer` | Fold answers back in → what moved, what needs review, what needs updating | Claude |
+| `/requivo:status` | Are we ready, what is still unresolved, which documents need updating | none (deterministic) |
+| `/requivo:brief` | The decision brief, saved as a tracked document tied to its revision | Claude |
+| `/requivo:prd` | A PRD from the same understanding, unknowns kept visible, saved and tracked | Claude |
+| `/requivo:impact` | What a change would reach — decisions to re-validate, documents to update | none (deterministic) |
 
 ## Prerequisites
 
@@ -64,12 +81,12 @@ CLI may not have a verb a newer skill uses.
 
 ```
                     Requivo Core
-               validated session model
+            validated, versioned understanding
                  /        |         \
                 /         |          \
-       Claude Code       CLI          Web
-           |              |            |
-   Claude reasoning   deterministic  local UI
+              Web    Claude Code      CLI
+               |          |            |
+         the product  this plugin  infrastructure
 ```
 
 - **Claude Code mode (this plugin):** Claude reasons in your session, pipes the proposal in on stdin, and calls
@@ -96,13 +113,14 @@ Sessions live under your workspace at `.requivo/sessions/<slug>/`:
 .requivo/sessions/<slug>/
 ├── session.json          # versioned metadata + provenance + artifact status
 ├── request.md            # the originating request
-├── model.json            # the current model (the product)
-├── revisions/            # every applied model revision (0001-model.json, …)
-└── artifacts/            # generated views (brief, prd, …), each tied to a revision
+├── model.json            # the current understanding (the durable product)
+├── revisions/            # every applied revision (0001-model.json, …)
+└── artifacts/            # generated documents (brief, prd, …), each tied to a revision
 ```
 
-The model is the product; every artifact is a view of it, tracked against the revision it was generated
-from — so when the model changes, `requivo status` tells you exactly which artifacts went stale.
+The understanding is the source of truth; every document is a view of it, tracked against the revision
+it was generated from — so when the understanding moves, `requivo status` tells you exactly which
+documents need updating.
 
 ## The skills never
 
