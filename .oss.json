@@ -1,0 +1,29 @@
+{
+  "repo": "jbkkz/requivo",
+  "default_branch": "main",
+  "branch_pattern": "fix/{issue}",
+  "test_command": "uv run --extra dev pytest -q",
+  "version_sites": [
+    "pyproject.toml",
+    "CHANGELOG.md"
+  ],
+  "changelog_dir": null,
+  "changelog_untagged": ["0.6.1"],
+  "docs_targets": [
+    "README.md"
+  ],
+  "labels": {
+    "priority": [],
+    "lanes": []
+  },
+  "milestones": [],
+  "release": {
+    "tag_pattern": "v{version}",
+    "merge_method": null,
+    "commit_subject": null,
+    "triggers": {
+      "merged_prs": 10,
+      "soak_hours": 48
+    }
+  }
+}
