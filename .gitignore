@@ -37,3 +37,13 @@ node_modules/
 # os / tooling
 .DS_Store
 supertool
+
+# agent tooling: per-session scratch. The 01-oss rule layer itself IS tracked --
+# it is generated and replaced wholesale by /oss:scaffold, so it belongs in the
+# repo; only this state directory is per-session and per-machine.
+.claude/jit-context/.discovery/
+
+# uv lockfile. Requivo is a library: its dependency floors and ceilings are the
+# contract, declared in pyproject.toml. A lock here would pin what a consumer
+# resolves against and is not what a library ships.
+uv.lock

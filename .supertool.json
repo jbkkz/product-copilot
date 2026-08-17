@@ -1,0 +1,10 @@
+{
+  "presets": ["git", "github", "watch"],
+  "ops": {
+    "radar": {
+      "radar_tiers": {
+        "gh-prs": {}
+      }
+    }
+  }
+}
