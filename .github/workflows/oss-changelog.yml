@@ -64,10 +64,10 @@ jobs:
       # a surface a release leaves behind rather than one it reads, so the run that
       # discovers it stale must not be the run cutting the tag (#88).
       - name: CHANGELOG.md's link refs agree with its release headings
-        # changelog_untagged is not declared in .oss.json, so every `## [x.y.z]`
-        # section below is expected to carry a link ref. That is this file's
-        # default reading and not a statement anybody made -- declare [] to say so
-        # deliberately, or list the versions that were never tagged.
+        # changelog_untagged in .oss.json declares 0.6.1 as never tagged, so no
+        # `releases/tag/v...` link is expected for it. A link written for one
+        # would be a 404 that renders as a working link, which is the failure this
+        # declaration exists to prevent.
         run: |
           set -eu
           # Three states, three exit codes: 0 ok, 1 skipped, 2 refused. Only
@@ -78,7 +78,7 @@ jobs:
           # nobody could yet make green. The receipt is still printed, so a check
           # that could not look says so rather than passing silently.
           status=0
-          python3 .oss/assemble_changelog.py --check-links --dir 'changelog.d' --changelog CHANGELOG.md || status=$?
+          python3 .oss/assemble_changelog.py --check-links --untagged '0.6.1' --dir 'changelog.d' --changelog CHANGELOG.md || status=$?
           [ "$status" -ne 2 ] || exit 1
 
       # A change to what this project DOES must say so where users read it.
