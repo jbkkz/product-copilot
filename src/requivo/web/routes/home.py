@@ -20,11 +20,27 @@ from requivo.web.viewmodels.sessions import session_list
 router = APIRouter()
 
 
+def empty_form() -> dict:
+    """A blank create form. A fresh dict per call, so no caller can edit the next reader's page."""
+    return {"request_text": "", "slug": "", "cards": [], "provider": "auto"}
+
+
 def home_context(sessions: SessionService, **extra) -> dict:
     """Everything the home page renders — shared with the create route, which re-renders this page
-    when a submission is refused rather than sending the reader elsewhere to be told."""
+    when a submission is refused rather than sending the reader elsewhere to be told.
+
+    `form` is what the reader last submitted, and it is a context key rather than something the
+    create route pokes into the template, because the promise in the sentence above is one this
+    function has to be able to keep. It used to be true of the empty-request refusal only: every
+    other refusal on this page raised, rendered `errors/error.html`, and offered *Back to sessions* —
+    which for a 26,000-character client email that arrived through the clipboard meant fetching it
+    again from wherever it came from (#30).
+
+    Refusing is still correct and is unchanged (invariant 3, *refuse, don't truncate*). What changed
+    is what the refusal costs.
+    """
     return {"sessions": session_list(sessions), "provider": provider_status(),
-            "cards": available_cards(), **extra}
+            "cards": available_cards(), "form": empty_form(), **extra}
 
 
 @router.get("/")

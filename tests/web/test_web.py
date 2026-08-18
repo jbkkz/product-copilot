@@ -280,10 +280,12 @@ def test_a_host_the_server_cannot_determine_is_refused_rather_than_skipped(app):
 
     empty = c.get("/", headers={"Host": ""})
     assert empty.status_code == 403
-    # names its own arm rather than borrowing the generic another-origin wording, as #43 did for the
+    # Names its own arm rather than borrowing the generic another-origin wording, as #43 did for the
     # opaque origin: a guard that could not look must not print what a guard that looked and refused
-    # prints. `details` never reach the reader, so the message is the only place this can be said.
-    assert "which host" in empty.text
+    # prints. Since #52 that arm has its own **code**, which is the stable identifier
+    # `docs/compatibility.md` says to assert on — this used to match the message text because
+    # `cross_site_request` was raised for all six arms and the wording was the only handle there was.
+    assert "undetermined_host" in empty.text
 
     # whitespace-only is the same undetermined state by a different spelling — `_hostname` strips first
     assert c.get("/", headers={"Host": "   "}).status_code == 403
@@ -314,20 +316,22 @@ def test_a_request_that_states_no_host_at_all_is_refused(app):
     from requivo.web.security import CrossSiteRequestError, _enforce
 
     def verdict(headers: list[tuple[bytes, bytes]]) -> str:
-        """`"accepted"`, or the refusal message — never a bare boolean, so the arm is visible here."""
+        """`"accepted"`, or the refusal's error **code** — never a bare boolean, so the arm is visible
+        here. The code rather than the message since #52: each arm now carries its own, and a code is
+        the identifier `docs/compatibility.md` says to assert on."""
         async def run() -> str:
             scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"",
                      "headers": headers}
             try:
                 await _enforce(Request(scope))
             except CrossSiteRequestError as exc:
-                return exc.message
+                return exc.code
             return "accepted"
         return asyncio.run(run())
 
-    assert verdict([(b"host", b"127.0.0.1:8765")]) == "accepted"        # must fire
-    assert "which host" in verdict([])                                  # no Host header at all
-    assert verdict([(b"host", b"evil.example")]) != "accepted"          # and the mismatch arm survives
+    assert verdict([(b"host", b"127.0.0.1:8765")]) == "accepted"          # must fire
+    assert verdict([]) == "undetermined_host"                            # no Host header at all
+    assert verdict([(b"host", b"evil.example")]) == "host_not_allowed"   # and the mismatch arm survives
 
 
 # ── the origin check: which hostnames are one trust domain (#43) ──────────────

@@ -59,7 +59,10 @@ paste a request
 
 - **Home** — the request box *is* the home page; there is no separate "new discovery" screen. Below it,
   the requests already in progress, each showing what was asked, whether it is waiting on you, and
-  whether a document needs updating. Sessions created by the CLI or Claude Code appear here too.
+  whether a document needs updating. Sessions created by the CLI or Claude Code appear here too. A
+  session that cannot be read — written by a newer Requivo, or left with a truncated file by a crash
+  mid-write — is a **row that says so and names itself**, not an error over the whole page: one bad
+  session used to hide the list of every other, and neither surface said which one it was (#7).
 - **Advanced settings** — session name, product context cards, and whether to analyse now or just save
   the request. Collapsed by default: the server already knows whether a provider action can run, so it
   resolves that itself instead of asking. The API key is never a form field.
@@ -140,6 +143,20 @@ Even though it is a local app:
   determined rather than borrowing the wording of a genuine mismatch. This does refuse an HTTP/1.0
   request that sends no `Host` at all; HTTP/1.1 requires one, every browser and ordinary client sends
   one, and HTTP/1.0 is not a supported caller here.
+- **The parser refuses an authority it cannot read, rather than answering about it.** `Host:
+  evil.com@127.0.0.1` used to resolve to `127.0.0.1` and pass the allowlist, because a URL parser
+  correctly discards userinfo — and `Host: 127.0.0.1 evil.com` came back as that whole string, which is
+  not a hostname and was refused only by happening to miss the allowlist. Neither is reachable from a
+  browser: nothing serializes userinfo into a `Host`, an `Origin` or a `Referer`. It is fixed because
+  it is the **third** time this parser answered confidently about an input it should have declined —
+  #43 the opaque origin, #45 the undetermined host, and this — and because the first two were closed at
+  the caller, which is a guarantee the next caller inherits without re-checking. The refusal is now the
+  parser's (#51).
+- **Each arm of the guard carries its own error code.** One code, `cross_site_request`, was raised for
+  six distinct facts whose `details` payloads had five different shapes between them — against the rule
+  this project states in [compatibility.md](compatibility.md), that a code carries one fact and one
+  shape. They are now `undetermined_host`, `host_not_allowed`, `cross_site_fetch`, `opaque_origin`,
+  `origin_mismatch` and `missing_request_token`, all still 403 (#52).
 - **The three loopback spellings are one origin.** `localhost`, `127.0.0.1` and `::1` name one machine,
   so a page served on any of them may post to any other — the host allowlist already accepted them
   interchangeably, and comparing them as strings refused a form that used two at once, with no way
@@ -183,6 +200,14 @@ Even though it is a local app:
   Request bodies are capped before they are parsed. An unknown context card is an error too:
   filtering it out would leave an empty selection, which every reader downstream treats as "load
   every card".
+- **A refusal costs you the submission no longer.** Refusing was right; the recovery was not. Every
+  refusal on the request form was a full-page error whose only affordance was *Back to sessions*, so a
+  26,000-character client email that arrived through the clipboard had to be fetched again from
+  wherever it came from. The answers box was worse: it posts as an HTMX swap over the region that
+  *contains* the textarea, so the error fragment deleted the field the text was typed into. Both now
+  re-render in place, with what you submitted still in the form — the request, the session name, the
+  context cards you ticked — and the refusal stated beside the field it is about (#30). What is
+  refused is unchanged; only what it costs you is.
 
 ## Limits of this first version
 

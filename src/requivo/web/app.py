@@ -47,7 +47,18 @@ _STATUS_BY_CODE = {
     "empty_selection": 400,           # a selection the caller supplied that selects nothing
     "unsafe_selector_token": 400,     # a control character in a name the caller supplied
     "unknown_artifact_type": 400,
-    "cross_site_request": 403,
+    # The cross-site family, one row per arm since #52. They are all 403 and the guard renders that
+    # status directly rather than reading this table — these rows classify the *codes*, which is what
+    # `test_every_error_code_has_an_explicit_http_status` walks and what a consumer sees. The family
+    # base keeps its row for the same reason: it is still in the vocabulary, and a code in the
+    # vocabulary with no row is exactly the gap that test exists to make loud.
+    "cross_site_request": 403,        # the family base; nothing raises it directly
+    "undetermined_host": 403,
+    "host_not_allowed": 403,
+    "cross_site_fetch": 403,
+    "opaque_origin": 403,
+    "origin_mismatch": 403,
+    "missing_request_token": 403,
     "input_too_large": 413,
     # 409 — a conflict with the store's current state, not a malformed request
     "revision_conflict": 409,

@@ -42,6 +42,54 @@ def _artifacts_view(status: dict) -> list[dict]:
     ]
 
 
+def _unreadable_row(slug: str, error: str | None) -> dict:
+    """A row for a session nobody could read — the third state, rendered rather than swallowed.
+
+    It states no fact it does not have. `updated_at` is empty rather than a plausible timestamp,
+    `open_questions` is `None` rather than `0` (we did not count zero questions, we failed to count),
+    and `needs_update` claims nothing. Inventing any of the three would be the quiet-wrong-answer
+    form of the very bug this guard exists for.
+
+    The title is the slug, because naming *which* session is the point: before #7 a reader with one
+    broken session was shown an error for the whole page and had no way to learn which one it was.
+    """
+    return {"slug": slug, "title": slug, "updated_at": "", "state": "unreadable",
+            "status_label": "Could not be read", "open_questions": None, "needs_update": False,
+            "error": error or "no further detail"}
+
+
+def _readable_row(sessions: SessionService, meta) -> dict:
+    """The ordinary row. Raises whatever its reads raise — `session_list` owns the degradation, so
+    that every failure below this line lands in one place instead of one `try` per call."""
+    row = {
+        "slug": meta.slug,
+        "title": _title(sessions.request_text(meta.slug), meta.slug),
+        "updated_at": meta.updated_at,
+        "error": None,
+    }
+    try:
+        status = sessions.status(meta.slug)
+    except SessionNotFoundError:
+        # Not a failure: the 'capture the request now, analyse later' path has no model yet, and
+        # `status()` needs one. This arm stays narrow on purpose — widening it would render an
+        # un-analysed session and an unreadable one identically, which is the distinction the row
+        # below exists to keep.
+        return {**row, "state": "awaiting", "status_label": "Awaiting analysis",
+                "open_questions": 0, "needs_update": False}
+    arts = status.get("artifacts", {})
+    open_questions = len(status.get("questions", []))
+    ready = status["readiness"]["ready"]
+    return {
+        **row,
+        "state": "ready" if ready else "in_progress",
+        "status_label": "Ready for a first decision brief" if ready
+        else (f"{open_questions} open question{'' if open_questions == 1 else 's'}"
+              if open_questions else "In progress"),
+        "open_questions": open_questions,
+        "needs_update": any(a["stale"] for a in arts.values()),
+    }
+
+
 def session_list(sessions: SessionService) -> list[dict]:
     """One row per local session for the home page.
 
@@ -49,35 +97,30 @@ def session_list(sessions: SessionService) -> list[dict]:
     them, and whether its brief has drifted. Revisions, provider names and artifact internals belong
     to the session screen's traceability section, not to a list.
 
-    A session with no model yet — the 'capture the request now, analyse later' path — is a normal row,
-    not an error. `status()` needs a model and raises without one, which used to take the *whole* home
-    page down with a 404: one un-analysed session and a reader lost the list of every other. The
-    listing has to survive its own members."""
+    **The listing has to survive its own members** (invariant 15), and this used to enforce that one
+    line below where it broke (#7). Three things sat outside the guard: `list_sessions()` is a
+    single-shot comprehension over `read_meta`, so an unreadable `session.json` or a newer
+    `format_version` raised before any row existed to degrade; `request_text` was outside the `try`;
+    and the `try` named `SessionNotFoundError` alone, so a truncated `model.json` raised a pydantic
+    `ValidationError` that missed this catch *and* the app's `RequivoError` handler and rendered as a
+    500 over the whole page. Measured, per break mode: 400, 500 and 500 respectively, on a page whose
+    other sessions were all fine.
+
+    So the source is `list_entries()`, which degrades per member, and everything read *on* a row is
+    inside one bare `except Exception`. Bare because the set of ways a session can be broken is open
+    — that is the argument in `SessionService.list_entries`, and this is the call site it was made
+    for. The narrow `SessionNotFoundError` arm survives inside `_readable_row`, because *not analysed
+    yet* is a normal state and must not render like *we could not look*.
+    """
     items = []
-    for meta in sessions.list_sessions():
-        row = {
-            "slug": meta.slug,
-            "title": _title(sessions.request_text(meta.slug), meta.slug),
-            "updated_at": meta.updated_at,
-        }
-        try:
-            status = sessions.status(meta.slug)
-        except SessionNotFoundError:
-            items.append({**row, "state": "awaiting", "status_label": "Awaiting analysis",
-                          "open_questions": 0, "needs_update": False})
+    for entry in sessions.list_entries():
+        if not entry.readable:
+            items.append(_unreadable_row(entry.slug, entry.error))
             continue
-        arts = status.get("artifacts", {})
-        open_questions = len(status.get("questions", []))
-        ready = status["readiness"]["ready"]
-        items.append({
-            **row,
-            "state": "ready" if ready else "in_progress",
-            "status_label": "Ready for a first decision brief" if ready
-            else (f"{open_questions} open question{'' if open_questions == 1 else 's'}"
-                  if open_questions else "In progress"),
-            "open_questions": open_questions,
-            "needs_update": any(a["stale"] for a in arts.values()),
-        })
+        try:
+            items.append(_readable_row(sessions, entry.meta))
+        except Exception as e:  # noqa: BLE001 - one member must not take the listing down
+            items.append(_unreadable_row(entry.slug, str(e)))
     return items
 
 
