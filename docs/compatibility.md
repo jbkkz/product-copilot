@@ -59,6 +59,50 @@ not change meaning without a note in the changelog.
 
 Error `code` values are stable identifiers — assert on the code, never on the message text.
 
+**A code carries one fact, and one `details` shape.** That is what makes the advice above safe to
+follow: matching a code and then reading a key out of `details` has to work for every payload
+carrying it. Two changes in 0.10.0 were needed to make it true.
+
+- **`empty_selector_token` split into two codes.** It carried two facts with two shapes: an empty
+  *token inside* a selection (`{selector, position}`) and a selection that is *itself* empty
+  (`{selector, tokens}`). A consumer matching the code and reading `details["position"]` got a
+  `KeyError` from a payload that correctly carried the code it matched. Since 0.10.0:
+
+  | Condition | Code | `details` |
+  |---|---|---|
+  | a stray comma — `--context "a,,b"` | `empty_selector_token` | `{selector, position}` |
+  | a selection that selects nothing — `--context ""` | `empty_selection` | `{selector, tokens}` |
+
+  **If you match `empty_selector_token`, match `empty_selection` alongside it.** The message is
+  unchanged for both; only the code moved for the second case, and `position` is now guaranteed
+  present on every `empty_selector_token` payload.
+
+- **`no_context_cards` is new.** An install with no context cards at all now refuses rather than
+  reasoning with an empty product context. It is distinct from `unknown_context_card` (the card you
+  named is not there) and from `context_unreadable` (we could not look): here we looked, at every
+  root, and there is nothing. `details` carries `{roots}` — the directories searched.
+
+Adding a code is not a breaking change under this policy, but *moving a condition to a new code* is,
+so both are noted here and in the changelog rather than only in the latter.
+
+### HTTP statuses in Requivo Web
+
+The Web maps each code to a status, and **every code has an explicit mapping** — the table used to
+default to 400, so a code added in one place reached the browser as "your request was bad" whatever
+it actually meant. Consumers scripting against the Web should note the four that moved off that
+default in 0.10.0, and the one that is new:
+
+| Code | Was | Now | Why |
+|---|---|---|---|
+| `context_unreadable` | 400 | 500 | the server cannot read its own card directory |
+| `no_context_cards` | — | 500 | the install shipped no cards; nothing the caller sent caused it |
+| `provider_output_invalid` | 400 | 502 | upstream would not hold the contract, after every retry |
+| `session_locked` | 400 | 503 | the write never started; retrying it unchanged is correct |
+| `session_exists` | 400 | 409 | a conflict with the store's state, like `revision_conflict` |
+
+An unrecognised code is now a 500 rather than a 400, for the same reason: "we could not classify
+this" is not evidence that the caller erred.
+
 One populated field has changed meaning under that rule, and the changelog carries the note:
 `doctor --json`'s `sessions.total` is `null`, not `0`, when the session directory could not be read
 at all. It reported `0` before, which was indistinguishable from an empty workspace — a reader

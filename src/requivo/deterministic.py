@@ -286,8 +286,10 @@ def _cmd_doctor(a, client) -> None:
               "thing as having no sessions.")
         return
     bad, lost = h["inconsistent"], h["unresolved_cards"]
-    # A session with no card selection is unaffected either way — `check_selection(None)` never
-    # reads the card directory — so this is only worth saying when there are sessions at all.
+    # Only worth saying when there are sessions at all. Since #33 a session with no card selection is
+    # *not* exempt: `check_selection(None)` reads the card directory now, because an install with no
+    # cards refuses every load, `only=None` included — so "every card" is a selection that can fail
+    # like any other.
     unchecked = not h["cards_checked"] and bool(h["total"])
     notes = ([f"{len(bad)} inconsistent"] if bad else []) \
         + ([f"{len(lost)} with product context that no longer loads"] if lost else []) \

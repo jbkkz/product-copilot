@@ -71,9 +71,33 @@ class EmptySelectorTokenError(RequivoError):
     selection wearing the shape of one. Matched as a substring it hits every candidate; dropped, it
     can leave the selection empty, and every reader downstream spells an empty selection "all of
     them". Both directions are silent, and both render exactly like a precise answer.
+
+    `details` always carries `{"selector", "position"}` — the position is the point, because a
+    comma-split list is usually long enough that "one of these is empty" is not an actionable
+    sentence. Its sibling `EmptySelectionError` is the *other* fact, and used to share this code
+    while carrying a different shape (#35).
     """
 
     code = "empty_selector_token"
+
+
+class EmptySelectionError(RequivoError):
+    """A selection object was supplied and it selects nothing — `--context ""` reaching a selector as
+    an empty list, or a persisted selection that has been emptied.
+
+    A **sibling** of `EmptySelectorTokenError`, deliberately not a subclass of it. They are two
+    facts, as `normalize_tokens`' own docstring has always argued: an empty *token inside* a
+    selection, against a selection that is *itself* empty. They shared one code until #35, with two
+    different `details` shapes behind it — so a consumer following the documented advice (match the
+    code) and reading `details["position"]` got a `KeyError` from a payload that correctly carried
+    the code it matched. Subclassing would re-conflate exactly what splitting them fixes.
+
+    `details` carries `{"selector", "tokens": 0}`. Refused rather than widened, because an empty
+    selection is not `None`: `None` is the explicit "no restriction" sentinel, and guessing which one
+    the caller meant is how this class of bug gets written.
+    """
+
+    code = "empty_selection"
 
 
 class ContextUnreadableError(RequivoError):
@@ -92,6 +116,27 @@ class ContextUnreadableError(RequivoError):
     """
 
     code = "context_unreadable"
+
+
+class NoContextCardsError(RequivoError):
+    """No context cards are installed at all — every card root was readable and every one was empty.
+
+    The third state beside `UnknownContextCardError` (the card named is not there) and
+    `ContextUnreadableError` (we could not look). Here we looked, at every root, and there is
+    nothing to look at: a wheel or container layer that shipped `assets/` and lost
+    `assets/context/`.
+
+    Raised rather than tolerated because an empty `{{CONTEXT}}` is never a legitimate thing to send
+    a provider. `build_prompt` substituted the empty string with no check, so the engine reasoned
+    with no product context at all — `information_value = uncertainty x impact`, the central design
+    idea, silently off — on a call that costs money. A context-free run is not currently a supported
+    mode; if it ever becomes one it wants an explicit flag, not an accident of an empty directory.
+
+    `details` carries `{"roots"}`: the directories that were searched, because "no cards" is only
+    actionable once you know where the search looked.
+    """
+
+    code = "no_context_cards"
 
 
 class InputTooLargeError(RequivoError):

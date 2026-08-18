@@ -675,17 +675,33 @@ def test_load_context_includes_real_cards_and_skips_underscore():
     assert "## _template" not in ctx   # underscore-prefixed card is skipped
 
 
-def test_load_context_empty_when_no_cards(tmp_path, monkeypatch):
-    # load_context reads the CONTEXT anchor from its own module (core.context); point it at an empty dir,
-    # and point the user-cards dir at a nonexistent path so the machine's real one can't leak in.
+def test_load_context_refuses_when_only_underscore_files_are_present(tmp_path, monkeypatch):
+    """A directory holding nothing but `_`-prefixed files has **no cards**, and since #33 that is a
+    refusal rather than an empty string.
+
+    This test used to assert `load_context() == ""`, which is the defect #33 reports written down as
+    the intended contract: an empty `{{CONTEXT}}` reached `build_prompt` and was sent to a paid call
+    with the product context silently missing. What it is still here to pin is the other half — that
+    an underscore-prefixed file does not count as a card — so the refusal below is the *right*
+    refusal and not an accident of an empty directory.
+    """
     from requivo.core import context as llm
+    from requivo.core.errors import NoContextCardsError
 
     ctx_dir = tmp_path / "context"
     ctx_dir.mkdir()
-    (ctx_dir / "_only_template.md").write_text("skip me")
+    (ctx_dir / "_only_template.md").write_text("skip me", encoding="utf-8")
     monkeypatch.setattr(llm, "CONTEXT", ctx_dir)
     monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(tmp_path / "no-user-cards"))
-    assert load_context() == ""
+
+    with pytest.raises(NoContextCardsError):
+        load_context()
+
+    # must fire: the same directory with one *real* card loads, so the refusal above is about the
+    # underscore rule and not about the directory being unreadable or the anchor being wrong
+    (ctx_dir / "real-card.md").write_text("REAL CARD", encoding="utf-8")
+    loaded = load_context()
+    assert "## real-card" in loaded and "## _only_template" not in loaded
 
 
 def test_user_context_cards_merge_and_override_bundled(tmp_path, monkeypatch):
