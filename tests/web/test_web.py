@@ -7,6 +7,10 @@ in HTML, escaping), and the discovery/artifact flows with a mocked provider.
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +59,11 @@ def test_security_headers_present(client):
     h = client.get("/").headers
     assert h["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in h and "default-src 'self'" in h["Content-Security-Policy"]
+    # Presence only. Which value is correct is not a spelling to pin here — it is a decision, and it is
+    # argued and asserted by its consequence in
+    # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
+    # that the app states the policy rather than inheriting whatever the browser defaults to.
+    assert "Referrer-Policy" in h
 
 
 # ── app / pages ───────────────────────────────────────────────────────────────
@@ -385,6 +394,63 @@ def test_the_opaque_origin_is_refused_deliberately_and_says_which_arm_fired(app)
     # must be accepted, same fixture
     assert _guard_post(app, host="127.0.0.1:8765", slug="attributed-origin",
                        headers={"Origin": "http://localhost:8765"}).status_code == 303
+
+
+# Fetch's *append a request `Origin` header* consults the referrer policy for any request that is not
+# CORS-mode — an ordinary HTML form submit is a navigation, not CORS — and whose method is not
+# GET/HEAD. This table is that algorithm restricted to the only case this app's plain forms produce: a
+# **same-origin** post over plain HTTP. Only `no-referrer` replaces the origin with the opaque value.
+# The downgrade-sensitive policies null it solely on an HTTPS→HTTP downgrade, which a same-origin
+# request cannot be, and `same-origin` nulls it solely when the request is genuinely cross-origin.
+_ORIGIN_A_BROWSER_SENDS_ON_A_SAME_ORIGIN_FORM_POST = {
+    "no-referrer": "null",
+    "no-referrer-when-downgrade": "SELF",
+    "origin": "SELF",
+    "origin-when-cross-origin": "SELF",
+    "same-origin": "SELF",
+    "strict-origin": "SELF",
+    "strict-origin-when-cross-origin": "SELF",
+    "unsafe-url": "SELF",
+}
+
+
+def test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree(app, client):
+    """The header this app emits must not produce an `Origin` this app's own guard refuses (#47).
+
+    Neither half was wrong alone, which is exactly why nothing caught it. `Referrer-Policy:
+    no-referrer` is a defensible header. Refusing the opaque origin is a deliberate decision with its
+    own test three functions up (#43). The defect lived only in the composition: a same-origin form
+    post, carrying a valid token, arriving as `Origin: null` because of a header this server had just
+    sent, and then refused by the server that sent it. Both files were individually green, so no
+    per-file test could see it and none did — the product's entry path was unusable in Chrome for a
+    release.
+
+    **What this does not do is reproduce the browser.** `TestClient` implements no referrer policy, and
+    neither does `curl` — which is why the maintainer's own header-matrix probes reached two wrong
+    diagnoses before the cause was found by reading what the *server sends*. So the browser's half is
+    supplied from the table above rather than executed. What is genuinely under test is the pair of
+    facts either side of it: the header this app really emits, read off a real response, and the real
+    guard's real verdict on the origin that header implies. A browser-engine test remains the missing
+    coverage and is out of this change's scope.
+    """
+    policy = client.get("/").headers["Referrer-Policy"]
+    assert policy in _ORIGIN_A_BROWSER_SENDS_ON_A_SAME_ORIGIN_FORM_POST, (
+        f"Referrer-Policy {policy!r} is not in the table this test reasons over. Add what Fetch says "
+        "it does to a same-origin form post; do not drop the assertion.")
+    origin = _ORIGIN_A_BROWSER_SENDS_ON_A_SAME_ORIGIN_FORM_POST[policy]
+    if origin == "SELF":
+        origin = "http://127.0.0.1:8765"
+
+    # must fire: the guard really is refusing opaque origins in this fixture. Without it the acceptance
+    # below would read exactly the same against a guard that had been deleted — and `no-referrer`
+    # shipping a second time would then land green.
+    assert _guard_post(app, host="127.0.0.1:8765", slug="composed-opaque",
+                       headers={"Origin": "null"}).status_code == 403
+
+    assert _guard_post(app, host="127.0.0.1:8765", slug="composed-real",
+                       headers={"Origin": origin}).status_code == 303, (
+        f"Referrer-Policy: {policy} makes a browser attach Origin: {origin} to a same-origin form "
+        "post, and this app's own cross-site guard refuses it — the form cannot be submitted (#47)")
 
 
 def test_no_origin_headers_at_all_keeps_its_current_behaviour(app):
@@ -888,3 +954,147 @@ def test_a_taken_session_name_is_suffixed_rather_than_refused(client):
     assert landed.startswith("/sessions/leave-approval-"), landed
     assert landed != "/sessions/leave-approval", (
         "must fire: the second request really did get its own session, so the rename is real")
+
+
+def test_a_resolved_session_can_still_be_refined(client, with_provider):
+    """Questions run out; the conversation does not.
+
+    Once the engine returns no question, the page says so — and used to remove the answer box with the
+    question list it lived in, so a session that reached "ready for a first decision brief" could no
+    longer be told anything: not a correction, not a constraint that arrived late, not scope the client
+    added after the fact. `answer()` never needed a question to fold text into the model."""
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT),
+                  engine_reply(converged=True, problem=HIGH_EXPLICIT, business_rules=HIGH_EXPLICIT))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+
+    page = client.get("/sessions/leave-approval").text
+    assert "No question left that would change the solution" in page
+    assert 'name="answers"' in page, "a resolved session still has to be answerable"
+
+    r = client.post("/sessions/leave-approval/answers",
+                    data={"answers": "One more thing — contractors are out of scope.",
+                          "expected_revision": "1"})
+    assert r.status_code == 200
+    assert "What changed" in r.text
+
+
+_BUSY_HARNESS = Path(__file__).parent / "busy_harness.js"
+
+
+def _busy_timeline() -> dict[str, dict]:
+    """Execute the real `static/js/app.js` against a minimal DOM and return what it did, step by step.
+
+    A `TestClient` runs no JavaScript, so without this the only assertable thing about #50 is that some
+    literal string appears in the asset — which pins the implementation's spelling instead of its
+    effect, and passes just as well against code that disables nothing.
+
+    Node is the one thing here that is not guaranteed. When it is missing this **skips loudly** and
+    names what went unasserted, rather than leaving a green run implying coverage it does not have.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH, so the page-wide busy rule in static/js/app.js was NOT "
+                    "asserted in this run — it is browser behaviour and nothing else in this suite "
+                    "can see it (#50)")
+    app_js = TEMPLATES_DIR.parent / "static" / "js" / "app.js"
+    proc = subprocess.run([node, str(_BUSY_HARNESS), str(app_js)], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 0, "the harness itself failed, so nothing was observed:\n" + proc.stderr
+    return {row["at"]: row for row in json.loads(proc.stdout)}
+
+
+def test_one_generation_at_a_time_is_the_pages_rule_not_the_forms():
+    """Mutual exclusion is a property of the page, not of a form (#50).
+
+    Every generator under *More documents* is its own form posting to the same `#artifacts-region`, so
+    a second click while the first call is in flight buys a second paid provider call whose result the
+    first swap then discards. `markLoading` disabled only the submitting form's own button, which left
+    every sibling live — the state the reader reported, and reproduced by this harness against the
+    shipped asset as `disabled=[True, False, False]`.
+
+    Every assertion below drives the real file. The two that matter most are the ones a weaker shape
+    misses: that the *first* response does not unmute the page while a second call is still running (a
+    boolean flag passes the simple case and fails this one), and that the state is re-asserted over
+    markup a swap just brought in, which carries no `disabled` attribute of its own.
+    """
+    t = _busy_timeline()
+
+    assert t["initial"]["disabled"] == [False, False, False]
+
+    # must fire. A harness that dispatched nothing, or an app.js that muted nothing, would leave these
+    # False — and every later assertion would then be about silence rather than about the rule.
+    assert all(t["one in flight"]["disabled"]), (
+        "one request in flight has to mute every submit button on the page, not only the one that was "
+        "clicked — the sibling generator buttons are exactly what buys the duplicate call")
+    assert t["one in flight"]["busy"] is True, "the page has to say it is working, not only look it"
+    assert all(t["two in flight"]["disabled"])
+
+    assert all(t["first finished, second still running"]["disabled"]), (
+        "the first response must not hand the reader live buttons while a second call is still in "
+        "flight — that needs a count, not a flag")
+    assert not any(t["both finished"]["disabled"]), "the page has to come back when the work is done"
+    assert t["both finished"]["busy"] is False
+
+    # A swap replaces the region mid-flight; the incoming markup carries no disabled attribute.
+    assert not any(t["swapped in, before afterSwap"]["disabled"]), (
+        "precondition: swapped-in buttons really do arrive enabled, so the next assertion is repairing "
+        "something rather than observing a no-op")
+    assert all(t["swapped in, after afterSwap"]["disabled"]), (
+        "htmx:afterSwap has to re-assert the busy state over markup the swap just brought in")
+    assert not any(t["after the swap, request finished"]["disabled"])
+
+    # bfcache: the shipped asset left a button disabled forever here, because the reset it does have
+    # only ever touched the progress bar.
+    assert all(t["in flight before pageshow"]["disabled"])
+    assert not any(t["after pageshow"]["disabled"]), (
+        "returning to a cached page must not restore it with its buttons still muted")
+
+
+def test_the_generator_forms_all_target_one_region_which_is_why_the_rule_is_page_wide(client,
+                                                                                     monkeypatch):
+    """The server-side half of #50, and the reason the rule cannot live in a form.
+
+    The JS test above needs Node; this one needs nothing, and pins the precondition that makes the
+    defect possible — several sibling forms whose responses all land on the same target. If a later
+    change gave each generator its own region, that would be a different (and also valid) fix, and this
+    test is where the argument would surface instead of the page-wide rule quietly becoming pointless.
+
+    **It is green on both sides of this change, deliberately.** It characterises the shape the fix
+    reasons about; it does not detect the fix's absence, and it is not evidence that the fix works.
+    That evidence is the Node test above, which fails on the shipped asset as `[True, False, False]`.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")   # the toolbar only shows with a provider
+    _make_session("leave-approval", problem=HIGH_EXPLICIT)
+    page = client.get("/sessions/leave-approval").text
+    targets = re.findall(r'hx-post="/sessions/leave-approval/artifacts/[^"]+"[^>]*?'
+                         r'hx-target="([^"]+)"', page, re.S)
+    assert len(targets) > 1, "expected several generator forms on the page, found: " + repr(targets)
+    assert set(targets) == {"#artifacts-region"}, (
+        "every generator form posts to one region, so their responses collide — mutual exclusion has "
+        "to be page-wide (#50)")
+
+
+def test_every_rendered_button_is_reachable_by_the_page_wide_busy_rule(client, monkeypatch):
+    """The busy rule selects `button[type="submit"]`, so a button without that attribute escapes it.
+
+    HTML makes `type="submit"` the default for a bare `<button>` inside a form, which is exactly what
+    makes this worth pinning: such a button submits, buys a provider call, and is invisible to the one
+    selector that is supposed to mute it. It would reproduce #50 for that button alone while every test
+    here stayed green — the same shape as the original defect, one attribute lower.
+
+    A CSS-side rule cannot be asserted from Python, and the selector lives in `app.js`; what is
+    assertable here is the other half of the contract, which is that the markup holds up its end.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_session("leave-approval", problem=HIGH_EXPLICIT)
+    pages = {path: client.get(path).text for path in ("/", "/sessions/leave-approval")}
+
+    for path, html in pages.items():
+        opening_tags = re.findall(r"<button\b[^>]*>", html)
+        # must fire: these pages really do render buttons, so the loop below is checking something
+        # rather than iterating over nothing.
+        assert opening_tags, f"expected buttons on {path}, found none — this assertion saw nothing"
+        for tag in opening_tags:
+            assert 'type="submit"' in tag, (
+                f'{path} renders a button with no explicit type="submit", so the page-wide busy rule '
+                f"in static/js/app.js cannot reach it and it can still buy a provider call: {tag}")

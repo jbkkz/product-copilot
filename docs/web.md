@@ -65,7 +65,12 @@ paste a request
   resolves that itself instead of asking. The API key is never a form field.
 - **Session** — the request, what Requivo understood, at most five questions (each with *why it
   matters* and its likely area of impact), the answer form, *Are we ready?* in one action state with
-  its reasons, and the decision brief.
+  its reasons, and the decision brief. **The answer form is unconditional.** Questions run out — that
+  is what *Ready for a first decision brief* means — and the box stays, reframed as *Anything to add?*,
+  because the engine having nothing further to ask is an answer about questions, never an answer about
+  what you still have to say: a correction, a constraint that arrived late, scope the client added
+  afterwards. It used to be nested inside the question list and vanished with it, which closed the only
+  route into the model at the moment the model converged (#49).
 - **Answer** — submit answers; the understanding is refined as a new revision (optimistic-locked), and
   the page leads with **What changed**: which parts of the solution moved, which decisions and
   assumptions need review, and which documents need updating. All of it computed from the dependency
@@ -157,6 +162,14 @@ Even though it is a local app:
 - Only the package's `static/` directory is served — never the workspace, `.requivo`, `.env` or `.git`.
 - The Anthropic key is read from the server environment and never rendered into HTML or logged.
 - All rendered content is HTML-escaped (Jinja autoescape); artifact Markdown is shown in a code block.
+- `Referrer-Policy` is **`same-origin`**: the full referrer within this app, and nothing at all to any
+  other origin. It was `no-referrer`, which is the one value a same-origin form post cannot survive —
+  under it a browser replaces the `Origin` header with the opaque `null`, and the cross-site guard
+  refuses that deliberately, so the app's own header made its own entry path unusable in Chrome for a
+  release (#47). Note what this header is and is not: it governs requests *our* pages make, never a
+  request some other page sends here, so it was never part of the guard's defence — it only ever
+  constrained us. `strict-origin-when-cross-origin` would also work and leaks `http://localhost:8765`
+  to third parties on an outbound navigation, which buys nothing for a local tool.
 - Conservative headers are set: `X-Content-Type-Options`, `Referrer-Policy`, and a `Content-Security-Policy`
   that allows only same-origin assets (so the vendored HTMX and local CSS are the only scripts/styles).
   HTMX is vendored rather than fetched from a CDN for exactly that reason, and because the app is meant
@@ -180,6 +193,15 @@ Even though it is a local app:
   analyses that produce no document at all.
 - Provider calls are synchronous (run in a worker thread so the event loop is not blocked); a request
   waits for the result, with an HTMX loading state. No job queue, no WebSockets.
+- **One provider call at a time, and that rule belongs to the page rather than to a form.** Every
+  generator under *More documents* posts to the same region, so a second click while the first call is
+  in flight bought a second paid call whose result the first swap then discarded — generated and saved
+  correctly on the server, never rendered, which reads as *it did not work* and invites another click
+  (#50). While anything is in flight every submit button on the page is muted, the state is re-asserted
+  after each swap (incoming markup carries no `disabled` attribute), and the button actually working
+  keeps its spinner at full opacity so the muted ones read as muted rather than broken. None of this is
+  a safety mechanism — the server holds the revision lock either way and the page still works with
+  JavaScript disabled. It is the interface telling the truth about what is happening.
 - Artifacts are shown as escaped Markdown in a code block, not rendered to HTML.
 - Readiness is binary (ready + unresolved topics), as in the Core — no invented "levels".
 - **What changed** is shown after the answer that caused it, and is not persisted: reloading the page

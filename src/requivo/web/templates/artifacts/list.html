@@ -60,8 +60,11 @@
         the decision brief first — it settles the decisions the others are written from.</p>
       <div class="toolbar">
         {% for g in s.more_generatable %}
+        {# The indicator is the toolbar, not the form: the "Generating…" text is a sibling of
+           these forms, so the default (the requesting element carries `htmx-request`) never
+           reaches it and the label was dead markup. #}
         <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}"
-              hx-target="#artifacts-region" hx-swap="outerHTML">
+              hx-target="#artifacts-region" hx-swap="outerHTML" hx-indicator="closest .toolbar">
           {% include "_csrf.html" %}
           <button class="btn small secondary" type="submit">{{ g.label }}</button>
         </form>

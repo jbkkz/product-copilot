@@ -263,8 +263,16 @@ pre.artifact {
 }
 #progress.on { opacity: 1; }
 
-/* A spinner inside the button that was just submitted (works for HTMX and plain forms). */
+/* A spinner inside the button that was just submitted (works for HTMX and plain forms). The
+   busy state mutes every submit button on the page, including this one — but the button that is
+   actually working must not read as muted, or nothing on the page says which call is running. */
 .btn.loading { pointer-events: none; }
+.btn.loading:disabled { opacity: 1; }
+/* The page-wide busy state. This is what makes `body.busy` a hook something reads rather than state
+   the page carries and nobody consumes — a review found it inert, and inert state that a test asserts
+   is a no-op wearing a passing assertion. A paid call is running; the cursor says so everywhere,
+   including over the muted buttons, which `pointer-events: none` would otherwise leave silent. */
+body.busy { cursor: progress; }
 .btn.loading::before {
   content: ""; width: 0.85rem; height: 0.85rem; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.45); border-top-color: #fff;

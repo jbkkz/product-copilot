@@ -71,6 +71,48 @@ _UNCLASSIFIED_STATUS = 500
 _CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
+# `no-referrer` here made the app unusable in a browser, and the mechanism is worth stating in full
+# because both halves were individually correct (#47).
+#
+# A `Referrer-Policy` governs the requests *our own pages* make. It says nothing about a request some
+# other page sends to this server — that is governed by that page's policy, not ours — so this header
+# has never been part of the cross-site guard's defence. It only ever constrains us.
+#
+# What it constrained was the `Origin` header on our own forms. Fetch's *append a request `Origin`
+# header* consults the referrer policy for any request that is **not** CORS-mode and whose method is
+# not `GET`/`HEAD`, and under `no-referrer` it replaces the serialized origin with the opaque value
+# `null`. An ordinary HTML form submit is a navigation, not CORS — so `home.html` (create a session)
+# and `sessions/detail.html` (run discovery), the two plain-form posts in this app, arrived carrying
+# `Origin: null`. `security._enforce` refuses the opaque origin deliberately (#43). The result was a
+# 403 on the product's entry path, from a same-origin request carrying a valid token.
+#
+# The HTMX posts (answers, generation) go out as XHR, which is CORS-mode, so that clause never applied
+# to them and they were unaffected. That asymmetry is why the failure looked like "the form is broken"
+# rather than "the app is broken".
+#
+# `same-origin` is the strictest value that leaves the guard something to read. It sends the full
+# referrer within this app and **nothing at all** to any other origin, so the privacy intent of
+# `no-referrer` is kept for the only case where it did anything: navigating away. The alternatives and
+# what they cost:
+#
+#   * `strict-origin-when-cross-origin` (the browser default) also fixes it, and hands a third party
+#     `http://localhost:8765` on any outbound navigation — a gratuitous "this machine runs Requivo Web
+#     on this port" that buys nothing here.
+#   * Removing the header defers to the browser's default, which is that same value on current
+#     browsers and unstated on older ones. This app states its headers rather than inheriting them.
+#   * `origin` / `unsafe-url` leak strictly more, for nothing.
+#
+# The cost of `same-origin` is that a same-origin `Referer` now carries the full URL, session slug
+# included — the reader's own request name, travelling to the server already holding it.
+#
+# For a *same-origin* request, `no-referrer` is the only policy value that produces `Origin: null`:
+# the downgrade-sensitive values (`strict-origin`, `no-referrer-when-downgrade`,
+# `strict-origin-when-cross-origin`) null it only on an HTTPS→HTTP downgrade, which same-origin cannot
+# be, and `same-origin` itself nulls it only when the request *is* cross-origin.
+# `tests/web/test_web.py::test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` asserts
+# that composition — the defect lived between two files, so no per-file test could see it.
+_REFERRER_POLICY = "same-origin"
+
 # Under `requivo web` this rides uvicorn's handler, so a traceback lands in the terminal the user
 # started the server in — the only place a local, single-user app has to put one.
 logger = logging.getLogger("requivo.web")
@@ -115,7 +157,7 @@ def create_app() -> FastAPI:
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Referrer-Policy", _REFERRER_POLICY)
         response.headers.setdefault("Content-Security-Policy", _CSP)
         return response
 
