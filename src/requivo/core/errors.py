@@ -76,6 +76,24 @@ class EmptySelectorTokenError(RequivoError):
     code = "empty_selector_token"
 
 
+class ContextUnreadableError(RequivoError):
+    """A context-card directory exists but could not be enumerated — permissions, usually.
+
+    Distinct from `UnknownContextCardError`, and the distinction is the whole point: that one means
+    the card is not there and the remedy is to restore it, this one means the card may well be there
+    and the remedy is to fix the permissions. Told apart only by raising, because the enumeration
+    that produced them is the same one.
+
+    It is raised rather than skipped because a card directory that cannot be read leaves the card
+    *vocabulary* incomplete, and every later answer is then confidently wrong in the same direction:
+    a selection naming a card in that directory resolves to "unknown card", and a turn that loaded
+    the readable roots only reasons from a quietly smaller product context. `Path.glob` returns an
+    empty iterator in exactly this case, which is what made all of that silent.
+    """
+
+    code = "context_unreadable"
+
+
 class InputTooLargeError(RequivoError):
     """A supplied text exceeds the ceiling the engine accepts. Raised rather than truncated: a request
     or an answer silently cut mid-sentence is reasoned over as if it were the whole thing, and the
@@ -106,11 +124,15 @@ class InvalidSlugError(RequivoError):
 
 class InvalidFilenameError(RequivoError):
     """A filename is not a safe name for a file inside a session's `artifacts/`. The sibling of
-    `InvalidSlugError`, and for the same reason: a filename is a *write target*, so it must be a bare
-    name — anything with a path separator, a dot segment or a leading dot can put the write outside
+    `InvalidSlugError`, and for the same reason: a filename is a *path target*, so it must be a bare
+    name — anything with a path separator, a dot segment or a leading dot can put the access outside
     the session directory (or shadow the store's own reserved dot-prefixed entries). Enforced in Core,
     at the same chokepoint as the slug, so every surface inherits it rather than the one caller that
-    happened to pass a literal."""
+    happened to pass a literal.
+
+    Raised on reads as well as writes, and the two are separate exposures: a write target decides
+    what this code may create, a read target decides what it may disclose. Closing one does not
+    close the other."""
 
     code = "invalid_filename"
 

@@ -19,7 +19,7 @@
     {% include "_csrf.html" %}
     <input type="hidden" name="expected_revision" value="{{ s.revision }}">
     <label for="answers">Your answers <span class="hint">(free text — address them in one go; say so if you don't know)</span></label>
-    <textarea id="answers" name="answers" required maxlength="20000" rows="5"
+    <textarea id="answers" name="answers" required rows="5"
       aria-label="Your answers to the questions above"></textarea>
     <div class="toolbar">
       <button class="btn" type="submit">Submit answers</button>

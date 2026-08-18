@@ -107,7 +107,17 @@ class SessionRepository(Protocol):
         ...
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
-        """The saved content of an artifact file, or None if it is not present."""
+        """The saved content of an artifact file, or None if it is not present.
+
+        **None means absent, and only that.** A backing that derives a *location* from `filename` —
+        a path on the file backing, a key with any namespacing of its own — must validate it and
+        **raise** on a name it will not accept, never return None: a caller that cannot tell a
+        refusal from an absence has been handed the wrong answer in the more dangerous direction,
+        and a rejected traversal then reads as an artifact nobody has generated yet.
+
+        A backing for which `filename` is an *opaque* key has nothing to refuse, and a miss there is
+        a real absence — `InMemorySessionRepository` in the tests is that case, and returns None
+        correctly. The obligation follows the path-building, not the protocol."""
         ...
 
 
@@ -180,8 +190,9 @@ class FileSessionRepository:
                                            source_revision=source_revision, stale=stale)
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
-        p = store.canonical_dir(slug) / "artifacts" / filename
-        return p.read_text() if p.exists() else None
+        # Delegated rather than re-joined here: this method built the artifacts/ path inline, which
+        # is how the read side kept a traversal the write side had already closed at `artifact_path`.
+        return store.read_artifact_file(slug, filename)
 
 
 def default_repository() -> SessionRepository:
