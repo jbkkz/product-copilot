@@ -106,7 +106,17 @@ def _same_trust_domain(origin_host: str, host: str) -> bool:
     hostnames pointing at a deliberate non-loopback bind, and two of them may well be meant as two
     distinct origins — that is the operator's call to make, and inferring it from co-membership in one
     comma-separated list would make it for them, silently, in the widening direction.
+
+    An empty string on either side is not a match, and that arm is the point rather than a special
+    case. `""` is what `_hostname` returns when it could not find a hostname *at all* — an absent or
+    unparseable `Host`, or an origin such as `http:///` that is a well-formed URL naming nobody. Two of
+    those facing each other used to compare equal, so the one input where **neither** side was
+    determined produced the same verdict as a verified match: a check that could not look, answering
+    anyway. Refusing costs nothing real — no browser omits `Host`, and a request that reaches here at
+    all has already stated an origin — and it keeps this function's name true for every input.
     """
+    if not origin_host or not host:
+        return False
     if origin_host == host:
         return True
     return origin_host in _LOOPBACK_HOSTS and host in _LOOPBACK_HOSTS

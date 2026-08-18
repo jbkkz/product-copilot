@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from requivo.cli import app as cli_app
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, MAX_REQUEST_CHARS, MAX_SLUG_CHARS
-from requivo.web.security import CSRF_FIELD, CSRF_HEADER, csrf_token
+from requivo.web.security import CSRF_FIELD, CSRF_HEADER, _same_trust_domain, csrf_token
 from requivo.web.templating import TEMPLATES_DIR
 from tests.web.conftest import BRIEF_REPLY, CRITERIA_REPLY, PRD_REPLY, engine_reply, full_model
 
@@ -325,6 +325,27 @@ def test_no_origin_headers_at_all_keeps_its_current_behaviour(app):
     bare = TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
     assert bare.post("/sessions", data={"request_text": "x", "slug": "no-token-at-all",
                                         "provider": "create_only"}).status_code == 403
+
+
+def test_two_hostnames_nobody_could_determine_are_not_a_match():
+    """`_hostname` returns `""` when it could not find a hostname at all — an absent or unparseable
+    `Host`, or an origin like `http:///` that is a valid URL naming nobody. Two of those facing each
+    other compared equal and read as *same trust domain*, so the one input where **neither** side was
+    determined produced the same verdict as a verified match. A check that could not look has to say
+    so rather than answer; found by the audit on this diff, and fixed here because the extracted helper
+    is what makes the claim by name.
+
+    Asserted directly rather than over HTTP: no client this suite can build will omit a `Host` header,
+    so the integration route cannot reach the state. The two rows below it are the must-fire control —
+    without them a helper hard-wired to `False` would pass this test while checking nothing.
+    """
+    assert _same_trust_domain("", "") is False              # neither side determined — not a match
+    assert _same_trust_domain("", "127.0.0.1") is False
+    assert _same_trust_domain("127.0.0.1", "") is False
+    # must fire
+    assert _same_trust_domain("localhost", "127.0.0.1") is True
+    assert _same_trust_domain("evil.example", "evil.example") is True
+    assert _same_trust_domain("evil.example", "127.0.0.1") is False
 
 
 def test_operator_listed_hosts_are_not_interchangeable_with_one_another(app, monkeypatch):
