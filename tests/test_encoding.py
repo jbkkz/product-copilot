@@ -255,6 +255,10 @@ def fixture_violations(path: Path) -> list:
 # Two sites read with the locale's default *on purpose*, and both would be destroyed by "fix" here:
 # they exist to measure what the default does. Keyed by enclosing function rather than line number,
 # which drifts, and each carries its reason so the next person argues with a line.
+# Keyed by path relative to `tests/`, not by basename: `tests/` already has a `web/` subdirectory, so
+# a future `tests/web/test_boundaries.py` would silently inherit this file's exemptions and any bare
+# read inside a function that happened to share a name would stop being reported. An exemption that
+# covers a file it was never written for is the silent-absence class wearing an allowlist.
 _LOCALE_DEFAULT_BY_DESIGN = {
     "test_boundaries.py": {
         "_force_default_encoding":
@@ -297,7 +301,11 @@ def read_violations_in_test(path: Path) -> list:
     So every read declares its codec, and the two that must not are named above.
     """
     tree = _parse(path)
-    exempt = _LOCALE_DEFAULT_BY_DESIGN.get(path.name, {})
+    try:
+        key = path.relative_to(REPO_ROOT / "tests").as_posix()
+    except ValueError:
+        key = ""  # a fixture tree under tmp_path: no exemption can apply to it, which is correct
+    exempt = _LOCALE_DEFAULT_BY_DESIGN.get(key, {})
     enclosing = _enclosing_function_names(tree)
     out: list = []
     for node in ast.walk(tree):
@@ -345,9 +353,20 @@ def test_the_by_design_exemptions_still_exist():
             f"{filename} exempts {missing}, which it no longer defines. An exemption naming nothing "
             f"is either dead or about to cover the wrong function."
         )
-        # And the exemption must still be *needed*: if the function stopped reading with the default,
-        # the exemption is dead weight that would hide the next one.
+        # The file is clean *with* the exemption applied...
         assert read_violations_in_test(path) == [], "unexpected: exempted file has other bare reads"
+        # ...and would not be without it. An exemption that suppresses nothing is dead weight, and
+        # dead weight in an allowlist is how the next real finding gets covered by an entry nobody
+        # re-read. Checked by removing the table rather than by trusting the comment beside it.
+        saved = globals()["_LOCALE_DEFAULT_BY_DESIGN"]
+        globals()["_LOCALE_DEFAULT_BY_DESIGN"] = {}
+        try:
+            without = read_violations_in_test(path)
+        finally:
+            globals()["_LOCALE_DEFAULT_BY_DESIGN"] = saved
+        assert len(without) == len(functions), (
+            f"{filename} exempts {len(functions)} function(s) but only {len(without)} bare read(s) "
+            f"exist without the table; an exemption suppressing nothing should be deleted: {without}")
 
 
 def test_the_read_rule_fires_and_spares_correctly(tmp_path):

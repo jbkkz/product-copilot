@@ -236,8 +236,12 @@ bug that looked like correct behaviour.
     the instant it ran. Another thread creating a directory in that window made them disagree, so
     `canonical_dir("s")` raised `InvalidSlugError` — *you gave me a bad slug* — about a valid slug,
     because somebody else was creating a session. Reproducible on POSIX with a symlinked parent, and
-    observed on the first Windows CI leg as four of twelve concurrent creators crashing. `artifact_path`
-    had the identical shape. Both now resolve **only a path that is actually there**, which is the only
+    observed on the first Windows CI leg as four of twelve concurrent creators crashing. Two siblings
+    had the identical shape and were found by sweeping the class rather than the instance:
+    `artifact_path`, and `integrity.py`'s artifact containment check — where a spurious disagreement
+    reported `unsafe_artifact_filename` about a perfectly bare name, i.e. the verb that answers *is
+    this session intact* accusing the user again. All three now resolve **only a path that is actually
+    there**, which is the only
     case that can fail: `validate_slug`/`validate_filename` already make a separator or a dot segment
     unrepresentable, so the sole escape is a symlink at the target, and an absent path is not one —
     `exists() or is_symlink()`, never `exists()` alone, because `exists()` follows the link and a

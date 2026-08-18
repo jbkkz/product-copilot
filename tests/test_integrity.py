@@ -682,6 +682,27 @@ def test_a_safe_but_missing_artifact_file_is_still_reported(workspace):
     assert "unsafe_artifact_filename" not in codes
 
 
+def test_an_artifact_that_is_a_symlink_out_of_the_session_is_still_refused(workspace, tmp_path):
+    """The branch the #3 fix leans on. `check_session_dir` now resolves the artifact path only when
+    something is there, because two independent `resolve()` calls disagree whenever the tree moves
+    between them and a spurious disagreement reports `unsafe_artifact_filename` about a bare name.
+    That is only safe if a symlink which *is* there still gets caught — including a dangling one,
+    which `exists()` reports as absent because it follows the link."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("not part of this session", encoding="utf-8")
+
+    (artifacts / "prd.md").unlink()
+    (artifacts / "prd.md").symlink_to(outside)
+    assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
+
+    (artifacts / "prd.md").unlink()
+    (artifacts / "prd.md").symlink_to(tmp_path / "never-created.md")   # dangling, still outside
+    assert not (artifacts / "prd.md").exists() and (artifacts / "prd.md").is_symlink()
+    assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
+
+
 def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(workspace, tmp_path,
                                                                             monkeypatch):
     """The boundary of what this module answers, pinned as behaviour rather than left in a docstring.

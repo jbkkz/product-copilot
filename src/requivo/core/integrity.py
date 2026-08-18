@@ -194,9 +194,19 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         # `canonical_dir(slug)`, the store, while this function is also handed a directory extracted
         # from an archive that is not in the store — it would answer confidently about the wrong
         # directory, which is this module's own defect class.
+        #
+        # The containment confirmation resolves `f` only when something is actually there, for the
+        # reason `_child_of` gives at length (#3): two independent `resolve()` calls, on paths where
+        # one is derived from the other, disagree whenever the tree moves between them — and a
+        # spurious disagreement here reports `unsafe_artifact_filename` about a name that is
+        # perfectly bare, which is this module's own defect class. `validate_filename` has already
+        # made a separator, a dot segment and an absolute path unrepresentable, so an absent `f`
+        # cannot escape; the only escape is a symlink at `f`, which has to exist to be one, and
+        # `is_symlink()` is there because `exists()` follows the link and would miss a dangling one.
         try:
             f = artifacts / validate_filename(st.filename)
-            safe = f.resolve().is_relative_to(artifacts.resolve())
+            safe = (not (f.exists() or f.is_symlink())
+                    or f.resolve().is_relative_to(artifacts.resolve()))
         except (InvalidFilenameError, OSError, ValueError):
             safe = False
         if not safe:
