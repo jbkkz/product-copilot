@@ -3,14 +3,16 @@
 This is the string-assembly half of what used to live in `core/llm.py`: it reads the bundled prompt
 files, the framework schema, and the context cards, and injects them into a prompt template. It makes
 **no LLM call and imports no provider** — it only turns assets into a system-prompt string — so it is
-safe to keep in `core`. The provider imports `build_prompt()` to feed a model; every surface imports
-`resolve_cards()` to validate a `--context` selection on the way in, `check_selection()` to ask
-whether a *saved* selection still resolves without paying for a turn to find out, and `doctor`
-imports `available_cards()` to report the vocabulary itself. None of it needs the SDK.
+safe to keep in `core`. The provider imports `build_prompt()` to feed a model, which assembles the
+cards through `load_context()`; every surface imports `resolve_cards()` to validate a `--context`
+selection on the way in; `doctor` and `session verify` import `check_selection()` to ask whether a
+*saved* selection still resolves without paying for a turn to find out, and `available_cards()` to
+report the vocabulary itself. None of it needs the SDK.
 
-Three of those four resolve a name against the installed cards, and they must agree about an install
-that has none — `_cards_for_selection()` is the single guarded read they share, and the fourth
-(`available_cards`) is deliberately outside it because reporting an empty install is its job.
+Exactly three of those resolve a name against the installed cards — `resolve_cards`, `load_context`
+and `check_selection` — and they must agree about an install that has none, so
+`_cards_for_selection()` is the single guarded read all three share. `available_cards()` is
+deliberately outside it, because reporting an empty install is its job rather than refusing one.
 """
 
 from __future__ import annotations
@@ -126,8 +128,12 @@ def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
     through the empty-token entrance. The empty-token rule now lives in `normalize_tokens`, shared
     with every other selector, so `picked` can only be empty when `tokens` itself was.
 
-    **An install with no cards at all is refused here too, ahead of the name lookup** (#41). This
-    used to run off a bare `available_cards()`, so on a card-less install it answered
+    **An install with no cards at all is refused here too, ahead of the whole selection** (#41) —
+    ahead of the name lookup and ahead of the token-shape checks, so on a card-less install even a
+    stray comma reports the install rather than the comma. That precedence is not new and is not this
+    function's to choose: `load_context` has diagnosed the install ahead of `_selection_keys` since
+    #33, deliberately and with a test on it, and the two are read side by side. This used to run off
+    a bare `available_cards()`, so on a card-less install it answered
     `unknown_context_card` for a name that was typed correctly — sending the reader to check their
     spelling when the fault is that there is nothing to match against, which is the sentence
     `_require_any_card`'s own docstring gives as the reason it must run first. This is the earliest
@@ -151,7 +157,13 @@ def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
     # was enumerated separately from the one their name was matched against.
     paths = _cards_for_selection()
     keys = normalize_tokens(tokens, what="context card")
-    avail = {stem.lower(): stem for stem in paths}
+    # `sorted` is a tie-break, not tidiness, so do not drop it: two installed stems can differ only
+    # in case — a bundled `foo.md` beside a user `Foo.md` — and they are two entries here, since
+    # `_card_paths()` only collapses an *exact* stem clash. Which one a typed `foo` resolves to is
+    # then decided by iteration order, and `sorted` is what `available_cards()` applied before this
+    # read replaced it. Preserved deliberately: which of the two should win is a real question, and a
+    # bug fix silently loading a different card than it did yesterday is not the place to answer it.
+    avail = {stem.lower(): stem for stem in sorted(paths)}
     picked, unknown = [], []
     for raw, key in zip(tokens, keys):
         # an unknown name is echoed as typed (stripped), so the error names what the caller wrote

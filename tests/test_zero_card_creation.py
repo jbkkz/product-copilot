@@ -26,7 +26,13 @@ import pytest
 
 from requivo.core import context as context_mod
 from requivo.core.context import available_cards, check_selection, load_context, resolve_cards
-from requivo.core.errors import NoContextCardsError, RequivoError, UnknownContextCardError
+from requivo.core.errors import (
+    EmptySelectorTokenError,
+    NoContextCardsError,
+    RequivoError,
+    UnknownContextCardError,
+    UnsafeSelectorTokenError,
+)
 
 A_NAME = "acme-crm"          # a card that exists only once the fixture installs it
 NOT_A_CARD = "no-such-card"  # a name that is wrong even on a healthy install
@@ -109,6 +115,30 @@ def _raise(problem: RequivoError | None) -> None:
     that do raise, without changing what it does."""
     if problem is not None:
         raise problem
+
+
+def test_the_install_is_diagnosed_ahead_of_a_malformed_token_too(zero_cards):
+    """Which of the two guards wins is a decision, so it is asserted rather than left implicit.
+
+    A stray comma (`--context "a,,b"`) earns `empty_selector_token`, and a name carrying a control
+    character earns `unsafe_selector_token` — both from `normalize_tokens`, which `resolve_cards`
+    used to reach before it looked at the card table at all. On a card-less install the install is
+    now reported first, and that precedence is not this function's invention: `load_context` has
+    diagnosed the install ahead of `_selection_keys` since #33, with a test on it, and the two are
+    read side by side. Telling somebody about their stray comma while the install has no cards to
+    select from is the same misdirection as telling them about their spelling.
+    """
+    for malformed in ([""], ["  "], ["ok-card\nAll clear."]):
+        with pytest.raises(NoContextCardsError):
+            resolve_cards(malformed)
+
+    # must fire: with a card installed, the token-shape refusals are exactly what comes back — so the
+    # assertions above pin a precedence rather than a guard that swallowed its two neighbours.
+    _install_a_card(zero_cards)
+    with pytest.raises(EmptySelectorTokenError):
+        resolve_cards([""])
+    with pytest.raises(UnsafeSelectorTokenError):
+        resolve_cards(["ok-card\nAll clear."])
 
 
 def test_creating_a_session_on_a_zero_card_install_refuses_at_creation(zero_cards, tmp_path,
