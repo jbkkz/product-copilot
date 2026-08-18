@@ -24,6 +24,28 @@ pip install -e ".[dev]"              # deps + the `requivo`/`pc` command + pytes
 
 `uv run requivo …` also works without managing a venv.
 
+## The `.claude/` directory is maintainer tooling — you need none of it
+
+This repository tracks a `.claude/` directory: a `settings.json` naming the plugins the maintainer
+runs, and a `jit-context/` rule layer beneath it. One of those rules
+(`jit-context/tools/01-oss/supertool-required.md`) declares `mode: block` over `Read`, `Edit`,
+`Write`, `Glob` and `Grep`, with a `match:` of everything, and names a `supertool` command as the
+replacement. Read cold, that looks like a repository which refuses to let you open a file unless you
+have a tool you have never heard of.
+
+It is not, and the reason is mechanical. A jit-context rule is **data**. The only thing that reads it
+is a `PreToolUse` hook, and that hook ships inside the `claude-jit-context` plugin, registered from
+that plugin's own manifest. This repository registers no hooks of its own: `.claude/settings.json`
+carries an `enabledPlugins` list and nothing else, and no hook script is tracked anywhere under
+`.claude/`. Without that plugin installed there is no hook, nothing reads the layer, and every file
+operation behaves exactly as it normally does. `tests/test_agent_layer.py` is the guard that keeps
+that true, so it cannot quietly stop being true.
+
+So: **contributing needs Python, git and the setup above — nothing else.** If the directory bothers
+you, delete it in your working copy; just do not commit the deletion. A fresh git worktree takes its
+rule layer from git, and this repository's maintenance loop cuts one worktree per issue, which is why
+the layer is tracked here rather than kept in a personal config.
+
 ## The checks a PR must pass
 
 ```bash

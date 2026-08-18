@@ -38,10 +38,20 @@ node_modules/
 .DS_Store
 supertool
 
-# agent tooling: per-session scratch. The 01-oss rule layer itself IS tracked --
-# it is generated and replaced wholesale by /oss:scaffold, so it belongs in the
-# repo; only this state directory is per-session and per-machine.
+# agent tooling: per-session scratch. The 01-oss rule layer itself IS tracked, and
+# the reason is not that /oss:scaffold regenerates it -- being regenerated is no
+# argument for committing anything. It is that a fresh git worktree takes its rule
+# layer from git, and this repo's maintenance loop cuts one worktree per issue, so
+# untracking the layer would silently disable it for every delegated agent. It is
+# inert for anyone without the plugin that reads it -- CONTRIBUTING.md says so and
+# tests/test_agent_layer.py holds it to that (#2). Only this state directory is
+# per-session and per-machine.
 .claude/jit-context/.discovery/
+# ...and this, which is per-machine by Claude Code's own convention and is where a personal hook
+# would be written. It was never excluded here; it only looked excluded, because this machine
+# carries a global ~/.config/git/ignore entry that no contributor has. A hook committed by accident
+# would run for everyone who clones -- the barrier #2 reported, made real.
+.claude/settings.local.json
 
 # uv lockfile. Requivo is a library: its dependency floors and ceilings are the
 # contract, declared in pyproject.toml. A lock here would pin what a consumer
