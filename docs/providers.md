@@ -31,8 +31,22 @@ The exact model a session ran against is recorded in its revision provenance (se
 ## Cost and the usage footprint
 
 A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The system prompt
-(prompt + schema + context cards) is **prompt-cached** across a session, so the repeated calls of a run
-are cheap.
+(prompt + schema + context cards) is **prompt-cached where the same prompt is sent again** — a
+discovery's turns and a golden capture's K runs — so those repeats cost ~0.1x input instead of full
+price.
+
+It is deliberately *not* cached across operations, and that is a saving rather than an omission. Each
+operation builds its system prompt from its own template, so a cache breakpoint costs 1.25x input to
+write and only pays back on a second send of the identical prefix; a one-call verb (`prd`, `criteria`,
+`epic`, `release`, `stories`, `estimate`) normally has no second send, so writing one was a flat ~25%
+surcharge on the largest part of its input. Callers declare which they are (`reuse_system`), because
+the same generator is one call in the CLI and K calls in the golden harness (#9).
+
+One honest caveat: a one-call verb *can* send twice, when the model returns malformed JSON and the
+retry loop re-sends the identical prompt. Those retries are no longer cached, so a generator that
+retries now pays 2.0x the system block where it used to pay 1.35x. That trade is deliberate — it is
+the better bet while a retry is rarer than about one call in four — but it is a real cost on a rare
+path rather than a free win.
 
 Every command that hits the API prints its footprint when it finishes — calls, tokens (with the cached
 share), latency, and an estimated cost — so you see the real number for *your* request. Tokens are

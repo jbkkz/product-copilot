@@ -235,14 +235,58 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+def _system_blocks(system: str, reuse_system: bool) -> list[dict]:
+    """The `system` argument for one request — carrying a cache breakpoint only when something will
+    read it.
+
+    A `cache_control` breakpoint bills the block at **1.25x** input to write and **0.1x** to read, so
+    it saves money from the second send of a byte-identical prefix and loses ~25% if there is never a
+    second send. Which of those it is depends entirely on the caller's loop, and this is a fixed cost
+    the caller alone can predict — hence the parameter rather than a rule here.
+
+    It genuinely pays *within* one operation: a JSON retry re-sends the identical system, `converse()`
+    runs up to 8 discovery turns off one prompt, and a golden capture runs K of them.
+
+    **The retry case is the accepted cost of `reuse_system=False`, and is stated here rather than
+    glossed.** A one-shot generator that *does* retry now pays full price twice (2.0x the system block)
+    where caching would have paid 1.25x + 0.1x = 1.35x. That is a real regression on that path, taken
+    deliberately: with `p` the probability of a retry, not caching wins while `1 + p < 1.25 + 0.1p`,
+    i.e. `p < ~0.28`, and a contract violation from these generators is far rarer than that. Caching
+    only from the second attempt was considered and rejected — it costs 1.0 + 1.25 = 2.25x on two
+    attempts, worse than the 2.0x above, and comes out ahead only past the same ~0.28 threshold at
+    which simply caching everywhere would have been the right call anyway.
+
+    It cannot pay *across* operations, and no breakpoint placement can change
+    that: `build_prompt()` substitutes the shared schema + context cards into a **per-operation**
+    template, and every template puts `{{SCHEMA}}`/`{{CONTEXT}}` near its end with an "Output format"
+    section after them. The shared bulk is a *suffix*, caching is a *prefix* match, and a suffix has
+    no prefix boundary to cache at — so a second operation could never hit a warm entry however many
+    of the API's four breakpoints were spent on it. The comment that used to sit here claimed
+    byte-identity "across the calls of a session" and was true only of the first list (#9).
+
+    Making it pay across operations means moving the shared bulk to the **front** of all eight
+    templates. That is a change to what the model reads, so it owes the golden harness a cycle
+    (`docs/evaluations.md`) and is deliberately not bundled here.
+    """
+    block = {"type": "text", "text": system}
+    if reuse_system:
+        block["cache_control"] = {"type": "ephemeral"}
+    return [block]
+
+
 def _complete(client, system: str, messages: list[dict], out_model, retries: int = 2,
-              validate=None):
+              validate=None, *, reuse_system: bool = True):
     """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
     The nudge lives in a local copy so the caller's clean history is never polluted.
 
     `validate` is an optional semantic post-check `(instance) -> None` that raises `ValueError` to
     reject an output Pydantic accepted but the caller still considers incomplete (e.g. a discovery
-    model missing required slots). It rides the same retry loop, so the model self-corrects."""
+    model missing required slots). It rides the same retry loop, so the model self-corrects.
+
+    `reuse_system` is the caller's answer to "will this exact system prompt be sent again inside the
+    cache TTL?" — see `_system_blocks`. It defaults to True because that is the safe answer to an
+    unknown: mistakenly caching costs 25% once, mistakenly not caching costs the full price of every
+    repeat. Only a caller that *knows* it makes one call should say False."""
     attempt = messages
     last_err = None
     model = current_model_name()
@@ -262,11 +306,7 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
             resp = client.messages.create(
                 model=model,
                 max_tokens=MAX_OUTPUT_TOKENS,
-                # The system prompt (template + schema + every context card) is byte-identical
-                # across the calls of a session — the K runs of a golden capture, the up-to-8 turns
-                # of converse(), each JSON retry. Caching its prefix makes those repeats cost ~0.1x
-                # input instead of full price. No effect on output, so baselines are unaffected.
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                system=_system_blocks(system, reuse_system),
                 messages=attempt,
             )
         except APIError as e:
@@ -351,6 +391,9 @@ def run(client, messages: list[dict], retries: int = 2, only: list[str] | None =
     `model`/`questions`/`summary` and nothing else: a turn that says nothing about decisions or
     challenges is *quiet*, not deleting them. `carry_from` is the model being refined — the established
     reasoning is carried onto the reply, so what leaves this function is a complete model again."""
+    # Keeps the cache breakpoint (`_complete`'s default): this is the one prompt genuinely re-sent
+    # byte-identically — `converse()` runs up to 8 turns off it, a golden capture runs K, and the
+    # completeness `validate` hook above makes a corrective retry more likely here than anywhere else.
     proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
                          validate=_require_complete_model)
     return proposal.resolve(carry_from)
@@ -380,54 +423,75 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
 # the full set. None means all cards (the default and the pre-0.6.1 behaviour).
 
 
-def derive_stories(client, out: EngineOutput, only: list[str] | None = None) -> Stories:
+# Every generator below is **one** `_complete` call, so its system prompt was being written to cache
+# and never read back — `reuse_system=False` is the default here for that reason (#9). It stays a
+# parameter rather than a constant because the same function is single-call in production and
+# multi-call in the harness: `scripts/golden_run.py --brief` calls `advise()` K times off one prompt,
+# and that caller should pass `reuse_system=True`. `AnthropicProvider.generate` threads it through
+# `**kwargs`, so a future looping caller has the same escape hatch without another signature change.
+
+
+def derive_stories(client, out: EngineOutput, only: list[str] | None = None, *,
+                   reuse_system: bool = False) -> Stories:
     """Pipeline stage: a filled model → implementable user stories."""
     system = build_prompt("stories.md", only)
     user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Stories)
+    return _complete(client, system, [{"role": "user", "content": user}], Stories,
+                     reuse_system=reuse_system)
 
 
-def advise(client, out: EngineOutput, only: list[str] | None = None) -> Brief:
+def advise(client, out: EngineOutput, only: list[str] | None = None, *,
+           reuse_system: bool = False) -> Brief:
     """Finalization stage: a completed model → design considerations, risks, opportunities."""
     system = build_prompt("brief.md", only)
     user = "Completed requirements model to advise on:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Brief)
+    return _complete(client, system, [{"role": "user", "content": user}], Brief,
+                     reuse_system=reuse_system)
 
 
-def generate_prd(client, out: EngineOutput, only: list[str] | None = None) -> PRD:
+def generate_prd(client, out: EngineOutput, only: list[str] | None = None, *,
+                 reuse_system: bool = False) -> PRD:
     """Artifact generator: a model → a Product Requirements Document."""
     system = build_prompt("prd.md", only)
     user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], PRD)
+    return _complete(client, system, [{"role": "user", "content": user}], PRD,
+                     reuse_system=reuse_system)
 
 
-def generate_criteria(client, out: EngineOutput, only: list[str] | None = None) -> AcceptanceCriteria:
+def generate_criteria(client, out: EngineOutput, only: list[str] | None = None, *,
+                      reuse_system: bool = False) -> AcceptanceCriteria:
     """Artifact generator: a model → Given/When/Then acceptance criteria (the recette checklist)."""
     system = build_prompt("criteria.md", only)
     user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria)
+    return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria,
+                     reuse_system=reuse_system)
 
 
-def generate_epic(client, out: EngineOutput, only: list[str] | None = None) -> Epic:
+def generate_epic(client, out: EngineOutput, only: list[str] | None = None, *,
+                  reuse_system: bool = False) -> Epic:
     """Artifact generator: a model → a delivery epic (work breakdown into trackable issues)."""
     system = build_prompt("epic.md", only)
     user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json(indent=2)
-    return _complete(client, system, [{"role": "user", "content": user}], Epic)
+    return _complete(client, system, [{"role": "user", "content": user}], Epic,
+                     reuse_system=reuse_system)
 
 
 def generate_release(client, out: EngineOutput, version: str = "",
-                     only: list[str] | None = None) -> ReleaseNotes:
+                     only: list[str] | None = None, *,
+                     reuse_system: bool = False) -> ReleaseNotes:
     """Artifact generator: a model → client-facing release notes. The caller may stamp a version."""
     system = build_prompt("release.md", only)
     user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json(indent=2)
-    notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes)
+    notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes,
+                      reuse_system=reuse_system)
     if version:
         notes.version = version
     return notes
 
 
 def estimate(client, out: EngineOutput, stories: Stories,
-             only: list[str] | None = None) -> tuple[EstimateDraft, list[str], str]:
+             only: list[str] | None = None, *,
+             reuse_system: bool = False) -> tuple[EstimateDraft, list[str], str]:
     """Pipeline stage: stories + the model's soft slots → a day-based estimate.
     Returns (draft, soft_slots, confidence) — the latter two are Python-authoritative."""
     soft = soft_slots(out)
@@ -438,7 +502,8 @@ def estimate(client, out: EngineOutput, stories: Stories,
         + "\n\nUnresolved (soft) slots — widen the range for any story that depends on one:\n"
         + (", ".join(soft) if soft else "(none — the model is solid)")
     )
-    draft = _complete(client, system, [{"role": "user", "content": user}], EstimateDraft)
+    draft = _complete(client, system, [{"role": "user", "content": user}], EstimateDraft,
+                      reuse_system=reuse_system)
     return draft, soft, estimate_confidence(len(soft))
 
 
