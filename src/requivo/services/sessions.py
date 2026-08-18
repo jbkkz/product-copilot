@@ -61,6 +61,31 @@ class SessionSnapshot:
     context_cards: list[str] | None     # None == every card
 
 
+@dataclass(frozen=True)
+class SessionEntry:
+    """One slug in the store, with either its metadata or the reason it could not be read (#7).
+
+    The third state, made representable. `list_sessions()` can only answer *here is the metadata* or
+    *this whole listing raised*, so an aggregate built on it has no way to say **we could not read
+    this one** — and the only shapes left are to raise for the set (one bad session hides every good
+    one) or to drop the member (the reader is told nothing is wrong and the session is gone). Both
+    were live: the first is #7, the second is what a naive fix for it produces.
+
+    `error` is the exception's own text rather than a code. A user whose session was written by a
+    newer Requivo needs to read *upgrade requivo*, not `unreadable` — the remedy is the part worth
+    keeping, and a flattened code discards exactly it."""
+
+    slug: str
+    meta: SessionMeta | None = None
+    error: str | None = None
+
+    @property
+    def readable(self) -> bool:
+        """True when the metadata loaded. Named rather than left as `meta is not None` so a caller
+        reads the question it is asking instead of the representation of the answer."""
+        return self.meta is not None
+
+
 @dataclass
 class UpdateResult:
     """The structured outcome of applying a proposal — the payload of `model apply [--json]`."""
@@ -210,7 +235,47 @@ class SessionService:
         return self.repo.load_revision(slug, revision)
 
     def list_sessions(self) -> list[SessionMeta]:
+        """Every session's metadata, raising on the first one that will not load.
+
+        The strict read, kept as such. A caller acting on one session it named is right to want the
+        failure; what must not use this is an **aggregate**, because one unreadable member then
+        raises before any row exists to degrade. Those call `list_entries` instead.
+        """
         return [self.repo.read_meta(s) for s in self.repo.list_slugs()]
+
+    def list_entries(self) -> list[SessionEntry]:
+        """Every session, degrading per member instead of raising for the whole set (#7).
+
+        This is the *source* of the rows, and it is where invariant 15 has to be enforced: guarding
+        the calls made on each row leaves the comprehension that produced the rows unguarded, which
+        is the line that breaks first. `read_meta` refuses an unreadable `session.json` and a
+        `format_version` newer than this build — so a user who ran a newer Requivo once, or imported
+        a colleague's archive, loses the listing of every *other* session too.
+
+        The catch is bare `Exception`, deliberately. An aggregate's contract is that one member
+        cannot take the view down, and the set of ways a member can be broken is open — a truncated
+        JSON file, a permissions fault, a pydantic `ValidationError`, a code this build has not been
+        written yet. Naming a family here is how the guard ends up nominally on and effectively off
+        for the next failure mode, which is the shape of #7 itself. `doctor`'s `_session_health`
+        already made this call for the same question; this is that decision, reused rather than
+        re-litigated. `BaseException` is *not* caught: a `KeyboardInterrupt` is not a broken session.
+
+        A member that cannot be read is reported, never dropped. A listing that silently omits it
+        tells the reader nothing is wrong and loses the session — the same absence, one step
+        quieter.
+
+        Failing to list the slugs at all is **not** caught here and propagates. That is not one
+        member failing, it is the aggregate having no members to speak for: there is no row to name
+        the problem in, and answering `[]` would tell a reader their sessions were deleted. It is
+        the same distinction `_session_health` draws with `total: None` versus `total: 0`.
+        """
+        entries = []
+        for slug in self.repo.list_slugs():
+            try:
+                entries.append(SessionEntry(slug=slug, meta=self.repo.read_meta(slug)))
+            except Exception as e:  # noqa: BLE001 - see the docstring: an open set, by contract
+                entries.append(SessionEntry(slug=slug, meta=None, error=str(e)))
+        return entries
 
     def cards(self, slug: str) -> list[str] | None:
         """The context-card selection recorded for a session (None == all cards)."""

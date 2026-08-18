@@ -59,9 +59,80 @@ _TOKEN = secrets.token_urlsafe(32)
 
 
 class CrossSiteRequestError(RequivoError):
-    """A state-changing request did not prove it came from this app's own pages."""
+    """A request did not prove it came from this app's own pages — the family, not a code to raise.
+
+    Every arm below carries its own code, and that is #52. This one error was raised for six distinct
+    facts whose `details` payloads had five different shapes between them, against the rule
+    `docs/compatibility.md` states in this repository for exactly this reason (#35): **a code carries
+    one fact and one `details` shape**. A consumer matching `cross_site_request` and reading
+    `details["origin"]` gets a `KeyError` from the host arm, and the shape it was written against was
+    never the contract.
+
+    The counter-argument, which is real and which this rejects: nothing serializes `details` on the
+    Web surface — a refusal renders as HTML — so no consumer can observe the inconsistency today, and
+    an argued exception in the policy was the other defensible answer. What decides it is that the
+    cost is already being paid. Both #43 and #45 had to distinguish their new arm **by message**,
+    because the code could not tell them apart, and the same policy says never to match on the
+    message. So the only handle a caller has for the distinction is the one it is told not to use.
+    That is a present cost, not a future one, and `empty_selector_token` was split for the identical
+    shape one release ago.
+
+    The family is kept because `install_cross_site_guard` catches it and answers 403 for every arm,
+    and because a caller that wants *any* cross-site refusal should not have to enumerate six names.
+    Nothing raises it directly.
+    """
 
     code = "cross_site_request"
+
+
+class UndeterminedHostError(CrossSiteRequestError):
+    """No host could be read from the request at all — absent, empty, or not an authority (#45, #51).
+
+    `details`: `{host_header_present, host_header, hint}`. `host_header_present` is what separates
+    *no header was sent* from *a header was sent and could not be read*; both are the same fact here
+    — nobody could attribute this request — and the same shape, so they share a code.
+    """
+
+    code = "undetermined_host"
+
+
+class HostNotAllowedError(CrossSiteRequestError):
+    """The host was read and is not one this server answers to. `details`: `{host, hint}`."""
+
+    code = "host_not_allowed"
+
+
+class CrossSiteFetchError(CrossSiteRequestError):
+    """The browser's own `Sec-Fetch-Site` says this came from elsewhere. `details`:
+    `{sec_fetch_site}`."""
+
+    code = "cross_site_fetch"
+
+
+class OpaqueOriginError(CrossSiteRequestError):
+    """`Origin: null` — a browser speaking and declining to attribute itself (#43). `details`:
+    `{origin, host}`."""
+
+    code = "opaque_origin"
+
+
+class OriginMismatchError(CrossSiteRequestError):
+    """The stated origin is not the same trust domain as the host addressed. `details`:
+    `{origin, host}` — the same keys as `opaque_origin` and a different fact, which is why they are
+    two codes rather than one: a shared shape is not a shared meaning."""
+
+    code = "origin_mismatch"
+
+
+class MissingRequestTokenError(CrossSiteRequestError):
+    """The synchronizer token was absent or did not match — the load-bearing check.
+
+    `details` is deliberately empty. The only fact beyond the code is the token itself, and echoing
+    a token back is never a diagnostic. An empty payload is a shape; a payload carrying a secret is
+    a defect.
+    """
+
+    code = "missing_request_token"
 
 
 def csrf_token() -> str:
@@ -76,16 +147,56 @@ def allowed_hosts() -> frozenset[str]:
     return frozenset(_LOOPBACK_HOSTS | {h.strip().lower() for h in extra.split(",") if h.strip()})
 
 
+# What a determined host may contain once `urlsplit` has lowercased it and removed the port and any
+# IPv6 brackets: the letter-digit-hyphen set of a DNS name, plus what an IPv6 literal leaves behind
+# (`:` between groups, `%` before a zone id) and `_`, which is not legal in a DNS hostname but does
+# occur in internal names an operator may deliberately bind to. Anything else means `urlsplit`
+# handed back a string that is not a host, and this returns the third state instead of that string.
+_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-_:%")
+
+
 def _hostname(value: str) -> str:
     """The bare hostname from a `Host` header (`[::1]:8765`) or an origin URL (`http://evil.com`),
-    lowercased, port and IPv6 brackets removed — so the two are comparable."""
+    lowercased, port and IPv6 brackets removed — so the two are comparable. `""` when this could not
+    determine a host at all, which every caller reads as a refusal.
+
+    **Userinfo is refused rather than stripped, and that is #51.** `urlsplit` is a URL parser and
+    correctly discards the `user@` part of an authority, so `Host: evil.com@127.0.0.1` resolved to
+    `127.0.0.1`, passed `allowed_hosts()`, and `Origin: http://evil.com@127.0.0.1` came out
+    same-trust-domain. Not reachable from a browser — none of `Host`, `Origin` or `Referer` is ever
+    serialized with userinfo, and RFC 7231 requires a `Referer` to have it removed — so this closes
+    a hole with no attacker who benefits.
+
+    It is fixed for the class, not the instance. This is the third time this module's parser answered
+    *confidently* about an input it should have refused: #43 was the opaque origin parsing to the
+    plausible hostname `"null"`, #45 was an undetermined host read as *no host check needed*, and this
+    is the same shape again. The first two were closed with checks at the caller. **This one is closed
+    in the parser**, because a caller-side check is a guarantee the next caller inherits without
+    re-checking — and `_hostname` has two callers already, on two different headers.
+
+    The charset test is the general form of the same rule and is why `Host: 127.0.0.1 evil.com` now
+    refuses too: it previously came back as that whole string, which is not a hostname, and was
+    refused only by happening to miss the allowlist. A parser that returns a non-host and relies on a
+    later equality test to reject it is answering where it should be declining.
+
+    Known residue, stated rather than implied: an **unbracketed** IPv6 literal (`Host: fe80::1`) still
+    parses to `fe80` with the rest read as a port. It is malformed as an authority, no browser emits
+    it, and it fails the allowlist — but the parser does answer, so this docstring does not claim the
+    class is empty.
+    """
     raw = value.strip()
     if not raw:
         return ""
     try:
-        return (urlsplit(raw if "//" in raw else "//" + raw).hostname or "").lower()
+        parts = urlsplit(raw if "//" in raw else "//" + raw)
+        host = (parts.hostname or "").lower()
+        if parts.username is not None:      # any userinfo at all, including an empty `@127.0.0.1`
+            return ""
     except ValueError:
         return ""
+    if not host or set(host) - _HOST_CHARS:
+        return ""
+    return host
 
 
 # The Origin header's opaque value, sent verbatim and never as part of a URL: a browser saying "a
@@ -184,16 +295,21 @@ async def _enforce(request: Request) -> None:
     # so it gains nothing from the skip that it did not already have. The cost is a caller that does
     # not exist. What it buys is the third state stated instead of silently folded into the clean one:
     # *could not determine the host* now reads differently from *determined it and was happy*.
+    #
+    # Since #51 this arm also covers a header that *was* sent and is not an authority — userinfo, or
+    # a character no hostname carries. The wording says "could not read" rather than "did not state"
+    # so it is true of both; `host_header_present` in `details` is what tells them apart, which is
+    # why they are one code and one shape rather than two (#52).
     raw_host = request.headers.get("host")
     host = _hostname(raw_host or "")
     if not host:
-        raise CrossSiteRequestError(
-            "this request did not state which host it was addressed to — send a Host header naming "
+        raise UndeterminedHostError(
+            "this request did not name a host this server could read — send a Host header naming "
             "this server",
             details={"host_header_present": raw_host is not None, "host_header": raw_host or "",
                      "hint": "HTTP/1.1 requires a Host header; HTTP/1.0 without one is not supported"})
     if host not in allowed_hosts():
-        raise CrossSiteRequestError(
+        raise HostNotAllowedError(
             f"this server does not answer to host {host!r}",
             details={"host": host, "hint": f"set {ALLOWED_HOSTS_ENV} to bind elsewhere on purpose"})
 
@@ -202,7 +318,7 @@ async def _enforce(request: Request) -> None:
 
     fetch_site = request.headers.get("sec-fetch-site", "")
     if fetch_site and fetch_site not in ("same-origin", "none"):
-        raise CrossSiteRequestError(
+        raise CrossSiteFetchError(
             "this request came from another site", details={"sec_fetch_site": fetch_site})
 
     # `Origin: null` is refused on purpose, and the asymmetry with an *absent* origin below is the
@@ -219,13 +335,13 @@ async def _enforce(request: Request) -> None:
     # newly falling through to `Referer`.
     origin_header = request.headers.get("origin", "")
     if origin_header.strip().lower() == OPAQUE_ORIGIN:
-        raise CrossSiteRequestError(
+        raise OpaqueOriginError(
             "this request came from an opaque origin, which this server does not accept",
             details={"origin": OPAQUE_ORIGIN, "host": host})
 
     origin = origin_header or request.headers.get("referer") or ""
     if origin and not _same_trust_domain(_hostname(origin), host):
-        raise CrossSiteRequestError(
+        raise OriginMismatchError(
             "this request came from another origin",
             details={"origin": _hostname(origin), "host": host})
 
@@ -242,8 +358,9 @@ async def _enforce(request: Request) -> None:
         raise InputTooLargeError(
             f"the submitted form exceeds {MAX_BODY_BYTES:,} bytes", details={"limit": MAX_BODY_BYTES})
     if not secrets.compare_digest(_submitted_token(request, body), _TOKEN):
-        raise CrossSiteRequestError(
-            "this form did not carry a valid request token — reload the page and try again")
+        raise MissingRequestTokenError(
+            "this form did not carry a valid request token — reload the page and try again",
+            details={})
 
 
 def install_cross_site_guard(app: FastAPI, render_error: Callable[..., Response]) -> None:

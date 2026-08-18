@@ -113,6 +113,32 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   against each other rather than each on its own. The condition is new rather than moved — nothing
   previously carried a code here, because nothing previously failed.
 
+- **`cross_site_request` split into six codes** (#52). Requivo Web's cross-site guard raised one code
+  for six distinct facts, and their `details` payloads had five different shapes between them — the
+  exact condition this rule was written for. A consumer matching `cross_site_request` and reading
+  `details["origin"]` got a `KeyError` from a payload that correctly carried the code it matched.
+
+  | Condition | Code | `details` |
+  |---|---|---|
+  | no host could be read — absent, empty, or not an authority | `undetermined_host` | `{host_header_present, host_header, hint}` |
+  | the host was read and is not one this server answers to | `host_not_allowed` | `{host, hint}` |
+  | the browser's `Sec-Fetch-Site` says another site | `cross_site_fetch` | `{sec_fetch_site}` |
+  | `Origin: null` | `opaque_origin` | `{origin, host}` |
+  | the origin is not the host's trust domain | `origin_mismatch` | `{origin, host}` |
+  | the request token was absent or wrong | `missing_request_token` | `{}` |
+
+  **All six are still 403**, and all six are still `CrossSiteRequestError` subclasses, so a caller
+  catching that class or matching on the status is unaffected. `cross_site_request` survives as the
+  family base and keeps its status row, but **nothing raises it any more** — if you match that string,
+  match the six above instead. `opaque_origin` and `origin_mismatch` share a `details` shape and are
+  still two codes: a shared shape is not a shared meaning.
+
+  This was inert before it was fixed, and deliberately noted anyway. Requivo Web does not serialize
+  `details` — a refusal renders as HTML — so no consumer could observe the inconsistency, and an
+  argued exception to the rule was the other defensible answer. What decided it is that the cost was
+  already being paid: both #43 and #45 had to distinguish their new arm **by message**, which is the
+  one handle this document tells you never to use.
+
 Adding a code is not a breaking change under this policy, but *moving a condition to a new code* is,
 so both are noted here and in the changelog rather than only in the latter.
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from requivo.core.context import resolve_cards
-from requivo.core.errors import InputTooLargeError, SessionNotFoundError
+from requivo.core.errors import InputTooLargeError, InvalidSlugError, SessionNotFoundError
 from requivo.core.persistence import validate_slug
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
@@ -39,27 +39,51 @@ def create_session(
     # Bounds are refusals, not truncations: a request silently cut at 20k would be reasoned over as if
     # it were the whole thing, and the user would never learn which half the engine saw.
     text = request_text.strip()
-    if len(text) > MAX_REQUEST_CHARS:
-        raise InputTooLargeError(
-            f"the product request exceeds {MAX_REQUEST_CHARS:,} characters — trim it and resubmit",
-            details={"limit": MAX_REQUEST_CHARS, "length": len(text)})
     chosen_slug = slug.strip()
+
+    def refused(status: int, code: str, message: str):
+        """Hand the page back with the submission still in it, rather than sending the reader to an
+        error page whose only affordance is *Back to sessions* (#30).
+
+        Every refusal on this form goes through here, so a reader never has to learn which of them
+        keeps their work. The status is unchanged — 413 is still 413 — and so is the error code,
+        which rides the banner rather than a full page.
+        """
+        return templates.TemplateResponse(request, "home.html", home_context(
+            sessions, error=message, error_code=code,
+            form={"request_text": text, "slug": chosen_slug, "cards": cards, "provider": provider},
+        ), status_code=status)
+
+    if len(text) > MAX_REQUEST_CHARS:
+        return refused(413, InputTooLargeError.code,
+                       f"the product request exceeds {MAX_REQUEST_CHARS:,} characters — trim it and "
+                       "resubmit")
     if len(chosen_slug) > MAX_SLUG_CHARS:
-        raise InputTooLargeError(
-            f"the session name exceeds {MAX_SLUG_CHARS} characters",
-            details={"limit": MAX_SLUG_CHARS, "length": len(chosen_slug)})
+        return refused(413, InputTooLargeError.code,
+                       f"the session name exceeds {MAX_SLUG_CHARS} characters")
     if chosen_slug:
-        validate_slug(chosen_slug)  # InvalidSlugError → clean 400
+        # The session-name field's *other* refusal, and it re-renders for the same reason. Leaving one
+        # of one field's two refusals throwing the reader's work away is a worse state than either
+        # arm alone, because which one they hit is not something they can predict.
+        try:
+            validate_slug(chosen_slug)
+        except InvalidSlugError as exc:
+            return refused(400, exc.code, exc.message)
     else:
         chosen_slug = None
     # An unknown card is an error, not something to filter out: dropping it leaves an empty selection,
     # which every reader downstream treats as "load every card" — the opposite of narrowing.
+    #
+    # This one is deliberately left to raise. The card boxes are checkboxes over a set this page
+    # rendered, so an unknown value did not come from a reader mistyping something they could correct
+    # on a re-render — it came from a submission that did not originate in this form. Re-rendering
+    # would dress a tampered request as a typo.
     picked = resolve_cards(cards)
 
     if not text:
-        return templates.TemplateResponse(request, "home.html", home_context(
-            sessions, error="A request is required — paste the client or stakeholder email, or "
-                            "describe what was asked in your own words."), status_code=400)
+        return refused(400, "empty_request",
+                       "A request is required — paste the client or stakeholder email, or describe "
+                       "what was asked in your own words.")
 
     if provider == "auto":
         provider = "anthropic" if provider_status().available else "create_only"

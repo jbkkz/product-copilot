@@ -46,10 +46,21 @@ def submit_answers(
     text = answers.strip()
     if len(text) > MAX_ANSWERS_CHARS:
         # Refused rather than truncated — half an answer folded into the model is worse than none,
-        # because nothing downstream can tell it was cut.
-        raise InputTooLargeError(
-            f"the answers exceed {MAX_ANSWERS_CHARS:,} characters — split them across two turns",
-            details={"limit": MAX_ANSWERS_CHARS, "length": len(text)})
+        # because nothing downstream can tell it was cut. That is unchanged (invariant 3).
+        #
+        # What changed is the recovery (#30). Raising rendered `errors/_error.html`, and this form
+        # posts with `hx-swap="outerHTML"` onto `#session-body` — the region that *contains* the
+        # textarea. So the refusal did not merely fail to keep what was typed: the swap deleted the
+        # field it was typed into, and there was no Back to return to. The whole region is returned
+        # instead, with the submission still in it and the refusal stated on the form.
+        return templates.TemplateResponse(request, "sessions/_session.html", {
+            "s": session_detail(sessions, slug),
+            "provider": provider_status(),
+            "answers_error": f"the answers exceed {MAX_ANSWERS_CHARS:,} characters — split them "
+                             "across two turns",
+            "answers_error_code": InputTooLargeError.code,
+            "submitted_answers": text,
+        }, status_code=413)
     result = discovery.answer(slug, text, expected_revision=expected_revision, surface="web-answer")
     return templates.TemplateResponse(request, "sessions/_session.html", {
         "s": session_detail(sessions, slug),

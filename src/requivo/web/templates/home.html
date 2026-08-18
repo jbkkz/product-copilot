@@ -5,7 +5,9 @@
 <p class="lead">Paste a client or stakeholder request. Requivo identifies the assumptions and missing
 decisions that could change the workflow, integrations, permissions, timeline or effort.</p>
 
-{% if error %}<div class="notice danger" role="alert">{{ error }}</div>{% endif %}
+{% if error %}<div class="notice danger" role="alert">{{ error }}
+  {% if error_code %}<span class="muted">(code: {{ error_code }})</span>{% endif %}
+</div>{% endif %}
 
 {% if not provider.available %}
 <div class="notice info">No analysis provider is configured — {{ provider.reason }} Your request will
@@ -15,9 +17,15 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
 <form method="post" action="/sessions" class="card start">
   {% include "_csrf.html" %}
   <label for="request_text" class="sr-only">The request</label>
+  {# The submission comes back on a refusal (#30). Nothing here clips the paste in the browser —
+     that is the silent truncation the server-side refusal exists to replace, and dropping the
+     client-side ceiling is what made that refusal reachable at all (#8).
+     `test_no_template_carries_a_clipping_attribute` scans these files as raw text, so it cannot tell
+     an attribute from prose naming one; this comment therefore describes the rule without spelling
+     the attribute. #}
   <textarea id="request_text" name="request_text" required rows="6"
     aria-describedby="req-hint"
-    placeholder="e.g. We'd like a leave approval system so staff can request time off and managers can approve it."></textarea>
+    placeholder="e.g. We'd like a leave approval system so staff can request time off and managers can approve it.">{{ form.request_text }}</textarea>
   <p id="req-hint" class="hint">One line or a whole email. The messier the request, the more Requivo helps.</p>
 
   <div class="toolbar">
@@ -31,15 +39,19 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
     <div class="advanced-body">
       <label for="slug">Session name <span class="hint">(optional — lowercase words joined by hyphens)</span></label>
       <input type="text" id="slug" name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*"
-        placeholder="leave-approval" aria-describedby="slug-hint">
+        placeholder="leave-approval" aria-describedby="slug-hint" value="{{ form.slug }}">
       <p id="slug-hint" class="hint">Leave blank to derive one from the request.</p>
 
       {% if cards %}
       <fieldset>
         <legend>Product context <span class="hint">(sharpens the questions — leave all unchecked to use every card)</span></legend>
+        {# The selection survives a refusal too. A session's identity is its request *and* its card
+           selection — the impact estimates are read against them — so handing back the textarea while
+           silently clearing these would return a form that no longer says what the reader told it. #}
         {% for c in cards %}
         <div class="check">
-          <input type="checkbox" id="card-{{ c }}" name="cards" value="{{ c }}">
+          <input type="checkbox" id="card-{{ c }}" name="cards" value="{{ c }}"
+            {% if c in form.cards %}checked{% endif %}>
           <label for="card-{{ c }}">{{ c }}</label>
         </div>
         {% endfor %}
@@ -48,8 +60,8 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
 
       <label for="provider">On submit</label>
       <select id="provider" name="provider">
-        <option value="auto">Analyse the request now{% if not provider.available %} (no provider configured — saves it instead){% endif %}</option>
-        <option value="create_only">Save the request only — analyse it later</option>
+        <option value="auto" {% if form.provider != 'create_only' %}selected{% endif %}>Analyse the request now{% if not provider.available %} (no provider configured — saves it instead){% endif %}</option>
+        <option value="create_only" {% if form.provider == 'create_only' %}selected{% endif %}>Save the request only — analyse it later</option>
       </select>
     </div>
   </details>
@@ -60,16 +72,24 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
 <ul class="clean session-list">
   {% for s in sessions %}
   <li>
+    {# A session we could not read is still a row, and it still names itself. Taking the whole list
+       down was #7; dropping the row instead would be the same absence one step quieter. It keeps the
+       link: the session screen is where the full error is stated, and that is the one place a reader
+       can act on it. #}
     <a class="session-item" href="/sessions/{{ s.slug }}">
       <span class="session-title">{{ s.title }}</span>
       <span class="session-meta">
         {% if s.state == 'ready' %}<span class="badge ok">{{ s.status_label }}</span>
         {% elif s.state == 'awaiting' %}<span class="badge">{{ s.status_label }}</span>
+        {% elif s.state == 'unreadable' %}<span class="badge danger">{{ s.status_label }}</span>
         {% else %}<span class="badge warn">{{ s.status_label }}</span>{% endif %}
         {% if s.needs_update %}<span class="badge danger">Needs updating</span>{% endif %}
         <span class="muted">{{ s.updated_at }}</span>
       </span>
     </a>
+    {% if s.state == 'unreadable' %}
+    <p class="hint">{{ s.error }}</p>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>

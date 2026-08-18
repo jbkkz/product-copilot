@@ -38,9 +38,17 @@
     {% else %}
     <label for="answers">More information <span class="hint">(free text — a correction, a constraint, anything the request left out)</span></label>
     {% endif %}
+    {# The refusal is stated on the form, beside the field it is about, rather than as a fragment that
+       replaces the field (#30). Both keys are optional: this partial is also rendered on the ordinary
+       session page and after a successful turn, where neither is set. #}
+    {% if answers_error is defined and answers_error %}
+    <div class="notice danger" role="alert">{{ answers_error }}
+      {% if answers_error_code %}<span class="muted">(code: {{ answers_error_code }})</span>{% endif %}
+    </div>
+    {% endif %}
     <textarea id="answers" name="answers" required rows="5"
       aria-label="{{ 'Your answers to the questions above' if s.questions
-        else 'Anything further to fold into the understanding' }}"></textarea>
+        else 'Anything further to fold into the understanding' }}">{{ submitted_answers if submitted_answers is defined else '' }}</textarea>
     <div class="toolbar">
       <button class="btn{{ '' if s.questions else ' secondary' }}" type="submit">{{ "Submit answers"
         if s.questions else "Add to the understanding" }}</button>
