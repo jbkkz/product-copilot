@@ -9,9 +9,11 @@ attacker never needs to see a single response to do it.
 Four checks close that, in the order they run:
 
   * **Host allowlist** — the `Host` header must name a loopback address (or one the operator opted into
-    via `REQUIVO_WEB_ALLOWED_HOSTS`). This is the DNS-rebinding guard, and it is the only check that
-    applies to reads as well: a rebound `evil.com` that resolves to 127.0.0.1 is same-origin from the
-    browser's point of view, so it would sail through every other check *and* be able to read the token.
+    via `REQUIVO_WEB_ALLOWED_HOSTS`), and a request that names no host *at all* is refused rather than
+    waved through — a check that cannot read its input has to say so, not treat it as nothing to check
+    (#45). This is the DNS-rebinding guard, and it is the only check that applies to reads as well: a
+    rebound `evil.com` that resolves to 127.0.0.1 is same-origin from the browser's point of view, so
+    it would sail through every other check *and* be able to read the token.
   * **`Sec-Fetch-Site`** — the browser's own account of where the request came from. Free, unspoofable
     from script, and rejects `cross-site` / `same-site` outright.
   * **`Origin` / `Referer`** — when present, it must name the same trust domain as the host being
@@ -96,10 +98,28 @@ def _same_trust_domain(origin_host: str, host: str) -> bool:
     """Is a page served from `origin_host` the same trust domain as the server answering to `host`?
 
     The same string always is. Beyond that, only the loopback set: `localhost`, `127.0.0.1` and `::1`
-    are three spellings of one interface on one machine, the host check above already accepts any of
-    them interchangeably, and a page at `http://localhost:8765` can only have been served by *this*
-    process — nothing else is listening there. Comparing the two spellings as strings refused a post
-    that used both at once, which is a false positive rather than a boundary (#43).
+    are three spellings of one interface on one machine, and the host check above already accepts any
+    of them interchangeably. Comparing the two spellings as strings refused a post that used both at
+    once, which is a false positive rather than a boundary (#43).
+
+    What that accepts is the loopback **interface**, not this process. `_hostname` discards the port on
+    both sides, so `http://localhost:3000` and `http://localhost:8765` arrive here as the same string:
+    the accepted set is every page served by every process on any loopback port, which on a developer
+    machine is a populated one. This docstring used to claim the opposite — that such a page *"can only
+    have been served by this process, nothing else is listening there"* — and that was simply false. A
+    rationale is what the next change gets reasoned from, so a wrong one is worse than none (#46).
+
+    The port-blindness is deliberate, and it predates #43 rather than following from it: before that
+    fix, `Origin: http://localhost:3000` against `Host: localhost:8765` already compared equal. It
+    stays, because the **request token** is what gates the write and a page on another loopback port
+    cannot get hold of one. The browser's own same-origin policy is (scheme, host, port), so reading a
+    page this server rendered is a cross-origin read; this app sends no CORS headers, so the body never
+    reaches the script. `Sec-Fetch-Site` refuses that same post one check earlier, as `same-site`, on
+    every browser that sends it. Comparing ports here would add nothing those two do not already do,
+    and it would reintroduce #43's exact failure shape — a default port elided in an `Origin` but
+    spelled out in a `Host`, refusing a form with no way forward. Tightening it is a separate decision
+    needing its own tests; `test_a_cross_port_loopback_origin_is_accepted_and_that_is_the_decision`
+    pins the behaviour so that change has to argue with this paragraph rather than slip past it.
 
     The hosts an operator listed in `REQUIVO_WEB_ALLOWED_HOSTS` deliberately do **not** join that
     equivalence class, so this is not a membership test over `allowed_hosts()`. Those are real
@@ -114,6 +134,13 @@ def _same_trust_domain(origin_host: str, host: str) -> bool:
     determined produced the same verdict as a verified match: a check that could not look, answering
     anyway. Refusing costs nothing real — no browser omits `Host`, and a request that reaches here at
     all has already stated an origin — and it keeps this function's name true for every input.
+
+    Since #45 the `host` half of that arm is unreachable from the only caller: `_enforce` refuses an
+    undetermined `Host` outright, several checks earlier, so `host` is always determined by the time it
+    gets here. It is kept rather than pruned as now-dead, and deliberately. A helper that makes a claim
+    by name should hold for every input it is handed, this one is called directly by its own tests, and
+    narrowing a security helper on the grounds that today's single caller happens to pre-filter its
+    input is how the next caller inherits a guarantee nobody re-checked.
     """
     if not origin_host or not host:
         return False
@@ -143,8 +170,29 @@ def _submitted_token(request: Request, body: bytes) -> str:
 async def _enforce(request: Request) -> None:
     """Run the checks for one request, raising the first failure. Reads run the host check only;
     anything that can change state runs all four."""
-    host = _hostname(request.headers.get("host", ""))
-    if host and host not in allowed_hosts():
+    # An undetermined `Host` is a **refusal**, not a skip. `_hostname` returns `""` when it could not
+    # find a host at all — an absent header, an empty or whitespace-only one, or one that will not
+    # parse — and the earlier `if host and host not in allowed_hosts()` read that as *no host check
+    # needed*. So the one request nobody could attribute walked past the only check that also runs on
+    # reads, and the guard reported nothing while it was off. Observed rather than reasoned: against
+    # the 0.10.1 candidate, `GET / HTTP/1.0` with no `Host` and `GET / HTTP/1.1` with an empty one both
+    # answered 200, because h11 requires `Host` on 1.1 only and passes an empty one straight through.
+    #
+    # This refuses a `GET`, which is a real behaviour change and the intended one. HTTP/1.1 requires a
+    # `Host` and every browser, `curl`, httpx and requests sends one; nothing here documents HTTP/1.0
+    # support; and a caller able to craft a hostless request can open a socket to this port directly,
+    # so it gains nothing from the skip that it did not already have. The cost is a caller that does
+    # not exist. What it buys is the third state stated instead of silently folded into the clean one:
+    # *could not determine the host* now reads differently from *determined it and was happy*.
+    raw_host = request.headers.get("host")
+    host = _hostname(raw_host or "")
+    if not host:
+        raise CrossSiteRequestError(
+            "this request did not state which host it was addressed to — send a Host header naming "
+            "this server",
+            details={"host_header_present": raw_host is not None, "host_header": raw_host or "",
+                     "hint": "HTTP/1.1 requires a Host header; HTTP/1.0 without one is not supported"})
+    if host not in allowed_hosts():
         raise CrossSiteRequestError(
             f"this server does not answer to host {host!r}",
             details={"host": host, "hint": f"set {ALLOWED_HOSTS_ENV} to bind elsewhere on purpose"})
