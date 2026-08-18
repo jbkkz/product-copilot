@@ -81,6 +81,31 @@ class EmptySelectorTokenError(RequivoError):
     code = "empty_selector_token"
 
 
+class UnsafeSelectorTokenError(RequivoError):
+    """A caller-supplied selector token carried a control character — a newline, a carriage return, a
+    tab, a NUL, or an ANSI escape introducer.
+
+    Refused rather than escaped-at-render, and the distinction is the whole of #40. A card name is
+    persisted in `session.json`, `session import` passes it through intact, and both health verbs
+    render it into a line of a receipt. A newline inside one does not merely look odd: it *ends the
+    line* and starts a new one at whatever column the attacker chose, so a session could write
+    `doctor`'s own `sessions` row and answer *all clear* directly underneath the row reporting it —
+    while `session verify`, the anti-tampering verb, still exited 1.
+
+    Escaping at the print sites would have closed the two that exist today and nothing about the
+    third one somebody adds next year. Refusing here means the value cannot reach a render site at
+    all: the token is rejected by the one function every selector goes through, in the same shape as
+    `validate_slug` and `validate_filename`, and — like both of those — the refusal names the
+    offending value in escaped form, because a refusal that forges the line reporting it is no guard.
+
+    `details` carries `{"selector", "position"}`, the same shape as `EmptySelectorTokenError`: both
+    are a fault in one token at a known place in the list. A **sibling** of it and not a subclass,
+    for the reason #35 gives — two facts sharing one `except` is how they get re-conflated.
+    """
+
+    code = "unsafe_selector_token"
+
+
 class EmptySelectionError(RequivoError):
     """A selection object was supplied and it selects nothing — `--context ""` reaching a selector as
     an empty list, or a persisted selection that has been emptied.

@@ -25,8 +25,9 @@ from requivo.core.errors import (
     NoContextCardsError,
     RequivoError,
     UnknownContextCardError,
+    UnsafeSelectorTokenError,
 )
-from requivo.core.selectors import normalize_tokens
+from requivo.core.selectors import display_token, normalize_tokens
 
 A_CARD = "b2b-platform"          # a bundled card, committed to the repo
 ANOTHER_CARD = "financial-reporting"
@@ -512,3 +513,64 @@ def test_both_refusals_still_ride_the_structured_envelope():
     assert envelope["details"] == {"selector": "context card", "tokens": 0}
     assert "context-card" in envelope["message"]    # the message names what was being selected
     assert isinstance(ei.value, RequivoError)
+
+
+# ── a selector token that forges the receipt reporting it (#40) ──────────────────
+
+
+def test_a_control_character_in_a_selector_token_is_refused_not_echoed():
+    """#40. A selector token is caller text, and `.strip()` — all that ever touched one — removes
+    surrounding whitespace and *not* interior newlines. Echoed into a diagnostic line, such a token
+    writes its own lines into the receipt.
+
+    The guard is here, in the one function all three selectors go through, rather than at the print
+    sites: a render-site fix is per-site and per-site is how the second one gets forgotten. This is
+    the same shape as `validate_slug` and `validate_filename` — refuse, and name the refused value
+    in the escaped form so the refusal cannot forge the line reporting it.
+    """
+    # must fire: a well-formed token is untouched, on every selector
+    assert normalize_tokens([A_CARD], what="context card") == [A_CARD]
+    assert resolve_cards([A_CARD]) == [A_CARD]
+    assert resolve_slots(["workflow"]) == (["workflow"], [])
+
+    # must not fire: a control character is a refusal, not something echoed back
+    for token in ("ok-card\nAll clear.", "a\rb", "a\tb", "a\x1b[2Kb", "a\x00b", "a\x9bb"):
+        for call in (lambda t: normalize_tokens([t], what="context card"),
+                     lambda t: resolve_cards([t]),
+                     lambda t: load_context([t]),
+                     lambda t: resolve_slots([t])):
+            with pytest.raises(UnsafeSelectorTokenError):
+                call(token)
+
+    # The offending value is named, and named in escaped form — the message must not be able to
+    # forge the line that carries it.
+    with pytest.raises(UnsafeSelectorTokenError) as ei:
+        resolve_cards(["ok-card\nAll clear."])
+    assert "\n" not in ei.value.message, "the refusal itself carries a line break"
+    assert "ok-card" in ei.value.message, "the refusal does not say which token"
+    assert ei.value.code == "unsafe_selector_token"
+    assert ei.value.details == {"selector": "context card", "position": 0}
+
+
+def test_check_selection_reports_a_hostile_persisted_card_rather_than_raising():
+    """`check_selection` is what `doctor` and `session verify` ask, and its contract is *reported,
+    never raised* — a health check that raises takes the whole listing down with it (invariant 15).
+    A stored selection is exactly where a hostile card name arrives, via `session import`, so the
+    new refusal has to join the reported set rather than escape it."""
+    assert check_selection([A_CARD]) is None            # must fire: a good selection is still clean
+
+    problem = check_selection(["ok-card\nAll clear."])
+    assert problem is not None and problem.code == "unsafe_selector_token"
+    assert "\n" not in problem.message
+
+
+def test_display_token_is_the_render_side_companion_where_no_selector_runs():
+    """`session show` prints a stored card name without selecting anything with it, so the guard
+    above never runs on that path. `display_token` is what such a site uses: a value that is already
+    one safe line is returned byte-for-byte (so ordinary output is unchanged), and only a value that
+    could break the line is quoted and escaped."""
+    assert display_token(A_CARD) == A_CARD              # must fire: no quotes on a clean name
+    assert display_token("Ünïcode-cárd") == "Ünïcode-cárd"   # non-ASCII is not "unsafe"
+
+    shown = display_token("ok-card\nAll clear.")
+    assert "\n" not in shown and "ok-card" in shown

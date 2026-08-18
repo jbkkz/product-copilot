@@ -98,3 +98,9 @@ One limit remains before you scope a session to a card that only exists on one m
 verb that re-scopes an existing session's cards, so the alternative to restoring the file is editing
 the `context_cards` key in the session's `session.json` by hand — the layout is a published contract,
 see [session-format.md](session-format.md).
+
+If you do edit it by hand, a card name may not contain a control character — a newline, a tab, an
+escape sequence. One that does is refused as `unsafe_selector_token` rather than displayed, because
+a name rendered into a health receipt can otherwise end the line and write its own
+([cli.md](cli.md#a-card-name-cannot-write-a-line-of-the-receipt), #40). Card stems are filenames, so
+no name you would actually type is affected.

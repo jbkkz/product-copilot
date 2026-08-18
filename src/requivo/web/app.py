@@ -45,6 +45,7 @@ _STATUS_BY_CODE = {
     "invalid_filename": 400,          # a path target the caller supplied
     "empty_selector_token": 400,      # a stray comma in what the caller typed
     "empty_selection": 400,           # a selection the caller supplied that selects nothing
+    "unsafe_selector_token": 400,     # a control character in a name the caller supplied
     "unknown_artifact_type": 400,
     "cross_site_request": 403,
     "input_too_large": 413,

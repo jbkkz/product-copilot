@@ -229,6 +229,68 @@ def test_a_too_long_filename_is_refused_at_the_boundary(workspace):
     assert ei.value.code == "invalid_filename"
 
 
+# ── #40 (adjacent): the end-of-line anchor is not the end of the string ──────────
+
+
+def test_both_name_guards_anchor_at_the_end_of_the_string_not_before_a_newline(workspace):
+    """Found while fixing #40, and outside its footprint — called out rather than slipped in.
+
+    Both `_SLUG_RE` and `_FILENAME_RE` ended in the end-of-line anchor, which in Python matches at
+    the end of the string **or just before a trailing newline**. So a slug and a filename each ending
+    in one newline were returned unchanged: two guards whose whole job is to make a separator or a
+    control character unrepresentable, admitting one. The end-of-string anchor is what both
+    docstrings already claim.
+
+    One character in each pattern, and the same defect class as #40 — untrusted text carrying a line
+    break past a guard — which is why it is fixed here rather than filed.
+    """
+    # must fire: every name the store actually writes still passes both guards
+    assert store.validate_slug("leave-approval") == "leave-approval"
+    for name in sorted(ARTIFACT_FILENAMES.values()) + ["epic.github.json"]:
+        assert store.validate_filename(name) == name
+
+    # must not fire: a trailing newline is not a valid name, and never was meant to be
+    for bad in ("ok\n", "ok\r", "leave-approval\n"):
+        with pytest.raises(RequivoError) as ei:
+            store.validate_slug(bad)
+        assert ei.value.code == "invalid_slug", repr(bad)
+    for bad in ("prd.md\n", "prd.md\r"):
+        with pytest.raises(RequivoError) as ei:
+            store.validate_filename(bad)
+        assert ei.value.code == "invalid_filename", repr(bad)
+
+
+def test_integrity_cannot_be_made_to_print_a_line_break_by_a_recorded_filename(workspace):
+    """The reachable consequence of the anchor above, and why it earns a test rather than a note.
+
+    `integrity.py` renders the recorded filename with `!r` on three of its four lines and **bare** on
+    the fourth — the one that says `artifacts/<name> is missing`. That line is guarded: it sits on
+    the `elif` behind `validate_filename`, so it is only reachable by a name the guard accepted,
+    which is exactly what the end-of-line anchor allowed. One trailing newline is limited leverage,
+    but a receipt line that splits in two is a line the program did not write.
+    """
+    svc = SessionService()
+    svc.create_session("Something.", slug="anch")
+    svc.update_model("anch", _full_model())
+    store.save_session_artifact("anch", "prd", "prd.md", "# P\n", source_revision=1)
+
+    # must fire: a genuinely missing artifact is still reported, on one line
+    (store.canonical_dir("anch") / "artifacts" / "prd.md").unlink()
+    problems = check_session("anch")
+    assert [p.code for p in problems] == ["missing_artifact_file"]
+    assert "\n" not in problems[0].message
+
+    # must not fire: a recorded name carrying a newline cannot split that line
+    p = store.canonical_dir("anch") / "session.json"
+    meta = json.loads(p.read_text(encoding="utf-8"))
+    meta["artifact_status"]["prd"]["filename"] = "prd.md\n"
+    p.write_text(json.dumps(meta), encoding="utf-8")
+    reported = check_session("anch")
+    assert reported, "must fire: the tampered name is still reported"
+    for problem in reported:
+        assert "\n" not in problem.message, problem.code
+
+
 # ── #23: the same filename is a read target, and a refusal is not an absence ─────
 
 

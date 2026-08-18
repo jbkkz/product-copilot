@@ -27,6 +27,7 @@ from requivo.core import persistence as store
 from requivo.core.context import available_cards, check_selection, resolve_cards
 from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionExistsError, SessionNotFoundError
 from requivo.core.integrity import IntegrityProblem, check_session, check_session_dir
+from requivo.core.selectors import display_token
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, CONTEXT, session_root, user_context_dir, workspace_root
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
@@ -139,6 +140,19 @@ def doctor_report() -> dict:
         # only surfaces later, as a refused artifact save with no obvious cause.
         "sessions": _session_health(cards_readable=cards_err is None),
     }
+
+
+# Which card findings are repaired by *restoring a file*, and which by *fixing the stored selection*.
+# Two different remedies, and printing the first under the second is the quiet-wrong-answer form of
+# the bug #40 is about: the verb names a real problem and then tells you to do something that cannot
+# fix it. Stated once and read by both surfaces, because `doctor` and `session verify` printing
+# different advice for the same finding is how they drift.
+_RESTORABLE_CARD_CODES = frozenset({"unknown_context_card", "no_context_cards", "context_unreadable"})
+
+_RESTORE_HINT = ("Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives — until "
+                 "then these sessions refuse their next reasoning turn.")
+_REPAIR_HINT = ("Repair the `context_cards` list in the session's session.json — the selection "
+                "itself is malformed, so no card you install will resolve it.")
 
 
 def _card_health(slug: str) -> dict:
@@ -304,9 +318,12 @@ def _cmd_doctor(a, client) -> None:
         print(f"     └─ {slug}: {', '.join(codes)} — run `requivo session verify {slug}`")
     for slug, problem in lost.items():
         print(f"     └─ {slug}: {problem['message']}")
-    if lost:
-        print("        Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives — "
-              "until then these sessions refuse their next reasoning turn.")
+    # One hint per remedy actually present, rather than one hint for whichever remedy came first.
+    codes = {p["code"] for p in lost.values()}
+    if codes & _RESTORABLE_CARD_CODES:
+        print(f"        {_RESTORE_HINT}")
+    if codes - _RESTORABLE_CARD_CODES:
+        print(f"        {_REPAIR_HINT}")
     if unchecked:
         print("     └─ the card directory could not be read (see above), so nothing is known about "
               "whether these sessions' product context still loads.")
@@ -370,7 +387,12 @@ def _cmd_session_show(a, client) -> None:
     print(f"  updated  {meta.updated_at}")
     print(f"  revision {meta.current_revision}")
     print(f"  provider {meta.provider or '—'}   model {meta.model_name or '—'}")
-    print(f"  context  {', '.join(meta.context_cards) if meta.context_cards else 'all cards'}")
+    # `display_token`, not a bare join (#40). This is the one card-name render site the selector
+    # guard cannot reach: nothing here is *selecting*, so `normalize_tokens` never runs and a name
+    # persisted by `session import` arrives unexamined. A clean name is returned byte-for-byte, so
+    # this line is unchanged for every session that was not tampered with.
+    print("  context  " + (", ".join(display_token(c) for c in meta.context_cards)
+                           if meta.context_cards else "all cards"))
     if meta.artifact_status:
         print("  artifacts:")
         for t, st in meta.artifact_status.items():
@@ -492,10 +514,12 @@ def _cmd_session_verify(a, client) -> None:
         for p in problems:
             print(f"  · [{p.code}] {p.message}")
     if cards["problem"]:
-        print(f"❌ Session '{slug}' names product context that no longer loads:")
-        print(f"  · [{cards['problem']['code']}] {cards['problem']['message']}")
-        print("    Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives. Until "
-              "then this session's next reasoning turn is refused rather than quietly degraded.")
+        code = cards["problem"]["code"]
+        restorable = code in _RESTORABLE_CARD_CODES
+        print(f"❌ Session '{slug}' " + ("names product context that no longer loads:" if restorable
+                                         else "has a product-context selection that cannot be read:"))
+        print(f"  · [{code}] {cards['problem']['message']}")
+        print(f"    {_RESTORE_HINT if restorable else _REPAIR_HINT}")
     elif not cards["checked"]:
         print(f"🟡 Could not check '{slug}'s product context: {cards['error']}")
     if not ok:
