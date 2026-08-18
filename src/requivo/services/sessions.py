@@ -246,9 +246,10 @@ class SessionService:
 
     def update_model(self, slug: str, proposal: dict | str, *, require_complete: bool = True,
                      expected_revision: int | None = None, provenance: dict | None = None) -> UpdateResult:
-        """Validate a proposal and apply it as a new revision (`model apply`). Migrates a legacy
-        session on this first mutation, saves the prior model as a revision, flags stale artifacts,
-        and returns the structured outcome.
+        """Validate a proposal and apply it as a new revision (`model apply`): saves the prior model
+        as a revision, flags stale artifacts, and returns the structured outcome. A session that lives
+        only in the retired `out/` layout is *named in the error*, not migrated behind your back —
+        `ensure_writable` raises pointing at `requivo session migrate`.
 
         `expected_revision` is the optimistic-locking precondition (see `persistence.save_revision`):
         omit it for the single-user CLI, pass the client's last-known revision from a concurrent

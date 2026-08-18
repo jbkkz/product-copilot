@@ -281,8 +281,8 @@ def _cmd_session_show(a, client) -> None:
 
 
 def _cmd_session_migrate(a, client) -> None:
-    """The explicit, opt-in bulk migration of every legacy out/<slug>/ session into the canonical
-    store (the automatic path only migrates a session on its own first mutation).
+    """The bulk migration of every legacy out/<slug>/ session into the canonical store. Since 0.9.8
+    this is the *only* thing that reads that layout — there is no automatic migrate-on-first-write.
 
     The `session_exists` check below is **reporting, not the guard**: it is what fills the
     `skipped_already_present` row, and it is kept because a sweep that names what it declined is worth

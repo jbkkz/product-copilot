@@ -169,7 +169,8 @@ def load_model(path: Path) -> EngineOutput:
 # metadata + provenance), request.md, model.json (the current model), revisions/NNNN-model.json (the
 # history, one file per applied revision), and artifacts/ (generated views, each tied to the revision
 # it was produced from). Every write is atomic; a revision is preserved before the model is replaced.
-# Legacy `out/<slug>/` sessions are read-only and copied in here on first mutation (`migrate_legacy`).
+# Legacy `out/<slug>/` sessions are read-only and are copied in here only by the explicit
+# `requivo session migrate` (`migrate_legacy`). Nothing has read that layout implicitly since 0.9.8.
 
 
 class ArtifactStatus(BaseModel):
@@ -319,7 +320,8 @@ def canonical_dir(slug: str) -> Path:
 
 
 def legacy_dir(slug: str) -> Path:
-    """The legacy `out/<slug>/` directory — read-only, migrated on first mutation."""
+    """The legacy `out/<slug>/` directory — read-only, and migrated only by an explicit
+    `requivo session migrate`, never on a read or a first write (see `migrate_legacy`)."""
     return _child_of(output_root(), slug)
 
 
