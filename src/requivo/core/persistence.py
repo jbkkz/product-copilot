@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from requivo import __version__
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import (
+    InvalidFilenameError,
     InvalidSessionError,
     InvalidSlugError,
     RevisionConflictError,
@@ -168,7 +169,8 @@ def load_model(path: Path) -> EngineOutput:
 # metadata + provenance), request.md, model.json (the current model), revisions/NNNN-model.json (the
 # history, one file per applied revision), and artifacts/ (generated views, each tied to the revision
 # it was produced from). Every write is atomic; a revision is preserved before the model is replaced.
-# Legacy `out/<slug>/` sessions are read-only and copied in here on first mutation (`migrate_legacy`).
+# Legacy `out/<slug>/` sessions are read-only and are copied in here only by the explicit
+# `requivo session migrate` (`migrate_legacy`). Nothing has read that layout implicitly since 0.9.8.
 
 
 class ArtifactStatus(BaseModel):
@@ -263,6 +265,46 @@ def validate_slug(slug: str) -> str:
     return slug
 
 
+# A filename is the *other* half of an artifact write target, and it was unvalidated while its slug
+# sibling on the same call was not. The same shape as `_SLUG_RE`, one separator class wider: a name is
+# runs of [a-z0-9] joined by single `.`, `-` or `_`. That forbids every vector at once — `/`, `\`, a
+# `..` segment (two dots in a row cannot be written), a leading or trailing separator, a leading dot,
+# and the empty string — while still admitting every name the store actually writes
+# (`solution-assessment.md`, `acceptance-criteria.md`, `epic.github.json`).
+#
+# Deliberately lowercase-only, matching the slug: a rejection is loud and one edit away, whereas a
+# permissive pattern is the thing being removed here. Every filename in `ARTIFACT_FILENAMES` and every
+# epic export name already fits.
+_FILENAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+
+# Room for the whole name plus the unique scratch suffix `_atomic_write` appends (a dot, the pid, 8
+# hex and `.tmp` — about 20 characters), inside the ~255-byte ceiling ext4 and APFS impose.
+MAX_FILENAME_LENGTH = 120
+
+
+def validate_filename(filename: str) -> str:
+    """Return `filename` if it is a safe bare filename, else raise `InvalidFilenameError`.
+
+    The sibling of `validate_slug`, and it exists for the reason stated there: the guard belongs in
+    Core so every surface inherits it, not in the callers that happen to be careful. Every in-repo
+    caller passes a literal or an `ARTIFACT_FILENAMES` lookup — which is precisely why this was
+    missing, and precisely the argument invariant 14 makes for putting it here anyway: the threat
+    model is the external consumer calling the service directly, not the CLI."""
+    if not isinstance(filename, str) or not _FILENAME_RE.match(filename):
+        raise InvalidFilenameError(
+            f"invalid artifact filename {filename!r}; expected a bare lowercase name such as "
+            "'prd.md' — no directories, no dot segments, no leading dot",
+            details={"filename": filename})
+    # Length is part of validity for the same reason it is for a slug: an over-long name is refused by
+    # the filesystem deep inside the write, as a bare OSError, instead of at the boundary.
+    if len(filename) > MAX_FILENAME_LENGTH:
+        raise InvalidFilenameError(
+            f"artifact filename is {len(filename)} characters; the maximum is {MAX_FILENAME_LENGTH}",
+            details={"filename": filename[:MAX_FILENAME_LENGTH], "length": len(filename),
+                     "max_length": MAX_FILENAME_LENGTH})
+    return filename
+
+
 def _child_of(root: Path, slug: str) -> Path:
     """`root / slug`, having validated the slug and confirmed the resolved path is genuinely a child of
     `root` — the defence-in-depth check the traversal guard is built around."""
@@ -278,8 +320,26 @@ def canonical_dir(slug: str) -> Path:
 
 
 def legacy_dir(slug: str) -> Path:
-    """The legacy `out/<slug>/` directory — read-only, migrated on first mutation."""
+    """The legacy `out/<slug>/` directory — read-only, and migrated only by an explicit
+    `requivo session migrate`, never on a read or a first write (see `migrate_legacy`)."""
     return _child_of(output_root(), slug)
+
+
+def artifact_path(slug: str, filename: str) -> Path:
+    """`<session>/artifacts/<filename>`, with **both** halves validated — the single chokepoint every
+    artifact write goes through.
+
+    One function rather than a check at each call site, for the reason `_child_of` gives for the slug:
+    a rule applied per-caller is a rule the next caller forgets. Belt-and-suspenders in the same
+    shape too — the pattern already makes a separator or a dot segment unrepresentable, and the
+    resolved path is confirmed to be a genuine child of `artifacts/` anyway."""
+    d = canonical_dir(slug) / "artifacts"
+    p = d / validate_filename(filename)
+    if not p.resolve().is_relative_to(d.resolve()):
+        raise InvalidFilenameError(
+            f"artifact filename {filename!r} resolves outside {d}",
+            details={"slug": slug, "filename": filename})
+    return p
 
 
 def session_exists(slug: str) -> bool:
@@ -458,7 +518,12 @@ def save_session_artifact(slug: str, artifact_type: str, filename: str, content:
 
     `stale` is supplied by the caller, which is the layer that knows the dependency graph — see
     `ArtifactService.save`. Core records freshness; it does not decide it.
+
+    `filename` is validated exactly as `slug` is, and before the lock is taken: it is the *other* half
+    of the write target, and it is also recorded into session.json, where `integrity.py` and the
+    artifact-show paths read it back — so an unvalidated one both escapes the directory and persists.
     """
+    path = artifact_path(slug, filename)   # refuse a bad target before taking the lock
     with session_lock(slug):
         meta = read_meta(slug)
         if not 1 <= source_revision <= meta.current_revision:
@@ -467,9 +532,8 @@ def save_session_artifact(slug: str, artifact_type: str, filename: str, content:
                 f"has revisions 1..{meta.current_revision or 0}",
                 details={"slug": slug, "source_revision": source_revision,
                          "current_revision": meta.current_revision})
-        d = canonical_dir(slug)
-        (d / "artifacts").mkdir(parents=True, exist_ok=True)
-        _atomic_write(d / "artifacts" / filename, content)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, content)
         st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=stale)
         meta.artifact_status[artifact_type] = st
         meta.updated_at = _now()
@@ -479,10 +543,14 @@ def save_session_artifact(slug: str, artifact_type: str, filename: str, content:
 
 def write_artifact_file(slug: str, filename: str, content: str) -> Path:
     """Write a raw file into a session's artifacts/ directory (no status tracking) — for the neutral
-    epic exports (epic.json / epic.github.json / …) that are extra views of one generated artifact."""
-    d = canonical_dir(slug)
-    (d / "artifacts").mkdir(parents=True, exist_ok=True)
-    return _atomic_write(d / "artifacts" / filename, content)
+    epic exports (epic.json / epic.github.json / …) that are extra views of one generated artifact.
+
+    Both halves of the target go through `artifact_path`: the mutating route validated its slug and
+    not the filename beside it, so `write_artifact_file(slug, '../../../x.md', …)` wrote outside the
+    session entirely."""
+    path = artifact_path(slug, filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _atomic_write(path, content)
 
 
 def session_artifact_files(slug: str) -> set[str]:
@@ -506,9 +574,22 @@ def list_session_slugs() -> list[str]:
 def migrate_legacy(slug: str) -> SessionMeta:
     """Copy a legacy `out/<slug>/` session into the canonical store, **preserving the originals**.
 
-    Called on the first mutation of a legacy session (never a bulk sweep). The existing model becomes
+    Called explicitly (`requivo session migrate`), never on a read. The existing model becomes
     revision 1; provenance is recovered from the old session.json where present; known artifact files
-    are copied into artifacts/ and recorded at revision 1. The legacy directory is left untouched."""
+    are copied into artifacts/ and recorded at revision 1. The legacy directory is left untouched.
+
+    **The claim on the slug is `create_session`'s rename**, not an existence check. This function
+    *creates* a session, so it makes its claim the same way the only other creator does, and invariant
+    11 applies to it verbatim: a preceding check is passed by two concurrent callers at once. It used
+    to check only that the legacy *model* existed, so pointed at a slug a live session already
+    occupied it rewrote session.json at revision 0 and then wrote the legacy model over
+    revisions/0001-model.json — and revisions/ is the only durable copy, so revision 1 was destroyed
+    with no copy anywhere. Now the rename loses and `SessionExistsError` is raised before anything is
+    written; the caller decides whether that is a skip or a failure.
+
+    Everything after the claim runs under one `session_lock` (invariant 9), so the metadata patch, the
+    revision and the artifact writes are a single unit rather than three separately-locked ones, and
+    `expected_revision=0` holds the session to the state the claim left it in."""
     from requivo.core.dependencies import ARTIFACT_FILES  # local import avoids a load-time cycle
 
     src = legacy_dir(slug)
@@ -526,34 +607,38 @@ def migrate_legacy(slug: str) -> SessionMeta:
             old = json.loads((src / "session.json").read_text())
         except (OSError, json.JSONDecodeError):
             old = {}
+    # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
+    # leaving an empty session behind holding a name nothing can now use.
+    model = EngineOutput.model_validate_json((src / "model.json").read_text())
 
-    d = canonical_dir(slug)
-    (d / "revisions").mkdir(parents=True, exist_ok=True)
-    (d / "artifacts").mkdir(parents=True, exist_ok=True)
-    now = _now()
     if request:
         req_hash = _hash(request)
     else:
         # Fall back to the legacy session.json's hash, normalising a bare hex digest to "sha256:…".
         legacy_hash = str(old.get("request_sha256", ""))
         req_hash = legacy_hash if legacy_hash.startswith("sha256:") or not legacy_hash else "sha256:" + legacy_hash
-    meta = SessionMeta(
-        session_id=uuid.uuid5(uuid.NAMESPACE_URL, f"requivo:legacy:{slug}").hex,
-        slug=slug, created_at=old.get("created_at", now), updated_at=now,
-        provider=old.get("provider"), model_name=old.get("model_name"),
-        context_cards=old.get("context_cards"), request_hash=req_hash, current_revision=0,
-    )
-    if request:
-        _atomic_write(d / "request.md", request)
-    write_meta(slug, meta)  # so save_revision can read/update it
 
-    model = EngineOutput.model_validate_json((src / "model.json").read_text())
-    rev, _ = save_revision(slug, model)  # existing model → revision 1
+    # The claim. Raises SessionExistsError if a canonical session already occupies the slug.
+    create_session(slug, request, provider=old.get("provider"), model_name=old.get("model_name"),
+                   context_cards=old.get("context_cards"))
 
-    filename_to_type = {fn: t for t, fn in ARTIFACT_FILES.items() if fn}
-    for fn, atype in filename_to_type.items():
-        legacy_file = src / fn
-        if legacy_file.exists():
-            content = legacy_file.read_text()
-            save_session_artifact(slug, atype, fn, content, source_revision=rev)
-    return read_meta(slug)
+    with session_lock(slug):
+        # The three fields `create_session` cannot know, because they belong to the *legacy* session:
+        # its original creation date, the request hash a migration may have to recover from the old
+        # metadata when no request file survived, and an id derived from the slug so re-reading a
+        # migrated session finds the identity a previous migration of it would have given.
+        meta = read_meta(slug)
+        meta.session_id = uuid.uuid5(uuid.NAMESPACE_URL, f"requivo:legacy:{slug}").hex
+        meta.created_at = old.get("created_at", meta.created_at)
+        meta.request_hash = req_hash
+        write_meta(slug, meta)
+
+        rev, _ = save_revision(slug, model, expected_revision=0)  # existing model → revision 1
+
+        filename_to_type = {fn: t for t, fn in ARTIFACT_FILES.items() if fn}
+        for fn, atype in filename_to_type.items():
+            legacy_file = src / fn
+            if legacy_file.exists():
+                content = legacy_file.read_text()
+                save_session_artifact(slug, atype, fn, content, source_revision=rev)
+        return read_meta(slug)
