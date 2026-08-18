@@ -1,6 +1,9 @@
 # Requivo
 
+[![PyPI](https://img.shields.io/pypi/v/requivo)](https://pypi.org/project/requivo/)
+[![Python](https://img.shields.io/pypi/pyversions/requivo)](https://pypi.org/project/requivo/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml)
 
 > Find what could change the solution before you commit to the scope.
 
