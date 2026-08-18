@@ -242,7 +242,12 @@ def _hash(text: str) -> str:
 # `resolve_slug()` always emit this shape, but an *explicit* `--slug` (or a future API caller) is
 # untrusted input — so the two path constructors below validate before joining. The pattern forbids
 # every traversal vector at once: `/`, `\`, `.`, `..`, a leading root, and the empty string.
-_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+#
+# `\Z` and not `$`, here and on `_FILENAME_RE` below (#40, adjacent). Python's `$` matches at the end
+# of the string **or just before a trailing newline**, so `validate_slug("ok\n")` returned its
+# argument unchanged — a guard whose stated job is to make a control character unrepresentable,
+# admitting exactly one. `\Z` is the anchor both docstrings were already describing.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 def validate_slug(slug: str) -> str:
@@ -275,7 +280,7 @@ def validate_slug(slug: str) -> str:
 # Deliberately lowercase-only, matching the slug: a rejection is loud and one edit away, whereas a
 # permissive pattern is the thing being removed here. Every filename in `ARTIFACT_FILENAMES` and every
 # epic export name already fits.
-_FILENAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_FILENAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*\Z")
 
 # Room for the whole name plus the unique scratch suffix `_atomic_write` appends (a dot, the pid, 8
 # hex and `.tmp` — about 20 characters), inside the ~255-byte ceiling ext4 and APFS impose.

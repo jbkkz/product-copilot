@@ -82,6 +82,14 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   named is not there) and from `context_unreadable` (we could not look): here we looked, at every
   root, and there is nothing. `details` carries `{roots}` — the directories searched.
 
+- **`unsafe_selector_token` is new** (#40). A selector token — a context card name or a slot token —
+  carrying a control character is refused rather than echoed back. `details` carries
+  `{selector, position}`, the same shape as `empty_selector_token`. This can turn a *previously
+  accepted* stored value into a refusal: a `session.json` whose `context_cards` holds a name with an
+  embedded newline now reports `unsafe_selector_token` from `doctor` and `session verify` instead of
+  printing it. No name Requivo itself writes is affected — `resolve_cards` has always resolved a
+  selection against the installed cards, so such a value can only have arrived by import or by hand.
+
 Adding a code is not a breaking change under this policy, but *moving a condition to a new code* is,
 so both are noted here and in the changelog rather than only in the latter.
 

@@ -119,7 +119,15 @@ def resolve_slots(tokens: list[str]) -> tuple[list[str], list[str]]:
         if hit:
             resolved.extend(hit)
         else:
-            unmatched.append(raw)
+            # `raw.strip()`, not `raw` — echo the token the guard actually checked (#40 review).
+            # `normalize_tokens` inspects the *stripped* token for control characters, and
+            # `str.strip()` removes the ones Python classifies as whitespace, a newline among them.
+            # So a token whose newline is leading or trailing passes the guard, and echoing the
+            # unstripped original here put that newline into the line `cli.py` prints — the same
+            # forged-receipt defect #40 is about, one selector over. The two card selectors already
+            # echo `raw.strip()` for the sibling reason (a caller should see what they typed, not
+            # the key it was matched by); this one had drifted.
+            unmatched.append(raw.strip())
     ordered = [sid for sid in labels if sid in set(resolved)]  # schema order, de-duped
     return ordered, unmatched
 

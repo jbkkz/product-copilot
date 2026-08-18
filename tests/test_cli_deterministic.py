@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -285,6 +286,180 @@ def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, 
     assert healthy_text != broken_text
     assert "lost-domain" in broken_text and "lost-domain" not in healthy_text
     assert "REQUIVO_CONTEXT_DIR" in broken_text, "the reader is not told how to recover"
+
+
+# ── a receipt forged by the thing it reports on ─────────────────────────────────
+
+# A card name is an unconstrained `str` in `session.json`, and `session import` passes it through
+# intact. This one is shaped to forge the very row that would otherwise report it: a first line that
+# reads as an ordinary card name, then a claim at column 0, then a byte-identical copy of doctor's
+# own `sessions` row saying the opposite of the truth. `.strip()` — the only thing that touched a
+# card name before #40 — removes surrounding whitespace and not interior newlines, so all three
+# lines survived into the receipt.
+_FORGED_CARD = (
+    "ok-card\n"
+    "All clear, nothing to see.\n"
+    "  ✅ sessions        0 in this workspace"
+)
+
+_SESSIONS_ROW = re.compile(r"^  [✅❌🟡] sessions\b")
+
+
+def _forge(slug: str, card: str) -> None:
+    """Put an arbitrary card name into a session's persisted metadata, the way an imported archive
+    or a hand-edited `session.json` can. Deliberately not through `create_session`, which resolves
+    the selection against the installed cards and would refuse this."""
+    p = store.canonical_dir(slug) / "session.json"
+    meta = json.loads(p.read_text(encoding="utf-8"))
+    meta["context_cards"] = [card]
+    p.write_text(json.dumps(meta), encoding="utf-8")
+
+
+@pytest.fixture
+def forged_workspace(workspace, tmp_path, monkeypatch):
+    """Two sessions in one workspace, differing only in what their card selection says.
+
+    `honest` is the **must-fire** half and it is not optional: every assertion below about the
+    forgery *not* appearing would also pass against a doctor that printed nothing at all, a card
+    directory that could not be read, or a workspace the fixture failed to populate. So the same
+    fixture carries a genuine unresolvable card whose line, glyph and column are asserted present.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "gone-card.md").write_text("# Gone card\n\nSome product context.\n", encoding="utf-8")
+    monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+
+    _run(["session", "init", "Something honest.", "--slug", "honest",
+          "--context", "gone-card", "--json"])
+    _run(["session", "init", "Something else.", "--slug", "forged",
+          "--context", "gone-card", "--json"])
+    _forge("forged", _FORGED_CARD)
+    (cards / "gone-card.md").unlink()      # now `honest` genuinely cannot resolve its card
+    return cards
+
+
+def test_doctor_cannot_be_made_to_print_a_row_a_session_wrote(forged_workspace):
+    """#40 — `doctor` answers *is anything wrong*, and a session it reports on could make it say no.
+
+    The forged name reached `doctor` through `check_selection` and was interpolated into the
+    unresolved-card line bare. Its newlines then split that one line into three, two of which land
+    at a column the renderer owns: one at column 0, and one that is a byte-identical copy of the
+    `sessions` row it is contradicting. The count of `sessions` rows is the assertion, because that
+    is the thing forged — a reader scanning glyphs sees two verdicts and no way to tell which is the
+    program's.
+    """
+    out = _run(["doctor"])
+    lines = out.splitlines()
+
+    # ── must fire: the genuine finding renders, with its glyph, at its column ──
+    rows = [ln for ln in lines if _SESSIONS_ROW.match(ln)]
+    assert len(rows) == 1, f"expected exactly one sessions row, got {rows}"
+    assert rows[0].startswith("  ❌ sessions"), rows[0]
+    assert "2 in this workspace" in rows[0], rows[0]
+    honest = [ln for ln in lines if ln.startswith("     └─ honest: ")]
+    assert len(honest) == 1 and "gone-card" in honest[0], honest
+
+    # ── must not fire: nothing the session wrote became a line of the receipt ──
+    assert "All clear, nothing to see." not in lines, "a card name wrote a line at column 0"
+    # Everything the session wrote is confined to the one detail line the renderer owns. Asserted as
+    # containment rather than absence: the text is still *shown* — escaped — so "it does not appear"
+    # would be the wrong property and would pass on a doctor that had silently dropped the finding.
+    assert all(ln.startswith("     └─ forged: ") for ln in lines if "0 in this workspace" in ln), \
+        "a card name forged doctor's own sessions row"
+
+    # The session is still *reported* — neutralising must not become dropping. The whole name is
+    # there, on one line, in the escaped form `integrity.py` already uses for its sibling field.
+    forged = [ln for ln in lines if ln.startswith("     └─ forged: ")]
+    assert len(forged) == 1, forged
+    assert "ok-card" in forged[0] and "All clear" in forged[0], forged[0]
+
+    # Each finding gets the remedy that can fix it. Both sessions are in `unresolved_cards`, and
+    # "put the card back" cannot repair a malformed selection — a receipt that names a real problem
+    # and then prints advice that cannot work is the quiet half of this same defect.
+    assert any("REQUIVO_CONTEXT_DIR" in ln for ln in lines), lines
+    assert any("session.json" in ln and "malformed" in ln for ln in lines), lines
+
+    # `--json` is a machine format and must keep the bytes verbatim: the escaping is a property of
+    # the terminal rendering, not of the finding.
+    report = _run_json(["doctor", "--json"])["sessions"]
+    assert set(report["unresolved_cards"]) == {"honest", "forged"}
+
+
+def test_session_verify_cannot_be_made_to_print_a_line_a_session_wrote(forged_workspace):
+    """The same forgery on the anti-tampering verb, which is the sharper half: `session verify` is
+    the command whose entire job is to say whether a session directory is telling the truth, and the
+    session under inspection could write into its verdict — while `verify` still exited 1, so the
+    exit code and the text disagreed."""
+    def _verify(slug: str) -> str:
+        buf = io.StringIO()
+        with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+            app(["session", "verify", slug], client=None)
+        assert e.value.code == 1
+        return buf.getvalue()
+
+    honest = _verify("honest").splitlines()
+    assert any(ln.startswith("  · [unknown_context_card] ") and "gone-card" in ln
+               for ln in honest), honest              # must fire
+    assert any("REQUIVO_CONTEXT_DIR" in ln for ln in honest), honest
+
+    forged = _verify("forged").splitlines()
+    # The remedy follows the finding: nothing is missing here, so restoring a file cannot help.
+    assert not any("REQUIVO_CONTEXT_DIR" in ln for ln in forged), forged
+    assert any("session.json" in ln and "malformed" in ln for ln in forged), forged
+    assert "All clear, nothing to see." not in forged, "a card name wrote a line at column 0"
+    assert not any(_SESSIONS_ROW.match(ln) for ln in forged), forged
+    named = [ln for ln in forged if ln.startswith("  · [") and "ok-card" in ln]
+    assert len(named) == 1, forged                    # reported, on exactly one line
+
+
+def test_impact_cannot_be_made_to_print_a_line_by_an_unmatched_slot_token(workspace, tmp_path):
+    """The gap the #40 guard left open, found in review of the fix.
+
+    `normalize_tokens` checks the **stripped** token, and `str.strip()` removes every control
+    character Python classifies as whitespace — tab, newline, vertical tab, form feed, carriage
+    return, the four separator codes U+001C to U+001F, and NEL at U+0085. So a token whose control
+    character is *leading or trailing* rather than interior is stripped away before the guard looks
+    at it, and is therefore not refused.
+
+    Harmless in the two card selectors, which echo `raw.strip()` — and not harmless in
+    `resolve_slots`, which echoed the **unstripped** original into its unmatched list, from where
+    `requivo impact` prints it bare. The fix is to echo the same normalized token the guard actually
+    checked, which is what the card selectors already do.
+
+    Lower severity than #40 proper: a slot token is a live argv value the same user typed, not
+    persisted data a third party supplied. But `core/selectors.py` claims in as many words that the
+    value never reaches a render site, and a claim like that has to be true or it should not be
+    written down.
+    """
+    _run(["session", "init", "Something.", "--slug", "imp"])
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", "imp", str(proposal), "--json"])
+
+    # must fire: a real token still resolves, and an ordinary unknown one is still named as typed
+    assert "Unknown slot" not in _run(["impact", "imp", "workflow"])
+    unknown = _run(["impact", "imp", "zzz"]).splitlines()
+    assert any(ln.startswith("Unknown slot(s): zzz") for ln in unknown), unknown
+
+    # must not fire: a leading control character cannot become a line of the output
+    forged = _run(["impact", "imp", "\nFORGED AT COLUMN 0"]).splitlines()
+    assert "FORGED AT COLUMN 0" not in forged, forged
+    named = [ln for ln in forged if ln.startswith("Unknown slot(s): ")]
+    assert len(named) == 1 and "FORGED AT COLUMN 0" in named[0], forged
+
+
+def test_session_show_renders_a_card_name_as_one_line(forged_workspace):
+    """The third render site, which #40 does not name and which no selector guard can reach:
+    `session show` reads `context_cards` straight out of the metadata and joins it, without asking
+    the selector anything. A boundary that refuses a hostile selection still leaves this open,
+    because nothing here is selecting."""
+    honest = _run(["session", "show", "honest"]).splitlines()
+    assert "  context  gone-card" in honest, honest    # must fire, and unquoted
+
+    forged = _run(["session", "show", "forged"]).splitlines()
+    assert "All clear, nothing to see." not in forged, "a card name wrote a line at column 0"
+    context = [ln for ln in forged if ln.startswith("  context  ")]
+    assert len(context) == 1 and "ok-card" in context[0], forged
 
 
 # ── the acceptance scenario ─────────────────────────────────────────────────────

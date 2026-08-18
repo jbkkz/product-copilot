@@ -103,6 +103,32 @@ So the two are reported side by side and named differently: `problems` is intern
 is environment. Both count towards the top-level `ok`, because either one means the session cannot
 take another turn.
 
+### A card name cannot write a line of the receipt
+
+A session's `context_cards` is caller text that **persists**, and `session import` accepts an archive
+without inspecting it — deliberately, because a card lives outside the session directory and its
+absence is a fact about your machine, not about the archive. Both health verbs then render those
+names into their output.
+
+Until 0.10.0 they rendered them bare, so a name containing a newline did not merely look odd: it
+ended the line and started a new one at whatever column it chose. A session could print `doctor`'s
+own `sessions` row, byte-identical in shape and column, saying *all clear* directly beneath the row
+that was reporting it — and forge `session verify`, the verb whose entire job is to say whether a
+session is telling the truth, while `verify` still exited 1 (#40).
+
+A selector token carrying a control character is now **refused** rather than displayed, at the one
+function every selector passes through, and reported as `unsafe_selector_token`. The refusal names
+the offending value in escaped form, on one line. Two consequences worth knowing:
+
+- `doctor` and `session verify` report such a session as unhealthy and name it. The finding is not
+  dropped — it is shown, quoted and escaped, so you can see exactly what is stored.
+- `--json` output is unaffected and keeps the bytes verbatim. The escaping is a property of rendering
+  to a terminal, not of the finding, and JSON already carries a newline safely.
+
+`session show` prints the stored names without selecting anything with them, so no refusal can run
+there; it renders each through the same one-line rule instead. A name that was already safe is
+printed byte-for-byte, so ordinary output is unchanged.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty

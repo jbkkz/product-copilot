@@ -21,6 +21,7 @@ from requivo.core.errors import (
     NoContextCardsError,
     RequivoError,
     UnknownContextCardError,
+    UnsafeSelectorTokenError,
 )
 from requivo.core.selectors import normalize_tokens
 from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
@@ -28,8 +29,16 @@ from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 # Every refusal `load_context` can produce, so `check_selection` can report exactly what the loader
 # would raise without listing them twice. `ContextUnreadableError` is deliberately absent: "we could
 # not look" is not a verdict about the selection, and `check_selection` lets it propagate.
+#
+# `UnsafeSelectorTokenError` has to be in here rather than escaping (#40). A hostile card name only
+# ever arrives *persisted* — `create_session` resolves the selection against the installed cards, so
+# the door is `session import` or a hand-edited `session.json` — which means the first code to see
+# one is a health check. A health check that raises takes the whole listing down with it rather than
+# degrading the one row (invariant 15), and `doctor` would then answer nothing at all about a
+# workspace containing one tampered session. Reported, never raised.
 _SELECTION_REFUSALS = (
     NoContextCardsError, EmptySelectionError, EmptySelectorTokenError, UnknownContextCardError,
+    UnsafeSelectorTokenError,
 )
 
 
