@@ -31,13 +31,13 @@ jobs:
     permissions:
       id-token: write   # mint the OIDC token Trusted Publishing uses — this is what replaces a token
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Publish exactly the tagged commit, never whatever happens to be on the default branch.
           ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
