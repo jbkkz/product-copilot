@@ -5,6 +5,7 @@
   "test_command": "uv run --extra dev pytest -q",
   "version_sites": [
     "pyproject.toml",
+    "src/requivo/__init__.py",
     "CHANGELOG.md",
     "plugins/claude-code/.claude-plugin/plugin.json",
     ".claude-plugin/marketplace.json"
