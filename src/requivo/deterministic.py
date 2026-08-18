@@ -57,8 +57,14 @@ def read_user_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
+        # `display_token`, not the bare path: the path is untrusted input, and a filename carrying a
+        # newline would otherwise write what reads as a second, authoritative line of Requivo's own
+        # output at column 0 — the shape #40 found in `doctor`, in a message added by the fix for
+        # #11. Found by this file's own guard test rather than in review, which is the argument for
+        # the guard: the class reaches code written today, not only legacy paths.
         raise InvalidModelError(
-            f"{path} is not valid UTF-8 (byte 0x{e.object[e.start]:02x} at position {e.start}). "
+            f"{display_token(str(path))} is not valid UTF-8 "
+            f"(byte 0x{e.object[e.start]:02x} at position {e.start}). "
             f"Requivo reads and writes UTF-8 throughout, so a file in another encoding is refused "
             f"rather than decoded into text that would look like prose and be wrong. Re-save it as "
             f"UTF-8 and try again.",

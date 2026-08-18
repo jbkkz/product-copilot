@@ -65,6 +65,8 @@ from pathlib import Path
 import pytest
 
 from requivo import streams
+from requivo.core.errors import InvalidModelError
+from requivo.deterministic import read_user_text
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -620,6 +622,55 @@ def test_safe_write_gives_up_quietly_on_a_stream_that_is_gone():
     closed = _wrapper("utf-8", "strict")
     closed.close()
     streams.safe_write(closed, "anything")  # must not raise
+
+
+# --------------------------------------------------------------------------------------------------
+# A file the *user* named. The one read whose bytes this project did not write.
+# --------------------------------------------------------------------------------------------------
+
+def test_a_user_file_that_is_not_utf8_is_refused_by_name_not_by_traceback(tmp_path):
+    """Refusing is right — mojibake validates, and half a request reads exactly like a whole one. But
+    refusing with a bare `UnicodeDecodeError` would trade a silently wrong answer for an unexplained
+    crash, which is the same trade one step along. The refusal has to be an answer."""
+    brief = tmp_path / "brief.md"
+    # A French sentence saved as cp1252 by a Windows editor: the realistic input, not an exotic one.
+    brief.write_bytes("Système de validation des congés.".encode("cp1252"))
+
+    with pytest.raises(InvalidModelError) as ei:
+        read_user_text(brief)
+
+    message = str(ei.value)
+    assert "not valid UTF-8" in message, message
+    assert "0xe8" in message, ("the offending byte is not named, so the user cannot tell which "
+                              f"character to look for: {message}")
+    assert ei.value.details["path"] == str(brief)
+    assert ei.value.details["expected_encoding"] == "utf-8"
+    assert isinstance(ei.value.details["position"], int)
+
+
+def test_a_user_file_that_is_utf8_is_read_unchanged(tmp_path):
+    """The must-not-fire half. A refusal that fires on correct input is worse than no refusal, and
+    this is the case that matters most on this project: French client prose, correctly encoded."""
+    brief = tmp_path / "brief.md"
+    original = "Système de validation des congés — 5 000 salariés."
+    brief.write_bytes(original.encode("utf-8"))
+    assert read_user_text(brief) == original
+
+
+def test_the_refusal_does_not_let_a_path_forge_a_line_of_output(tmp_path):
+    """The message interpolates a path the user supplied. A path carrying a newline must not be able
+    to write what looks like a second, authoritative line of Requivo's own output -- the shape #40
+    found in `doctor`."""
+    sneaky = tmp_path / "brief\nERROR: session verified OK.md"
+    try:
+        sneaky.write_bytes(b"\xe8")
+    except (OSError, ValueError):
+        pytest.skip("this filesystem refuses a newline in a filename; the forging path is untested here")
+    with pytest.raises(InvalidModelError) as ei:
+        read_user_text(sneaky)
+    body = str(ei.value)
+    assert not any(line.startswith("ERROR:") for line in body.splitlines()), (
+        "a user-supplied path forged a line at column 0 of Requivo's own message: " + repr(body))
 
 
 _WARN_DEFAULT_ENCODING = {"PYTHONWARNDEFAULTENCODING": "1"}
