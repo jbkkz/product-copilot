@@ -22,6 +22,39 @@ class UnknownArtifactTypeError(RequivoError):
     code = "unknown_artifact_type"
 
 
+class UnstatedSourceRevisionError(InvalidSessionError):
+    """`save` was called without the revision the artifact was reasoned from.
+
+    Only the caller knows what it read. This service can see the session's *current* revision, which
+    is a different fact, and reading one as the other is the whole of #6: the omitted revision was
+    filled in with the current one and the freshness question was then answered `False` without the
+    dependency graph being consulted at all. The recorded number was a real revision of a real
+    session, so nothing downstream could ever tell it from a stated one.
+
+    Refused rather than guessed in either direction. `stale=False` claims the artifact is current
+    when nobody established that; `stale=True` claims it is out of date when it may be perfectly
+    fresh, and a flag that fires on every unstated save is one every reader learns to scroll past.
+    The third state is neither flag — it is that the record does not get written, which is the answer
+    `_stale_since` already gives for the sibling case where the history cannot be read.
+
+    **The code is inherited on purpose, and it is not the one this deserves.** `invalid_session`
+    names the session rather than the omission, and the honest code is a new one —
+    `unstated_source_revision`. Adding it means a row in `web/app.py::_STATUS_BY_CODE` (400), which
+    `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status` requires of every code
+    in the vocabulary, and that file is held by another lane in this round. Inheriting keeps the
+    precision in the *type*, where a caller can still catch exactly this.
+
+    **Sharing a code means sharing a `details` shape**, which is a debt this class takes on rather
+    than a property it gets for free: both raise sites carry all five of
+    `{slug, type, source_revision, current_revision, cause}`, two of them `null` here, because a key
+    present on one payload and absent on the other is precisely what #35 cost — a consumer matches
+    the code, reads the key, and gets a `KeyError` from a payload that correctly carried the code it
+    matched. `tests/test_artifact_provenance.py` asserts the two key sets against each other, so the
+    debt is checked rather than remembered. Giving the class its own `code` and adding the status row
+    is a two-line follow-up that also retires it.
+    """
+
+
 class ArtifactService:
     def __init__(self, repo: SessionRepository | None = None):
         self.repo: SessionRepository = repo or default_repository()
@@ -37,25 +70,52 @@ class ArtifactService:
 
     def save(self, slug: str, artifact_type: str, content: str,
              source_revision: int | None = None) -> ArtifactStatus:
-        """Persist an artifact and tie it to the model revision it was generated from. `source_revision`
-        defaults to the session's current revision (the common case: generate-then-save).
+        """Persist an artifact and tie it to the model revision it was generated from.
+        `source_revision` is **required**: it is the one fact only the caller holds.
 
         An artifact reasoned from an *older* revision is saved with its freshness already computed
         against the current model, not assumed fresh. A long generation can finish after the session
         has moved (that is why generators capture their revision up front), and Claude Code can save a
         file it produced several turns ago — in both cases the honest answer is knowable: diff the
         source revision against the current model and see whether this artifact's dependencies were
-        touched. Recording it fresh because the caller said so was how a stale PRD stayed unflagged."""
+        touched. Recording it fresh because the caller said so was how a stale PRD stayed unflagged.
+
+        Omitting it used to mean "the current revision", which is the same bug one level down (#6): the
+        answer was then computed against a revision nobody had claimed to read, and it came out
+        `stale=False` every time because a source revision that *is* the current one cannot have moved.
+        The parameter keeps its `None` default rather than becoming positionally required so that the
+        omission arrives as a structured `UnstatedSourceRevisionError` a surface can print — the CLI
+        passes `--revision`'s value straight through, and a `TypeError` traceback is not an answer to
+        a user who left a flag off."""
         filename = self._filename(artifact_type)
         if not self.repo.has_meta(slug):
             raise SessionNotFoundError(
                 f"session '{slug}' is not in the canonical store; apply a model first", details={"slug": slug})
         with self.repo.lock(slug):
             meta = self.repo.read_meta(slug)
-            rev = source_revision if source_revision is not None else meta.current_revision
-            stale = self._stale_since(slug, artifact_type, rev, meta.current_revision)
+            if source_revision is None:
+                # Before any write: a refused save must leave neither a file under artifacts/ nor a
+                # status row in session.json, or the next reader finds content nothing describes.
+                raise UnstatedSourceRevisionError(
+                    f"cannot record {artifact_type!r} against session '{slug}': the revision it was "
+                    "reasoned from was not stated, so whether it is current cannot be established — "
+                    f"and this session is at revision {meta.current_revision}, which is not evidence "
+                    "about what the content was generated from. State it: `source_revision=N` on the "
+                    "service, `--revision N` on `requivo artifact save`. This session has revisions "
+                    f"1..{meta.current_revision or 0}.",
+                    details={"slug": slug, "type": artifact_type, "source_revision": None,
+                             "current_revision": meta.current_revision,
+                             # `cause` is present and null rather than absent. `invalid_session` now
+                             # carries two conditions, and `docs/compatibility.md` states the rule
+                             # they are both held to: one code, one `details` shape. A key that
+                             # appears on one payload and not the other is exactly the shape #35 cost
+                             # — a consumer matches the code, reads the key, and gets a `KeyError`
+                             # from a payload that correctly carried the code it matched. There is no
+                             # underlying failure to name here, and `null` says that.
+                             "cause": None})
+            stale = self._stale_since(slug, artifact_type, source_revision, meta.current_revision)
             return self.repo.save_artifact(slug, artifact_type, filename, content,
-                                           source_revision=rev, stale=stale)
+                                           source_revision=source_revision, stale=stale)
 
     def _stale_since(self, slug: str, artifact_type: str, source_revision: int,
                      current_revision: int) -> bool:
@@ -68,7 +128,31 @@ class ArtifactService:
         the absence of an answer, it is the claim "this artifact is up to date", and it was being made
         about a session whose history could not be read at all. Both directions invent something; only
         one of them is silent. The honest outcome is that the save does not happen, because the
-        provenance it would record cannot be verified."""
+        provenance it would record cannot be verified.
+
+        **The guard catches the failure set, not one family of it (#6 F2).** It caught `RequivoError`
+        alone, which covers exactly one way a revision fails to load: `load_revision_model` raises
+        `SessionNotFoundError` for a file that is *absent*. A file that is present and unreadable took
+        every other route out — a truncated `0002-model.json` from an interrupted sync reaches
+        `EngineOutput.model_validate_json` and raises pydantic's `ValidationError` (a `ValueError`),
+        a revision that fails to decode raises `UnicodeDecodeError` (also a `ValueError`), and a
+        permission or device error raises `OSError`. None of the three is a `RequivoError`, so the
+        one block that exists to turn "I cannot establish freshness" into a refusal never ran, and a
+        raw traceback came out of a service call from inside the session lock — past `cli.py`'s
+        `except RequivoError` too, so the surface could not phrase it either. The three are caught by
+        their base classes rather than by name so the next reader of a corrupt file joins them; the
+        `try` wraps only the two loads, so a defect in the diff below still surfaces as itself.
+
+        **What this does not close, stated rather than implied.** The decode arm only fires if the
+        decode actually *raises*, and that is decided one layer down, in `load_revision_model` /
+        `load_session_model`, which call `p.read_text()` with **no explicit encoding** while
+        `_atomic_write` writes those same files as UTF-8. Where the locale default is not UTF-8 —
+        cp1252 on a default Windows install — most UTF-8 byte sequences decode to *something*
+        instead of failing, so a revision holding an em-dash comes back mojibaked and this guard sees
+        nothing to catch. `_stale_since` would then answer from quietly corrupted text, which is the
+        silent failure this refusal exists to avoid, arriving by a different door. Closing it means
+        `encoding="utf-8"` on those two reads — `read_artifact_file` already carries it and says why —
+        and that file belongs to another lane, so it is named here rather than reached into."""
         if source_revision >= current_revision:
             return False
         if source_revision < 1:
@@ -76,14 +160,20 @@ class ArtifactService:
         try:
             was = self.repo.load_revision(slug, source_revision)
             now = self.repo.load_model(slug)
-        except RequivoError as e:
+        except (RequivoError, ValueError, OSError) as e:
+            # The cause is named by type as well as text: a pydantic ValidationError's message says
+            # nothing about *why* a file could not be read, and "invalid JSON" and "no such revision"
+            # are different remedies. The full text goes in `details`; the message carries its first
+            # line, because a multi-line pydantic report inside a sentence is unreadable in a terminal.
+            cause = f"{type(e).__name__}: {e}"
             raise InvalidSessionError(
                 f"cannot establish whether this {artifact_type!r} is current: session '{slug}' is at "
                 f"revision {current_revision} but revision {source_revision}, the one it was reasoned "
-                f"from, cannot be read ({e}). The session's history is incomplete — verify it before "
-                "recording an artifact against it.",
+                f"from, cannot be read ({(cause.splitlines() or [cause])[0]}). The session's history is "
+                "incomplete — verify it before recording an artifact against it.",
                 details={"slug": slug, "source_revision": source_revision,
-                         "current_revision": current_revision, "type": artifact_type},
+                         "current_revision": current_revision, "type": artifact_type,
+                         "cause": cause},
             ) from e
         if diff_reasoning(was, now).changed and artifact_type in REASONING_CONSUMERS:
             return True

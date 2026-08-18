@@ -520,7 +520,7 @@ def test_model_apply_and_status_and_artifact_flow(workspace, tmp_path):
 
     brief = tmp_path / "brief.md"
     brief.write_text("# Assessment\n")
-    _run(["artifact", "save", "event", "--type", "brief", "--file", str(brief)])
+    _run(["artifact", "save", "event", "--type", "brief", "--file", str(brief), "--revision", "1"])
     listed = _run_json(["artifact", "list", "event", "--json"])
     assert listed["brief"]["revision"] == 1 and listed["brief"]["stale"] is False
 
@@ -535,7 +535,7 @@ def test_session_show_reads_freshness_from_the_dependency_graph_not_the_revision
     _run(["model", "apply", "s", str(proposal)])
     prd = tmp_path / "prd.md"
     prd.write_text("# PRD\n")
-    _run(["artifact", "save", "s", "--type", "prd", "--file", str(prd)])   # generated at revision 1
+    _run(["artifact", "save", "s", "--type", "prd", "--file", str(prd), "--revision", "1"])
 
     # Move the session on via a slot the PRD does not consume: revision 2, PRD inputs untouched.
     proposal.write_text(json.dumps(_full_model(
@@ -668,8 +668,27 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
     assert r["revision"] == 1 and r["stale"] is True
     assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is True
 
-    fresh = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc), "--json"])
+    # This used to omit `--revision` and assert `revision: 2, stale: false` — the defect of #6 pinned
+    # as a contract. The service filled the gap with the session's current revision and then answered
+    # the freshness question against it, which cannot come out anything but False. The revision it
+    # recorded was real, so no reader downstream could tell the claim from a stated one. Saying `2`
+    # here asserts the same fresh answer about a revision the caller actually claims to have read.
+    fresh = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc),
+                       "--revision", "2", "--json"])
     assert fresh["revision"] == 2 and fresh["stale"] is False
+
+    # …and leaving it off is now refused rather than guessed, on the exact surface the Claude Code
+    # plugin drives. What the caller gets is the structured envelope, not a traceback — the refusal is
+    # raised from inside the session lock, so this also pins that it reaches `cli.py`'s handler.
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as exc:
+        app(["artifact", "save", "s", "--type", "prd", "--file", str(doc), "--json"])
+    assert exc.value.code == 1
+    envelope = json.loads(buf.getvalue())
+    assert envelope["details"]["source_revision"] is None
+    assert "--revision" in envelope["message"]
+    # and nothing was recorded against the guess: the PRD on disk is still the one saved above.
+    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["revision"] == 2
 
 
 # ── documents on stdin ──────────────────────────────────────────────────────────
@@ -695,7 +714,8 @@ def test_a_proposal_can_be_applied_from_stdin(workspace, monkeypatch):
 def test_an_artifact_can_be_saved_from_stdin(workspace, monkeypatch):
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
     _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
-    r = json.loads(_run_stdin(["artifact", "save", "s", "--type", "prd", "--file", "-", "--json"],
+    r = json.loads(_run_stdin(["artifact", "save", "s", "--type", "prd", "--file", "-",
+                               "--revision", "1", "--json"],
                               "# PRD\nwritten straight to stdin\n", monkeypatch))
     assert r["revision"] == 1 and r["stale"] is False
     assert "straight to stdin" in _run(["artifact", "show", "s", "--type", "prd"])
