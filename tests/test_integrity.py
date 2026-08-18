@@ -13,6 +13,7 @@ import threading
 import pytest
 
 from requivo.core import persistence as store
+from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RevisionConflictError
 from requivo.core.integrity import check_session
@@ -502,3 +503,36 @@ def test_a_revision_log_that_does_not_match_the_revision_count_is_caught(workspa
     raw["revisions"] = raw["revisions"][:1]          # claims revision 2, logs one
     p.write_text(json.dumps(raw))
     assert "revision_count_mismatch" in {p_.code for p_ in check_session("s")}
+
+
+def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(workspace, tmp_path,
+                                                                            monkeypatch):
+    """The boundary of what this module answers, pinned as behaviour rather than left in a docstring.
+
+    `check_session_dir` asks whether a session directory tells the truth **about itself**. A context
+    card lives outside the directory — in the installed package or in `user_context_dir()` — so an
+    unresolvable card is a fact about *this machine*, not about the session. Two consequences follow
+    and both are load-bearing:
+
+    - the same directory would be "broken" on one machine and coherent on another, which is not a
+      property an integrity check can have; and
+    - `session import` refuses an archive on these problems, so a colleague's perfectly good session
+      would become unimportable merely because you do not have one of their cards.
+
+    It is a real problem and it is reported — by `doctor` and `session verify`, as an *environment*
+    finding, through `core.context.check_selection`. It is deliberately not reported here.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "lost-domain.md").write_text("# Lost domain\n")
+    monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+
+    svc = SessionService()
+    slug = svc.create_session("Something.", context_cards=["lost-domain"], slug="carded").slug
+    assert store.read_meta(slug).context_cards == ["lost-domain"]
+    assert check_session(slug) == []                 # must-fire control: the session is coherent
+
+    (cards / "lost-domain.md").unlink()
+    assert check_session(slug) == [], "integrity must not depend on what this machine has installed"
+    # …and the environment check, which is where it belongs, does see it.
+    assert check_selection(store.read_meta(slug).context_cards) is not None

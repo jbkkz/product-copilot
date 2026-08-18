@@ -50,7 +50,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | Command | Does |
 |---|---|
 | `requivo demo` | Replay a bundled run — no key, no network |
-| `requivo doctor [--json]` | Environment + install check |
+| `requivo doctor [--json]` | Environment + install check (see [What `doctor` answers](#what-doctor-answers)) |
 | `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
 | `requivo session init\|list\|show\|verify\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
@@ -58,6 +58,50 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.
+
+### What `doctor` answers
+
+`doctor` is the verb whose only job is *is anything wrong*, so every check it makes has three
+answers, not two: it passed, it failed, or **it could not be made**. The third is the one that used
+to be missing, and a check that reports "nothing found" when it could not look is worse than no check
+at all.
+
+| `--json` field | Reads |
+|---|---|
+| `schema.ok` / `schema.slots` / `schema.error` | The slot schema loaded, and how many slots it defines |
+| `context.status` | `ok`, `empty` (the install has no context cards) or `unreadable` (they could not be read). `context.ok` is true only for `ok` |
+| `context_cards` | The card names themselves — the plain list it has always been |
+| `sessions.readable` / `sessions.total` / `sessions.error` | Whether the session directory could be listed at all. When it could not, `total` is `null` rather than `0`, because *no sessions* and *we could not look* are different answers and a user told the first concludes their sessions were deleted |
+| `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
+| `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
+| `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
+
+An `empty` context is a broken install rather than a quiet inconvenience: the cards are what impact
+is estimated against, and impact is half of `information_value = uncertainty × impact`. Discovery
+would still run and still produce a model — it would just ask duller questions, for a reason nothing
+on screen would name.
+
+### Context cards a session can no longer find
+
+A session records the context cards it was created with, and those cards live **outside** the
+session — in the installed package, or in `REQUIVO_CONTEXT_DIR`. Rename a card, replace an install,
+or open the session on another machine, and the saved selection no longer resolves. Since that is now
+a refusal rather than a silently empty context, such a session is stopped at its next reasoning turn,
+which is a paid call minutes into a conversation.
+
+Both health verbs now say so first, offline: `doctor` lists the sessions under
+`sessions.unresolved_cards`, and `session verify <slug>` reports it in a `context_cards` block and
+exits non-zero. Recovery is to put the card back, or to point `REQUIVO_CONTEXT_DIR` at wherever it
+now lives.
+
+It is deliberately **not** a session-integrity problem. `session verify`'s `problems` list, and
+`check_session_dir` behind it, answer whether a session directory tells the truth *about itself* —
+and a card is not in the directory. Reporting a lost card there would make the same session coherent
+on one machine and broken on another, and would make `session import` (which refuses an archive on
+integrity problems) reject a colleague's perfectly good session because you lack one of their cards.
+So the two are reported side by side and named differently: `problems` is internal, `context_cards`
+is environment. Both count towards the top-level `ok`, because either one means the session cannot
+take another turn.
 
 ### What `model apply` takes
 

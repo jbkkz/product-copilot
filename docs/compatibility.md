@@ -59,6 +59,12 @@ not change meaning without a note in the changelog.
 
 Error `code` values are stable identifiers — assert on the code, never on the message text.
 
+One populated field has changed meaning under that rule, and the changelog carries the note:
+`doctor --json`'s `sessions.total` is `null`, not `0`, when the session directory could not be read
+at all. It reported `0` before, which was indistinguishable from an empty workspace — a reader
+gating on `total == 0` was being told "you have no sessions" by a check that had not managed to look.
+The sibling `sessions.readable` says which case you are in.
+
 ## What a proposal means
 
 The JSON you hand to `model validate`, `model diff` and `model apply` is a **proposal**, and since

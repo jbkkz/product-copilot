@@ -24,11 +24,11 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
-from requivo.core.context import available_cards, resolve_cards
+from requivo.core.context import available_cards, check_selection, resolve_cards
 from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionExistsError, SessionNotFoundError
-from requivo.core.integrity import check_session, check_session_dir
+from requivo.core.integrity import IntegrityProblem, check_session, check_session_dir
 from requivo.core.validation import validate_proposal
-from requivo.paths import ASSETS, session_root, workspace_root
+from requivo.paths import ASSETS, CONTEXT, session_root, user_context_dir, workspace_root
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
 
@@ -94,11 +94,20 @@ def doctor_report() -> dict:
     except Exception as e:  # noqa: BLE001 - doctor reports any failure rather than raising
         schema_ok, schema_err = False, str(e)
 
-    cards = []
+    # Context cards get their own check, with their own three states. They used to have none: a
+    # failure of `available_cards()` was written into `schema_err` — a *different* check's field —
+    # with `schema_ok` left True and the message printed nowhere, while the card line printed a tick
+    # whatever the count was. A wheel that ships `assets/` but loses `assets/context/` therefore
+    # showed three green ticks (#12). `status` is the distinction that was missing: `ok` (cards
+    # loaded), `empty` (we looked and there are none — a broken install, because impact estimation
+    # is the product's central idea and it runs on these cards), `unreadable` (we could not look,
+    # which is not the same answer and must not render like the clean one).
+    cards, cards_err = [], None
     try:
         cards = available_cards()
-    except Exception as e:  # noqa: BLE001
-        schema_err = schema_err or str(e)
+    except Exception as e:  # noqa: BLE001 - doctor reports any failure rather than raising
+        cards_err = str(e)
+    cards_status = "unreadable" if cards_err else ("ok" if cards else "empty")
 
     # Provider (optional).
     provider_installed, provider_version = False, None
@@ -114,7 +123,11 @@ def doctor_report() -> dict:
         "python_version": platform.python_version(),
         "assets": {"root": str(ASSETS), "present": ASSETS.exists()},
         "schema": {"ok": schema_ok, "slots": slot_count, "error": schema_err},
+        # `context_cards` stays the plain list it has always been — it is a published `--json` key
+        # and a consumer reading `len(...)` off it must keep working. The verdict is the new sibling.
         "context_cards": cards,
+        "context": {"ok": cards_status == "ok", "status": cards_status, "count": len(cards),
+                    "error": cards_err, "roots": [str(CONTEXT), str(user_context_dir())]},
         "provider_anthropic": {
             "installed": provider_installed,
             "version": provider_version,
@@ -124,25 +137,77 @@ def doctor_report() -> dict:
         # Sessions that no longer add up. Cheap (a session is a handful of small files) and this is
         # where a user asks "is anything wrong?" — a broken history is exactly that, and it otherwise
         # only surfaces later, as a refused artifact save with no obvious cause.
-        "sessions": _session_health(),
+        "sessions": _session_health(cards_readable=cards_err is None),
     }
 
 
-def _session_health() -> dict:
-    """{"total": N, "inconsistent": {slug: [codes]}} over the workspace's sessions."""
-    inconsistent = {}
+def _card_health(slug: str) -> dict:
+    """Does this session's persisted context-card selection still load *here*? Three states, because
+    a checker that could not look must not answer like one that looked and found nothing:
+
+    - `{"checked": True,  "problem": None}`  — it loads;
+    - `{"checked": True,  "problem": {…}}`   — it does not, and the envelope names the cards;
+    - `{"checked": False, "error": "…"}`     — neither the session's metadata nor the card directory
+      could be read, so this session's context is simply unknown.
+
+    **Why this lives here and not in `core/integrity.py`.** That module answers one question — does
+    a session directory tell the truth *about itself* — and a context card is not in the directory;
+    it is in the installed package or in `user_context_dir()`. Reporting a lost card as an integrity
+    problem would make the same directory coherent on one machine and broken on another, which is
+    not a property an integrity check can have. It would also break `session import`, which refuses
+    an archive on exactly those problems: a colleague's perfectly good session would become
+    unimportable because you happen not to have one of their cards. So it is an *environment*
+    finding, reported by the two verbs that ask about the environment — `doctor` and
+    `session verify` — over `core.context.check_selection`, which is the guard `load_context`
+    itself applies rather than a second implementation of it.
+    """
+    try:
+        problem = check_selection(store.read_meta(slug).context_cards)
+    except Exception as e:  # noqa: BLE001 - a health check reports that it could not look; it never raises
+        return {"checked": False, "problem": None, "error": str(e)}
+    return {"checked": True, "problem": problem.to_dict() if problem else None, "error": None}
+
+
+def _session_health(*, cards_readable: bool = True) -> dict:
+    """The workspace's sessions, with a third state on each question it asks.
+
+    - `readable` / `total` / `error` — could the session root be listed at all? A bare `except`
+      returning `{"total": 0}` was the whole of #12's F3: twelve unreachable sessions rendered
+      byte-identically to a genuinely empty workspace, and a user reads that as "my sessions were
+      deleted". When we could not look, `total` is `None`, because `0` is a claim about the
+      workspace and we do not have one.
+    - `inconsistent` — {slug: [integrity codes]}, from `check_session`. A slug whose own files
+      cannot be read gets the `unreadable` code the inner loop already synthesised, now as a real
+      `IntegrityProblem` rather than an ad-hoc stand-in class.
+    - `unresolved_cards` — {slug: error envelope} for a session whose persisted card selection no
+      longer loads (see `_card_health` for why that is not an integrity code). `cards_checked` is
+      false when the card layer itself was unreadable — then nobody looked, and an empty map here
+      means nothing at all.
+    """
+    inconsistent: dict[str, list[str]] = {}
+    unresolved: dict[str, dict] = {}
     try:
         slugs = store.list_session_slugs()
-    except Exception:  # noqa: BLE001 - doctor reports, it does not fail
-        return {"total": 0, "inconsistent": {}}
+    except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
+        return {"total": None, "readable": False, "error": str(e),
+                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False}
     for slug in slugs:
         try:
             problems = check_session(slug)
         except Exception as e:  # noqa: BLE001
-            problems = [type("P", (), {"code": "unreadable", "message": str(e)})()]
-        if problems:
-            inconsistent[slug] = [p.code for p in problems]
-    return {"total": len(slugs), "inconsistent": inconsistent}
+            problems = [IntegrityProblem("unreadable", str(e))]
+        codes = [p.code for p in problems]
+        if cards_readable:
+            health = _card_health(slug)
+            if not health["checked"] and "unreadable" not in codes:
+                codes.append("unreadable")
+            if health["problem"]:
+                unresolved[slug] = health["problem"]
+        if codes:
+            inconsistent[slug] = codes
+    return {"total": len(slugs), "readable": True, "error": None,
+            "inconsistent": inconsistent, "unresolved_cards": unresolved,
+            "cards_checked": cards_readable}
 
 
 def _cmd_schema(a, client) -> None:
@@ -193,7 +258,16 @@ def _cmd_doctor(a, client) -> None:
     s = r["schema"]
     print(f"  {ok if s['ok'] else '❌'} schema          {s['slots']} slots"
           + (f"  (error: {s['error']})" if not s["ok"] else ""))
-    print(f"  {ok} context cards   {len(r['context_cards'])} available")
+    c = r["context"]
+    if c["status"] == "unreadable":
+        print(f"  ❌ context cards   unreadable — {c['error']}")
+    elif c["status"] == "empty":
+        print("  ❌ context cards   0 available — none found under "
+              f"{' or '.join(c['roots'])}")
+        print("     └─ impact estimation has no product context to reason from; this install is "
+              "incomplete.")
+    else:
+        print(f"  {ok} context cards   {c['count']} available")
     p = r["provider_anthropic"]
     prov = f"installed (v{p['version']})" if p["installed"] else "not installed"
     key = "API key set" if p["api_key_present"] else "no API key"
@@ -204,11 +278,31 @@ def _cmd_doctor(a, client) -> None:
     print(f"  {ok} workspace       {r['workspace']['root']}")
     print(f"     sessions        {r['workspace']['sessions']}")
     h = r["sessions"]
-    bad = h["inconsistent"]
-    print(f"  {ok if not bad else '❌'} sessions        {h['total']} in this workspace"
-          + (f" · {len(bad)} inconsistent" if bad else ""))
+    if not h["readable"]:
+        # Not "0 sessions". We could not look, and saying nothing found is the failure this verb
+        # exists to prevent: a user told they have no sessions concludes they were deleted.
+        print(f"  ❌ sessions        unreadable — {h['error']}")
+        print(f"     └─ {r['workspace']['sessions']} could not be listed. This is not the same "
+              "thing as having no sessions.")
+        return
+    bad, lost = h["inconsistent"], h["unresolved_cards"]
+    notes = ([f"{len(bad)} inconsistent"] if bad else []) \
+        + ([f"{len(lost)} with product context that no longer loads"] if lost else [])
+    print(f"  {ok if not notes else '❌'} sessions        {h['total']} in this workspace"
+          + (f" · {' · '.join(notes)}" if notes else ""))
     for slug, codes in bad.items():
         print(f"     └─ {slug}: {', '.join(codes)} — run `requivo session verify {slug}`")
+    for slug, problem in lost.items():
+        print(f"     └─ {slug}: {problem['message']}")
+    if lost:
+        print("        Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives — "
+              "until then these sessions refuse their next reasoning turn.")
+    if not h["cards_checked"] and h["total"]:
+        # Only worth saying when there are sessions it was not said about. Note that a session with
+        # no card selection is unaffected either way: `check_selection(None)` never reads the card
+        # directory, so this line is about the sessions that named cards.
+        print(f"     {warn} product context not checked for these sessions — the card directory "
+              "could not be read (see above).")
 
 
 # ── session ──────────────────────────────────────────────────────────────────────
@@ -358,23 +452,46 @@ def _cmd_session_export(a, client) -> None:
 
 
 def _cmd_session_verify(a, client) -> None:
-    """Check that a session tells the truth about itself — the relationships between its files, which
-    validating each file on its own cannot see. Exits non-zero when something is wrong, so it can gate
-    a script."""
+    """Check that a session tells the truth about itself, and that the product context it names is
+    still there. Exits non-zero when either is wrong, so it can gate a script.
+
+    The two are reported side by side and kept apart on purpose. `problems` are *internal*: the
+    relationships between the session's own files, which validating each file on its own cannot see.
+    `context_cards` is an *environment* finding — the cards a session was created against live
+    outside its directory, so a lost one says nothing about the session and everything about this
+    machine. Keeping it out of `check_session_dir` is what stops `session import` refusing a
+    colleague's perfectly good archive over a card you do not have; see `_card_health`.
+
+    It is nonetheless part of `ok`, because a session whose cards are gone is refused at its next
+    reasoning turn, and a verb that answers "is this session usable" with a tick right up to that
+    moment is the failure this whole change is about."""
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
         raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
     problems = check_session(slug)
+    cards = _card_health(slug)
+    ok = not problems and cards["checked"] and cards["problem"] is None
     if a.json:
-        _print_json({"slug": slug, "ok": not problems, "problems": [p.to_dict() for p in problems]})
-    elif not problems:
-        print(f"✅ Session '{slug}' is internally consistent.")
-    else:
+        _print_json({"slug": slug, "ok": ok, "problems": [p.to_dict() for p in problems],
+                     "context_cards": cards})
+        if not ok:
+            raise SystemExit(1)
+        return
+    if ok:
+        print(f"✅ Session '{slug}' is internally consistent and its product context still loads.")
+    if problems:
         print(f"❌ Session '{slug}' has {len(problems)} problem(s):")
         for p in problems:
             print(f"  · [{p.code}] {p.message}")
-    if problems:
+    if cards["problem"]:
+        print(f"❌ Session '{slug}' names product context that no longer loads:")
+        print(f"  · [{cards['problem']['code']}] {cards['problem']['message']}")
+        print("    Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives. Until "
+              "then this session's next reasoning turn is refused rather than quietly degraded.")
+    elif not cards["checked"]:
+        print(f"🟡 Could not check '{slug}'s product context: {cards['error']}")
+    if not ok:
         raise SystemExit(1)
 
 

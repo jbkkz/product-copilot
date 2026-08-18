@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from requivo.core.context import available_cards, build_prompt, load_context, resolve_cards
+from requivo.core.context import available_cards, build_prompt, check_selection, load_context, resolve_cards
 from requivo.core.dependencies import _all_slot_ids, resolve_slots
 from requivo.core.errors import EmptySelectorTokenError, RequivoError, UnknownContextCardError
 from requivo.core.selectors import normalize_tokens
@@ -225,3 +225,49 @@ def test_normalize_tokens_passes_real_tokens_through_stripped_and_lowercased():
     """The must-fire half of the helper: it is a normalizer, not only a refusal."""
     assert normalize_tokens([" Workflow ", "PERMISSIONS"], what="slot") == ["workflow", "permissions"]
     assert normalize_tokens([], what="slot") == []      # an empty list is not an empty token
+
+
+# ── asking the same question without paying for it (#12) ─────────────────────────
+
+
+def test_check_selection_answers_exactly_what_load_context_would_do():
+    """`load_context` refuses a selection that no longer resolves — correct, and discovered at the
+    next provider call, which costs money and happens minutes into a session. `check_selection` is
+    that same guard asked as a question: it reports rather than raises, so `doctor` and
+    `session verify` can answer it for free and in advance.
+
+    The two must never drift, which is why `check_selection` runs the guard rather than
+    reimplementing the rule. Both halves are asserted here: the selections that pass, and the ones
+    that do not."""
+    # must not fire — these are the selections that still load
+    assert check_selection(None) is None            # None is the "every card" sentinel, not a selection
+    assert check_selection([A_CARD]) is None
+    assert check_selection([A_CARD, ANOTHER_CARD]) is None
+    assert check_selection([A_CARD.upper()]) is None        # matched case-insensitively, like the loader
+
+    # must fire — and it reports, it does not raise
+    unknown = check_selection([A_CARD, "no-such-card"])
+    assert isinstance(unknown, UnknownContextCardError)
+    assert unknown.details["unknown"] == ["no-such-card"]
+    assert unknown.to_dict()["code"] == "unknown_context_card"
+
+    empty = check_selection([])
+    assert isinstance(empty, EmptySelectorTokenError), (
+        "a persisted selection of nothing is refused by load_context; the checker must say so too")
+    assert isinstance(check_selection([" "]), EmptySelectorTokenError)
+
+
+@pytest.mark.parametrize("selection", [None, [A_CARD], [A_CARD, ANOTHER_CARD], ["no-such-card"], []])
+def test_check_selection_agrees_with_load_context_on_every_selection(selection):
+    """The drift guard itself: for each selection, `check_selection` returning None must mean
+    `load_context` succeeds, and returning a problem must mean it raises that same code. A checker
+    that answers a slightly different question than the thing it checks is the defect this issue is
+    about, one level up."""
+    problem = check_selection(selection)
+    try:
+        load_context(selection)
+    except RequivoError as e:
+        assert problem is not None, f"load_context refused {selection!r} and check_selection did not"
+        assert problem.code == e.code
+    else:
+        assert problem is None, f"check_selection refused {selection!r} and load_context did not"
