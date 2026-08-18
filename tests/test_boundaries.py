@@ -42,6 +42,7 @@ therefore treats an unscannable or empty root as an error rather than as an answ
 from __future__ import annotations
 
 import ast
+import importlib
 import textwrap
 from pathlib import Path
 
@@ -262,16 +263,59 @@ def test_the_scan_is_recursive(tmp_path):
     )
 
 
-def test_the_guard_reads_source_as_utf8(tmp_path):
-    """Every module in core carries at least one em dash. Reading with the locale codepage rather
-    than utf-8 turns this guard into a crash under `LC_ALL=C` or a DBCS Windows shell."""
+def _force_default_encoding(monkeypatch, tmp_path: Path, encoding: str) -> bool:
+    """Force what an encoding-less `open()` falls back to, and report whether the force actually took.
+
+    There is only a Python-level hook to patch on some interpreters: `_bootlocale` was removed in 3.10
+    and `_io` has resolved the locale encoding in C ever since, and UTF-8 mode overrides it anyway. So
+    every candidate is patched and the result is then *measured* on a probe file rather than assumed.
+    Measured here: the force takes on CPython 3.9 and does not on 3.10 or later. Returning False is
+    the third state -- the caller must skip rather than assert, because a control that cannot fail is
+    worse than no control.
+    """
+    for module_name, attr in (
+        ("_bootlocale", "getpreferredencoding"),
+        ("locale", "getencoding"),
+        ("locale", "getpreferredencoding"),
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        monkeypatch.setattr(module, attr, lambda *args, **kwargs: encoding, raising=False)
+    probe = tmp_path / "_probe_encoding.py"
+    probe.write_bytes(b"# \xe2\x80\x94\n")
+    try:
+        probe.read_text()
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def test_the_guard_reads_source_as_utf8(tmp_path, monkeypatch):
+    """Every module in core carries at least one em dash, and `read_text()` with no encoding decodes
+    with the *locale* codepage -- so under `LC_ALL=C`, or a DBCS Windows shell, the pre-#10 guard dies
+    with `UnicodeDecodeError` instead of running.
+
+    Asserting only that `_parse` succeeds would prove nothing: on a UTF-8 locale it succeeds with or
+    without the explicit `encoding=`, which is to say the control could not fire. So the fallback is
+    forced first, and where it cannot be forced this test skips *loudly* rather than passing.
+    """
+    if not _force_default_encoding(monkeypatch, tmp_path, "ascii"):
+        pytest.skip(
+            "the ambient default encoding could not be forced on this interpreter (CPython dropped "
+            "_bootlocale in 3.10 and resolves the locale encoding in C, and UTF-8 mode overrides it "
+            "regardless), so this control cannot fire here. UNTESTED ON THIS INTERPRETER: that _parse "
+            "passes an explicit encoding rather than taking the locale's. The 3.9 leg of the CI "
+            "matrix does test it."
+        )
     path = tmp_path / "dashes.py"
     # Written as raw bytes so this source file stays pure ASCII while the fixture on disk does not:
     # a console whose codepage cannot represent an em dash must not be able to kill a failure report.
     path.write_bytes(b'"""Core \xe2\x80\x94 the engine."""\nimport anthropic\n')  # an em dash, in utf-8
     with pytest.raises(UnicodeDecodeError):
-        path.read_text(encoding="ascii")
-    assert "anthropic" in imported_modules(path, CORE_PACKAGE)
+        path.read_text()  # what the pre-#10 guard did, meeting the locale it would meet
+    assert "anthropic" in imported_modules(path, CORE_PACKAGE)  # what this guard does instead
 
 
 # --------------------------------------------------------------------------------------------------
