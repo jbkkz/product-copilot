@@ -107,7 +107,12 @@ class SessionRepository(Protocol):
         ...
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
-        """The saved content of an artifact file, or None if it is not present."""
+        """The saved content of an artifact file, or None if it is not present.
+
+        None means *absent*, and only that. An implementation that cannot accept `filename` must
+        raise — an `InvalidFilenameError` on the file backing — rather than return None: a caller
+        that cannot tell a refusal from an absence has been handed the wrong answer in the more
+        dangerous direction, and a rejected traversal would read as an artifact nobody generated."""
         ...
 
 
@@ -180,8 +185,9 @@ class FileSessionRepository:
                                            source_revision=source_revision, stale=stale)
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
-        p = store.canonical_dir(slug) / "artifacts" / filename
-        return p.read_text() if p.exists() else None
+        # Delegated rather than re-joined here: this method built the artifacts/ path inline, which
+        # is how the read side kept a traversal the write side had already closed at `artifact_path`.
+        return store.read_artifact_file(slug, filename)
 
 
 def default_repository() -> SessionRepository:

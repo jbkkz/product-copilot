@@ -327,7 +327,7 @@ def legacy_dir(slug: str) -> Path:
 
 def artifact_path(slug: str, filename: str) -> Path:
     """`<session>/artifacts/<filename>`, with **both** halves validated — the single chokepoint every
-    artifact write goes through.
+    artifact read and write goes through.
 
     One function rather than a check at each call site, for the reason `_child_of` gives for the slug:
     a rule applied per-caller is a rule the next caller forgets. Belt-and-suspenders in the same
@@ -551,6 +551,28 @@ def write_artifact_file(slug: str, filename: str, content: str) -> Path:
     path = artifact_path(slug, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     return _atomic_write(path, content)
+
+
+def read_artifact_file(slug: str, filename: str) -> Optional[str]:
+    """The saved content of a file under a session's artifacts/, or None if there is no such file.
+
+    The read sibling of `write_artifact_file`, and it exists so that the read goes through
+    `artifact_path` instead of re-joining the path a second time. `FileSessionRepository` built
+    `canonical_dir(slug) / "artifacts" / filename` inline, one layer above the chokepoint — which is
+    precisely how it escaped the sweep that routed the two *mutating* paths through it, and
+    precisely what `_child_of` means by a rule the next caller forgets. A read traversal is also a
+    different exposure from a write one: not what this code may create, but what it may disclose.
+
+    **Absence and refusal are deliberately different answers.** An unsafe `filename` raises
+    `InvalidFilenameError`; only a genuinely missing file returns None. Returning None for both
+    would be the quiet answer — a rejected traversal would then be indistinguishable from an
+    artifact nobody has generated yet, and the caller cannot tell it has been refused.
+
+    Decoded as UTF-8 explicitly, matching `_atomic_write`'s encoding on the way in. `read_text()`
+    with no encoding uses the locale's, which on Windows is typically cp1252 and silently mojibakes
+    any generated artifact containing an em-dash rather than failing."""
+    p = artifact_path(slug, filename)
+    return p.read_text(encoding="utf-8") if p.exists() else None
 
 
 def session_artifact_files(slug: str) -> set[str]:
