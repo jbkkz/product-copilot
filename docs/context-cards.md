@@ -44,3 +44,30 @@ requivo discover --context b2b-platform,financial-reporting "…"
 
 The selection is held constant across the session's turns (so the cached system prompt survives) and
 reused by the generators.
+
+Every name is checked, on every turn, against the cards actually on disk — not only when the session is
+created. A misspelled card is refused rather than dropped, because dropping it leaves an empty
+selection and an empty selection means *every* card; a selection that resolves to nothing is refused
+for the mirror-image reason, because an empty context is not visibly different from a good one:
+
+```console
+$ requivo discover --context b2b-platform, "…"
+empty context card selector at position 1 — an empty token matches everything, so it would widen the
+selection instead of narrowing it. Remove it (a stray comma is the usual cause), or pass no selector
+at all to select everything deliberately.
+```
+
+The case that costs the most is the one you did not type. A session scoped to a card that lives in
+`REQUIVO_CONTEXT_DIR` carries that name in its `session.json`; open the same session on another
+machine, or rename the card, and the name no longer resolves. Requivo says so and stops:
+
+```console
+$ requivo answer my-session "…"
+unknown context card(s): acme-crm. Available: b2b-platform, document-management, event-ops, financial-reporting
+```
+
+That is deliberately a refusal rather than a quiet fallback to no context at all. Impact estimation is
+what decides which questions get asked, it is estimated from these cards, and a turn that runs without
+them produces a plausible answer for a reason nothing on screen would have shown you. Restore the card
+(or re-scope the session) and the turn runs. `requivo context --session <slug>` prints the cards a
+session is actually reasoning with, and fails the same way when one of them has gone.

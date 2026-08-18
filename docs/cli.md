@@ -17,6 +17,14 @@ Most verbs take a session **slug** or a path to a saved `model.json`.
 | `requivo status <slug>` | Understanding checklist + readiness (`--json` for a machine snapshot). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
 
+A selector — `--context a,b`, or the slot names given to `impact` — is checked rather than best-guessed.
+An **empty** name is refused: `requivo impact <slug> ""`, which is what an unset shell variable expands
+to, used to match every label and report the whole model as changed with nothing in the output to say
+the input was malformed. A slot name that matches nothing is listed as unmatched and the rest still
+resolve; an unknown *card* is a hard error, since dropping it would silently load every card instead of
+the ones you asked for. Pass no selector at all to select everything deliberately. See
+[context-cards.md](context-cards.md#scoping-a-session-to-relevant-cards).
+
 ## Artifact generators (provider-backed)
 
 Each is a view of the saved model: `requivo <verb> <slug>`.

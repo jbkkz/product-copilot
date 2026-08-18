@@ -555,7 +555,9 @@ def test_a_revision_records_the_prompt_it_was_reasoned_against(workspace):
     assert rec.provider == "anthropic" and rec.model_name
     assert rec.prompt_version and rec.prompt_version.startswith("sha256:")
     # It follows the context-card selection, because a different card set is different reasoning.
-    assert prompt_version("analyze") != prompt_version("analyze", only=[])
+    # A *real* card rather than `only=[]`: an empty selection is now refused (#13), because a
+    # selection that selects nothing renders exactly like a clean load of everything.
+    assert prompt_version("analyze") != prompt_version("analyze", only=["b2b-platform"])
 
 
 # ── the session format is public ──────────────────────────────────────────────
