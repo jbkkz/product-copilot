@@ -14,9 +14,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from requivo.core.errors import ContextUnreadableError, EmptySelectorTokenError, RequivoError, UnknownContextCardError
+from requivo.core.errors import (
+    ContextUnreadableError,
+    EmptySelectionError,
+    EmptySelectorTokenError,
+    NoContextCardsError,
+    RequivoError,
+    UnknownContextCardError,
+)
 from requivo.core.selectors import normalize_tokens
 from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
+
+# Every refusal `load_context` can produce, so `check_selection` can report exactly what the loader
+# would raise without listing them twice. `ContextUnreadableError` is deliberately absent: "we could
+# not look" is not a verdict about the selection, and `check_selection` lets it propagate.
+_SELECTION_REFUSALS = (
+    NoContextCardsError, EmptySelectionError, EmptySelectorTokenError, UnknownContextCardError,
+)
 
 
 def _card_paths() -> dict[str, Path]:
@@ -110,14 +124,45 @@ def load_context(only: list[str] | None = None) -> str:
     `only=[]` is refused for the same reason: a selection that selects nothing is not the same thing
     as `None`, the explicit "no restriction" sentinel, and guessing which one was meant is how this
     class of bug gets written.
+
+    **An install with no cards at all is refused too** (#33), and that is the wide instance the two
+    narrow guards above left open. Both of them are about a *selection*; `only=None` never reaches
+    either, and `only=None` is exactly what a session with no card selection sends on every turn. So
+    a wheel or container layer that shipped `assets/` without `assets/context/` produced an empty
+    `{{CONTEXT}}` on every paid call, forever, and nothing on that path said so. One rule covers all
+    three: an empty context is never a legitimate thing to send a provider, whatever emptied it.
     """
     paths = _card_paths()
+    _require_any_card(paths)
     # `only` is materialised before the guard iterates it — a generator read twice yields nothing
     keep = _selection_keys(list(only), paths) if only is not None else None
-    cards = [f"## {stem}\n{paths[stem].read_text()}"
+    # `encoding` is explicit because `read_text()` defaults to the *locale's* encoding, not the file's:
+    # every bundled card carries an em dash or an arrow, so on a cp1252 Windows console they decoded to
+    # mojibake and were sent to the provider that way, and under an ASCII locale the read raised
+    # outright. Neither is visible from a UTF-8 machine, which is every developer machine here.
+    cards = [f"## {stem}\n{paths[stem].read_text(encoding='utf-8')}"
              for stem in sorted(paths)
              if keep is None or stem.lower() in keep]
     return "\n\n".join(cards)
+
+
+def _require_any_card(paths: dict[str, Path]) -> None:
+    """Refuse an install that has no context cards at all.
+
+    The third state beside "the card you named is not there" and "we could not look": we looked, at
+    every root, and there is nothing. It is checked before the selection because with no cards
+    installed *every* name is unknown — technically true, and it sends the reader to check the name
+    they typed when the fault is that there is nothing to match against.
+    """
+    if paths:
+        return
+    roots = [str(CONTEXT), str(user_context_dir())]
+    raise NoContextCardsError(
+        "no context cards are installed, so there is no product context to reason from — impact "
+        "estimation is the product's central idea and it runs on these cards. Looked in: "
+        f"{' and '.join(roots)}. This install is incomplete: reinstall requivo, or point "
+        "REQUIVO_CONTEXT_DIR at a directory holding your cards.",
+        details={"roots": roots})
 
 
 def _selection_keys(only: list[str], paths: dict[str, Path]) -> set[str]:
@@ -131,7 +176,13 @@ def _selection_keys(only: list[str], paths: dict[str, Path]) -> set[str]:
     """
     wanted = normalize_tokens(only, what="context card")
     if not wanted:
-        raise EmptySelectorTokenError(
+        # `EmptySelectionError`, not `EmptySelectorTokenError` (#35). They are two facts, as
+        # `normalize_tokens`' own docstring argues: an empty *token inside* a selection carries a
+        # `position`, a selection that is *itself* empty has no position to carry. They shared one
+        # code with two `details` shapes behind it, so a consumer following the documented advice —
+        # match the code — and reading `details["position"]` got a KeyError from a payload that
+        # correctly carried the code it matched.
+        raise EmptySelectionError(
             "an empty context-card selection selects nothing. Pass no selection at all to load "
             "every card, or name the cards to load.",
             details={"selector": "context card", "tokens": 0})
@@ -151,9 +202,14 @@ def _selection_keys(only: list[str], paths: dict[str, Path]) -> set[str]:
 def check_selection(only: list[str] | None) -> RequivoError | None:
     """Whether a stored card selection still loads **on this machine** — reported, never raised.
 
-    `None` when it loads (including for `only=None`, the "every card" sentinel, which cannot fail);
-    otherwise the exact `RequivoError` `load_context` would raise, so a caller gets the stable code
-    and the offending names in `details` rather than a re-derived message.
+    `None` when it loads; otherwise the exact `RequivoError` `load_context` would raise, so a caller
+    gets the stable code and the offending names in `details` rather than a re-derived message.
+
+    `only=None` — the "every card" sentinel — used to short-circuit to `None` here on the grounds
+    that it cannot fail. That was true until #33 and false after it: with no cards installed at all,
+    `load_context(None)` refuses, and a checker that reports a session as fine while the call it
+    predicts refuses is this module's own defect class one level up. It now asks the same two guards
+    the loader applies, in the same order.
 
     Why a session needs asking at all: `resolve_cards` validates a selection **once**, at creation,
     but the cards live outside the session — in the installed package or in `user_context_dir()`. A
@@ -167,17 +223,20 @@ def check_selection(only: list[str] | None) -> RequivoError | None:
     and the card is gone", and the caller owes its reader that distinction rather than a selection
     reported as fine.
     """
-    if only is None:
-        return None
     try:
-        _selection_keys(list(only), _card_paths())
-    except (EmptySelectorTokenError, UnknownContextCardError) as e:
+        paths = _card_paths()
+        _require_any_card(paths)
+        if only is not None:
+            _selection_keys(list(only), paths)
+    except _SELECTION_REFUSALS as e:
         return e
     return None
 
 
 def build_prompt(name: str, only: list[str] | None = None) -> str:
     """Load a prompt file and inject the schema + product context (optionally a subset of cards)."""
-    schema = (FRAMEWORK / "model_schema.json").read_text()
-    text = (PROMPTS / name).read_text()
+    # Explicit encoding for the same reason as the cards above: these assets are UTF-8 on disk and
+    # `read_text()` would decode them with whatever the locale happens to be.
+    schema = (FRAMEWORK / "model_schema.json").read_text(encoding="utf-8")
+    text = (PROMPTS / name).read_text(encoding="utf-8")
     return text.replace("{{SCHEMA}}", schema).replace("{{CONTEXT}}", load_context(only))

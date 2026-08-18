@@ -95,6 +95,26 @@ browser ──HTTP──> routes ──> DiscoveryService / SessionService / Art
                      └── Jinja templates + view models (presentation only)
 ```
 
+### When something goes wrong
+
+A structured `RequivoError` becomes a clean page, never a traceback, and its HTTP status answers one
+question: **is this about what you sent, or about the state of the server you sent it to?**
+
+- **4xx — your request.** A name that does not resolve (`404`), a malformed model or selection
+  (`400`), a submission over the ceiling (`413`), a write that raced another one (`409`).
+- **5xx — this server, or what it depends on.** It cannot read its own context-card directory
+  (`500`), it has no cards installed at all (`500`), the model would not return valid output after
+  every retry (`502`), or a session lock did not clear (`503`).
+
+That split used to leak: every code the status table did not list fell through to `400`, so a
+server-side fault told the reader they had made a bad request. Every code now has an explicit
+mapping and a test fails if a new one is added without deciding which side it falls on. The full
+table, and what changed for anyone scripting against it, is in
+[compatibility.md](compatibility.md#http-statuses-in-requivo-web).
+
+A 5xx is also logged in the terminal you started the server in — the page a reader gets says little
+by design, and an operator otherwise has no record of a condition the reader cannot act on.
+
 ## Security (local by default)
 
 Even though it is a local app:
