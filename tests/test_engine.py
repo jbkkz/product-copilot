@@ -1577,6 +1577,110 @@ def test_generators_thread_the_context_selection():
     assert "## b2b-platform" not in system
 
 
+# ── Prompt-cache breakpoints: paid for only where the prefix is re-read (#9) ──
+#
+# `cache_control` costs 1.25x input to write and pays back at 0.1x on a read, so it is a saving only
+# when the *same* system prompt is sent again inside the cache TTL. It is, across the calls of one
+# operation — a JSON retry, converse()'s turns, a golden capture's K runs. It is not, across
+# operations: `build_prompt()` substitutes the shared schema + context cards into a *per-operation*
+# template, and every template places {{SCHEMA}}/{{CONTEXT}} near its end with an "Output format"
+# section after them. The shared bulk is therefore a suffix, and a cache is a prefix match — no
+# breakpoint placement can let a second operation hit a warm one. A one-shot generator was writing a
+# cache it could never read, a flat ~25% premium on the largest part of its input.
+#
+# Every "must not fire" assertion below is paired with a "must fire" control in the same fixture: a
+# fix that strips the directive everywhere breaks the operations where caching genuinely pays, and
+# these tests fail on that too.
+
+
+def _system_block(fake, i: int) -> dict:
+    return fake.calls[i]["system"][0]
+
+
+_BRIEF_REPLY = json.dumps({"complexity": "low", "solution": "S"})
+
+
+def test_cache_breakpoint_rides_a_reused_prefix_and_not_a_single_call():
+    # Both halves in ONE fixture. Discovery keeps the breakpoint (converse() loops it, the golden
+    # harness loops it, a retry re-sends it); a one-shot generator does not.
+    fake = FakeClient(_ENGINE_REPLY, _BRIEF_REPLY)
+    run(fake, [{"role": "user", "content": "leave approval"}])
+    advise(fake, out({"problem": slot(80, "explicit", "high")}))
+    assert _system_block(fake, 0)["cache_control"] == {"type": "ephemeral"}  # must fire
+    assert "cache_control" not in _system_block(fake, 1)                     # must not fire
+
+
+def test_every_generator_defaults_to_no_cache_write():
+    # Covers all six registered generators plus `estimate` without needing a valid reply fixture for
+    # each contract, so fixing one and leaving five is caught. The control is `_complete` itself: its
+    # default stays True, because "will this be sent again?" is the caller's question and an unknown
+    # caller should keep paying the safe answer rather than silently losing a real cache.
+    import inspect
+
+    from requivo.providers.anthropic import _GENERATORS, estimate
+
+    for name, fn in list(_GENERATORS.items()) + [("estimate", estimate)]:
+        param = inspect.signature(fn).parameters.get("reuse_system")
+        assert param is not None, f"{name} cannot declare whether its prefix is re-read"
+        assert param.default is False, f"{name} should not pay the cache write premium by default"
+    assert inspect.signature(_complete).parameters["reuse_system"].default is True  # must fire
+
+
+def test_a_generator_can_opt_back_in_when_its_caller_loops_it():
+    # scripts/golden_run.py --brief calls advise() K times with one system prompt, so the harness is a
+    # genuine re-reader. The escape hatch has to actually reach the request, not just exist.
+    fake = FakeClient(_BRIEF_REPLY, _BRIEF_REPLY)
+    model = out({"problem": slot(80, "explicit", "high")})
+    advise(fake, model)                       # production: one call
+    advise(fake, model, reuse_system=True)    # harness: K calls, same prompt
+    assert "cache_control" not in _system_block(fake, 0)                     # must not fire
+    assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}  # must fire
+
+
+def test_skipping_the_breakpoint_does_not_change_the_system_prompt_bytes():
+    # The cheap fix must stay a cheap fix. Moving the shared bulk to the front of every template is
+    # the other way to make this pay, and it changes what the model reads — a behaviour change that
+    # owes the golden harness a cycle. This pins that no such reordering rode along: the text sent is
+    # still exactly what build_prompt() assembles.
+    from requivo.core.context import build_prompt
+
+    fake = FakeClient(_BRIEF_REPLY)
+    advise(fake, out({"problem": slot(80, "explicit", "high")}))
+    assert _system_block(fake, 0)["text"] == build_prompt("brief.md", None)
+
+
+def test_retry_resends_a_byte_identical_system_whether_or_not_it_is_cached():
+    # The intra-operation invariant, on both arms: a retry must re-send the same bytes, or the cache
+    # is lost exactly where it does pay. Asserted for the cached arm too, so a future edit that makes
+    # the directive conditional on the attempt number fails here.
+    for reuse, expect_directive in ((True, True), (False, False)):
+        fake = FakeClient("not json at all", _BRIEF_REPLY)
+        _complete(fake, "SYSTEM PROMPT", [{"role": "user", "content": "u"}], Brief,
+                  reuse_system=reuse)
+        assert len(fake.calls) == 2, "expected one retry"
+        assert _system_block(fake, 0)["text"] == _system_block(fake, 1)["text"] == "SYSTEM PROMPT"
+        for i in (0, 1):
+            assert ("cache_control" in _system_block(fake, i)) is expect_directive
+
+
+def test_cost_estimate_bills_a_write_premium_and_plain_input_differently():
+    # Not a new-behaviour test — a guard that the fix's whole point survives in the rendered number.
+    # The ledger prices what the API *reported*, so dropping the directive moves those tokens from
+    # cache_write (1.25x) to input (1.0x) with no arithmetic change here. If these two ever bill the
+    # same, the saving becomes invisible and the issue's "the number rendered is correct" stops
+    # holding.
+    from datetime import date
+
+    on = date(2026, 9, 1)  # past the sonnet-5 launch-price expiry, so the rate is the plain 3.00
+    cached = UsageLedger()
+    cached.record(CallRecord(model="claude-sonnet-5", cache_write_tokens=1_000_000))
+    plain = UsageLedger()
+    plain.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000))
+    assert cached.cost_usd(on) == pytest.approx(3.75)
+    assert plain.cost_usd(on) == pytest.approx(3.00)
+    assert cached.cost_usd(on) > plain.cost_usd(on)
+
+
 def test_current_model_name_reads_env_override(monkeypatch):
     monkeypatch.delenv("MODEL", raising=False)
     assert current_model_name() == "claude-sonnet-5"

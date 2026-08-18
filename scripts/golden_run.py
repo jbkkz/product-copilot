@@ -51,7 +51,9 @@ def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
         out = run(client, [{"role": "user", "content": req["request"]}])
         models.append(out)
         if with_brief:
-            briefs.append(advise(client, out))    # a second call per run — see --brief in the header
+            # `reuse_system=True`: unlike the CLI, this loop sends brief.md's system prompt K times, so
+            # the cache breakpoint is genuinely re-read here and is worth its 1.25x write (#9).
+            briefs.append(advise(client, out, reuse_system=True))  # see --brief in the header
         print(f"    run {i + 1}/{K} done", end="\r", flush=True)
     dump_runs(req["slug"], req["request"], models, briefs)
     st = stability(models)
