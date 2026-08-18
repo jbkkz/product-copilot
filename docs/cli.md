@@ -75,7 +75,7 @@ at all.
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
-| `output.streams[].state` | `safe` (a character the console cannot encode is escaped, never fatal), `will-crash` (a strict handler on a narrow codec — a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
+| `output.streams[].state` | `safe` (a character the console cannot encode is escaped visibly, never fatal), `lossy` (it cannot crash but drops or blanks the character with no mark — only reachable by setting `errors=replace`/`ignore` yourself), `will-crash` (a strict handler on a narrow codec, so a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
 
 An `empty` context is a broken install rather than a quiet inconvenience: the cards are what impact
 is estimated against, and impact is half of `information_value = uncertainty × impact`. Discovery
@@ -157,12 +157,17 @@ is impossible — a stream Requivo could not reconfigure, which
 | 0 | Success |
 | 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
 | 2 | Bad arguments (argparse) |
-| 3 | **The command succeeded and its output could not be encoded.** Whatever it changed has been applied |
+| 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
 
 Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
 its provider call, applies the revision and writes the artifact *before* it prints anything — so a
 renderer that dies at the final `print` and reports failure invites a re-run that pays for a second
 call and stacks a second revision on the first.
+
+The message reads the run's usage ledger rather than assuming: it says a call **has** been billed
+only when one was, because several verbs (`doctor`, `status`, `schema`) never call the provider at
+all and `discover` prints before it does. Telling you not to re-run a command that cost nothing
+would be the same misreport one layer up.
 
 ### Documents on stdin
 

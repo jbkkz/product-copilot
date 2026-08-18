@@ -138,26 +138,46 @@ def configure_streams() -> list:
     return [configure_stream(sys.stdout, "stdout"), configure_stream(sys.stderr, "stderr")]
 
 
-# The error handlers that substitute rather than raise. A stream on any of these cannot kill the
-# process on a character it cannot encode; a stream on `strict` (the default) can.
-_SAFE_ERROR_HANDLERS = frozenset({"backslashreplace", "replace", "xmlcharrefreplace", "ignore", "namereplace"})
+# Error handlers that substitute something a reader can *see*. A stream on one of these can neither
+# crash nor lose a character silently.
+_VISIBLE_ERROR_HANDLERS = frozenset({"backslashreplace", "xmlcharrefreplace", "namereplace"})
+
+# Handlers that cannot crash but do lose information without saying so: `replace` prints a question
+# mark, `ignore` prints nothing at all. Reporting these as `safe` would have `doctor` endorse exactly
+# the quiet hole this module's docstring argues against -- so they get their own verdict. Requivo
+# never selects one; a stream arrives on one because the operator asked for it via PYTHONIOENCODING.
+_LOSSY_ERROR_HANDLERS = frozenset({"replace", "ignore"})
 
 
 def describe_stream(stream, name: str) -> dict:
     """What `stream` is set to *now*, with no side effect. What `doctor` reports.
 
-    Three states, and the third one is the reason this is a separate function from
-    `configure_stream`: `safe` (a character it cannot encode gets substituted), `will-crash` (a
-    strict handler on a codec narrower than the text — the #29 shape), and `unknown` (the stream does
-    not expose its codec at all, so this cannot answer and must not pretend to).
+    Four states, and the last two are the reason this is a separate function from `configure_stream`:
+
+      - `safe` — a character it cannot encode is substituted with something a reader can see;
+      - `lossy` — it cannot crash, but it drops or blanks the character silently. Not `safe`: a
+        reader cannot tell a substituted character from one that was never there, which is the
+        failure this module's docstring rejects, and `doctor` reporting it as clean would be this
+        project endorsing it;
+      - `will-crash` — a strict handler, so a character it cannot encode kills the process at the
+        print, after the work that print was reporting has landed (the #29 shape);
+      - `unknown` — the stream does not expose a codec at all, so this cannot answer and must not
+        pretend to.
     """
     encoding = getattr(stream, "encoding", None)
     errors = getattr(stream, "errors", None)
     if stream is None or encoding is None:
         return {"stream": name, "state": "unknown", "encoding": None, "errors": errors,
                 "detail": f"{type(stream).__name__} does not expose an encoding; this check cannot look"}
-    if (errors or "strict") in _SAFE_ERROR_HANDLERS:
+    handler = errors or "strict"
+    if handler in _VISIBLE_ERROR_HANDLERS:
         return {"stream": name, "state": "safe", "encoding": encoding, "errors": errors, "detail": None}
+    if handler in _LOSSY_ERROR_HANDLERS:
+        return {
+            "stream": name, "state": "lossy", "encoding": encoding, "errors": errors,
+            "detail": f"{encoding} with errors={errors!r}: a character it cannot encode is dropped or "
+                      f"blanked with no mark, so a reader cannot tell it from one that was never there",
+        }
     return {
         "stream": name, "state": "will-crash", "encoding": encoding, "errors": errors,
         "detail": f"{encoding} with errors={errors!r}: a character it cannot encode raises "
@@ -180,7 +200,13 @@ def safe_write(stream, text: str) -> None:
         stream.write(text)
     except UnicodeEncodeError:
         encoding = (getattr(stream, "encoding", None) or "ascii")
-        stream.write(text.encode(encoding, ERRORS).decode(encoding, "replace"))
+        try:
+            stream.write(text.encode(encoding, ERRORS).decode(encoding, "replace"))
+        except (ValueError, OSError, UnicodeError):
+            # The stream can close between the first attempt and the retry. Guarded for the same
+            # reason the first write is: this function is usually reporting an error, and an error
+            # reporter that raises replaces the message with a traceback about the message.
+            return
     except (ValueError, OSError):
         return  # a closed or broken stream: there is nowhere left to report to
     try:

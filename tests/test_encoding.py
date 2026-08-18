@@ -2,9 +2,10 @@
 
 Why this file exists (#11, #29)
 -------------------------------
-`_atomic_write` has always written `encoding="utf-8"`. Nothing read that way back: 29 call sites
-across `src/` and `scripts/` called `Path.read_text()` with no `encoding`, which decodes with
-`locale.getpreferredencoding(False)` -- UTF-8 on macOS and on Linux CI, the ANSI codepage (cp1252)
+`_atomic_write` has always written `encoding="utf-8"`. Almost nothing else named a codec: **29 call
+sites** across `src/` and `scripts/` -- 28 reads and one write (`scripts/golden_lib.py`, so the
+asymmetry was never quite total) -- used the `Path` text methods with no `encoding`, which fall back
+to `locale.getpreferredencoding(False)`: UTF-8 on macOS and on Linux CI, the ANSI codepage (cp1252)
 on Windows unless `PYTHONUTF8=1`. `pyproject.toml` is `requires-python = ">=3.9"`, so UTF-8
 mode-by-default (new in 3.15) covers none of the supported range.
 
@@ -15,8 +16,11 @@ That asymmetry has three consequences and all of them are quiet:
   - `integrity.py` rehashes the mis-decoded string and reports `revision_hash_mismatch` -- the verb
     whose whole job is answering *is this session intact* accuses the user of editing a file nobody
     touched, and `session import` refuses a legitimate archive on it;
-  - twelve bundled assets are not cp1252-decodable, so `requivo discover`, `demo`, `schema` and
-    `context` raise `UnicodeDecodeError` before any API call is made.
+  - 20 of the bundled assets are not pure ASCII, so on an ASCII locale `requivo discover`, `demo`,
+    `schema` and `context` raise `UnicodeDecodeError` before any API call is made. Measured, because
+    the issue body had this backwards: only **2** of those 20 are undecodable as *cp1252*. The other
+    18 decode successfully into mojibake, so on Windows the usual outcome was never a crash -- it was
+    a prompt assembled from corrupted product context, shipped to the model and billed.
 
 The same class runs the other way on output (#29): a glyph the console cannot *encode* raises
 `UnicodeEncodeError` at the `print` -- after the mutation that print was reporting has already
@@ -55,6 +59,7 @@ Stated rather than left to read as clean:
 from __future__ import annotations
 
 import ast
+import contextlib
 import io
 import os
 import subprocess
@@ -64,7 +69,7 @@ from pathlib import Path
 
 import pytest
 
-from requivo import streams
+from requivo import cli, streams
 from requivo.core.errors import InvalidModelError
 from requivo.deterministic import read_user_text
 
@@ -622,6 +627,121 @@ def test_safe_write_gives_up_quietly_on_a_stream_that_is_gone():
     closed = _wrapper("utf-8", "strict")
     closed.close()
     streams.safe_write(closed, "anything")  # must not raise
+
+
+# --------------------------------------------------------------------------------------------------
+# The last resort: a stream that could not be configured at all. `configure_streams` covers every
+# stream it can reach, so this arm only fires on the ones it cannot -- which means nothing else in
+# this file exercises it, and an untested last resort is a last resort nobody has checked.
+# --------------------------------------------------------------------------------------------------
+
+class _Unconfigurable(io.TextIOWrapper):
+    """A stream `configure_streams` cannot fix: `reconfigure` refuses, so it stays strict/ascii.
+
+    Not a mock of the failure — a real `TextIOWrapper` on a real ascii codec whose `reconfigure`
+    raises the way a detached or substituted stream's does. The `UnicodeEncodeError` below is raised
+    by the actual encoder, not by the test.
+    """
+
+    def reconfigure(self, **kwargs):
+        raise ValueError("underlying buffer has been detached")
+
+
+def _unconfigurable_stdout():
+    return _Unconfigurable(io.BytesIO(), encoding="ascii", errors="strict", write_through=True)
+
+
+def test_configure_streams_reports_a_stream_it_could_not_fix(monkeypatch):
+    """The precondition for everything below: this stream really is one Requivo cannot save."""
+    stream = _unconfigurable_stdout()
+    monkeypatch.setattr(sys, "stdout", stream)
+    report = {r["stream"]: r for r in streams.configure_streams()}["stdout"]
+    assert report["state"] == "could-not", report
+    assert streams.describe_stream(stream, "stdout")["state"] == "will-crash"
+    with pytest.raises(UnicodeEncodeError):
+        stream.write(_CHECK_MARK)          # the failure is the encoder's, not the test's
+
+
+def _run_app_on_an_unconfigurable_stdout(monkeypatch, argv, ledger_calls=()):
+    """Drive `cli.app()` with a stdout that cannot be made safe, and return (exit code, stderr)."""
+    out, err = _unconfigurable_stdout(), io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+
+    class _Ledger:
+        calls = list(ledger_calls)
+
+    monkeypatch.setattr(cli, "track_usage", lambda: contextlib.nullcontext(_Ledger()))
+    monkeypatch.setattr(cli, "render_usage", lambda ledger: None)
+    with pytest.raises(SystemExit) as ei:
+        cli.app(argv)
+    return ei.value.code, err.getvalue()
+
+
+def test_a_glyph_that_cannot_be_encoded_exits_three_rather_than_a_traceback(monkeypatch, tmp_path):
+    """#29's ordering rule, at the last line of defence. The command has already done its work by the
+    time anything is printed, so a traceback here reports a failure that did not happen."""
+    monkeypatch.chdir(tmp_path)
+    code, err = _run_app_on_an_unconfigurable_stdout(monkeypatch, ["doctor"])
+    assert code == cli.EXIT_RENDER_FAILED == 3, (code, err)
+    assert "could not encode its output" in err, err
+    assert "Traceback" not in err, err
+    assert "requivo doctor" in err, "the message does not say how to find out which stream: " + err
+
+
+def test_the_render_failure_message_does_not_claim_a_call_was_billed_when_none_was(monkeypatch, tmp_path):
+    """`app()` wraps the whole handler, and several verbs print before they mutate — `discover` echoes
+    its context cards before the provider call, and `doctor`/`status`/`schema` never mutate at all. A
+    single message asserting *whatever this changed HAS been applied* is false for those, which is
+    the same misreporting this branch exists to remove, one layer up. So the arm reads the usage
+    ledger instead of assuming."""
+    monkeypatch.chdir(tmp_path)
+    _, err = _run_app_on_an_unconfigurable_stdout(monkeypatch, ["doctor"], ledger_calls=())
+    assert "No provider call was made" in err, err
+    assert "HAS completed and been billed" not in err, (
+        "`doctor` makes no provider call, and telling the user one was billed is a false statement "
+        "in the message that exists to stop a false statement: " + err)
+
+
+def test_the_render_failure_message_does_say_so_when_a_call_was_billed(monkeypatch, tmp_path):
+    """The must-fire half. The warning that matters is the one on the verbs that cost money, and a
+    message that never fires it is as useless as one that always does."""
+    monkeypatch.chdir(tmp_path)
+    _, err = _run_app_on_an_unconfigurable_stdout(monkeypatch, ["doctor"], ledger_calls=("one call",))
+    assert "HAS completed and been billed" in err, err
+    assert "Do not re-run" in err, err
+
+
+def test_the_usage_line_cannot_kill_a_run_that_already_paid_for_its_call(monkeypatch, tmp_path):
+    """Found by the audit on this branch, and it is #29 one call further out.
+
+    `render_usage` prints a middle dot and an em dash, and two of its three call sites sit *outside*
+    the `UnicodeEncodeError` arm -- including the one that runs after a wholly successful command. So
+    a successful `requivo brief` on an unreachable stream still died at the usage line, after the
+    provider call had been billed and the revision applied. That is the exact ordering this branch
+    exists to close, surviving on the one route where nothing had gone wrong.
+
+    Driven through `_render_usage_safely` with a real ledger and a real ascii encoder, so the
+    exception under test is the encoder's."""
+    from requivo.providers.anthropic import CallRecord, UsageLedger
+
+    ledger = UsageLedger()
+    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=10, output_tokens=20,
+                             cache_read_tokens=0, cache_write_tokens=0, latency_ms=5))
+
+    stream = _unconfigurable_stdout()
+    monkeypatch.setattr(sys, "stdout", stream)
+    err = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", err)
+
+    # The control: unwrapped, this really does raise on this ledger and this stream.
+    with pytest.raises(UnicodeEncodeError):
+        cli.render_usage(ledger)
+
+    cli._render_usage_safely(ledger)      # the wrapper must not
+    assert "could not be encoded" in err.getvalue(), (
+        "the usage line vanished without a word; a line nobody can read is not the same as a run "
+        "that made no calls, and they must not print the same way: " + repr(err.getvalue()))
 
 
 # --------------------------------------------------------------------------------------------------

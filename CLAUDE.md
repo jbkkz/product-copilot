@@ -212,7 +212,8 @@ bug that looked like correct behaviour.
     names `encoding="utf-8"` — the default is the *locale's* codec, so a file this project wrote as
     UTF-8 decodes as cp1252 on Windows and the round-trip corrupts while still validating: mojibake in
     the PRD, and `integrity.py` rehashing the mis-decode to accuse the user of editing a file nobody
-    touched. `tests/test_encoding.py` is the guard, because 29 call-site fixes leave the 30th; it walks
+    touched. It was 28 reads and one write, not reads alone.
+    `tests/test_encoding.py` is the guard, because 29 call-site fixes leave the 30th; it walks
     `src/` and `scripts/` and, narrowly, any `tests/` fixture whose content is non-ASCII (that one is
     the *harness* rendering an environment limit as a product verdict, which is a different bug wearing
     the same red). A file the **user** names is the one exception worth knowing: it is still read as

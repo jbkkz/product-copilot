@@ -106,7 +106,7 @@ def _read_document(arg: str) -> str:
         return _read_stdin()
     p = Path(arg)
     if not p.is_file():
-        raise InvalidModelError(f"no such file: {arg} (use '-' to read from stdin)",
+        raise InvalidModelError(f"no such file: {display_token(arg)} (use '-' to read from stdin)",
                                 details={"path": arg})
     return read_user_text(p)
 
@@ -325,6 +325,10 @@ def _cmd_doctor(a, client) -> None:
         if stream["state"] == "will-crash":
             print(f"  ❌ {stream['stream']:<15} {stream['detail']}")
             print("     └─ Requivo could not configure this stream; set PYTHONIOENCODING=utf-8.")
+        elif stream["state"] == "lossy":
+            print(f"  {warn} {stream['stream']:<15} {stream['detail']}")
+            print("     └─ this handler came from your environment, not from Requivo. Prefer "
+                  "errors=backslashreplace.")
         elif stream["state"] == "unknown":
             print(f"  {warn} {stream['stream']:<15} {stream['detail']}")
         elif (stream["encoding"] or "").lower() not in ("utf-8", "utf8"):
@@ -439,7 +443,7 @@ def _cmd_session_show(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
-        raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
+        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
     meta = store.read_meta(slug)
     if a.json:
         _print_json(meta.model_dump())
@@ -523,7 +527,7 @@ def _cmd_session_export(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
-        raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
+        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
     d = store.canonical_dir(slug)
     dest = Path(a.output) if a.output else Path.cwd() / f"{slug}.requivo.zip"
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.part")
@@ -559,7 +563,7 @@ def _cmd_session_verify(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
-        raise SessionNotFoundError(f"no canonical session '{slug}'", details={"slug": slug})
+        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
     problems = check_session(slug)
     cards = _card_health(slug)
     ok = not problems and cards["checked"] and cards["problem"] is None
@@ -666,14 +670,15 @@ def _cmd_session_import(a, client) -> None:
     (If a second surface ever needs this, it moves to core; today the CLI is the only importer.)"""
     archive = Path(a.archive)
     if not archive.is_file():
-        raise SessionNotFoundError(f"archive not found: {archive}", details={"archive": str(archive)})
+        raise SessionNotFoundError(f"archive not found: {display_token(str(archive))}",
+                                   details={"archive": str(archive)})
     root = session_root()
     root.mkdir(parents=True, exist_ok=True)
 
     try:
         z = zipfile.ZipFile(archive)
     except (zipfile.BadZipFile, OSError) as e:
-        raise InvalidSessionError(f"{archive} is not a readable .zip archive: {e}",
+        raise InvalidSessionError(f"{display_token(str(archive))} is not a readable .zip archive: {e}",
                                   details={"archive": str(archive)}) from e
     with z:
         slug = _inspect_archive(z)
