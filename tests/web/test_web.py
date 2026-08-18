@@ -249,6 +249,78 @@ def test_a_request_addressed_to_another_host_is_refused(app):
     assert rebound.get("/").status_code == 403
 
 
+def test_a_host_the_server_cannot_determine_is_refused_rather_than_skipped(app):
+    """#45: the allowlist used to read `if host and host not in allowed_hosts()`, so `""` — what
+    `_hostname` returns when it could not determine a host at all — skipped the check entirely rather
+    than failing it. That is this project's own house defect class landing in a security module: a
+    check that cannot read its input treats that as *no check needed* instead of as a refusal, and
+    reports nothing while it is off. Because the host allowlist is the one check that also runs on
+    reads, the skip took a plain `GET` past the only DNS-rebinding guard there is.
+
+    Reported observed at the socket against the 0.10.1 candidate: `GET / HTTP/1.1` with an empty
+    `Host:` answered 200. `TestClient` reproduces that row exactly — httpx forwards `Host: ""` and it
+    arrives in the ASGI scope as `(b"host", b"")`, which is the same value uvicorn hands the
+    middleware.
+
+    The accept beside it is the control, and it is not decoration: a refusal-only test passes against
+    a guard that refuses every request, which is a worse outcome than the bug it was written for. So a
+    determined loopback host on a plain `GET` — the everyday read path — must still answer 200 in this
+    same fixture.
+    """
+    c = TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
+
+    empty = c.get("/", headers={"Host": ""})
+    assert empty.status_code == 403
+    # names its own arm rather than borrowing the generic another-origin wording, as #43 did for the
+    # opaque origin: a guard that could not look must not print what a guard that looked and refused
+    # prints. `details` never reach the reader, so the message is the only place this can be said.
+    assert "which host" in empty.text
+
+    # whitespace-only is the same undetermined state by a different spelling — `_hostname` strips first
+    assert c.get("/", headers={"Host": "   "}).status_code == 403
+
+    # must still pass, same fixture: a determined loopback host on a read
+    assert c.get("/").status_code == 200
+    assert c.get("/", headers={"Host": "localhost:8765"}).status_code == 200
+
+
+def test_a_request_that_states_no_host_at_all_is_refused(app):
+    """The other observed row: `GET / HTTP/1.0` with **no** `Host` header, which h11 admits (it only
+    requires `Host` on HTTP/1.1) and which answered 200.
+
+    Driven against `_enforce` over a hand-built ASGI scope rather than over HTTP, because no client
+    this suite can build will omit the header — httpx raises `TypeError: Header value must be str or
+    bytes` on a `None` value, and `TestClient` always derives one from `base_url`. The scope below is
+    what uvicorn hands the middleware for that request: headers verbatim, no `host` among them. Run
+    through `asyncio.run` so this needs no async plugin, which the dev extra does not carry.
+
+    The determined-host scope is asserted first and is the must-fire control — without it a hand-built
+    scope that was simply malformed, or an `_enforce` that raised on everything, would pass this test
+    while checking nothing.
+    """
+    import asyncio
+
+    from starlette.requests import Request
+
+    from requivo.web.security import CrossSiteRequestError, _enforce
+
+    def verdict(headers: list[tuple[bytes, bytes]]) -> str:
+        """`"accepted"`, or the refusal message — never a bare boolean, so the arm is visible here."""
+        async def run() -> str:
+            scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"",
+                     "headers": headers}
+            try:
+                await _enforce(Request(scope))
+            except CrossSiteRequestError as exc:
+                return exc.message
+            return "accepted"
+        return asyncio.run(run())
+
+    assert verdict([(b"host", b"127.0.0.1:8765")]) == "accepted"        # must fire
+    assert "which host" in verdict([])                                  # no Host header at all
+    assert verdict([(b"host", b"evil.example")]) != "accepted"          # and the mismatch arm survives
+
+
 # ── the origin check: which hostnames are one trust domain (#43) ──────────────
 
 def _guard_post(app, *, host: str, slug: str, headers: dict | None = None):
@@ -346,6 +418,32 @@ def test_two_hostnames_nobody_could_determine_are_not_a_match():
     assert _same_trust_domain("localhost", "127.0.0.1") is True
     assert _same_trust_domain("evil.example", "evil.example") is True
     assert _same_trust_domain("evil.example", "127.0.0.1") is False
+
+
+def test_a_cross_port_loopback_origin_is_accepted_and_that_is_the_decision(app):
+    """#46: `_hostname` discards the port on both sides, so the set this check accepts is *any page on
+    any loopback port* — not, as the docstring used to claim, a page that can only have come from this
+    process. The claim was false; the behaviour it described is deliberate and is pinned here.
+
+    Why it is deliberate rather than tolerated: the request token is what gates the write, and a page
+    on another loopback port cannot obtain it. The browser's own same-origin policy is (scheme, host,
+    port), so `http://localhost:3000` reading a page served on `:8765` is a cross-origin read, this app
+    sets no CORS headers, and the response body is unreadable to it. `Sec-Fetch-Site` refuses the
+    cross-port post as `same-site` before this line is even reached, on every browser that sends it.
+    Comparing the port here would add nothing those two do not already do, and it is the exact shape of
+    false positive that #43 was: a default port elided in an `Origin` but present in a `Host` refuses a
+    form with no way forward.
+
+    Pinned so that making the comparison port-exact is a change somebody has to argue with — and
+    against the docstring — rather than a quiet tightening. This is a characterization test for a
+    deliberate non-change: it passed before #46 was addressed and passes after, which is the point.
+    The hostile row beside it is the must-fire control.
+    """
+    assert _guard_post(app, host="127.0.0.1:8765", slug="cross-port-loopback",
+                       headers={"Origin": "http://localhost:3000"}).status_code == 303
+    # must still fire — a port is not what makes a foreign host acceptable either
+    assert _guard_post(app, host="127.0.0.1:8765", slug="cross-port-hostile",
+                       headers={"Origin": "http://evil.example:8765"}).status_code == 403
 
 
 def test_operator_listed_hosts_are_not_interchangeable_with_one_another(app, monkeypatch):

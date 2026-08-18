@@ -128,6 +128,13 @@ Even though it is a local app:
   and the only one that also runs on reads), the browser's `Sec-Fetch-Site` hint, an `Origin`/`Referer`
   trust-domain match, and a per-process request token rendered into every form. A page held open across
   a server restart needs a reload to pick up the new token.
+- **A request that names no host is refused, not waved through.** The host allowlist used to skip
+  itself when it could not determine a `Host` — an absent header, or an empty one — so the one request
+  nobody could attribute walked past the only check that also runs on reads, and nothing reported that
+  it was off (#45). It is now the third state, stated: the refusal says the host could not be
+  determined rather than borrowing the wording of a genuine mismatch. This does refuse an HTTP/1.0
+  request that sends no `Host` at all; HTTP/1.1 requires one, every browser and ordinary client sends
+  one, and HTTP/1.0 is not a supported caller here.
 - **The three loopback spellings are one origin.** `localhost`, `127.0.0.1` and `::1` name one machine,
   so a page served on any of them may post to any other — the host allowlist already accepted them
   interchangeably, and comparing them as strings refused a form that used two at once, with no way
@@ -137,6 +144,14 @@ Even though it is a local app:
   opaque origin a sandboxed cross-site frame sends — is refused; no origin header at all is accepted,
   which is what lets `curl` with a valid token work, and the reasoning for the difference is in
   `web/security.py`.
+- **That equivalence is the loopback interface, not this process, and the port is deliberately not
+  compared.** A page on *any* loopback port passes the origin check — `http://localhost:3000` as much
+  as the port Requivo is serving on — because the comparison discards the port on both sides. That
+  predates the loopback-spelling change above and is kept on purpose: the request token is what gates
+  the write, and a page on another port cannot read one, because the browser's own same-origin policy
+  counts the port and this app sends no CORS headers. Comparing ports here would add nothing and would
+  reintroduce the failure it just fixed, since a default port is elided in an `Origin` but spelled out
+  in a `Host` (#46).
 - Every slug is validated in the Core (strict kebab-case, no path separators or dot segments), so a
   request can never escape `.requivo/sessions/`.
 - Only the package's `static/` directory is served — never the workspace, `.requivo`, `.env` or `.git`.
