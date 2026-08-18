@@ -15,7 +15,7 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
 <form method="post" action="/sessions" class="card start">
   {% include "_csrf.html" %}
   <label for="request_text" class="sr-only">The request</label>
-  <textarea id="request_text" name="request_text" required maxlength="20000" rows="6"
+  <textarea id="request_text" name="request_text" required rows="6"
     aria-describedby="req-hint"
     placeholder="e.g. We'd like a leave approval system so staff can request time off and managers can approve it."></textarea>
   <p id="req-hint" class="hint">One line or a whole email. The messier the request, the more Requivo helps.</p>
@@ -30,7 +30,7 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
     <summary>Advanced settings</summary>
     <div class="advanced-body">
       <label for="slug">Session name <span class="hint">(optional — lowercase words joined by hyphens)</span></label>
-      <input type="text" id="slug" name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="80"
+      <input type="text" id="slug" name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*"
         placeholder="leave-approval" aria-describedby="slug-hint">
       <p id="slug-hint" class="hint">Leave blank to derive one from the request.</p>
 
