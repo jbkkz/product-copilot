@@ -18,6 +18,7 @@ from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
+from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
 from requivo.providers.anthropic import EngineError, advise, estimate, new_client, run, track_usage
@@ -35,11 +36,30 @@ from requivo.render.terminal import (
 from requivo.services.artifacts import ARTIFACT_FILENAMES
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
+from requivo.streams import configure_streams, safe_write
 
 load_dotenv()
 
 
 MAX_TURNS = 8
+
+# A command whose *work* succeeded and whose *report* could not be encoded. Distinct from 1 (a clean,
+# expected failure) so a script can tell "nothing happened" from "it happened and you cannot see it";
+# see the `UnicodeEncodeError` arm in `app()` and `streams.py` for why the distinction is the point.
+EXIT_RENDER_FAILED = 3
+
+_RENDER_FAILED = (
+    "\n"
+    "The command completed, but its output could not be encoded for this console: {error}\n"
+    "\n"
+    "Whatever this command changed HAS been applied -- do not re-run it. A `discover`, `answer` or\n"
+    "generator verb has already made its provider call and written its revision, and running it\n"
+    "again would pay for a second one.\n"
+    "\n"
+    "Set PYTHONIOENCODING=utf-8, or redirect to a file, and read the result with\n"
+    "`requivo status <session>` or `requivo artifact show <session> <name>`.\n"
+    "Run `requivo doctor` to see which stream could not be configured.\n"
+)
 
 
 def converse(client, request: str, only: list[str] | None = None) -> EngineOutput | None:
@@ -114,7 +134,7 @@ def _cmd_discover(a, client) -> None:
         raise SystemExit(2)
     client = client or new_client()
     is_file = _is_file_arg(a.request)
-    request = Path(a.request).read_text() if is_file else a.request
+    request = read_user_text(Path(a.request)) if is_file else a.request
 
     # One resolver, in Core, shared with the deterministic verbs and the Web: an unknown card is a hard
     # error. This used to warn and carry on with `only = None`, which does not mean "the cards you
@@ -235,9 +255,9 @@ def _cmd_demo(a, client) -> None:
     # Read from the frozen payload bundled in the package (so `requivo demo` works from a wheel, no clone),
     # but point the visitor at the browsable copy under examples/ at the repo root.
     demo = DEMO
-    request = (demo / "request.md").read_text().strip()
+    request = (demo / "request.md").read_text(encoding="utf-8").strip()
     out = load_model(demo / "model.json")
-    assessment = _fenced_text((demo / "solution-assessment.md").read_text())
+    assessment = _fenced_text((demo / "solution-assessment.md").read_text(encoding="utf-8"))
 
     bar = "═" * 72
     print(bar)
@@ -469,6 +489,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def app(argv: list[str] | None = None, client=None) -> None:
     """Entry point for the `requivo` command (and its `pc` alias, and `python -m requivo`)."""
+    # First, before anything can print: make stdout and stderr unable to kill this process on a
+    # character they cannot encode (#29). Not at import time — importing `requivo` must not
+    # reconfigure the streams of a program that merely imported it.
+    configure_streams()
     args = _build_parser().parse_args(argv)
     # A global --workspace redirects where sessions are read/written, for the duration of this run.
     if getattr(args, "workspace", None):
@@ -487,6 +511,20 @@ def app(argv: list[str] | None = None, client=None) -> None:
             if want_json:
                 print(json.dumps(e.to_dict(), indent=2))
             else:
-                print(f"\n{e}", file=sys.stderr)
+                safe_write(sys.stderr, f"\n{e}\n")
             raise SystemExit(1) from None
+        except UnicodeEncodeError as e:
+            # The braces to `configure_streams`' belt, and the reason this arm exists at all: a
+            # `UnicodeEncodeError` escaping a handler was raised by a `print`, which means the
+            # handler had already finished the work it was reporting. Letting it surface as a
+            # traceback tells the operator the command failed when the revision has landed and the
+            # artifact has been written — so they re-run, and pay for a second provider call on top
+            # of the first (#29). Say what actually happened instead.
+            #
+            # Reached only where `configure_streams` reported `could-not` for this stream, which
+            # `requivo doctor` prints. Narrow on purpose: a broad `except Exception` here would
+            # swallow real failures and claim they had landed.
+            render_usage(ledger)
+            safe_write(sys.stderr, _RENDER_FAILED.format(error=e))
+            raise SystemExit(EXIT_RENDER_FAILED) from None
     render_usage(ledger)

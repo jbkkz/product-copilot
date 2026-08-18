@@ -61,7 +61,7 @@ class IntegrityProblem:
 
 def _read_json(path: Path) -> tuple[dict | None, str | None]:
     try:
-        return json.loads(path.read_text()), None
+        return json.loads(path.read_text(encoding="utf-8")), None
     except (OSError, json.JSONDecodeError) as e:
         return None, str(e)
 
@@ -132,7 +132,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         if not f.is_file():
             bad("missing_revision_file", f"revisions/{i:04d}-model.json is missing")
             continue
-        payload = f.read_text()
+        payload = f.read_text(encoding="utf-8")
         if rec.model_hash and _hash(payload) != rec.model_hash:
             bad("revision_hash_mismatch",
                 f"revisions/{i:04d}-model.json does not match the hash recorded for it — the file "
@@ -159,7 +159,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
     elif not model_path.is_file():
         bad("missing_model", f"session.json is at revision {n} but there is no model.json")
     else:
-        payload = model_path.read_text()
+        payload = model_path.read_text(encoding="utf-8")
         try:
             EngineOutput.model_validate_json(payload)
         except (ValidationError, ValueError) as e:

@@ -53,7 +53,7 @@ def diff_one(slug: str) -> str:
         print(f"\n{slug}\n  ! no working-tree capture (run golden_run.py first)")
         return "stale"
 
-    new = load_runs(path.read_text())
+    new = load_runs(path.read_text(encoding="utf-8"))
     old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
 
     if old_text is None:
@@ -66,7 +66,7 @@ def diff_one(slug: str) -> str:
         print(f"  stable themes: {', '.join(st['themes']) or '—'}")
         return "moved"
 
-    if path.read_text() == old_text:
+    if path.read_text(encoding="utf-8") == old_text:
         # Byte-identical to HEAD means the capture never landed — the engine is non-deterministic, so
         # a genuine re-run can't reproduce a file exactly. Reporting "no change" here would be a false
         # all-clear, which is the one failure mode a regression lens must not have.
@@ -97,7 +97,7 @@ def diff_one(slug: str) -> str:
         print(f"  questions  − stable theme(s): {', '.join(m['themes_removed'])}")
 
     strong = bool(m["strong"])
-    old_briefs, new_briefs = load_briefs(old_text), load_briefs(path.read_text())
+    old_briefs, new_briefs = load_briefs(old_text), load_briefs(path.read_text(encoding="utf-8"))
     if old_briefs and new_briefs:
         strong = _show_assessment(old_briefs, new_briefs) or strong
     return "moved" if strong else "weak"
@@ -139,7 +139,7 @@ def questions_one(slug: str) -> None:
     if not path.exists() or old_text is None:
         print(f"\n{slug}\n  ! need both a working-tree capture and a HEAD baseline")
         return
-    new_text = path.read_text()
+    new_text = path.read_text(encoding="utf-8")
     for title, text in (("HEAD", old_text), ("working tree", new_text)):
         print(f"\n{slug} — {title}")
         for i, m in enumerate(load_runs(text), 1):

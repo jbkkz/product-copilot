@@ -75,6 +75,7 @@ at all.
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
+| `output.streams[].state` | `safe` (a character the console cannot encode is escaped, never fatal), `will-crash` (a strict handler on a narrow codec — a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
 
 An `empty` context is a broken install rather than a quiet inconvenience: the cards are what impact
 is estimated against, and impact is half of `information_value = uncertainty × impact`. Discovery
@@ -137,6 +138,31 @@ A proposal replaces the model, so it carries the **complete** slot set and a non
 deleted (and what rested on them goes stale); send a list and it replaces. A refinement normally says
 nothing about them. To check a partial projection without applying it, use
 `model validate --allow-partial`. See [compatibility.md](compatibility.md#what-a-proposal-means).
+
+### Text encoding, and what exit code 3 means
+
+Requivo reads and writes UTF-8 throughout, whatever the machine's locale. A file *you* name —
+`requivo discover ./brief.md`, `requivo model apply <slug> proposal.json` — must be UTF-8 too; one
+that is not is refused by name, with the offending byte and its position, rather than decoded with
+the locale's codec into something that would look like prose and be wrong.
+
+On output, a console that cannot represent a character gets a visible backslash escape in its place,
+rather than a crash or a silent hole — `backslashreplace`, deliberately not `replace`, because a
+reader cannot tell a substituted question mark from a character that was never there. Where even that
+is impossible — a stream Requivo could not reconfigure, which
+`doctor` names — the command exits **3** instead of dying in a traceback:
+
+| Exit | Means |
+|---|---|
+| 0 | Success |
+| 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
+| 2 | Bad arguments (argparse) |
+| 3 | **The command succeeded and its output could not be encoded.** Whatever it changed has been applied |
+
+Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
+its provider call, applies the revision and writes the artifact *before* it prints anything — so a
+renderer that dies at the final `print` and reports failure invites a re-run that pays for a second
+call and stacks a second revision on the first.
 
 ### Documents on stdin
 

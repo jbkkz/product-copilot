@@ -23,13 +23,34 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests scripts
 
+  # Why there is an `os` axis at all (#3), and why it is not the full cross product.
+  #
+  # Requivo is installed with pip/uv and run from a terminal by whoever installs it. The maintainer
+  # develops on macOS and CI proved Linux; neither said anything about Windows, and a green run on
+  # the platform the code was written on is the weakest evidence available. #11 and #29 are what
+  # that gap cost: every read decoded with the platform's codec while every write encoded UTF-8, so
+  # a French session round-tripped into mojibake on Windows and `session verify` then accused the
+  # user of editing a file nobody had touched. Both shipped, both were graded *reasoned* rather than
+  # observed by three separate audits, and the reason each time was that no leg could execute them.
+  #
+  # The shape: every Python on Linux (the compatibility axis — that is where a 3.9-vs-3.13 language
+  # difference shows), and the ends of the supported range on macOS and Windows (the platform axis —
+  # a path separator, a codepage or a rename-over-existing does not care which minor version it
+  # meets). 5 + 2 + 2 = 9 legs rather than 15, which is roughly double the previous cost rather than
+  # triple it, and it buys the platform coverage that the full cross product's extra six legs do not.
   test:
-    name: Test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - {os: macos-latest, python-version: "3.9"}
+          - {os: macos-latest, python-version: "3.13"}
+          - {os: windows-latest, python-version: "3.9"}
+          - {os: windows-latest, python-version: "3.13"}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -38,6 +59,12 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       # Pure-logic + offline CLI units, no API calls (a fake client is injected), so no key needed.
+      #
+      # Deliberately NOT run under a forced UTF-8 mode. `tests/test_encoding.py` spawns subprocesses
+      # that set PYTHONIOENCODING and PYTHONWARNDEFAULTENCODING themselves, and a PYTHONUTF8=1 in
+      # the job environment would be inherited by those children and override every lever they use
+      # — turning the whole encoding suite green for the wrong reason, on the one platform it exists
+      # to measure.
       - run: python -m pytest tests/ -q
 
   wheel:

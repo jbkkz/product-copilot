@@ -32,10 +32,38 @@ from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, CONTEXT, session_root, user_context_dir, workspace_root
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
+from requivo.streams import describe_streams
 
 
 def _print_json(obj) -> None:
     print(json.dumps(obj, indent=2))
+
+
+def read_user_text(path: Path) -> str:
+    """A file the *user* named, decoded as UTF-8, with a structured refusal when it is not UTF-8.
+
+    Every file Requivo writes is UTF-8 (`_atomic_write`), so UTF-8 is the right codec to read one
+    back with — that is #11. But these particular reads take a path the user typed, and that file was
+    written by something else: a French client brief saved out of a Windows editor is genuinely
+    cp1252 often enough to matter.
+
+    The old behaviour decoded it with the locale's codec, which on Windows silently produced mojibake
+    that then validated, persisted, and shipped in the PRD. Refusing is right — invariant 3, refuse
+    rather than truncate, because half a request reads exactly like a whole one, and mojibake reads
+    exactly like prose. What is *not* right is refusing with a bare `UnicodeDecodeError` traceback:
+    that would trade a silently wrong answer for an unexplained crash, which is the same trade one
+    step along. So the refusal names the file, the codec and the way out.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise InvalidModelError(
+            f"{path} is not valid UTF-8 (byte 0x{e.object[e.start]:02x} at position {e.start}). "
+            f"Requivo reads and writes UTF-8 throughout, so a file in another encoding is refused "
+            f"rather than decoded into text that would look like prose and be wrong. Re-save it as "
+            f"UTF-8 and try again.",
+            details={"path": str(path), "expected_encoding": "utf-8", "position": e.start},
+        ) from None
 
 
 def _read_source(arg: str) -> str:
@@ -46,7 +74,7 @@ def _read_source(arg: str) -> str:
         is_file = bool(arg.strip()) and Path(arg).is_file()
     except OSError:
         is_file = False
-    return Path(arg).read_text() if is_file else arg
+    return read_user_text(Path(arg)) if is_file else arg
 
 
 def _read_stdin() -> str:
@@ -74,7 +102,7 @@ def _read_document(arg: str) -> str:
     if not p.is_file():
         raise InvalidModelError(f"no such file: {arg} (use '-' to read from stdin)",
                                 details={"path": arg})
-    return p.read_text()
+    return read_user_text(p)
 
 
 # ── doctor ──────────────────────────────────────────────────────────────────────
@@ -119,10 +147,18 @@ def doctor_report() -> dict:
     except ImportError:
         pass
 
+    # The console's own codec, which `doctor` is the right verb to answer about: it is the thing
+    # that decides whether any *other* line of this report can be printed at all (#29). `cli.app()`
+    # has already run `configure_streams()` by the time this is reached, so what is reported is the
+    # state after that — including the case where a stream refused to be configured, which is the
+    # one state in which a glyph can still kill the process mid-report.
+    output = describe_streams()
+
     return {
         "requivo_version": __version__,
         "python_version": platform.python_version(),
         "assets": {"root": str(ASSETS), "present": ASSETS.exists()},
+        "output": {"ok": all(s["state"] == "safe" for s in output), "streams": output},
         "schema": {"ok": schema_ok, "slots": slot_count, "error": schema_err},
         # `context_cards` stays the plain list it has always been — it is a published `--json` key
         # and a consumer reading `len(...)` off it must keep working. The verdict is the new sibling.
@@ -236,10 +272,10 @@ def _cmd_schema(a, client) -> None:
     """Print the slot schema (and optionally the human framework spec) so a reasoning caller — Claude
     Code, above all — has the exact slot vocabulary + driver rule to produce a valid proposal offline."""
     from requivo.paths import FRAMEWORK
-    print((FRAMEWORK / "model_schema.json").read_text())
+    print((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))
     if a.framework:
         print("\n\n<!-- framework/elicitation.md (human spec) -->\n")
-        print((FRAMEWORK / "elicitation.md").read_text())
+        print((FRAMEWORK / "elicitation.md").read_text(encoding="utf-8"))
 
 
 def _cmd_context(a, client) -> None:
@@ -276,6 +312,18 @@ def _cmd_doctor(a, client) -> None:
     print("Requivo doctor")
     print(f"  {ok} requivo         {r['requivo_version']}")
     print(f"  {ok} python          {r['python_version']}")
+    # The console's codec, reported before anything that depends on it. Only ever a line when there
+    # is something to say: on a UTF-8 terminal — every developer's, which is why this shipped — the
+    # answer is uninteresting and a clean report should not grow a row per non-finding.
+    for stream in r["output"]["streams"]:
+        if stream["state"] == "will-crash":
+            print(f"  ❌ {stream['stream']:<15} {stream['detail']}")
+            print("     └─ Requivo could not configure this stream; set PYTHONIOENCODING=utf-8.")
+        elif stream["state"] == "unknown":
+            print(f"  {warn} {stream['stream']:<15} {stream['detail']}")
+        elif (stream["encoding"] or "").lower() not in ("utf-8", "utf8"):
+            print(f"  {warn} {stream['stream']:<15} {stream['encoding']} — characters it cannot "
+                  f"encode are escaped, not dropped, and never crash")
     print(f"  {ok if r['assets']['present'] else '❌'} assets          {r['assets']['root']}")
     s = r["schema"]
     print(f"  {ok if s['ok'] else '❌'} schema          {s['slots']} slots"

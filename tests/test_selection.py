@@ -181,7 +181,14 @@ def test_a_persisted_card_selection_is_visible_when_the_card_is_gone(tmp_path, m
     once, at creation, so nothing else was ever going to notice."""
     user_dir = tmp_path / "user-cards"
     user_dir.mkdir()
-    (user_dir / "acme-crm.md").write_text("ACME CRM — the product context this session was built on.")
+    # Explicitly UTF-8, because `load_context` reads it that way. Without it this fixture is written
+    # with the *locale's* codec, so on Windows the em dash below goes to disk as cp1252 and the read
+    # at line 188 raises `UnicodeDecodeError` — a red leg caused by the harness, about a product that
+    # is behaving correctly. That failure mode is worth naming: it is the test rendering an
+    # environment limit as a product verdict, and "add more tests for that platform" is the wrong
+    # lever on it (#3).
+    (user_dir / "acme-crm.md").write_text(
+        "ACME CRM — the product context this session was built on.", encoding="utf-8")
     monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(user_dir))
 
     # machine A: the card is there, the selection loads it

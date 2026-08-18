@@ -73,6 +73,7 @@ all three reach the same services.
 ```
 requivo/
   paths.py         ASSETS (read-only) + workspace_root()/session_root() + output_root() (retired out/)
+  streams.py       stdout/stderr encoding — one chokepoint, called once by cli.app() (see invariant 16)
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the deterministic engine — no LLM, no provider, no argv/stdout
     contracts.py     Pydantic contracts (StrictModel base) + stable ids + slot vocabulary
@@ -207,6 +208,21 @@ bug that looked like correct behaviour.
     a session at revision 0 has no model — `status()` raises for it. Letting that propagate turned one
     un-analysed session into a 404 for the *whole* list, hiding every other session behind it. Any
     aggregate view catches per-item failure and degrades that row, never the page.
+16. **Text is UTF-8 on both sides, and a renderer cannot kill the process.** Every text read and write
+    names `encoding="utf-8"` — the default is the *locale's* codec, so a file this project wrote as
+    UTF-8 decodes as cp1252 on Windows and the round-trip corrupts while still validating: mojibake in
+    the PRD, and `integrity.py` rehashing the mis-decode to accuse the user of editing a file nobody
+    touched. `tests/test_encoding.py` is the guard, because 29 call-site fixes leave the 30th; it walks
+    `src/` and `scripts/` and, narrowly, any `tests/` fixture whose content is non-ASCII (that one is
+    the *harness* rendering an environment limit as a product verdict, which is a different bug wearing
+    the same red). A file the **user** names is the one exception worth knowing: it is still read as
+    UTF-8, but refused by `read_user_text` with a structured error rather than a traceback.
+    Output is the mirror image, and the ordering is the whole point: `streams.py` reconfigures stdout
+    and stderr once, from `cli.app()`, with `errors="backslashreplace"` — never `replace`, because a
+    reader cannot tell a substituted character from one that was never there. A glyph must not be able
+    to kill a process **after** the mutation it was reporting has landed; the `UnicodeEncodeError` arm
+    in `app()` exits `EXIT_RENDER_FAILED` (3) and says the work is done rather than letting a traceback
+    imply it is not (#11, #29).
 
 ## Two vocabularies, one meaning
 

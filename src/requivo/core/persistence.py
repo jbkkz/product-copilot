@@ -161,7 +161,7 @@ def _slug(text: str) -> str:
 
 def load_model(path: Path) -> EngineOutput:
     """Load a saved model so artifacts can be regenerated without redoing discovery."""
-    return EngineOutput.model_validate_json(path.read_text())
+    return EngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 # ── Canonical session store (.requivo/sessions/<slug>/) ────────────────────────
@@ -398,7 +398,7 @@ def read_meta(slug: str) -> SessionMeta:
     if not p.exists():
         raise SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
     try:
-        return migrate_session(json.loads(p.read_text()))
+        return migrate_session(json.loads(p.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:
         raise InvalidSessionError(f"session '{slug}' has an unreadable session.json: {e}",
                                   details={"slug": slug}) from e
@@ -496,7 +496,7 @@ def load_session_model(slug: str) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
-    return EngineOutput.model_validate_json(p.read_text())
+    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def load_revision_model(slug: str, revision: int) -> EngineOutput:
@@ -505,12 +505,12 @@ def load_revision_model(slug: str, revision: int) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
-    return EngineOutput.model_validate_json(p.read_text())
+    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def session_request(slug: str) -> str:
     p = canonical_dir(slug) / "request.md"
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
@@ -626,17 +626,17 @@ def migrate_legacy(slug: str) -> SessionMeta:
     request = ""
     for name in ("request.md", "request.txt"):
         if (src / name).exists():
-            request = (src / name).read_text()
+            request = (src / name).read_text(encoding="utf-8")
             break
     old: dict = {}
     if (src / "session.json").exists():
         try:
-            old = json.loads((src / "session.json").read_text())
+            old = json.loads((src / "session.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             old = {}
     # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
     # leaving an empty session behind holding a name nothing can now use.
-    model = EngineOutput.model_validate_json((src / "model.json").read_text())
+    model = EngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
 
     if request:
         req_hash = _hash(request)
@@ -666,6 +666,6 @@ def migrate_legacy(slug: str) -> SessionMeta:
         for fn, atype in filename_to_type.items():
             legacy_file = src / fn
             if legacy_file.exists():
-                content = legacy_file.read_text()
+                content = legacy_file.read_text(encoding="utf-8")
                 save_session_artifact(slug, atype, fn, content, source_revision=rev)
         return read_meta(slug)

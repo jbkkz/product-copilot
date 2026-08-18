@@ -146,6 +146,29 @@ open-source strategy — is indexed in [`docs/`](docs/README.md).
 
 ---
 
+## Supported platforms
+
+| Platform | Python | Tested in CI |
+|---|---|---|
+| Linux | 3.9 – 3.13 | every version, every push |
+| macOS | 3.9 – 3.13 | 3.9 and 3.13 |
+| Windows | 3.9 – 3.13 | 3.9 and 3.13 |
+
+An untested platform and a supported platform look identical from outside, so this table says which
+is which. The ends of the version range are tested on macOS and Windows rather than every minor
+version: a path separator, a console codepage or a rename-over-existing does not care which 3.x it
+meets, while a language-level difference does — and that one shows on the Linux axis, which runs all
+five.
+
+Requivo reads and writes **UTF-8 everywhere**, regardless of the machine's locale or the console's
+codepage. A session written on one machine reads back byte-identically on another. Where a console
+cannot represent a character Requivo prints, the character is escaped rather than dropped and never
+crashes the command — `requivo doctor` reports your console's encoding when there is something worth
+saying about it. A file you pass in (`requivo discover ./brief.md`) must be UTF-8; one that is not is
+refused by name rather than silently decoded into something that reads like prose and is wrong.
+
+---
+
 ## Status
 
 Actively developed, pre-1.0. The Core, CLI, Claude Code plugin and local Web interface are usable
