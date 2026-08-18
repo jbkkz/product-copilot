@@ -64,6 +64,18 @@ class UnknownContextCardError(InvalidModelError):
     code = "unknown_context_card"
 
 
+class EmptySelectorTokenError(RequivoError):
+    """A caller-supplied selector carried an empty or whitespace-only token — a stray comma, usually.
+
+    Refused rather than dropped, because an empty token is not a narrow selection: it is *no*
+    selection wearing the shape of one. Matched as a substring it hits every candidate; dropped, it
+    can leave the selection empty, and every reader downstream spells an empty selection "all of
+    them". Both directions are silent, and both render exactly like a precise answer.
+    """
+
+    code = "empty_selector_token"
+
+
 class InputTooLargeError(RequivoError):
     """A supplied text exceeds the ceiling the engine accepts. Raised rather than truncated: a request
     or an answer silently cut mid-sentence is reasoned over as if it were the whole thing, and the

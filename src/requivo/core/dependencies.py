@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from requivo.core.analysis import _label, _slot_meta
 from requivo.core.contracts import EngineOutput
+from requivo.core.selectors import normalize_tokens
 
 
 def _all_slot_ids() -> set[str]:
@@ -92,11 +93,25 @@ def artifact_slots() -> dict[str, set[str]]:
 
 def resolve_slots(tokens: list[str]) -> tuple[list[str], list[str]]:
     """Map user-typed tokens (slot ids OR label substrings, PM-friendly) to slot ids.
-    Returns (resolved ids in schema order, unmatched tokens)."""
+    Returns (resolved ids in schema order, unmatched tokens).
+
+    A token that matches nothing is *reported*, not dropped — that is what the second element is for,
+    and the caller prints it. A token that is **empty** is refused outright, before any matching runs,
+    because the substring arm makes it match everything: `"" in label` is true for every label, so
+    `requivo impact <model> ""` (an unset shell variable, usually) or a caller splitting a
+    comma-separated value on a trailing comma resolved to the *entire* schema with an empty unmatched
+    list. An impact report claiming the whole model changed, carrying no complaint about its input,
+    reads as a precise answer to a specific question rather than as a failure. The refusal is
+    `normalize_tokens`, shared with the context-card selectors so the rule is stated once.
+    """
     _, labels = _slot_meta()
+    # Materialised before the helper iterates it: a generator handed in here would be exhausted by
+    # `normalize_tokens` and the `zip` below would then pair nothing, returning ([], []) — no slots
+    # and no complaint, which is the same silent absence this function is being fixed for.
+    tokens = list(tokens)
+    keys = normalize_tokens(tokens, what="slot")
     resolved, unmatched = [], []
-    for tok in tokens:
-        key = tok.strip().lower()
+    for raw, key in zip(tokens, keys):
         if key in labels:  # exact slot id
             hit = [key]
         else:  # label substring, e.g. "permission" → permissions
@@ -104,7 +119,7 @@ def resolve_slots(tokens: list[str]) -> tuple[list[str], list[str]]:
         if hit:
             resolved.extend(hit)
         else:
-            unmatched.append(tok)
+            unmatched.append(raw)
     ordered = [sid for sid in labels if sid in set(resolved)]  # schema order, de-duped
     return ordered, unmatched
 
