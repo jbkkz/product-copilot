@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from requivo.cli import app as cli_app
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, MAX_REQUEST_CHARS, MAX_SLUG_CHARS
-from requivo.web.security import CSRF_FIELD, csrf_token
+from requivo.web.security import CSRF_FIELD, CSRF_HEADER, csrf_token
 from requivo.web.templating import TEMPLATES_DIR
 from tests.web.conftest import BRIEF_REPLY, CRITERIA_REPLY, PRD_REPLY, engine_reply, full_model
 
@@ -247,6 +247,101 @@ def test_a_request_addressed_to_another_host_is_refused(app):
     # only guard that catches it, which is why it also runs on reads.
     rebound = TestClient(app, base_url="http://evil.example", raise_server_exceptions=False)
     assert rebound.get("/").status_code == 403
+
+
+# ── the origin check: which hostnames are one trust domain (#43) ──────────────
+
+def _guard_post(app, *, host: str, slug: str, headers: dict | None = None):
+    """One write, addressed to `host`, carrying a valid request token — so the only thing under test is
+    the origin check. Redirects are not followed, so an accepted write reads as 303 and a refused one as
+    403 rather than both landing on a rendered page."""
+    c = TestClient(app, base_url=f"http://{host}", raise_server_exceptions=False)
+    c.headers[CSRF_HEADER] = csrf_token()
+    return c.post("/sessions",
+                  data={"request_text": "A leave approval system.", "slug": slug,
+                        "provider": "create_only"},
+                  headers=headers or {}, follow_redirects=False)
+
+
+def test_the_loopback_spellings_are_one_origin_and_evil_example_still_is_not(app):
+    """#43: `localhost`, `127.0.0.1` and `::1` are three spellings of one machine — this module's own
+    host allowlist already treats them as interchangeable — and the origin check compared them as
+    strings, so a page served on one spelling could not post to the other. Reported from a real browser
+    on the 0.10.0 wheel: the form could not be submitted at all, and the natural recovery (change the
+    address, submit again) resubmits with the stale `Origin` and reproduces the same 403.
+
+    The refusal half is not optional and lives in this fixture on purpose: an acceptance-only test
+    passes just as well against a guard that has been deleted.
+    """
+    assert _guard_post(app, host="127.0.0.1:8765", slug="lb-localhost-origin",
+                       headers={"Origin": "http://localhost:8765"}).status_code == 303
+    assert _guard_post(app, host="localhost:8765", slug="lb-ipv4-origin",
+                       headers={"Origin": "http://127.0.0.1:8765"}).status_code == 303
+    assert _guard_post(app, host="127.0.0.1:8765", slug="lb-ipv6-origin",
+                       headers={"Origin": "http://[::1]:8765"}).status_code == 303
+    # must still fire — same fixture, same valid token, only the origin differs
+    assert _guard_post(app, host="127.0.0.1:8765", slug="hostile-vs-ipv4",
+                       headers={"Origin": "http://evil.example"}).status_code == 403
+    assert _guard_post(app, host="localhost:8765", slug="hostile-vs-localhost",
+                       headers={"Origin": "http://evil.example"}).status_code == 403
+
+
+def test_a_referer_gets_the_same_equivalence_and_the_same_refusal(app):
+    """`Referer` is the fallback the same line reads, so it has to move with `Origin` — the reporter's
+    probe measured both, and a fix that widened only one would leave half the dead end in place."""
+    assert _guard_post(app, host="127.0.0.1:8765", slug="ref-loopback",
+                       headers={"Referer": "http://localhost:8765/sessions"}).status_code == 303
+    # must still fire
+    assert _guard_post(app, host="127.0.0.1:8765", slug="ref-hostile",
+                       headers={"Referer": "http://evil.example/x"}).status_code == 403
+
+
+def test_the_opaque_origin_is_refused_deliberately_and_says_which_arm_fired(app):
+    """`Origin: null` is a browser declining to attribute the context it is posting from. Before #43 it
+    was refused only by accident — `_hostname("null")` returns the literal string `"null"`, which then
+    failed an equality test — and an accident is not a decision. It is refused on purpose now, and the
+    asymmetry with an *absent* origin is the reason rather than an oversight: browsers attach `Origin`
+    to every POST, so silence means no browser is speaking, while `null` is the one origin a
+    browser-borne attacker can choose to emit (a sandboxed cross-site frame).
+
+    The accept beside it is the control. Without it a harness that refused everything — a broken app
+    fixture, a token that stopped matching — would pass this test while checking nothing.
+    """
+    r = _guard_post(app, host="127.0.0.1:8765", slug="opaque-origin", headers={"Origin": "null"})
+    assert r.status_code == 403
+    assert "opaque origin" in r.text          # the opaque arm, not the generic another-origin refusal
+    # must be accepted, same fixture
+    assert _guard_post(app, host="127.0.0.1:8765", slug="attributed-origin",
+                       headers={"Origin": "http://localhost:8765"}).status_code == 303
+
+
+def test_no_origin_headers_at_all_keeps_its_current_behaviour(app):
+    """A scripted client sends neither header and the request token is what gates it — `curl` with a
+    valid token is a supported caller, and this suite's own posts are that caller. #43 asked whether the
+    absent case should be tightened to match `null`; it is deliberately left alone, so it is pinned here
+    rather than left implicit, with the token-less post beside it as the control that the write path is
+    still guarded at all."""
+    assert _guard_post(app, host="127.0.0.1:8765", slug="no-origin-stated").status_code == 303
+    bare = TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
+    assert bare.post("/sessions", data={"request_text": "x", "slug": "no-token-at-all",
+                                        "provider": "create_only"}).status_code == 403
+
+
+def test_operator_listed_hosts_are_not_interchangeable_with_one_another(app, monkeypatch):
+    """The equivalence is the fixed loopback set this module defines, never whatever an operator put in
+    `REQUIVO_WEB_ALLOWED_HOSTS`. Those are real hostnames and two of them may well be meant as two
+    distinct origins; a blanket `allowed_hosts()` membership test would have made that call on the
+    operator's behalf. Each is still same-origin with itself, which is the accept half."""
+    monkeypatch.setenv("REQUIVO_WEB_ALLOWED_HOSTS", "app.internal,admin.internal")
+    assert _guard_post(app, host="app.internal", slug="named-self",
+                       headers={"Origin": "http://app.internal"}).status_code == 303
+    # must still fire, in both directions — loopback does not launder into the opt-in set either
+    assert _guard_post(app, host="app.internal", slug="named-sibling",
+                       headers={"Origin": "http://admin.internal"}).status_code == 403
+    assert _guard_post(app, host="app.internal", slug="loopback-into-named",
+                       headers={"Origin": "http://localhost:8765"}).status_code == 403
+    assert _guard_post(app, host="127.0.0.1:8765", slug="named-into-loopback",
+                       headers={"Origin": "http://app.internal"}).status_code == 403
 
 
 # ── input bounds ──────────────────────────────────────────────────────────────
