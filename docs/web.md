@@ -126,8 +126,17 @@ Even though it is a local app:
   is the damage (sessions created, provider calls billed). Four checks run in `web/security.py`: a host
   allowlist (loopback, plus anything in `REQUIVO_WEB_ALLOWED_HOSTS` — this is the DNS-rebinding guard,
   and the only one that also runs on reads), the browser's `Sec-Fetch-Site` hint, an `Origin`/`Referer`
-  host match, and a per-process request token rendered into every form. A page held open across a
-  server restart needs a reload to pick up the new token.
+  trust-domain match, and a per-process request token rendered into every form. A page held open across
+  a server restart needs a reload to pick up the new token.
+- **The three loopback spellings are one origin.** `localhost`, `127.0.0.1` and `::1` name one machine,
+  so a page served on any of them may post to any other — the host allowlist already accepted them
+  interchangeably, and comparing them as strings refused a form that used two at once, with no way
+  forward from the error page (#43). A host you listed in `REQUIVO_WEB_ALLOWED_HOSTS` is **not** in that
+  equivalence: two real hostnames there must match exactly, because whether they are one trust domain is
+  your call and not something the app should infer from one comma-separated list. `Origin: null` — the
+  opaque origin a sandboxed cross-site frame sends — is refused; no origin header at all is accepted,
+  which is what lets `curl` with a valid token work, and the reasoning for the difference is in
+  `web/security.py`.
 - Every slug is validated in the Core (strict kebab-case, no path separators or dot segments), so a
   request can never escape `.requivo/sessions/`.
 - Only the package's `static/` directory is served — never the workspace, `.requivo`, `.env` or `.git`.

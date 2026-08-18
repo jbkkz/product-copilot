@@ -14,7 +14,10 @@ Four checks close that, in the order they run:
     browser's point of view, so it would sail through every other check *and* be able to read the token.
   * **`Sec-Fetch-Site`** — the browser's own account of where the request came from. Free, unspoofable
     from script, and rejects `cross-site` / `same-site` outright.
-  * **`Origin` / `Referer`** — when present, its host must match the host being addressed.
+  * **`Origin` / `Referer`** — when present, it must name the same trust domain as the host being
+    addressed. The three loopback spellings are one machine and are interchangeable here; an
+    operator-listed host is not, and must match exactly (`_same_trust_domain`). The opaque origin
+    `null` is refused outright, and `_enforce` says why that differs from sending no origin at all.
   * **A synchronizer token** — minted once per process, rendered into every form, required on every
     unsafe method. This is the load-bearing check; the three above are cheap filters in front of it.
 
@@ -83,6 +86,42 @@ def _hostname(value: str) -> str:
         return ""
 
 
+# The Origin header's opaque value, sent verbatim and never as part of a URL: a browser saying "a
+# context I decline to attribute". Matched on the raw header rather than on `_hostname()`, which parses
+# it into the plausible-looking hostname `"null"`.
+OPAQUE_ORIGIN = "null"
+
+
+def _same_trust_domain(origin_host: str, host: str) -> bool:
+    """Is a page served from `origin_host` the same trust domain as the server answering to `host`?
+
+    The same string always is. Beyond that, only the loopback set: `localhost`, `127.0.0.1` and `::1`
+    are three spellings of one interface on one machine, the host check above already accepts any of
+    them interchangeably, and a page at `http://localhost:8765` can only have been served by *this*
+    process — nothing else is listening there. Comparing the two spellings as strings refused a post
+    that used both at once, which is a false positive rather than a boundary (#43).
+
+    The hosts an operator listed in `REQUIVO_WEB_ALLOWED_HOSTS` deliberately do **not** join that
+    equivalence class, so this is not a membership test over `allowed_hosts()`. Those are real
+    hostnames pointing at a deliberate non-loopback bind, and two of them may well be meant as two
+    distinct origins — that is the operator's call to make, and inferring it from co-membership in one
+    comma-separated list would make it for them, silently, in the widening direction.
+
+    An empty string on either side is not a match, and that arm is the point rather than a special
+    case. `""` is what `_hostname` returns when it could not find a hostname *at all* — an absent or
+    unparseable `Host`, or an origin such as `http:///` that is a well-formed URL naming nobody. Two of
+    those facing each other used to compare equal, so the one input where **neither** side was
+    determined produced the same verdict as a verified match: a check that could not look, answering
+    anyway. Refusing costs nothing real — no browser omits `Host`, and a request that reaches here at
+    all has already stated an origin — and it keeps this function's name true for every input.
+    """
+    if not origin_host or not host:
+        return False
+    if origin_host == host:
+        return True
+    return origin_host in _LOOPBACK_HOSTS and host in _LOOPBACK_HOSTS
+
+
 def _submitted_token(request: Request, body: bytes) -> str:
     """The token the client sent: a header (scripted clients, tests) or the hidden field of a
     urlencoded form (every page in this app). A multipart body carries no token we will read — nothing
@@ -118,8 +157,26 @@ async def _enforce(request: Request) -> None:
         raise CrossSiteRequestError(
             "this request came from another site", details={"sec_fetch_site": fetch_site})
 
-    origin = request.headers.get("origin") or request.headers.get("referer") or ""
-    if origin and _hostname(origin) != host:
+    # `Origin: null` is refused on purpose, and the asymmetry with an *absent* origin below is the
+    # reason rather than an oversight. A browser attaches `Origin` to every POST, so no origin at all
+    # means no browser is speaking — a scripted client, which the token already gates and which is a
+    # supported caller. `null` is the opposite: a browser that is speaking and declining to attribute
+    # itself, and it is the one origin a browser-borne attacker can *choose* to emit, from a sandboxed
+    # cross-site frame. No page this server serves ever produces it. Before #43 this arm fired only by
+    # accident, because `_hostname("null")` happens to return `"null"` and fail an equality test; the
+    # outcome is unchanged and the reason is now stated. It is a cheap filter either way — the token
+    # remains the load-bearing check for both cases.
+    # Read unstripped, so a whitespace-only `Origin` stays truthy here exactly as it did before and
+    # still reaches the hostname comparison (where it resolves to `""` and is refused) rather than
+    # newly falling through to `Referer`.
+    origin_header = request.headers.get("origin", "")
+    if origin_header.strip().lower() == OPAQUE_ORIGIN:
+        raise CrossSiteRequestError(
+            "this request came from an opaque origin, which this server does not accept",
+            details={"origin": OPAQUE_ORIGIN, "host": host})
+
+    origin = origin_header or request.headers.get("referer") or ""
+    if origin and not _same_trust_domain(_hostname(origin), host):
         raise CrossSiteRequestError(
             "this request came from another origin",
             details={"origin": _hostname(origin), "host": host})
