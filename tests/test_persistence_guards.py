@@ -10,10 +10,17 @@ import json
 
 import pytest
 
+# The one control in this repo that can actually move the ambient default encoding, measured rather
+# than assumed. Borrowed rather than restated: two copies of a probe like this drift, and the copy
+# that drifts is the one that silently stops firing.
+from test_boundaries import _force_default_encoding
+
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
+from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import RequivoError
 from requivo.core.integrity import check_session
+from requivo.services.repository import FileSessionRepository
 from requivo.services.sessions import SessionService
 
 
@@ -220,3 +227,128 @@ def test_a_too_long_filename_is_refused_at_the_boundary(workspace):
     with pytest.raises(RequivoError) as ei:
         store.write_artifact_file("trav3", "a" * 300 + ".md", "x")
     assert ei.value.code == "invalid_filename"
+
+
+# ── #23: the same filename is a read target, and a refusal is not an absence ─────
+
+
+def _session(slug: str) -> FileSessionRepository:
+    """A session at revision 1, plus the repository an external consumer would hold."""
+    svc = SessionService()
+    svc.create_session("Something.", slug=slug)
+    svc.update_model(slug, _full_model())
+    return FileSessionRepository()
+
+
+def test_load_artifact_refuses_a_traversal_rather_than_disclosing_the_file(workspace):
+    """The read-side sibling of the two write paths above, and a different question: the write fix
+    answers what this code may *create*, a read traversal answers what it may *disclose*.
+
+    `FileSessionRepository.load_artifact` re-joined `canonical_dir(slug) / "artifacts" / filename`
+    inline rather than going through `artifact_path`, one layer above the chokepoint — which is
+    exactly why the sweep that closed the writes in #21 did not reach it.
+
+    Driven through the repository directly, which is invariant 14's threat model verbatim: every
+    in-repo caller arrives via `ArtifactService.show` with an `ARTIFACT_FILENAMES` lookup, and
+    `requivo-cloud` reuses Core as a dependency and is the consumer that does not."""
+    repo = _session("read-trav")
+
+    # ESCAPES[0] resolves four levels up from artifacts/, i.e. to <workspace>. Put a real, readable
+    # file exactly there: without it, a `load_artifact` that merely failed to *find* anything would
+    # satisfy every assertion below, and the test would prove nothing about refusal.
+    (workspace / "ESCAPED.md").write_text("TOP SECRET", encoding="utf-8")
+    assert (workspace / "ESCAPED.md").read_text(encoding="utf-8") == "TOP SECRET"
+
+    # Positive control: a legitimate ARTIFACT_FILENAMES value still loads, byte for byte.
+    store.save_session_artifact("read-trav", "brief", ARTIFACT_FILENAMES["brief"], "# A brief\n",
+                                source_revision=1)
+    assert repo.load_artifact("read-trav", ARTIFACT_FILENAMES["brief"]) == "# A brief\n"
+
+    # The over-long name rides the same guard here as on the write side: it is the one vector the
+    # traversal shapes do not cover, and a read of it fails as a bare OSError without the boundary.
+    for name in ESCAPES + ["a" * 300 + ".md"]:
+        with pytest.raises(RequivoError) as ei:
+            repo.load_artifact("read-trav", name)
+        assert ei.value.code == "invalid_filename", name
+        # The refusal has to name what it refused, or a caller holding several names cannot tell
+        # which one was rejected. Read off `details` rather than the message: the length branch of
+        # `validate_filename` states the count and not the name, and truncates the one it records.
+        # Asserting instead that the secret is absent from the message would be unfalsifiable — the
+        # raise happens before any read, so no content is ever in scope for the message to leak.
+        assert name.startswith(ei.value.details["filename"]), name
+
+
+def test_a_refused_read_raises_where_a_missing_artifact_returns_none(workspace):
+    """The judgment this issue turned on. `artifact_path()` raises and `load_artifact` returns None,
+    so routing one through the other forces a choice, and the tempting one is the quiet answer:
+    returning None for a rejected traversal too would make it indistinguishable from an artifact
+    nobody has generated yet. That is not hypothetical — reproducing the defect, a traversal that
+    resolved to no file returned None exactly as an ungenerated artifact does, and only the depth of
+    the `..` chain separated disclosure from a plausible-looking absence.
+
+    So all three states are asserted together, because each only means anything against the other
+    two: content for a saved artifact, None for a legitimate name with no file behind it, and a
+    raise for a name that is not a filename."""
+    repo = _session("read-3state")
+    store.save_session_artifact("read-3state", "brief", ARTIFACT_FILENAMES["brief"], "# A brief\n",
+                                source_revision=1)
+
+    assert repo.load_artifact("read-3state", ARTIFACT_FILENAMES["brief"]) == "# A brief\n"
+    assert repo.load_artifact("read-3state", ARTIFACT_FILENAMES["prd"]) is None   # never generated
+
+    with pytest.raises(RequivoError) as ei:
+        repo.load_artifact("read-3state", "../../../../ESCAPED.md")
+    assert ei.value.code == "invalid_filename"
+
+
+def test_core_owns_the_read_guard_so_the_next_reader_cannot_forget_it(workspace):
+    """#21 put the write guard at `artifact_path()` in Core rather than at its callers, for the
+    reason `_child_of` gives: a rule applied per-caller is a rule the next caller forgets. The read
+    side is that sentence's own proof, so the fix goes to Core too and this drives Core directly
+    rather than through the adapter — a guard that lived only in `FileSessionRepository` would leave
+    Core with a write-only chokepoint and the next reader re-joining the path a third time."""
+    _session("read-core")
+    (workspace / "ESCAPED.md").write_text("TOP SECRET", encoding="utf-8")
+
+    store.write_artifact_file("read-core", "epic.github.json", "{}")
+    assert store.read_artifact_file("read-core", "epic.github.json") == "{}"
+    assert store.read_artifact_file("read-core", "epic.json") is None   # a real name, no file
+
+    for name in ESCAPES:
+        with pytest.raises(RequivoError) as ei:
+            store.read_artifact_file("read-core", name)
+        assert ei.value.code == "invalid_filename", name
+
+
+def test_an_artifact_round_trips_non_ascii_content(workspace, monkeypatch):
+    """The other half of the line this change rewrites. `_atomic_write` passes `encoding="utf-8"`
+    explicitly and the read beside it passed none, so it decoded with the *locale's* — `LC_ALL=C`, or
+    a DBCS Windows shell, and a generated artifact dies on its first em-dash. Every artifact this
+    engine writes is full of them.
+
+    The plain round trip below is only a regression pin: on a UTF-8 locale it passes with or without
+    the explicit `encoding=`, which is to say the control cannot fire. So the fallback is forced and
+    *measured* first, reusing `test_boundaries`' helper rather than restating it — the same shape,
+    and the same loud skip where the force does not take, because a control that cannot fail is worse
+    than no control."""
+    repo = _session("read-utf8")
+    body = "# Brief\n\nAn em-dash — a café — and a curly quote: “ready”.\n"
+    store.save_session_artifact("read-utf8", "brief", ARTIFACT_FILENAMES["brief"], body,
+                                source_revision=1)
+    assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body
+
+    # Everything above is set up under the ambient encoding; only the read is forced, so a session.json
+    # or model_schema.json read cannot fail for reasons that have nothing to do with the artifact.
+    with monkeypatch.context() as m:
+        if not _force_default_encoding(m, workspace, "ascii"):
+            pytest.skip(
+                "the ambient default encoding could not be forced on this interpreter (CPython "
+                "dropped _bootlocale in 3.10 and resolves the locale encoding in C), so this control "
+                "cannot fire here. UNTESTED ON THIS INTERPRETER: that read_artifact_file passes an "
+                "explicit encoding rather than taking the locale's. The 3.9 leg of the CI matrix "
+                "does test it."
+            )
+        p = store.artifact_path("read-utf8", ARTIFACT_FILENAMES["brief"])
+        with pytest.raises(UnicodeDecodeError):
+            p.read_text()   # what the repository's own line did, meeting the locale it would meet
+        assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body
