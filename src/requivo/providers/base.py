@@ -23,6 +23,19 @@ class ReasoningProvider(Protocol):
     """The qualitative-reasoning contract. Deterministic core never imports an implementation of this;
     it receives the `EngineOutput` a provider produced and takes over from there."""
 
+    name: str
+    """Short identity of the implementation (`"anthropic"`), stamped on the session and on every
+    revision it produces. Declared here because `DiscoveryService` reads it on the first discovery,
+    before it reasons — an implementation without one is not usable, so leaving it out of the contract
+    described a seam narrower than the one the code depends on.
+
+    A bare annotation rather than a method, deliberately: `@runtime_checkable` *does* check non-method
+    members, so `isinstance` rejects a provider missing this one, and it matches how the attribute is
+    already exposed and read (`provider.name`, not `provider.name()`). The cost is that `issubclass`
+    against this protocol now raises `TypeError` — Python refuses it for any protocol with a
+    non-method member. Use `isinstance`. Note it checks *presence*, not type: an implementation is
+    still trusted to make this a `str`."""
+
     def analyze(
         self,
         request: str,

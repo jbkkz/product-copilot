@@ -42,12 +42,26 @@ exact; the cost is a labelled estimate from a dated rate table, never treated as
 
 A provider implements the `ReasoningProvider` protocol in `providers/base.py`:
 
-| Method | Returns |
+| Member | Is |
 |---|---|
+| `name` | an attribute — short identity of the implementation (`"anthropic"`), stamped on the session |
 | `analyze(request, current_model=…, answers=…, only=…)` | a validated `EngineOutput` — one discovery turn |
 | `generate(artifact_type, model, only=…, **kwargs)` | the typed contract for that artifact |
 | `model_name()` | the reasoning model, recorded on the session |
 | `provenance(op, only=…)` | provider / model / prompt identity, recorded on each revision |
+
+`name` is a plain attribute, not a method, because that is how it is read — `DiscoveryService` reaches
+for `provider.name` when it claims the session, *before* any reasoning happens, so an implementation
+without one fails on its first `discover` rather than at some later edge. It is the first thing to
+check when porting a provider.
+
+The protocol is `@runtime_checkable`, so `isinstance(p, ReasoningProvider)` is a real conformance check
+and it does cover `name` — Python checks non-method members too. Two limits worth knowing before you
+lean on it: `issubclass()` is *refused* for this protocol (`TypeError`, which Python raises for any
+protocol carrying a non-method member — use `isinstance`), and `isinstance` checks that a member is
+**present**, never that it has the right type or signature. It will not tell you that `analyze` returns
+the wrong thing. Nothing inside Requivo runs this check — a provider is injected and duck-typed — so it
+is a self-test for an implementation to run against itself, not a gate the library applies to you.
 
 `analyze` returns a *resolved* model: a refinement reply says nothing about `decisions`, `challenges`
 and `opportunities` (the engine prompt does not ask a turn to re-derive the brief), so a provider
