@@ -36,6 +36,27 @@ CI runs the tests and `ruff check` on Python 3.9–3.13 and builds the wheel (th
 every prompt from the installed package). Please run them locally first. The project lints with ruff
 but does **not** enforce `ruff format` — match the surrounding style rather than reformatting.
 
+### What the changelog gate does not cover
+
+The changelog gate (`.github/workflows/oss-changelog.yml`, which requires a `changelog.d/` fragment)
+triggers on **`pull_request` only**. Direct pushes to `main` are never checked by it.
+
+That matters here because this is a solo-maintained repository whose own working style is to commit
+straight to `main`, so the gate covers pull-request-authored changes — delegated agent work, and
+outside contributions — and nothing the maintainer pushes directly. That uncovered class is not
+hypothetical and not rare: in every release cycle so far, some commits have reached `main` without a
+pull request and were therefore never subject to the gate. (A count is deliberately not quoted here —
+it changes with the next push, and a stale number is its own small version of this same problem.)
+
+So **a green board means the changelog gate passed on the commits it was shown**, not that every
+change in the release carries a fragment. Those are different claims, and nothing on the board
+distinguishes them.
+
+This limit is stated rather than closed, deliberately. A `push:` trigger on `main` would go red
+*after* the fact — a fragment cannot be added retroactively to a commit already pushed — installing a
+permanently red default branch, which is a worse lie than the one it fixes. If you push directly to
+`main`, add the fragment in that same commit; nothing will remind you.
+
 ## Conventions
 
 - **English everywhere** — code, comments, docs, prompts, context cards, and the engine's own output
