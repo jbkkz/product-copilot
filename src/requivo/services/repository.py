@@ -109,10 +109,15 @@ class SessionRepository(Protocol):
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
         """The saved content of an artifact file, or None if it is not present.
 
-        None means *absent*, and only that. An implementation that cannot accept `filename` must
-        raise — an `InvalidFilenameError` on the file backing — rather than return None: a caller
-        that cannot tell a refusal from an absence has been handed the wrong answer in the more
-        dangerous direction, and a rejected traversal would read as an artifact nobody generated."""
+        **None means absent, and only that.** A backing that derives a *location* from `filename` —
+        a path on the file backing, a key with any namespacing of its own — must validate it and
+        **raise** on a name it will not accept, never return None: a caller that cannot tell a
+        refusal from an absence has been handed the wrong answer in the more dangerous direction,
+        and a rejected traversal then reads as an artifact nobody has generated yet.
+
+        A backing for which `filename` is an *opaque* key has nothing to refuse, and a miss there is
+        a real absence — `InMemorySessionRepository` in the tests is that case, and returns None
+        correctly. The obligation follows the path-building, not the protocol."""
         ...
 
 

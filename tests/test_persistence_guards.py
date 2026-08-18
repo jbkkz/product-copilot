@@ -270,7 +270,12 @@ def test_load_artifact_refuses_a_traversal_rather_than_disclosing_the_file(works
         with pytest.raises(RequivoError) as ei:
             repo.load_artifact("read-trav", name)
         assert ei.value.code == "invalid_filename", name
-        assert "TOP SECRET" not in ei.value.message, name
+        # The refusal has to name what it refused, or a caller holding several names cannot tell
+        # which one was rejected. Read off `details` rather than the message: the length branch of
+        # `validate_filename` states the count and not the name, and truncates the one it records.
+        # Asserting instead that the secret is absent from the message would be unfalsifiable — the
+        # raise happens before any read, so no content is ever in scope for the message to leak.
+        assert name.startswith(ei.value.details["filename"]), name
 
 
 def test_a_refused_read_raises_where_a_missing_artifact_returns_none(workspace):
