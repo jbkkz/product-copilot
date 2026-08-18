@@ -11,13 +11,26 @@
     ".claude-plugin/marketplace.json"
   ],
   "changelog_dir": "changelog.d",
-  "changelog_untagged": ["0.6.1"],
+  "changelog_untagged": [
+    "0.6.1"
+  ],
   "docs_targets": [
     "README.md"
   ],
   "labels": {
-    "priority": ["priority-blocker", "priority-high", "priority-low"],
-    "lanes": ["lane-core", "lane-services", "lane-providers", "lane-surfaces", "lane-tests", "lane-infra"]
+    "priority": [
+      "priority-blocker",
+      "priority-high",
+      "priority-low"
+    ],
+    "lanes": [
+      "lane-core",
+      "lane-services",
+      "lane-providers",
+      "lane-surfaces",
+      "lane-tests",
+      "lane-infra"
+    ]
   },
   "milestones": [],
   "release": {
@@ -27,6 +40,9 @@
     "triggers": {
       "merged_prs": 10,
       "soak_hours": 48
-    }
+    },
+    "create_release": true,
+    "draft": false,
+    "latest": true
   }
 }

@@ -193,6 +193,16 @@ bug that looked like correct behaviour.
     guarantee — an external consumer can call the service directly. For the same reason `DiscoveryService`'s
     artifact service defaults to the *session service's* repository: on files a split backing is
     invisible and every call succeeds.
+
+    **And creation is not the only door.** `session import` writes a `session.json` this project never
+    resolved — deliberately, because refusing a colleague's archive for want of one of their cards
+    would be wrong, and `integrity.py` is right not to turn a card living outside the session
+    directory into a verdict. So the resolution above is a guarantee about *creation*, never about the
+    value on disk: a persisted `context_cards` is untrusted input every time it is read back. What
+    holds the second door is a guard where the value is *interpreted* — `normalize_tokens`, which
+    every card selector passes through — not the resolver. Read as covering both, this invariant
+    promised something it does not, and a stored card name spent a release able to forge a line at
+    column 0 of `doctor`'s own output (#40).
 15. **A listing survives its own members.** `session_list` renders every session on the home page, and
     a session at revision 0 has no model — `status()` raises for it. Letting that propagate turned one
     un-analysed session into a 404 for the *whole* list, hiding every other session behind it. Any
