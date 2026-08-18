@@ -8,11 +8,13 @@ reader, a slug the filesystem refuses. They are grouped in one file because they
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 
 import pytest
 
 from requivo.core import persistence as store
+from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RevisionConflictError
 from requivo.core.integrity import check_session
@@ -502,3 +504,109 @@ def test_a_revision_log_that_does_not_match_the_revision_count_is_caught(workspa
     raw["revisions"] = raw["revisions"][:1]          # claims revision 2, logs one
     p.write_text(json.dumps(raw))
     assert "revision_count_mismatch" in {p_.code for p_ in check_session("s")}
+
+
+def _point_artifact_at(slug: str, filename: str) -> None:
+    """Rewrite the recorded artifact's `filename` in `session.json` — what a crafted or hand-edited
+    session does. `ArtifactStatus.filename` is a bare `str` with no constraint, so this round-trips."""
+    p = store.canonical_dir(slug) / "session.json"
+    raw = json.loads(p.read_text())
+    raw["artifact_status"]["prd"]["filename"] = filename
+    p.write_text(json.dumps(raw))
+
+
+def test_a_crafted_artifact_filename_cannot_be_used_to_probe_for_files_outside_the_session(
+        workspace, tmp_path):
+    """An existence oracle: `st.filename` was read out of `session.json` and joined straight into the
+    artifacts directory, so `.is_file()` was called on whatever it named.
+
+    `pathlib` makes the absolute case the sharp one — `Path(d) / "artifacts" / "/etc/passwd"` is
+    `/etc/passwd`, because an absolute component *replaces* everything before it — so the join did
+    not even have to escape upwards. Nothing is read, so this discloses no content; what it discloses
+    is **existence**, and the test for that has to be built accordingly.
+
+    So the assertion is not "a problem is reported" — the old code reported a problem too, sometimes.
+    It is that the verdict is now **identical whether or not the probed file exists**. Under the old
+    code those two runs differ, and that difference is precisely the oracle: `missing_artifact_file`
+    means the outside path was absent, its absence means the outside path was there.
+    """
+    present = tmp_path / "outside-present.md"
+    present.write_text("secret\n")
+    absent = tmp_path / "outside-absent.md"
+    assert present.is_file() and not absent.exists(), "fixture is blind: the two paths must differ"
+
+    verdicts = []
+    for probe in (present, absent):
+        _healthy("probe")
+        _point_artifact_at("probe", str(probe))
+        verdicts.append({p.code for p in check_session("probe")})
+        shutil.rmtree(store.canonical_dir("probe"))
+
+    assert verdicts[0] == verdicts[1], (
+        f"the verdict leaks whether {present} exists: {verdicts[0]} vs {verdicts[1]}")
+    assert "unsafe_artifact_filename" in verdicts[0]
+    assert "missing_artifact_file" not in verdicts[0], (
+        "reporting the artifact as merely missing means the path outside the session was stat-ed")
+
+
+def test_an_unknown_artifact_type_does_not_fall_through_to_the_filesystem(workspace, tmp_path):
+    """The fall-through the #23 lane's auditor named: an unknown artifact *type* recorded its problem
+    and then carried on to the join with the untrusted filename still in hand. Both branches did —
+    the filename-mismatch one too — so neither is a guard."""
+    outside = tmp_path / "outside.md"
+    outside.write_text("x\n")
+
+    _healthy("probe")
+    p = store.canonical_dir("probe") / "session.json"
+    raw = json.loads(p.read_text())
+    raw["artifact_status"]["not-an-artifact-type"] = dict(raw["artifact_status"]["prd"],
+                                                          filename=str(outside))
+    p.write_text(json.dumps(raw))
+
+    codes = {pr.code for pr in check_session("probe")}
+    assert "unknown_artifact_type" in codes          # must-fire: the row is still reported
+    assert "unsafe_artifact_filename" in codes       # and its filename was refused, not followed
+    assert "missing_artifact_file" not in codes
+
+
+def test_a_safe_but_missing_artifact_file_is_still_reported(workspace):
+    """The must-fire control for the two tests above: refusing an unsafe name must not have turned
+    the ordinary missing-file check off."""
+    _healthy()
+    (store.canonical_dir("s") / "artifacts" / "prd.md").unlink()
+    codes = {p.code for p in check_session("s")}
+    assert "missing_artifact_file" in codes
+    assert "unsafe_artifact_filename" not in codes
+
+
+def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(workspace, tmp_path,
+                                                                            monkeypatch):
+    """The boundary of what this module answers, pinned as behaviour rather than left in a docstring.
+
+    `check_session_dir` asks whether a session directory tells the truth **about itself**. A context
+    card lives outside the directory — in the installed package or in `user_context_dir()` — so an
+    unresolvable card is a fact about *this machine*, not about the session. Two consequences follow
+    and both are load-bearing:
+
+    - the same directory would be "broken" on one machine and coherent on another, which is not a
+      property an integrity check can have; and
+    - `session import` refuses an archive on these problems, so a colleague's perfectly good session
+      would become unimportable merely because you do not have one of their cards.
+
+    It is a real problem and it is reported — by `doctor` and `session verify`, as an *environment*
+    finding, through `core.context.check_selection`. It is deliberately not reported here.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "lost-domain.md").write_text("# Lost domain\n")
+    monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+
+    svc = SessionService()
+    slug = svc.create_session("Something.", context_cards=["lost-domain"], slug="carded").slug
+    assert store.read_meta(slug).context_cards == ["lost-domain"]
+    assert check_session(slug) == []                 # must-fire control: the session is coherent
+
+    (cards / "lost-domain.md").unlink()
+    assert check_session(slug) == [], "integrity must not depend on what this machine has installed"
+    # …and the environment check, which is where it belongs, does see it.
+    assert check_selection(store.read_meta(slug).context_cards) is not None

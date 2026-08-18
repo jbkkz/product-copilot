@@ -76,6 +76,24 @@ class EmptySelectorTokenError(RequivoError):
     code = "empty_selector_token"
 
 
+class ContextUnreadableError(RequivoError):
+    """A context-card directory exists but could not be enumerated — permissions, usually.
+
+    Distinct from `UnknownContextCardError`, and the distinction is the whole point: that one means
+    the card is not there and the remedy is to restore it, this one means the card may well be there
+    and the remedy is to fix the permissions. Told apart only by raising, because the enumeration
+    that produced them is the same one.
+
+    It is raised rather than skipped because a card directory that cannot be read leaves the card
+    *vocabulary* incomplete, and every later answer is then confidently wrong in the same direction:
+    a selection naming a card in that directory resolves to "unknown card", and a turn that loaded
+    the readable roots only reasons from a quietly smaller product context. `Path.glob` returns an
+    empty iterator in exactly this case, which is what made all of that silent.
+    """
+
+    code = "context_unreadable"
+
+
 class InputTooLargeError(RequivoError):
     """A supplied text exceeds the ceiling the engine accepts. Raised rather than truncated: a request
     or an answer silently cut mid-sentence is reasoned over as if it were the whole thing, and the

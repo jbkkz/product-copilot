@@ -16,6 +16,23 @@ It reports rather than raises. A caller decides what a problem means: `session v
 and exits non-zero, `session import` refuses the archive, `doctor` names the sessions worth looking at.
 Raising on the first one would answer a different, less useful question — "is it broken?" instead of
 "what is broken?".
+
+**The evidence is the directory, and only the directory.** That is one rule, and it binds in both
+directions — they look like separate concerns and are the same sentence read forwards and backwards:
+
+- *Nothing outside becomes a verdict.* Whether a session's context cards still resolve is a fact
+  about the machine, not about the session, so it is not checked here. The same directory would be
+  coherent on one machine and broken on another, which is not a property this function can have —
+  and because `session import` refuses an archive on these problems, it would make a colleague's
+  perfectly good session unimportable for want of a card you do not have. That check lives in
+  `core.context.check_selection`, reported beside these problems by `doctor` and `session verify`.
+- *Nothing inside sends us outside.* A claim in `session.json` is untrusted input, so it must not be
+  able to aim a filesystem call anywhere else. `ArtifactStatus.filename` was joined into `artifacts/`
+  and stat-ed unvalidated, and under `pathlib` an absolute component replaces the prefix outright —
+  so the answer leaked whether an arbitrary path existed. See the artifact loop below.
+
+Reading them together is what makes the pair coherent: an integrity answer is derived from the
+directory's own bytes, and it neither imports facts from the environment nor exports questions to it.
 """
 
 from __future__ import annotations
@@ -28,8 +45,8 @@ from pydantic import ValidationError
 
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import ARTIFACT_FILENAMES
-from requivo.core.errors import RequivoError
-from requivo.core.persistence import _hash, canonical_dir, migrate_session
+from requivo.core.errors import InvalidFilenameError, RequivoError
+from requivo.core.persistence import _hash, canonical_dir, migrate_session, validate_filename
 
 
 @dataclass(frozen=True)
@@ -154,6 +171,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
                 "the current model and the history describe different states")
 
     # ── artifacts ───────────────────────────────────────────────────────────────
+    artifacts = d / "artifacts"
     for atype, st in meta.artifact_status.items():
         if atype not in ARTIFACT_FILENAMES:
             bad("unknown_artifact_type", f"session.json records an artifact of unknown type {atype!r}")
@@ -161,9 +179,34 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
             bad("artifact_filename_mismatch",
                 f"the {atype!r} artifact is recorded as {st.filename!r}, but that type is stored as "
                 f"{ARTIFACT_FILENAMES[atype]!r}")
-        if not (d / "artifacts" / st.filename).is_file():
+
+        # `st.filename` is an unconstrained `str` read out of session.json, and the two branches
+        # above only *record* a problem — execution used to carry on to the join with the untrusted
+        # value still in hand, so neither was a guard. `pathlib` makes the absolute case the sharp
+        # one: an absolute component replaces everything before it, so `artifacts / "/etc/passwd"`
+        # is `/etc/passwd` and the join never had to escape upwards at all. Nothing is ever read, so
+        # this disclosed no content — it disclosed *existence*, because whether the row came back
+        # `missing_artifact_file` answered whether that outside path was there.
+        #
+        # The name goes through the same `validate_filename` chokepoint every artifact write uses,
+        # plus the containment confirmation `artifact_path` makes, and a refused name is *reported*
+        # instead of probed. `artifact_path()` itself is deliberately not reused: it builds from
+        # `canonical_dir(slug)`, the store, while this function is also handed a directory extracted
+        # from an archive that is not in the store — it would answer confidently about the wrong
+        # directory, which is this module's own defect class.
+        try:
+            f = artifacts / validate_filename(st.filename)
+            safe = f.resolve().is_relative_to(artifacts.resolve())
+        except (InvalidFilenameError, OSError, ValueError):
+            safe = False
+        if not safe:
+            bad("unsafe_artifact_filename",
+                f"the {atype!r} artifact is recorded under {st.filename!r}, which is not a bare "
+                "filename inside artifacts/ — refused without checking whether it exists")
+        elif not f.is_file():
             bad("missing_artifact_file",
                 f"session.json records a {atype!r} artifact but artifacts/{st.filename} is missing")
+
         if not 1 <= st.revision <= n:
             bad("artifact_revision_out_of_range",
                 f"the {atype!r} artifact claims to come from revision {st.revision}, which this "

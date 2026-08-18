@@ -11,9 +11,17 @@ session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (
 trust boundary, honesty per slot, the validate→apply loop). Then:
 
 ## 1. Check the install
-Run `requivo doctor --json`. Confirm `schema.ok` is true. A missing Anthropic SDK / API key is **fine**
-— this mode does not use it. If `requivo` is not found, tell the user to install it
-(`pip install requivo`) and stop.
+Run `requivo doctor --json`. Confirm **both** `schema.ok` and `context.ok` are true. A missing
+Anthropic SDK / API key is **fine** — this mode does not use it. If `requivo` is not found, tell the
+user to install it (`pip install requivo`) and stop.
+
+`context.ok` is not decoration. The slot schema and the product context cards ship in different
+directories, so an install can lose the cards while `schema.ok` stays true — and the cards are what
+impact is estimated against, which is the whole of `information_value = uncertainty × impact`. The
+session would still run and would still produce a model; it would just ask duller questions, for a
+reason nothing on screen would name. `context.status` says which case you are in: `ok`, `empty` (the
+install has no cards) or `unreadable` (they could not be read at all). On anything but `ok`, tell the
+user what `context.error` or the card count says and stop rather than reasoning without them.
 
 ## 2. Get the request
 `$ARGUMENTS` is the request text or a path to a request file. If empty, ask the user for it and stop.
