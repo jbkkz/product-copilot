@@ -161,6 +161,24 @@ def test_concurrent_atomic_writes_do_not_collide_on_a_temp_file(workspace):
     assert not list(d.glob(".*tmp"))                          # no scratch left behind
 
 
+def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    """Create a symlink, or skip loudly naming what went untested.
+
+    Windows refuses `CreateSymbolicLink` unless the process holds `SeCreateSymbolicLinkPrivilege` or
+    the machine is in Developer Mode, and whether a CI runner has either is not something this suite
+    can assume. Letting that surface as a failure would be the harness reporting an environment limit
+    as a product verdict — the exact trap #3 names — and silently passing instead would claim a
+    coverage that does not exist. So it skips, and says which assertion did not run.
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as e:
+        pytest.skip(
+            f"this platform refuses to create a symlink ({type(e).__name__}: {e}). UNTESTED HERE: "
+            f"that a symlink escaping the session root is refused. The containment check itself still "
+            f"runs on every platform; only the symlink half of it is unreachable.")
+
+
 # ── what the first Windows leg found (#3) ─────────────────────────────────────
 # Both of these are product defects the platform matrix exposed on its first run. Neither could fail
 # on Linux or macOS, and both are written to fail on every platform now that the mechanism is known.
@@ -202,13 +220,13 @@ def test_a_symlink_out_of_the_session_root_is_still_refused(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
 
-    (root / "live").symlink_to(outside, target_is_directory=True)
+    _symlink_or_skip(root / "live", outside, target_is_directory=True)
     with pytest.raises(InvalidSlugError):
         store._child_of(root, "live")
 
     # Dangling: `exists()` follows the link and reports False, so an `exists()`-only guard would wave
     # this through and then write through it the moment the target appeared.
-    (root / "dangling").symlink_to(tmp_path / "not-yet", target_is_directory=True)
+    _symlink_or_skip(root / "dangling", tmp_path / "not-yet", target_is_directory=True)
     assert not (root / "dangling").exists() and (root / "dangling").is_symlink()
     with pytest.raises(InvalidSlugError):
         store._child_of(root, "dangling")
@@ -694,11 +712,11 @@ def test_an_artifact_that_is_a_symlink_out_of_the_session_is_still_refused(works
     outside.write_text("not part of this session", encoding="utf-8")
 
     (artifacts / "prd.md").unlink()
-    (artifacts / "prd.md").symlink_to(outside)
+    _symlink_or_skip(artifacts / "prd.md", outside)
     assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
 
     (artifacts / "prd.md").unlink()
-    (artifacts / "prd.md").symlink_to(tmp_path / "never-created.md")   # dangling, still outside
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")   # dangling, still outside
     assert not (artifacts / "prd.md").exists() and (artifacts / "prd.md").is_symlink()
     assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
 

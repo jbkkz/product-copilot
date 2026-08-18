@@ -43,7 +43,10 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       # Pure-logic + offline CLI units, no API calls (a fake client is injected), so no key needed.
-      - run: python -m pytest tests/ -q
+      # `-rs` so a skip prints its reason: this suite skips loudly on purpose in several places
+      # (a platform that will not create a symlink, an interpreter where an encoding lever cannot be
+      # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
+      - run: python -m pytest tests/ -q -rs
 
   # The platform axis (#3). Every job in every workflow was `ubuntu-latest` and the only matrix axis
   # anywhere was `python-version`, so no leg had ever executed this code on the platform most users
@@ -83,7 +86,10 @@ jobs:
       # job environment would be inherited by those children and override every lever they use —
       # turning the whole encoding suite green for the wrong reason, on the one platform it exists to
       # measure.
-      - run: python -m pytest tests/ -q
+      # `-rs` so a skip prints its reason: this suite skips loudly on purpose in several places
+      # (a platform that will not create a symlink, an interpreter where an encoding lever cannot be
+      # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
+      - run: python -m pytest tests/ -q -rs
 
   wheel:
     name: Wheel install (no clone)
