@@ -81,15 +81,22 @@ def load_context(only: list[str] | None = None) -> str:
     a machine where a `user_context_dir()` card does not exist, therefore used to swap `{{CONTEXT}}`
     for the empty string on every subsequent call — the engine reasoning with no product context at
     all, which is the `information_value = uncertainty x impact` driver gone, silently, mid-session.
-    Refusing does break a session that used to appear to work; it appeared to work while producing
-    worse questions for an invisible reason, and the caller can restore the card or re-scope the
-    session. `only=[]` is refused for the same reason: a selection that selects nothing is not the
-    same thing as `None`, the explicit "no restriction" sentinel, and guessing which one was meant is
-    how this class of bug gets written.
+    Refusing does break a session that used to appear to work — it appeared to work while producing
+    worse questions for an invisible reason — and the recovery today is to put the card back, or to
+    point `REQUIVO_CONTEXT_DIR` at wherever it now lives. There is deliberately no fallback to "then
+    load nothing": that is the bug. Two gaps are known and out of this change: no verb re-scopes a
+    session's `context_cards` after creation, and neither `doctor` nor `session verify` checks that a
+    persisted selection still resolves, so the refusal is discovered by the next (paid) turn rather
+    than by the health check.
+
+    `only=[]` is refused for the same reason: a selection that selects nothing is not the same thing
+    as `None`, the explicit "no restriction" sentinel, and guessing which one was meant is how this
+    class of bug gets written.
     """
     paths = _card_paths()
     keep = None
     if only is not None:
+        only = list(only)                       # materialised before the helper iterates it
         wanted = normalize_tokens(only, what="context card")
         if not wanted:
             raise EmptySelectorTokenError(
@@ -97,7 +104,9 @@ def load_context(only: list[str] | None = None) -> str:
                 "every card, or name the cards to load.",
                 details={"selector": "context card", "tokens": 0})
         known = {stem.lower() for stem in paths}
-        missing = [name for name in wanted if name not in known]
+        # echoed as typed, like `resolve_cards` — the two are one design and a caller reading the
+        # error should see the name they wrote, not the lower-cased key it was matched by
+        missing = [raw.strip() for raw, key in zip(only, wanted) if key not in known]
         if missing:
             raise UnknownContextCardError(
                 f"unknown context card(s): {', '.join(missing)}. Available: "

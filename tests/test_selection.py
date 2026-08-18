@@ -103,10 +103,27 @@ def test_load_context_refuses_an_empty_selection_and_an_empty_token():
     # must fire: no selection at all still means every card, which is the documented contract
     assert load_context(None).strip()
     # must not fire: a selection object that selects nothing is not the same as no selection
-    with pytest.raises(RequivoError):
+    with pytest.raises(EmptySelectorTokenError) as ei:
         load_context([])
+    assert ei.value.details == {"selector": "context card", "tokens": 0}
+    assert isinstance(ei.value, RequivoError)   # rides the same envelope as every clean failure
     with pytest.raises(EmptySelectorTokenError):
         load_context([""])
+
+
+def test_both_card_selectors_echo_an_unknown_name_as_the_caller_typed_it():
+    """`resolve_cards` and `load_context` are one design and their errors are read side by side, so
+    the name in `details["unknown"]` is the one the caller wrote — not the lower-cased key it was
+    matched by. `load_context` built that list from the normalized tokens and reported `some-card`
+    for a typed `Some-Card`."""
+    # must fire: a real name still resolves through both, so this is about the echo and not the match
+    assert resolve_cards([f" {A_CARD.upper()} "]) == [A_CARD]      # matching stays case-insensitive
+    assert f"## {A_CARD}" in load_context([A_CARD.upper()])
+
+    for selector in (resolve_cards, load_context):
+        with pytest.raises(UnknownContextCardError) as ei:
+            selector(["  Some-Card  "])
+        assert ei.value.details["unknown"] == ["Some-Card"], f"{selector.__name__} lower-cased the echo"
 
 
 def test_a_persisted_card_selection_is_visible_when_the_card_is_gone(tmp_path, monkeypatch):

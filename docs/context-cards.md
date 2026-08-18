@@ -68,6 +68,14 @@ unknown context card(s): acme-crm. Available: b2b-platform, document-management,
 
 That is deliberately a refusal rather than a quiet fallback to no context at all. Impact estimation is
 what decides which questions get asked, it is estimated from these cards, and a turn that runs without
-them produces a plausible answer for a reason nothing on screen would have shown you. Restore the card
-(or re-scope the session) and the turn runs. `requivo context --session <slug>` prints the cards a
-session is actually reasoning with, and fails the same way when one of them has gone.
+them produces a plausible answer for a reason nothing on screen would have shown you.
+
+**To recover, put the card back** — restore the file, or point `REQUIVO_CONTEXT_DIR` at wherever it now
+lives — and the turn runs. Two limits are worth knowing before you scope a session to a card that only
+exists on one machine: there is no verb that re-scopes an existing session's cards, so the alternative
+to restoring the file is editing the `context_cards` key in the session's `session.json` by hand — the
+layout is a published contract, see [session-format.md](session-format.md); and neither `requivo doctor` nor
+`requivo session verify` checks that a persisted selection still resolves, so a session that will
+refuse its next turn looks healthy until that turn is asked for. `requivo context --session <slug>`
+is the check that does answer it — it prints the cards a session is actually reasoning with, and fails
+the same way when one of them has gone.
