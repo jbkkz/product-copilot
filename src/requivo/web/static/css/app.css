@@ -263,8 +263,11 @@ pre.artifact {
 }
 #progress.on { opacity: 1; }
 
-/* A spinner inside the button that was just submitted (works for HTMX and plain forms). */
+/* A spinner inside the button that was just submitted (works for HTMX and plain forms). The
+   busy state mutes every submit button on the page, including this one — but the button that is
+   actually working must not read as muted, or nothing on the page says which call is running. */
 .btn.loading { pointer-events: none; }
+.btn.loading:disabled { opacity: 1; }
 .btn.loading::before {
   content: ""; width: 0.85rem; height: 0.85rem; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.45); border-top-color: #fff;

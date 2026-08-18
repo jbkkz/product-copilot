@@ -1,6 +1,16 @@
+{# The refinement box is unconditional, and that is the point. Questions run out — once nothing left
+   would change the solution the engine returns none — and this form used to live inside that `if`, so
+   reaching a resolved understanding removed the only way to say anything further about it: a
+   correction, a constraint that arrived late, scope the client added after the fact. Answering is how
+   the model is refined; it is not a reply to a question list, and a session that is ready for a first
+   decision brief is not a closed one. #}
 {% if s.questions %}
 <h2>What could change the solution</h2>
+{% else %}
+<h2>Anything to add?</h2>
+{% endif %}
 <div class="card">
+  {% if s.questions %}
   <ol class="questions">
     {% for q in s.questions %}
     <li>
@@ -14,20 +24,27 @@
   <p class="hint">{{ s.more_questions|length }} further question{{ '' if s.more_questions|length == 1
     else 's' }} of lower impact — see <em>Traceability details</em> below.</p>
   {% endif %}
+  {% else %}
+  <p>No question left that would change the solution. The understanding above is as resolved as this
+    request can make it — which does not close it: whatever you add is folded in the same way, and the
+    documents that rest on it are marked for updating.</p>
+  {% endif %}
 
   <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#session-body" hx-swap="outerHTML">
     {% include "_csrf.html" %}
     <input type="hidden" name="expected_revision" value="{{ s.revision }}">
+    {% if s.questions %}
     <label for="answers">Your answers <span class="hint">(free text — address them in one go; say so if you don't know)</span></label>
+    {% else %}
+    <label for="answers">More information <span class="hint">(free text — a correction, a constraint, anything the request left out)</span></label>
+    {% endif %}
     <textarea id="answers" name="answers" required rows="5"
-      aria-label="Your answers to the questions above"></textarea>
+      aria-label="{{ 'Your answers to the questions above' if s.questions
+        else 'Anything further to fold into the understanding' }}"></textarea>
     <div class="toolbar">
-      <button class="btn" type="submit">Submit answers</button>
+      <button class="btn{{ '' if s.questions else ' secondary' }}" type="submit">{{ "Submit answers"
+        if s.questions else "Add to the understanding" }}</button>
       <span class="spinner" role="status">Working through the impact…</span>
     </div>
   </form>
 </div>
-{% else %}
-<div class="notice info">No question left that would change the solution. The understanding above is
-as resolved as this request can make it.</div>
-{% endif %}
