@@ -90,6 +90,19 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   printing it. No name Requivo itself writes is affected — `resolve_cards` has always resolved a
   selection against the installed cards, so such a value can only have arrived by import or by hand.
 
+- **`artifact save` without `--revision` is now `invalid_session`** (#6). It used to succeed, filling
+  the omission in with the session's current revision and recording `stale: false` — an answer that
+  could not come out any other way, about a revision the caller never claimed to have read. Every
+  documented invocation already passes the flag, so this only reaches a caller relying on the
+  undocumented default, which was being handed a fabricated provenance. `details` carries
+  `{slug, type, source_revision, current_revision, cause}` — the same five keys as the refusal for a
+  source revision that cannot be *read*, which shares the code. Both are always present: here
+  `source_revision` is `null` because none was stated and `cause` is `null` because no underlying
+  failure occurred, and on the unreadable side `cause` names the exception type and its text. One
+  code, one shape, per the rule above; `tests/test_artifact_provenance.py` asserts the two key sets
+  against each other rather than each on its own. The condition is new rather than moved — nothing
+  previously carried a code here, because nothing previously failed.
+
 Adding a code is not a breaking change under this policy, but *moving a condition to a new code* is,
 so both are noted here and in the changelog rather than only in the latter.
 

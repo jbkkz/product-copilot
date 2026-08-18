@@ -167,7 +167,7 @@ def test_apply_flags_generated_artifact_stale(workspace):
     art = ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _full_model())
-    art.save("s", "prd", "# PRD\n")  # generated at revision 1
+    art.save("s", "prd", "# PRD\n", source_revision=1)  # generated at revision 1
     assert art.list("s")["prd"]["stale"] is False
     # Change a slot the PRD consumes (workflow) → PRD goes stale.
     result = svc.update_model("s", _full_model(**{"workflow": _slot(80, "explicit", "high", "new flow")}))
@@ -202,7 +202,7 @@ def test_apply_flags_assessment_stale_when_reasoning_is_unseated(workspace):
     art = ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_reasoning(_full_model()))
-    art.save("s", "brief", "# Assessment\n")  # the saved assessment renders that reasoning
+    art.save("s", "brief", "# Assessment\n", source_revision=1)  # the saved assessment renders that reasoning
     assert art.list("s")["brief"]["stale"] is False
 
     # Change `workflow` — a challenge contests it → the assessment on disk no longer holds.
@@ -224,7 +224,7 @@ def test_changing_the_problem_marks_a_saved_assessment_stale(workspace):
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _full_model())          # no decisions, no challenges — nothing to unseat
-    art.save("s", "brief", "# Assessment\n")
+    art.save("s", "brief", "# Assessment\n", source_revision=1)
     assert art.list("s")["brief"]["stale"] is False
 
     result = svc.update_model("s", _full_model(**{"problem": _slot(80, "explicit", "high", "reframed")}))
@@ -328,7 +328,7 @@ def test_an_answers_turn_that_says_nothing_about_reasoning_keeps_it(workspace):
     svc.create_session("Something.", slug="s")
     svc.update_model("s", {**_full_model(), "decisions": [
         {"decision": "Managers approve in-app", "derived_from": ["permissions"]}]})
-    art.save("s", "prd", "# PRD\n")
+    art.save("s", "prd", "# PRD\n", source_revision=1)
 
     reply = {**_full_model(**{"workflow": _slot(90, "explicit", "high", "request → approve")}),
              "summary": {"objective": "A leave approval system"}}

@@ -278,7 +278,7 @@ def test_reasoning_that_changes_without_a_slot_moving_still_invalidates(workspac
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
-    art.save("s", "prd", "# PRD\n")
+    art.save("s", "prd", "# PRD\n", source_revision=1)
     assert art.list("s")["prd"]["stale"] is False
 
     result = svc.update_model("s", _with_decision(_full_model(), "reviewers were the bottleneck"))
@@ -302,7 +302,7 @@ def test_reasoning_merely_omitted_by_a_turn_is_preserved(workspace):
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
-    art.save("s", "prd", "# PRD\n")
+    art.save("s", "prd", "# PRD\n", source_revision=1)
 
     result = svc.update_model("s", _full_model())           # same slots, reasoning simply absent
     assert [d.why for d in svc.load_model("s").decisions] == ["drafts are cheap"]
@@ -317,7 +317,7 @@ def test_reasoning_explicitly_replaced_is_a_change_that_invalidates(workspace):
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
-    art.save("s", "prd", "# PRD\n")
+    art.save("s", "prd", "# PRD\n", source_revision=1)
 
     replacement = {**_full_model(),
                    "decisions": [{"decision": "Approve-first", "derived_from": ["permissions"]}]}
@@ -335,7 +335,7 @@ def test_reasoning_explicitly_emptied_is_a_deletion_that_invalidates(workspace):
     svc, art = SessionService(), ArtifactService()
     svc.create_session("Something.", slug="s")
     svc.update_model("s", _with_decision(_full_model(), "drafts are cheap"))
-    art.save("s", "prd", "# PRD\n")
+    art.save("s", "prd", "# PRD\n", source_revision=1)
 
     result = svc.update_model("s", {**_full_model(), "decisions": []})
     assert svc.load_model("s").decisions == []
@@ -442,7 +442,9 @@ def _healthy(slug: str = "s") -> SessionService:
     svc.create_session("Something.", slug=slug)
     svc.update_model(slug, _full_model())
     svc.update_model(slug, _full_model(**{"workflow": _slot(80, "explicit", "high", "moved")}))
-    ArtifactService().save(slug, "prd", "# PRD\n")
+    # Two revisions were applied above, so 2 is the revision this PRD was generated from. Stating
+    # it is now the caller's job rather than the service's guess (#6).
+    ArtifactService().save(slug, "prd", "# PRD\n", source_revision=2)
     return svc
 
 

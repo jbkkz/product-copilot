@@ -54,7 +54,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
 | `requivo session init\|list\|show\|verify\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
-| `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` for the revision it was reasoned from) |
+| `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` is required — the revision the content was reasoned from is the one fact only the caller holds) |
 
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.

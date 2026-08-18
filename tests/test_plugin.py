@@ -172,6 +172,24 @@ def test_artifact_saving_skills_use_the_cli():
         assert "artifact save" in text, f"{name}: must save via `requivo artifact save`"
 
 
+def test_artifact_saving_skills_state_the_revision_they_reasoned_from():
+    """`--revision` is the one fact only the skill holds, and since #6 a save without it is refused
+    rather than filled in with the session's current revision.
+
+    Both skills already pass it — this is here so they cannot stop. A skill is prose, so nothing else
+    would notice: the drift would land on a user as a refused save several turns after the edit, and
+    the composition (a service that refuses, a skill that does not state it) is invisible to a review
+    of either one on its own.
+    """
+    for name in ("brief", "prd"):
+        lines = [ln for ln in (SKILLS / name / "SKILL.md").read_text().splitlines()
+                 if "artifact save" in ln]
+        assert lines, f"{name}: no `artifact save` line to check — the scan found nothing to speak for"
+        for ln in lines:
+            assert "--revision" in ln, (
+                f"{name}: `artifact save` must state the revision it reasoned from: {ln.strip()}")
+
+
 def test_skill_enum_placeholders_name_values_the_contracts_accept():
     """A skill's JSON template is a prompt: Claude fills it in and the deterministic CLI validates the
     result. So a wrong alternative in a `"field": "a|b|c"` placeholder is not a typo in a comment — it

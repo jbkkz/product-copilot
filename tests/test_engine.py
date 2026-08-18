@@ -1142,7 +1142,7 @@ def test_unrelated_slot_change_keeps_artifact_fresh():
     slug = "clitest-fresh-unrelated"
     store.create_session(slug, "req")
     svc.update_model(slug, out({"success_metrics": slot(40, "inferred", "high")}).model_dump())
-    ArtifactService().save(slug, "criteria", "# criteria")  # generated at revision 1
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # generated at revision 1
     try:
         # confidence moves inferred → explicit on an UNRELATED slot: a real change, new revision.
         svc.update_model(slug, out({"success_metrics": slot(90, "explicit", "high")}).model_dump())
@@ -1160,7 +1160,7 @@ def test_completeness_only_change_keeps_artifact_fresh():
     slug = "clitest-fresh-completeness"
     store.create_session(slug, "req")
     svc.update_model(slug, out({"workflow": slot(50, "explicit", "high")}).model_dump())
-    ArtifactService().save(slug, "criteria", "# criteria")  # criteria consumes workflow
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # criteria consumes workflow
     try:
         svc.update_model(slug, out({"workflow": slot(95, "explicit", "high")}).model_dump())  # only %
         items = ArtifactService().list(slug)
@@ -1176,7 +1176,7 @@ def test_related_slot_change_marks_artifact_stale():
     slug = "clitest-stale-related"
     store.create_session(slug, "req")
     svc.update_model(slug, out({"workflow": slot(50, "inferred", "high")}).model_dump())
-    ArtifactService().save(slug, "criteria", "# criteria")  # criteria consumes workflow
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # criteria consumes workflow
     try:
         wf = {**slot(95, "explicit", "high"), "value": "draft → issued → archived"}
         svc.update_model(slug, out({"workflow": wf}).model_dump())
@@ -1296,7 +1296,9 @@ def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
         # a real slot an artifact consumes, and an already-generated PRD tracked in the session
         wf = {**slot(60, "inferred", "high"), "value": "draft → issued"}
         store.save_revision(slug, out({"workflow": wf}))
-        ArtifactService().save(slug, "prd", "# stale PRD")  # generated at the current revision
+        # `_model_in_out` applied revision 1 and the line above applied revision 2, so 2 is what this
+        # PRD was generated from — stated by the caller rather than assumed by the service (#6).
+        ArtifactService().save(slug, "prd", "# stale PRD", source_revision=2)
         turn2 = json.dumps({
             "model": full_slots(workflow={"completeness": 95, "confidence": "explicit",
                                           "impact": "high", "value": "draft → issued → paid → archived"}),
@@ -1864,7 +1866,7 @@ def test_session_service_runs_unchanged_on_a_non_file_repository():
     assert r1.revision == 1
 
     # artifact tracking + dependency-graph staleness, entirely in memory
-    ArtifactService(repo).save("leave-mem", "criteria", "# c")   # criteria consumes workflow
+    ArtifactService(repo).save("leave-mem", "criteria", "# c", source_revision=1)   # criteria consumes workflow
     r2 = svc.update_model(
         "leave-mem", out({"workflow": {**slot(95, "explicit", "high"), "value": "a → b"}}).model_dump())
     assert r2.revision == 2

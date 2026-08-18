@@ -57,9 +57,12 @@ still true**:
 
 Skipping step 3 does not make your apply safer — it makes it silent. Without `--expected-revision`,
 a change someone else made while you were reasoning is overwritten with no error, and the user is
-never told. Skipping step 4 is the same failure one layer up: an artifact you reasoned from revision 3
-is recorded as if it came from the session's current state, so a PRD built on a superseded model is
-filed as fresh.
+never told. Skipping step 4 used to be the same failure one layer up: an artifact you reasoned from
+revision 3 was recorded as if it came from the session's current state, so a PRD built on a superseded
+model was filed as fresh. Since #6 the save is **refused** instead — `--revision` has no default,
+because which revision you reasoned from is the one fact only you hold. Nothing is written, and the
+error names the flag and the revisions the session has. So step 4 is not a precaution you can trade
+away for brevity: leave it off and the save does not happen.
 
 If the apply fails with `revision_conflict`, the session moved under you. Do not retry the same
 proposal — it was reasoned against a model that no longer exists. Re-read the model, tell the user
