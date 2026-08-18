@@ -71,7 +71,7 @@ def _atomic_write(path: Path, content: str) -> Path:
 # write to a scanner is not an acceptable outcome.
 #
 # Deliberately bounded and deliberately narrow. It retries `PermissionError` only, a handful of times,
-# over a few tens of milliseconds, and then re-raises the original: a genuinely unwritable destination
+# over a few hundred milliseconds, and then re-raises the original: a genuinely unwritable destination
 # (a read-only file, a real permissions problem) still fails loudly and quickly, because turning a
 # permanent error into a slow permanent error helps nobody. This is the one place where retrying is
 # right rather than a way of hiding something -- the operation is idempotent and the cause is external.

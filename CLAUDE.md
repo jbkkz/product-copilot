@@ -251,9 +251,10 @@ bug that looked like correct behaviour.
     `MoveFileEx`, which fails with `PermissionError(13)` whenever anything holds a handle to the
     destination — an antivirus scanner or the Search Indexer, opening a file microseconds after it is
     written, neither of which this process can serialise against. Losing a completed write to a scanner
-    is not acceptable for the durable product, so the replace is retried a few times over a few tens of
-    milliseconds. Bounded and narrow on purpose: `PermissionError` only, then the original is re-raised,
-    so a genuinely unwritable destination still fails loudly and fast. This is the one place in the
+    is not acceptable for the durable product, so the replace is retried — 8 attempts, 280 ms of
+    backoff in total, both bounded by `_REPLACE_ATTEMPTS`/`_REPLACE_BACKOFF_S`. Narrow on purpose:
+    `PermissionError` only, then the original is re-raised, so a genuinely unwritable destination
+    still fails loudly and fast. This is the one place in the
     store where retrying is right rather than a way of hiding something — the operation is idempotent
     and the cause is external (#3).
 

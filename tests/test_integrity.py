@@ -17,7 +17,7 @@ import pytest
 from requivo.core import persistence as store
 from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
-from requivo.core.errors import InvalidSlugError, RevisionConflictError
+from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
 from requivo.core.integrity import check_session
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
@@ -239,6 +239,48 @@ def test_an_ordinary_existing_session_directory_is_still_accepted(tmp_path):
     assert store._child_of(root, "s") == root / "s"
 
 
+def test_an_artifact_path_is_not_resolved_before_it_exists(workspace, monkeypatch):
+    """`artifact_path` is `_child_of`'s sibling and had the identical two-resolution shape. It gets
+    the same pin, because the previous commit claimed to have fixed it and tested only `_child_of` --
+    a claim of "both are fixed" backed by one test is the shape this repo keeps finding.
+
+    `canonical_dir` runs inside `artifact_path` and legitimately resolves an existing session
+    directory, so the count is not zero. The property is that the *artifact* half adds nothing to it
+    for a file that is not there — measured as a difference against `canonical_dir` alone rather than
+    asserted as an absolute, which would just be a test of `canonical_dir`."""
+    _healthy()
+    resolved: list = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(self, *a, **k):
+        resolved.append(str(self))
+        return real_resolve(self, *a, **k)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    store.canonical_dir("s")                           # the baseline this test is not about
+    baseline = len(resolved)
+    resolved.clear()
+
+    p = store.artifact_path("s", "epic.json")          # a valid name, no such file
+    assert p.name == "epic.json"
+    assert len(resolved) == baseline, (
+        f"artifact_path resolved {len(resolved) - baseline} path(s) beyond canonical_dir's for a "
+        f"file that does not exist; each one is a verdict that depends on what the filesystem "
+        f"looked like at that instant: {resolved[baseline:]}")
+
+
+def test_an_artifact_filename_that_escapes_is_still_refused(workspace):
+    """The must-fire half for `artifact_path`, so the relaxation above cannot have turned the
+    traversal guard off. These names are refused by `validate_filename` before any path is built,
+    which is why the containment check can safely skip an absent target."""
+    _healthy()
+    for name in ("../../../ESCAPED.md", "/etc/passwd", "..", ".hidden", "a/b.md"):
+        with pytest.raises(RequivoError) as ei:
+            store.artifact_path("s", name)
+        assert ei.value.code == "invalid_filename", name
+
+
 def test_atomic_write_survives_a_transient_permission_error(tmp_path, monkeypatch):
     """On Windows `rename` is `MoveFileEx`, which fails with `PermissionError(13, 'Access is denied')`
     whenever anything holds a handle to the destination — an antivirus scanner or the Search Indexer,
@@ -268,13 +310,21 @@ def test_atomic_write_still_gives_up_on_a_permanent_permission_error(tmp_path, m
     slow permanent error helps nobody, and a retry that never gives up is how a crash becomes a hang."""
     target = tmp_path / "model.json"
     target.write_text("old", encoding="utf-8")
+    attempts = {"n": 0}
 
     def always_denied(self, dst):
+        attempts["n"] += 1
         raise PermissionError(13, "Access is denied")
 
     monkeypatch.setattr(Path, "replace", always_denied)
     with pytest.raises(PermissionError):
         store._atomic_write(target, "new")
+    # The attempt count is the part that makes this a test of the *retry* rather than of `replace`:
+    # without it the assertions below hold identically whether the retry exists or not, so the test
+    # would pass against the code it was written to pin. Found by review, and it is the whole reason
+    # the bound is worth asserting -- an unbounded retry turns a crash into a hang.
+    assert attempts["n"] == store._REPLACE_ATTEMPTS, (
+        f"expected exactly {store._REPLACE_ATTEMPTS} attempts before giving up, got {attempts['n']}")
     assert target.read_text(encoding="utf-8") == "old"      # the old content is intact
     assert not list(tmp_path.glob(".*tmp")), "scratch left behind after a failed write"
 

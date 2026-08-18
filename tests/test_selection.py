@@ -436,7 +436,7 @@ def test_check_selection_still_passes_a_healthy_install(zero_cards):
 
 
 def test_the_prompt_assembly_path_never_decodes_an_asset_with_the_locale_encoding():
-    """`Path.read_text(encoding="utf-8")` with no `encoding` decodes with the *locale's* encoding, not the file's.
+    """`Path.read_text()` with no `encoding` decodes with the *locale's* encoding, not the file's.
 
     Every bundled card carries an em dash or an arrow, so on a cp1252 Windows console they decoded to
     mojibake and were sent to the provider that way — silently, since mojibake is still a string.

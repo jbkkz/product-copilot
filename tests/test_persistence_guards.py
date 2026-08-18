@@ -412,5 +412,10 @@ def test_an_artifact_round_trips_non_ascii_content(workspace, monkeypatch):
             )
         p = store.artifact_path("read-utf8", ARTIFACT_FILENAMES["brief"])
         with pytest.raises(UnicodeDecodeError):
-            p.read_text(encoding="utf-8")   # what the repository's own line did, meeting the locale it would meet
+            # Deliberately bare: this read IS the thing under test, performing the defect so the
+            # assertion can catch it. Passing `encoding=` here would bypass the forced locale
+            # entirely and the `raises` could never fire -- which is exactly what a mechanical sweep
+            # did to it, invisibly on 3.10+ (where the force does not take and the test skips) and
+            # fatally on the 3.9 leg. Registered in `_LOCALE_DEFAULT_BY_DESIGN` in test_encoding.py.
+            p.read_text()   # what the repository's own line did, meeting the locale it would meet
         assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body
