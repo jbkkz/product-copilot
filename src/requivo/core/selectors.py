@@ -26,8 +26,17 @@ intact, and `doctor` and `session verify` render it into a receipt. A newline in
 not look odd, it ends the line: a session could write `doctor`'s own `sessions` row and answer *all
 clear* underneath the row reporting it, while `session verify` — the anti-tampering verb — still
 exited 1. Escaping at the print sites would have closed the two that existed and said nothing about
-the third; refusing here means the value never reaches a render site at all, which is the same choice
+the third; refusing here means a render site cannot be handed one, which is the same choice
 `validate_slug` and `validate_filename` make for their own untrusted siblings.
+
+Stated precisely, because the loose version of that sentence was false when it was first written:
+the guard inspects the **stripped** token, so what every selector may echo is a token with no
+interior control character. It is not a promise that no control character was ever typed — a leading
+or trailing one is normalised away by `str.strip()`, not refused. The two halves only add up while
+each selector echoes `raw.strip()` rather than the original, which is a discipline at the call site
+and not something this module can enforce. `resolve_slots` echoed the original and leaked a leading
+newline into `requivo impact`'s output; that is fixed, and the rule is written into
+`normalize_tokens`' own docstring so the next selector meets it.
 
 `display_token` is the companion for the one shape that guard cannot cover: a site that *shows* a
 stored token without selecting anything with it, where no refusal can run. Nothing makes an arbitrary
@@ -71,7 +80,8 @@ def display_token(value: str) -> str:
 
 
 def normalize_tokens(tokens: Iterable[str], *, what: str) -> list[str]:
-    """Strip and lower-case caller-supplied selector tokens; refuse an empty or whitespace-only one.
+    """Strip and lower-case caller-supplied selector tokens; refuse an empty one, and refuse one
+    carrying a control character.
 
     Returns the tokens in the order given, stripped and lower-cased (matching is case-insensitive on
     every selector). Duplicates are kept — de-duplication is each selector's own business. An empty
@@ -81,6 +91,16 @@ def normalize_tokens(tokens: Iterable[str], *, what: str) -> list[str]:
     `what` names the vocabulary being selected from, so the refusal can say what the caller was
     choosing between; the position is carried in `details` because a comma-split list is usually long
     enough that "one of these is empty" is not an actionable sentence.
+
+    **The control-character guard inspects the token *after* stripping, and that is the whole of its
+    scope — say it here rather than let a caller infer more.** `str.strip()` removes the control
+    characters Python classifies as whitespace (tab, newline, vertical tab, form feed, carriage
+    return, U+001C–U+001F, and NEL), so a token whose control character is leading or trailing is
+    normalised away rather than refused; only an *interior* one is a refusal. That is safe **only
+    because every selector echoes the stripped token**, so what a caller renders is what this
+    function checked. A selector that echoed the unstripped original would leak a leading newline
+    into its own error line — `resolve_slots` did exactly that, and it is why this paragraph exists.
+    A new selector inherits the guard; it does not inherit that discipline, so echo `raw.strip()`.
     """
     out: list[str] = []
     for position, token in enumerate(tokens):

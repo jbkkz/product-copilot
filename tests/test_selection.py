@@ -17,9 +17,17 @@ from __future__ import annotations
 import pytest
 
 from requivo.core import context as context_mod
-from requivo.core.context import available_cards, build_prompt, check_selection, load_context, resolve_cards
+from requivo.core.context import (
+    _SELECTION_REFUSALS,
+    available_cards,
+    build_prompt,
+    check_selection,
+    load_context,
+    resolve_cards,
+)
 from requivo.core.dependencies import _all_slot_ids, resolve_slots
 from requivo.core.errors import (
+    ContextUnreadableError,
     EmptySelectionError,
     EmptySelectorTokenError,
     NoContextCardsError,
@@ -28,6 +36,7 @@ from requivo.core.errors import (
     UnsafeSelectorTokenError,
 )
 from requivo.core.selectors import display_token, normalize_tokens
+from requivo.deterministic import _RESTORABLE_CARD_CODES
 
 A_CARD = "b2b-platform"          # a bundled card, committed to the repo
 ANOTHER_CARD = "financial-reporting"
@@ -562,6 +571,31 @@ def test_check_selection_reports_a_hostile_persisted_card_rather_than_raising():
     problem = check_selection(["ok-card\nAll clear."])
     assert problem is not None and problem.code == "unsafe_selector_token"
     assert "\n" not in problem.message
+
+
+def test_the_two_card_code_tables_agree():
+    """`deterministic._RESTORABLE_CARD_CODES` decides which remedy `doctor` and `session verify`
+    print, by matching `problem["code"]`. It can only ever see codes `check_selection` **returns**,
+    which is exactly `_SELECTION_REFUSALS` — so a member outside that set is a branch that cannot
+    run, and a returned code outside both tables silently gets the repair hint.
+
+    Pinned structurally rather than by making a card directory unreadable: that needs a chmod, which
+    does nothing when the test runs as root and behaves differently on Windows, so the assertion
+    would be vacuous on exactly the legs nobody re-reads. This asks the same question of the two
+    tables directly and answers it identically everywhere.
+    """
+    returnable = {e.code for e in _SELECTION_REFUSALS}
+    assert returnable, "must fire: the refusal tuple is not empty"
+    assert _RESTORABLE_CARD_CODES <= returnable, (
+        "a remedy is routed on a code check_selection can never return: "
+        f"{sorted(_RESTORABLE_CARD_CODES - returnable)}")
+    # And the reverse, as documentation of the split rather than as a second guard: everything else
+    # `check_selection` can return is a malformed *selection*, which restoring a file cannot fix.
+    assert returnable - _RESTORABLE_CARD_CODES == {
+        "empty_selection", "empty_selector_token", "unsafe_selector_token"}
+    assert ContextUnreadableError not in _SELECTION_REFUSALS, (
+        "context_unreadable is now returned rather than propagated; _RESTORABLE_CARD_CODES and "
+        "_card_health's third state both need revisiting")
 
 
 def test_display_token_is_the_render_side_companion_where_no_selector_runs():

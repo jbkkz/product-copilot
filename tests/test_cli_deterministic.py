@@ -412,6 +412,42 @@ def test_session_verify_cannot_be_made_to_print_a_line_a_session_wrote(forged_wo
     assert len(named) == 1, forged                    # reported, on exactly one line
 
 
+def test_impact_cannot_be_made_to_print_a_line_by_an_unmatched_slot_token(workspace, tmp_path):
+    """The gap the #40 guard left open, found in review of the fix.
+
+    `normalize_tokens` checks the **stripped** token, and `str.strip()` removes every control
+    character Python classifies as whitespace — tab, newline, vertical tab, form feed, carriage
+    return, the four separator codes U+001C to U+001F, and NEL at U+0085. So a token whose control
+    character is *leading or trailing* rather than interior is stripped away before the guard looks
+    at it, and is therefore not refused.
+
+    Harmless in the two card selectors, which echo `raw.strip()` — and not harmless in
+    `resolve_slots`, which echoed the **unstripped** original into its unmatched list, from where
+    `requivo impact` prints it bare. The fix is to echo the same normalized token the guard actually
+    checked, which is what the card selectors already do.
+
+    Lower severity than #40 proper: a slot token is a live argv value the same user typed, not
+    persisted data a third party supplied. But `core/selectors.py` claims in as many words that the
+    value never reaches a render site, and a claim like that has to be true or it should not be
+    written down.
+    """
+    _run(["session", "init", "Something.", "--slug", "imp"])
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", "imp", str(proposal), "--json"])
+
+    # must fire: a real token still resolves, and an ordinary unknown one is still named as typed
+    assert "Unknown slot" not in _run(["impact", "imp", "workflow"])
+    unknown = _run(["impact", "imp", "zzz"]).splitlines()
+    assert any(ln.startswith("Unknown slot(s): zzz") for ln in unknown), unknown
+
+    # must not fire: a leading control character cannot become a line of the output
+    forged = _run(["impact", "imp", "\nFORGED AT COLUMN 0"]).splitlines()
+    assert "FORGED AT COLUMN 0" not in forged, forged
+    named = [ln for ln in forged if ln.startswith("Unknown slot(s): ")]
+    assert len(named) == 1 and "FORGED AT COLUMN 0" in named[0], forged
+
+
 def test_session_show_renders_a_card_name_as_one_line(forged_workspace):
     """The third render site, which #40 does not name and which no selector guard can reach:
     `session show` reads `context_cards` straight out of the metadata and joins it, without asking
