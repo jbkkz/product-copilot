@@ -252,6 +252,121 @@ def fixture_violations(path: Path) -> list:
     return sorted(out)
 
 
+# Two sites read with the locale's default *on purpose*, and both would be destroyed by "fix" here:
+# they exist to measure what the default does. Keyed by enclosing function rather than line number,
+# which drifts, and each carries its reason so the next person argues with a line.
+_LOCALE_DEFAULT_BY_DESIGN = {
+    "test_boundaries.py": {
+        "_force_default_encoding":
+            "probes whether the ambient default could be forced at all; passing encoding= here would "
+            "make the probe measure nothing and the control it gates would silently stop firing",
+        "test_the_guard_reads_source_as_utf8":
+            "demonstrates the pre-#10 failure by performing it -- the bare read IS the thing under "
+            "test, and it is asserted to raise",
+    },
+}
+
+
+def _enclosing_function_names(tree: ast.Module) -> dict:
+    """Map each AST node's id() to the name of the function it sits in. Outermost wins, which is what
+    an exemption keyed by test name wants."""
+    out: dict = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(fn):
+                out.setdefault(id(node), fn.name)
+    return out
+
+
+def read_violations_in_test(path: Path) -> list:
+    """Encoding-less *reads* in a test, minus the ones that are deliberately measuring the default.
+
+    Reads and writes are treated asymmetrically in `tests/`, and the asymmetry is the finding rather
+    than a compromise. For a **write**, the hazard is the content, and the content is a literal in the
+    source -- so `fixture_violations` below can see exactly which writes are dangerous, and demanding
+    `encoding=` of the other ~53 would be a large diff with no defect behind it.
+
+    For a **read**, the hazard is in the file being read, which the source never mentions. Nothing
+    static can tell a test reading an ASCII fixture it just wrote from a test reading a bundled asset
+    full of em dashes. That is not hypothetical: the first Windows leg this branch adds went red on
+    `test_demo_payload_matches_the_browsable_example`, which compares the bundled demo payload against
+    the browsable copy with two bare `read_text()` calls -- `UnicodeDecodeError: 'charmap' codec can't
+    decode byte 0x90`. The product read those files correctly; only the test did not. The narrow
+    write-side rule could not have seen it, because there was no literal to look at.
+
+    So every read declares its codec, and the two that must not are named above.
+    """
+    tree = _parse(path)
+    exempt = _LOCALE_DEFAULT_BY_DESIGN.get(path.name, {})
+    enclosing = _enclosing_function_names(tree)
+    out: list = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "read_text":
+            continue
+        if _has_keyword(node, "encoding"):
+            continue
+        if enclosing.get(id(node)) in exempt:
+            continue
+        out.append(
+            f"line {node.lineno}: .read_text() with no encoding -- the file being read may hold "
+            f"characters the locale's codec cannot decode, and unlike a write there is no literal "
+            f"here for a narrower rule to inspect"
+        )
+    return sorted(out)
+
+
+def test_every_read_in_the_suite_declares_its_encoding():
+    """The gap the first Windows leg found. The guard walked `src/` and `scripts/`; the 30th site
+    appeared in the one directory it did not walk."""
+    offenders: dict = {}
+    for path in scan(REPO_ROOT / "tests"):
+        found = read_violations_in_test(path)
+        if found:
+            offenders[path.relative_to(REPO_ROOT).as_posix()] = found
+    assert not offenders, (
+        "a test that reads text without naming its codec decodes with whatever the platform offers, "
+        "so it passes on Linux and fails on Windows about a file the product reads correctly: "
+        + repr(offenders)
+    )
+
+
+def test_the_by_design_exemptions_still_exist():
+    """An exemption for a function that has been renamed or deleted is an exemption silently covering
+    nothing -- or, worse, still suppressing a real finding under a name somebody reused. Pin them."""
+    for filename, functions in _LOCALE_DEFAULT_BY_DESIGN.items():
+        path = REPO_ROOT / "tests" / filename
+        assert path.is_file(), f"{filename} is exempted from the read rule and does not exist"
+        defined = {n.name for n in ast.walk(_parse(path))
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        missing = sorted(set(functions) - defined)
+        assert not missing, (
+            f"{filename} exempts {missing}, which it no longer defines. An exemption naming nothing "
+            f"is either dead or about to cover the wrong function."
+        )
+        # And the exemption must still be *needed*: if the function stopped reading with the default,
+        # the exemption is dead weight that would hide the next one.
+        assert read_violations_in_test(path) == [], "unexpected: exempted file has other bare reads"
+
+
+def test_the_read_rule_fires_and_spares_correctly(tmp_path):
+    """Both edges. A rule with an exemption table is the one that quietly stops firing."""
+    root = tmp_path / "tests"
+    _write_tree(root, {"test_x.py": """
+        from pathlib import Path
+
+        def test_bare(p: Path) -> str:
+            return p.read_text()
+
+        def test_explicit(p: Path) -> str:
+            return p.read_text(encoding="utf-8")
+    """})
+    path = scan(root)[0]
+    found = read_violations_in_test(path)
+    assert len(found) == 1 and "line 5" in found[0], found
+
+
 def test_no_test_fixture_writes_non_ascii_with_the_locale_codec():
     """The harness half of #3, kept honest by the same walk that keeps the product honest."""
     offenders: dict = {}

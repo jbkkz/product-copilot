@@ -852,7 +852,7 @@ def test_demo_payload_matches_the_browsable_example():
     bundled = sorted(DEMO.glob("*"))
     assert bundled, "demo payload is empty"
     for f in bundled:
-        assert f.read_text() == (browsable / f.name).read_text(), f"demo payload drifted from examples/: {f.name}"
+        assert f.read_text(encoding="utf-8") == (browsable / f.name).read_text(encoding="utf-8"), f"demo payload drifted from examples/: {f.name}"
 
 
 def test_pc_brief_persists_reasoning_into_model():
@@ -924,7 +924,7 @@ _EPIC = {"title": "X", "issues": [{"id": "I-1", "title": "Build the request form
 def test_pc_prd_writes_artifact():
     with _model_in_out("clitest-prd") as p:
         _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X", "problem": "P"})))
-        assert (p.parent / "artifacts" / "prd.md").read_text().startswith("# X")
+        assert (p.parent / "artifacts" / "prd.md").read_text(encoding="utf-8").startswith("# X")
 
 
 def test_pc_criteria_writes_artifact():
@@ -943,7 +943,7 @@ def test_pc_epic_writes_all_views():
 def test_pc_release_stamps_version():
     with _model_in_out("clitest-release") as p:
         _run_app(["release", str(p), "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
-        assert "v1.0" in (p.parent / "artifacts" / "release-notes.md").read_text()
+        assert "v1.0" in (p.parent / "artifacts" / "release-notes.md").read_text(encoding="utf-8")
 
 
 def test_pc_discover_once_saves_model():
@@ -1489,7 +1489,7 @@ def test_resolve_cards_maps_stems_and_refuses_an_unknown_one():
 def test_atomic_write_persists_content_and_leaves_no_tmp(tmp_path):
     dest = tmp_path / "model.json"
     _atomic_write(dest, '{"ok": true}')
-    assert dest.read_text() == '{"ok": true}'
+    assert dest.read_text(encoding="utf-8") == '{"ok": true}'
     # The temp sidecar is renamed onto the target, never left behind.
     assert not (tmp_path / ".model.json.tmp").exists()
     assert list(tmp_path.iterdir()) == [dest]

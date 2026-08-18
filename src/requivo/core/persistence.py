@@ -56,11 +56,38 @@ def _atomic_write(path: Path, content: str) -> Path:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # never leave scratch behind on a failed write
         raise
     return path
+
+
+# On POSIX `rename` over an existing file always succeeds. On Windows it is `MoveFileEx`, which needs
+# the destination to be openable, so it fails with `PermissionError(13, 'Access is denied')` whenever
+# *anything* holds a handle to it — most often an antivirus scanner or the Search Indexer, which open
+# a file microseconds after it is written, and neither of which this process can serialise against.
+# The failure is transient by nature, and `model.json` is the durable product, so losing a completed
+# write to a scanner is not an acceptable outcome.
+#
+# Deliberately bounded and deliberately narrow. It retries `PermissionError` only, a handful of times,
+# over a few tens of milliseconds, and then re-raises the original: a genuinely unwritable destination
+# (a read-only file, a real permissions problem) still fails loudly and quickly, because turning a
+# permanent error into a slow permanent error helps nobody. This is the one place where retrying is
+# right rather than a way of hiding something -- the operation is idempotent and the cause is external.
+_REPLACE_ATTEMPTS = 8
+_REPLACE_BACKOFF_S = 0.01
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S * (attempt + 1))
 
 
 # ── Session locking ────────────────────────────────────────────────────────────
@@ -312,8 +339,30 @@ def validate_filename(filename: str) -> str:
 
 def _child_of(root: Path, slug: str) -> Path:
     """`root / slug`, having validated the slug and confirmed the resolved path is genuinely a child of
-    `root` — the defence-in-depth check the traversal guard is built around."""
+    `root` — the defence-in-depth check the traversal guard is built around.
+
+    The child is resolved **only when it exists**, and that is the load-bearing part rather than an
+    optimisation. This used to compare `d.resolve()` with `root.resolve()`: two independent
+    resolutions, of paths where one is derived from the other, each reflecting whatever the filesystem
+    happened to look like at the instant it ran. Between them another thread can create a directory,
+    and then the two disagree — so `canonical_dir("s")` raised `InvalidSlugError`, which means *you
+    gave me a bad slug*, about a perfectly good slug, because somebody else was creating a session at
+    the same moment. Observed here on POSIX by creating a symlinked parent between the two calls, and
+    observed in CI on the Windows leg as four of twelve concurrent creators crashing (#3).
+
+    Skipping the resolution when `d` does not exist loses nothing. `validate_slug` has already
+    guaranteed a single kebab-case component — no separator, no dot segment, no leading dot — so
+    `root / slug` is lexically one level below `root` and cannot escape by construction. The only way
+    out is a **symlink at `d` itself**, and a path that does not exist is not a symlink. So the check
+    now runs in exactly the case that can fail it, against a root resolved once.
+    """
     d = root / validate_slug(slug)
+    # `is_symlink()` as well as `exists()`, and not `exists()` alone: `exists()` follows the link, so
+    # a **dangling** symlink pointing out of the root reports False and would skip the very check it
+    # is the reason for. `is_symlink()` does not follow, so the pair covers every path that is there
+    # in any form.
+    if not (d.exists() or d.is_symlink()):
+        return d
     if not d.resolve().is_relative_to(root.resolve()):
         raise InvalidSlugError(f"slug {slug!r} resolves outside the session root", details={"slug": slug})
     return d
@@ -340,7 +389,12 @@ def artifact_path(slug: str, filename: str) -> Path:
     resolved path is confirmed to be a genuine child of `artifacts/` anyway."""
     d = canonical_dir(slug) / "artifacts"
     p = d / validate_filename(filename)
-    if not p.resolve().is_relative_to(d.resolve()):
+    # Resolved only when the target is there in some form, for the reason `_child_of` gives at
+    # length: two independent `resolve()` calls on paths derived from one another disagree whenever
+    # the filesystem moves between them, and `artifacts/` is created lazily, so the window is real
+    # here too. `validate_filename` has already made a separator or a dot segment unrepresentable, so
+    # the only escape left is a symlink at `p`, which must exist to be one.
+    if (p.exists() or p.is_symlink()) and not p.resolve().is_relative_to(d.resolve()):
         raise InvalidFilenameError(
             f"artifact filename {filename!r} resolves outside {d}",
             details={"slug": slug, "filename": filename})

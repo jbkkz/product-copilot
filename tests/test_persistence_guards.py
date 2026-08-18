@@ -122,8 +122,8 @@ def test_migrating_a_free_slug_still_works(workspace):
     assert _problem("free", 1) == "LEGACY"
     assert _problem("free") == "LEGACY"
     assert meta.artifact_status["prd"].revision == 1
-    assert (store.canonical_dir("free") / "artifacts" / "prd.md").read_text() == "# Legacy PRD\n"
-    assert (store.canonical_dir("free") / "request.md").read_text() == "Legacy request."
+    assert (store.canonical_dir("free") / "artifacts" / "prd.md").read_text(encoding="utf-8") == "# Legacy PRD\n"
+    assert (store.canonical_dir("free") / "request.md").read_text(encoding="utf-8") == "Legacy request."
     assert [p.code for p in check_session("free")] == []
     assert (legacy / "model.json").exists()   # the originals are preserved
 
@@ -412,5 +412,5 @@ def test_an_artifact_round_trips_non_ascii_content(workspace, monkeypatch):
             )
         p = store.artifact_path("read-utf8", ARTIFACT_FILENAMES["brief"])
         with pytest.raises(UnicodeDecodeError):
-            p.read_text()   # what the repository's own line did, meeting the locale it would meet
+            p.read_text(encoding="utf-8")   # what the repository's own line did, meeting the locale it would meet
         assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body

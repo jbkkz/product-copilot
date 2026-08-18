@@ -50,7 +50,7 @@ def _skill_files() -> list[Path]:
 def test_manifest_present_and_valid():
     manifest = PLUGIN / ".claude-plugin" / "plugin.json"
     assert manifest.is_file()
-    data = json.loads(manifest.read_text())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     assert data["name"] == "requivo"
     assert data["version"] and data["description"]
 
@@ -65,11 +65,11 @@ def test_repo_is_a_marketplace_pointing_at_this_plugin():
     # repo root carries a catalog whose `source` actually resolves to the plugin directory.
     catalog = PLUGIN.parents[1] / ".claude-plugin" / "marketplace.json"
     assert catalog.is_file(), "the repo root must carry a marketplace catalog"
-    data = json.loads(catalog.read_text())
+    data = json.loads(catalog.read_text(encoding="utf-8"))
     entry = next(p for p in data["plugins"] if p["name"] == "requivo")
     assert (catalog.parent.parent / entry["source"]).resolve() == PLUGIN.resolve()
     # The catalog and the manifest are edited in different files; drift makes the install lie.
-    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert entry["version"] == manifest["version"]
 
 
@@ -80,16 +80,16 @@ def test_the_plugin_version_tracks_the_package_version():
     which CLI they were tested against. A hand-edited number needs a test, not a convention."""
     from requivo import __version__
 
-    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["version"] == __version__
     # And the prose must not restate it: the copy in the README is exactly what drifted before.
-    assert __version__ not in (PLUGIN / "README.md").read_text()
+    assert __version__ not in (PLUGIN / "README.md").read_text(encoding="utf-8")
 
 
 def test_documented_skill_invocations_are_namespaced():
     # Claude Code always namespaces plugin skills as `/<plugin>:<skill>`. The README documented
     # `/requivo-discover`, which no user could ever type successfully.
-    readme = (PLUGIN / "README.md").read_text()
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
     for name in EXPECTED_SKILLS:
         assert f"/requivo:{name}" in readme, f"{name}: README must document the namespaced invocation"
     assert "/requivo-" not in readme
@@ -105,7 +105,7 @@ def test_exactly_the_expected_skills_exist():
 
 def test_each_skill_frontmatter_name_matches_dir():
     for p in _skill_files():
-        fm = _frontmatter(p.read_text())
+        fm = _frontmatter(p.read_text(encoding="utf-8"))
         assert fm.get("name") == p.parent.name, f"{p.parent.name}: frontmatter name mismatch"
         assert fm.get("description"), f"{p.parent.name}: missing description"
         assert "allowed-tools" in fm, f"{p.parent.name}: must declare allowed-tools"
@@ -113,7 +113,7 @@ def test_each_skill_frontmatter_name_matches_dir():
 
 def test_no_skill_requires_an_api_key_or_the_anthropic_provider():
     for p in _skill_files():
-        text = p.read_text()
+        text = p.read_text(encoding="utf-8")
         assert "ANTHROPIC_API_KEY" not in text or "not need" in text.lower() or "no api key" in text.lower(), \
             f"{p.parent.name}: must not require an API key"
         assert "--provider anthropic" not in text, f"{p.parent.name}: must not call the Anthropic provider"
@@ -123,7 +123,7 @@ def test_skills_reference_only_real_cli_commands():
     commands = _cli_commands()
     assert commands, "could not introspect CLI commands"
     for p in _skill_files():
-        for cmd in re.findall(r"requivo (\w[\w-]*)", p.read_text()):
+        for cmd in re.findall(r"requivo (\w[\w-]*)", p.read_text(encoding="utf-8")):
             assert cmd in commands, f"{p.parent.name}: references unknown `requivo {cmd}`"
 
 
@@ -131,13 +131,13 @@ def test_mutating_skills_validate_and_apply_through_the_cli():
     # discover/answer change the model — they MUST go through validate/apply, never by editing
     # model.json directly.
     for name in ("discover", "answer"):
-        text = (SKILLS / name / "SKILL.md").read_text()
+        text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert "model apply" in text, f"{name}: must apply via the CLI"
         assert "model validate" in text, f"{name}: must validate before applying"
         assert "model apply <slug> -" in text, f"{name}: must pass the proposal on stdin"
     # No skill should instruct writing/editing model.json directly.
     for p in _skill_files():
-        assert not re.search(r"(edit|write)\s+[^\n]*model\.json", p.read_text(), re.IGNORECASE), \
+        assert not re.search(r"(edit|write)\s+[^\n]*model\.json", p.read_text(encoding="utf-8"), re.IGNORECASE), \
             f"{p.parent.name}: must not hand-edit model.json"
 
 
@@ -147,13 +147,13 @@ def test_no_skill_stages_content_through_a_temp_file():
     Windows; and cleanup needed `rm`, which the plugin does not grant itself. Content the skill already
     holds goes in on stdin — so the convention is pinned here rather than left to habit."""
     for p in _skill_files():
-        text = p.read_text()
+        text = p.read_text(encoding="utf-8")
         assert "/tmp" not in text, f"{p.parent.name}: must not stage content in /tmp"
         assert not re.search(r"^\s*rm\s", text, re.MULTILINE), \
             f"{p.parent.name}: must not need `rm` — it is not in allowed-tools"
     # And the grant should not outlive the need: nothing writes files any more.
     for p in _skill_files():
-        front = p.read_text().split("---")[1]
+        front = p.read_text(encoding="utf-8").split("---")[1]
         assert "Write" not in front, f"{p.parent.name}: no skill needs the Write tool now"
 
 
@@ -162,13 +162,13 @@ def test_session_scoped_skills_read_the_session_s_context_cards():
     were made against. A later turn calling bare `requivo context` reads every card and reasons from a
     wider context than the model was built on, which the golden harness has measured as a real cost."""
     for name in ("answer", "brief"):
-        text = (SKILLS / name / "SKILL.md").read_text()
+        text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert "context --session" in text, f"{name}: must read context scoped to the session"
 
 
 def test_artifact_saving_skills_use_the_cli():
     for name in ("brief", "prd"):
-        text = (SKILLS / name / "SKILL.md").read_text()
+        text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert "artifact save" in text, f"{name}: must save via `requivo artifact save`"
 
 
@@ -182,7 +182,7 @@ def test_artifact_saving_skills_state_the_revision_they_reasoned_from():
     of either one on its own.
     """
     for name in ("brief", "prd"):
-        lines = [ln for ln in (SKILLS / name / "SKILL.md").read_text().splitlines()
+        lines = [ln for ln in (SKILLS / name / "SKILL.md").read_text(encoding="utf-8").splitlines()
                  if "artifact save" in ln]
         assert lines, f"{name}: no `artifact save` line to check — the scan found nothing to speak for"
         for ln in lines:
@@ -208,7 +208,7 @@ def test_skill_enum_placeholders_name_values_the_contracts_accept():
         "priority": (Priority,), "kind": (ScenarioKind,), "complexity": (Complexity, Level),
     }
     for p in _skill_files():
-        for field, value in re.findall(r'"(\w+)"\s*:\s*"([a-zA-Z_]+(?:\|[a-zA-Z_]+)+)"', p.read_text()):
+        for field, value in re.findall(r'"(\w+)"\s*:\s*"([a-zA-Z_]+(?:\|[a-zA-Z_]+)+)"', p.read_text(encoding="utf-8")):
             if field not in enums:
                 continue
             allowed = {m.value for e in enums[field] for m in e}

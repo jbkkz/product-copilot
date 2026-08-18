@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -155,9 +156,109 @@ def test_concurrent_atomic_writes_do_not_collide_on_a_temp_file(workspace):
         t.join(timeout=30)
 
     assert errors == []
-    lines = set(target.read_text().splitlines())
+    lines = set(target.read_text(encoding="utf-8").splitlines())
     assert len(lines) == 1                                    # one writer's payload, not a blend
     assert not list(d.glob(".*tmp"))                          # no scratch left behind
+
+
+# ── what the first Windows leg found (#3) ─────────────────────────────────────
+# Both of these are product defects the platform matrix exposed on its first run. Neither could fail
+# on Linux or macOS, and both are written to fail on every platform now that the mechanism is known.
+
+
+def test_a_session_path_is_not_resolved_before_it_exists(tmp_path, monkeypatch):
+    """`_child_of` must reach no resolution at all for a child that is not there.
+
+    It used to compare `d.resolve()` with `root.resolve()`: two independent resolutions, of paths
+    where one is derived from the other, each reflecting the filesystem at the instant it ran. Create
+    a directory between them and they disagree — so `canonical_dir("s")` raised `InvalidSlugError`,
+    which means *you gave me a bad slug*, about the slug `s`, because another thread was creating a
+    session at that moment. Four of twelve concurrent creators died that way on the Windows leg.
+
+    Pinned as "performs no resolution" rather than by reproducing the race, because a timing test that
+    only sometimes reopens the window is not a regression test. No resolution, no disagreement."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    resolved: list = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(self, *a, **k):
+        resolved.append(str(self))
+        return real_resolve(self, *a, **k)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+    assert store._child_of(root, "s") == root / "s"
+    assert resolved == [], (
+        "_child_of resolved paths for a child that does not exist; every such resolution is a "
+        f"verdict that depends on what the filesystem happened to look like: {resolved}")
+
+
+def test_a_symlink_out_of_the_session_root_is_still_refused(tmp_path):
+    """The must-fire half, and the reason the check exists at all. Skipping the resolution when the
+    child is absent is only safe because an absent path cannot be a symlink — so a symlink that *is*
+    there must still be caught, including a dangling one, which `exists()` alone reports as absent."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    (root / "live").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "live")
+
+    # Dangling: `exists()` follows the link and reports False, so an `exists()`-only guard would wave
+    # this through and then write through it the moment the target appeared.
+    (root / "dangling").symlink_to(tmp_path / "not-yet", target_is_directory=True)
+    assert not (root / "dangling").exists() and (root / "dangling").is_symlink()
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "dangling")
+
+
+def test_an_ordinary_existing_session_directory_is_still_accepted(tmp_path):
+    """The must-not-fire half: a guard that refuses correct input is deleted by the next person."""
+    root = tmp_path / "sessions"
+    (root / "s").mkdir(parents=True)
+    assert store._child_of(root, "s") == root / "s"
+
+
+def test_atomic_write_survives_a_transient_permission_error(tmp_path, monkeypatch):
+    """On Windows `rename` is `MoveFileEx`, which fails with `PermissionError(13, 'Access is denied')`
+    whenever anything holds a handle to the destination — an antivirus scanner or the Search Indexer,
+    neither of which this process can serialise against. `model.json` is the durable product, so
+    losing a completed write to a scanner is not an acceptable outcome. Eight concurrent writers hit
+    exactly this on the Windows leg."""
+    target = tmp_path / "model.json"
+    target.write_text("old", encoding="utf-8")
+    attempts = {"n": 0}
+    real_replace = Path.replace
+
+    def flaky(self, dst):
+        attempts["n"] += 1
+        if attempts["n"] <= 3:
+            raise PermissionError(13, "Access is denied")
+        return real_replace(self, dst)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    store._atomic_write(target, "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert attempts["n"] == 4, "the write did not actually go through the retry path"
+
+
+def test_atomic_write_still_gives_up_on_a_permanent_permission_error(tmp_path, monkeypatch):
+    """Bounded, and the bound is the point: a genuinely unwritable destination — a read-only file, a
+    real permissions problem — must still fail loudly and quickly. Turning a permanent error into a
+    slow permanent error helps nobody, and a retry that never gives up is how a crash becomes a hang."""
+    target = tmp_path / "model.json"
+    target.write_text("old", encoding="utf-8")
+
+    def always_denied(self, dst):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(Path, "replace", always_denied)
+    with pytest.raises(PermissionError):
+        store._atomic_write(target, "new")
+    assert target.read_text(encoding="utf-8") == "old"      # the old content is intact
+    assert not list(tmp_path.glob(".*tmp")), "scratch left behind after a failed write"
 
 
 def test_a_failed_atomic_write_leaves_no_scratch_file(workspace):
@@ -179,12 +280,12 @@ def test_a_field_from_a_future_requivo_survives_a_round_trip(workspace):
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
 
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["future_field"] = {"added_by": "requivo 1.4", "keep": True}
     p.write_text(json.dumps(raw, indent=2))
 
     svc.update_model("s", _full_model())        # a real mutation: reads, then rewrites session.json
-    after = json.loads(p.read_text())
+    after = json.loads(p.read_text(encoding="utf-8"))
     assert after["future_field"] == {"added_by": "requivo 1.4", "keep": True}
     assert after["current_revision"] == 1       # and the known fields still moved
 
@@ -196,12 +297,12 @@ def test_a_retired_key_is_dropped_rather_than_carried_forever(workspace):
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
 
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["prompt_versions"] = {"engine.md": "sha256:dead"}   # declared once, never written, now retired
     p.write_text(json.dumps(raw, indent=2))
 
     svc.update_model("s", _full_model())
-    assert "prompt_versions" not in json.loads(p.read_text())
+    assert "prompt_versions" not in json.loads(p.read_text(encoding="utf-8"))
 
 
 # ── slug bounds ───────────────────────────────────────────────────────────────
@@ -356,7 +457,7 @@ def test_a_session_from_a_newer_slot_schema_is_refused_clearly(workspace):
     svc = SessionService()
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["schema_version"] = store.SCHEMA_VERSION + 1
     p.write_text(json.dumps(raw))
 
@@ -479,7 +580,7 @@ def test_a_model_swapped_out_from_under_its_hash_is_caught(workspace):
 def test_a_hand_edited_revision_file_is_caught(workspace):
     _healthy()
     f = store.canonical_dir("s") / "revisions" / "0001-model.json"
-    f.write_text(f.read_text().replace('"completeness": 0', '"completeness": 5', 1))
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
     assert "revision_hash_mismatch" in {p.code for p in check_session("s")}
 
 
@@ -502,7 +603,7 @@ def test_a_structurally_invalid_session_json_is_a_problem_not_a_traceback(worksp
 def test_a_revision_log_that_does_not_match_the_revision_count_is_caught(workspace):
     _healthy()
     p = store.canonical_dir("s") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["revisions"] = raw["revisions"][:1]          # claims revision 2, logs one
     p.write_text(json.dumps(raw))
     assert "revision_count_mismatch" in {p_.code for p_ in check_session("s")}
@@ -512,7 +613,7 @@ def _point_artifact_at(slug: str, filename: str) -> None:
     """Rewrite the recorded artifact's `filename` in `session.json` — what a crafted or hand-edited
     session does. `ArtifactStatus.filename` is a bare `str` with no constraint, so this round-trips."""
     p = store.canonical_dir(slug) / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["artifact_status"]["prd"]["filename"] = filename
     p.write_text(json.dumps(raw))
 
@@ -560,7 +661,7 @@ def test_an_unknown_artifact_type_does_not_fall_through_to_the_filesystem(worksp
 
     _healthy("probe")
     p = store.canonical_dir("probe") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["artifact_status"]["not-an-artifact-type"] = dict(raw["artifact_status"]["prd"],
                                                           filename=str(outside))
     p.write_text(json.dumps(raw))

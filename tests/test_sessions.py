@@ -701,4 +701,4 @@ def test_a_legacy_session_is_named_in_the_error_rather_than_migrated_behind_your
     assert result.revision == 2
     d = store.canonical_dir("old")
     assert (d / "revisions" / "0001-model.json").exists()
-    assert (d / "artifacts" / "prd.md").read_text() == "# Legacy PRD\n"
+    assert (d / "artifacts" / "prd.md").read_text(encoding="utf-8") == "# Legacy PRD\n"

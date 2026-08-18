@@ -214,9 +214,15 @@ bug that looked like correct behaviour.
     the PRD, and `integrity.py` rehashing the mis-decode to accuse the user of editing a file nobody
     touched. It was 28 reads and one write, not reads alone.
     `tests/test_encoding.py` is the guard, because 29 call-site fixes leave the 30th; it walks
-    `src/` and `scripts/` and, narrowly, any `tests/` fixture whose content is non-ASCII (that one is
-    the *harness* rendering an environment limit as a product verdict, which is a different bug wearing
-    the same red). A file the **user** names is the one exception worth knowing: it is still read as
+    `src/`, `scripts/` and `tests/`. The `tests/` half is deliberately asymmetric and the asymmetry is
+    the lesson: **every read** must declare its codec, because the hazard is in the file being read and
+    no literal in the source reveals it — that is how the first Windows leg went red on
+    `test_demo_payload_matches_the_browsable_example`, reading a bundled asset the product itself
+    reads correctly. A **write** is checked only when its content literal is non-ASCII, because there
+    the literal *is* the hazard and is fully visible. Two sites read with the locale default on
+    purpose and are exempted by name with a reason, pinned by a test that fails when an exemption
+    stops naming a real function. A file the **user** names is the one exception worth knowing: it is
+    still read as
     UTF-8, but refused by `read_user_text` with a structured error rather than a traceback.
     Output is the mirror image, and the ordering is the whole point: `streams.py` reconfigures stdout
     and stderr once, from `cli.app()`, with `errors="backslashreplace"` — never `replace`, because a
@@ -224,6 +230,28 @@ bug that looked like correct behaviour.
     to kill a process **after** the mutation it was reporting has landed; the `UnicodeEncodeError` arm
     in `app()` exits `EXIT_RENDER_FAILED` (3) and says the work is done rather than letting a traceback
     imply it is not (#11, #29).
+17. **A guard's verdict must not depend on transient filesystem state.** `_child_of` decided whether
+    `root/slug` escaped the session root by comparing `d.resolve()` with `root.resolve()` — two
+    independent resolutions, of paths where one is derived from the other, each reflecting the tree at
+    the instant it ran. Another thread creating a directory in that window made them disagree, so
+    `canonical_dir("s")` raised `InvalidSlugError` — *you gave me a bad slug* — about a valid slug,
+    because somebody else was creating a session. Reproducible on POSIX with a symlinked parent, and
+    observed on the first Windows CI leg as four of twelve concurrent creators crashing. `artifact_path`
+    had the identical shape. Both now resolve **only a path that is actually there**, which is the only
+    case that can fail: `validate_slug`/`validate_filename` already make a separator or a dot segment
+    unrepresentable, so the sole escape is a symlink at the target, and an absent path is not one —
+    `exists() or is_symlink()`, never `exists()` alone, because `exists()` follows the link and a
+    dangling symlink out of the root is precisely the case to catch. The general form: if a check can
+    answer differently for the same argument depending on when it runs, it is not a check (#3).
+18. **`_atomic_write` retries a denied rename, briefly and only that.** On Windows `rename` is
+    `MoveFileEx`, which fails with `PermissionError(13)` whenever anything holds a handle to the
+    destination — an antivirus scanner or the Search Indexer, opening a file microseconds after it is
+    written, neither of which this process can serialise against. Losing a completed write to a scanner
+    is not acceptable for the durable product, so the replace is retried a few times over a few tens of
+    milliseconds. Bounded and narrow on purpose: `PermissionError` only, then the original is re-raised,
+    so a genuinely unwritable destination still fails loudly and fast. This is the one place in the
+    store where retrying is right rather than a way of hiding something — the operation is idempotent
+    and the cause is external (#3).
 
 ## Two vocabularies, one meaning
 
