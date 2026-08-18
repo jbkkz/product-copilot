@@ -286,9 +286,17 @@ def _cmd_doctor(a, client) -> None:
               "thing as having no sessions.")
         return
     bad, lost = h["inconsistent"], h["unresolved_cards"]
+    # A session with no card selection is unaffected either way — `check_selection(None)` never
+    # reads the card directory — so this is only worth saying when there are sessions at all.
+    unchecked = not h["cards_checked"] and bool(h["total"])
     notes = ([f"{len(bad)} inconsistent"] if bad else []) \
-        + ([f"{len(lost)} with product context that no longer loads"] if lost else [])
-    print(f"  {ok if not notes else '❌'} sessions        {h['total']} in this workspace"
+        + ([f"{len(lost)} with product context that no longer loads"] if lost else []) \
+        + (["product context not checked"] if unchecked else [])
+    # Three glyphs for three states, on the line a reader actually scans. Leaving "not checked" to
+    # a trailing note put a tick on this line while nobody had looked — the defect this whole change
+    # is about, one line further down than where it was filed.
+    glyph = "❌" if (bad or lost) else (warn if unchecked else ok)
+    print(f"  {glyph} sessions        {h['total']} in this workspace"
           + (f" · {' · '.join(notes)}" if notes else ""))
     for slug, codes in bad.items():
         print(f"     └─ {slug}: {', '.join(codes)} — run `requivo session verify {slug}`")
@@ -297,12 +305,9 @@ def _cmd_doctor(a, client) -> None:
     if lost:
         print("        Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives — "
               "until then these sessions refuse their next reasoning turn.")
-    if not h["cards_checked"] and h["total"]:
-        # Only worth saying when there are sessions it was not said about. Note that a session with
-        # no card selection is unaffected either way: `check_selection(None)` never reads the card
-        # directory, so this line is about the sessions that named cards.
-        print(f"     {warn} product context not checked for these sessions — the card directory "
-              "could not be read (see above).")
+    if unchecked:
+        print("     └─ the card directory could not be read (see above), so nothing is known about "
+              "whether these sessions' product context still loads.")
 
 
 # ── session ──────────────────────────────────────────────────────────────────────

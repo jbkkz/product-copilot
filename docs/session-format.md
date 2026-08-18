@@ -126,6 +126,14 @@ requivo session verify <slug> --json   # {"ok": false, "problems": [{"code": …
 The same check gates `session import` (an archive is held to exactly the standard a live session is)
 and appears in `requivo doctor`, which names any session in the workspace that no longer adds up.
 
+A recorded artifact's `filename` is treated as untrusted while this runs. It is an unconstrained
+string in the format, and a session may arrive from an archive or a hand edit, so it goes through the
+same bare-filename guard every artifact write uses; a name that is not a plain file inside
+`artifacts/` is reported as `unsafe_artifact_filename` and, deliberately, **is not checked for
+existence**. Testing it would answer whether an arbitrary path on the machine exists — no content,
+but the presence or absence of `missing_artifact_file` in the reply is itself the answer. `import`
+refuses such an archive.
+
 `context_cards` is a second, separate question the same command answers: do the context cards this
 session was created with still resolve on this machine? It is reported beside `problems` rather than
 inside it, because those cards live *outside* the session directory — an integrity problem is a claim

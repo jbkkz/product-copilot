@@ -27,7 +27,7 @@ Classic install (equivalent; drop `uv run` once the venv is active):
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
-.venv/bin/python -m pytest tests/ -q    # 320 tests, no API calls, no build step
+.venv/bin/python -m pytest tests/ -q    # 324 tests, no API calls, no build step
 .venv/bin/ruff check src tests          # lint (CI runs the same)
 ```
 
@@ -80,8 +80,10 @@ requivo/
     persistence.py   session store: .requivo layout, revisions, migrate_legacy, atomic writes
     validation.py    validate_proposal → structured errors  errors.py  RequivoError (+ .to_dict())
     dependencies.py  the dependency DAG: propagate / diff_models / diff_reasoning
-    integrity.py     does a session directory tell the truth about itself? (only about *itself* —
-                     a lost context card lives outside it and is an environment finding instead)
+    integrity.py     does a session directory tell the truth about itself? evidence is the
+                     directory and only the directory: nothing outside becomes a verdict (a lost
+                     context card is an environment finding), and nothing inside aims a filesystem
+                     call outside (a recorded artifact filename is untrusted input)
     adapters.py      epic_export + GitHub/GitLab tracker plans
   providers/       the only LLM callers
     base.py          ReasoningProvider protocol

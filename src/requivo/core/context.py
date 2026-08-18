@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from requivo.core.errors import EmptySelectorTokenError, RequivoError, UnknownContextCardError
+from requivo.core.errors import ContextUnreadableError, EmptySelectorTokenError, RequivoError, UnknownContextCardError
 from requivo.core.selectors import normalize_tokens
 from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 
@@ -29,6 +29,22 @@ def _card_paths() -> dict[str, Path]:
     for directory in (CONTEXT, user_context_dir()):  # user dir second → its cards win on stem clash
         if not directory.exists():
             continue
+        # `Path.glob` swallows `PermissionError` and yields nothing, so a directory that cannot be
+        # read is indistinguishable from one holding no cards — the absence this module is most
+        # expensive to get wrong, since the empty result then reads as a complete vocabulary and
+        # every card in that directory becomes an "unknown context card" whose stated remedy is to
+        # restore a file that is already there. `iterdir()` raises where `glob` does not, so it is
+        # used as the readability probe; the selection itself still goes through `glob`, whose match
+        # rule (case-insensitive on Windows, case-sensitive on POSIX) is deliberately left alone.
+        # The cost is one extra directory walk over a handful of files.
+        try:
+            list(directory.iterdir())
+        except OSError as e:
+            raise ContextUnreadableError(
+                f"the context-card directory {directory} exists but cannot be read: {e}. Fix its "
+                "permissions — cards in it would otherwise be reported as missing.",
+                details={"directory": str(directory)},
+            ) from e
         for p in sorted(directory.glob("*.md")):
             if not p.name.startswith("_"):
                 paths[p.stem] = p

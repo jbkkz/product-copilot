@@ -87,6 +87,13 @@ the session directory: the same session is fine on a machine that has the card. 
 [cli.md](cli.md#context-cards-a-session-can-no-longer-find) for why that distinction is load-bearing
 for `session import`.
 
+A card directory that exists but **cannot be read** is reported separately, as
+`context_unreadable`, and never as a missing card. The two have opposite remedies — restore the file
+versus fix the permissions — and they used to be indistinguishable, because `Path.glob` yields
+nothing rather than raising when a directory is denied: the card vocabulary came back quietly short,
+so a card sitting in that directory was reported as unknown and you were told to put back a file that
+was already there.
+
 One limit remains before you scope a session to a card that only exists on one machine: there is no
 verb that re-scopes an existing session's cards, so the alternative to restoring the file is editing
 the `context_cards` key in the session's `session.json` by hand — the layout is a published contract,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -156,6 +157,76 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
     assert "0 in this workspace" in empty_text
     assert "0 in this workspace" not in unreadable_text
     assert "unreadable" in unreadable_text and "Permission denied" in unreadable_text
+
+
+def _deny_read(directory: Path) -> None:
+    """Make `directory` genuinely unreadable, or skip loudly naming what went untested.
+
+    `chmod 000` is not a read denial everywhere: Windows ignores POSIX mode bits entirely, and root
+    bypasses them. Branching silently on that would leave a test that *passes* on those runs while
+    asserting nothing — a green leg nobody re-reads, reporting a coverage it does not have. So it
+    skips instead, and says which platform or condition the assertion did not reach."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny reads on Windows — the unreadable-card-directory "
+                    "path is untested on this platform")
+    directory.chmod(0o000)
+    try:
+        list(directory.iterdir())
+    except OSError:
+        return                                  # the denial took: the assertion below is real
+    directory.chmod(0o755)
+    pytest.skip("chmod 000 did not deny reads here (running as root?) — the "
+                "unreadable-card-directory path is untested on this run")
+
+
+def test_a_card_directory_that_cannot_be_read_is_unreadable_not_empty(workspace, tmp_path):
+    """The `unreadable` state has to be reachable by the thing that actually makes a directory
+    unreadable, and it was not.
+
+    `_card_paths()` enumerated with `Path.glob("*.md")`, and `glob` **swallows `PermissionError` and
+    yields nothing**. So a card directory denied by permissions — the ordinary way one becomes
+    unreadable — produced an empty card list and no exception: `doctor` said `empty` (or, with a
+    second readable root, a confident `ok` at a smaller count), and a session naming a card in that
+    directory was told `unknown_context_card`, whose remedy is "put the card back" when the card is
+    right there and merely unreadable. That is #12's own defect class one layer under #12's fix.
+
+    Both halves are here, on the same directory, with only its mode changing.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "walled-domain.md").write_text("# Walled domain\n")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+        _run(["session", "init", "Something.", "--slug", "s", "--context", "walled-domain", "--json"])
+
+        # ── readable: the must-fire control ───────────────────────────────────
+        healthy = _run_json(["doctor", "--json"])
+        assert healthy["context"]["status"] == "ok"
+        assert "walled-domain" in healthy["context_cards"]
+        assert healthy["sessions"]["cards_checked"] is True
+        assert healthy["sessions"]["unresolved_cards"] == {}
+
+        _deny_read(cards)
+        try:
+            broken = _run_json(["doctor", "--json"])
+            broken_text = _run(["doctor"])
+        finally:
+            cards.chmod(0o755)
+
+    assert broken["context"]["status"] == "unreadable", (
+        "a permission-denied card directory is not an install with no cards; the remedy differs")
+    assert broken["context"]["ok"] is False
+    assert "walled-domain" not in broken["context_cards"]
+
+    # The session must not be accused of naming a card that does not exist — it does exist, and we
+    # could not read it. `checked` false is the honest answer, and it must not read as clean.
+    assert broken["sessions"]["cards_checked"] is False
+    assert broken["sessions"]["unresolved_cards"] == {}
+    assert "✅" not in _check_line(broken_text, "context cards")
+    assert "✅" not in _check_line(broken_text, "sessions"), (
+        "the sessions line ticked while nobody had checked their product context")
+    assert "not checked" in _check_line(broken_text, "sessions")
 
 
 def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, tmp_path):

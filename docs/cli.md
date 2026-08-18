@@ -69,7 +69,7 @@ at all.
 | `--json` field | Reads |
 |---|---|
 | `schema.ok` / `schema.slots` / `schema.error` | The slot schema loaded, and how many slots it defines |
-| `context.status` | `ok`, `empty` (the install has no context cards) or `unreadable` (they could not be read). `context.ok` is true only for `ok` |
+| `context.status` | `ok`, `empty` (the install has no context cards) or `unreadable` (a card directory exists but could not be enumerated — permissions, usually). `context.ok` is true only for `ok` |
 | `context_cards` | The card names themselves — the plain list it has always been |
 | `sessions.readable` / `sessions.total` / `sessions.error` | Whether the session directory could be listed at all. When it could not, `total` is `null` rather than `0`, because *no sessions* and *we could not look* are different answers and a user told the first concludes their sessions were deleted |
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
