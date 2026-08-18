@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -61,6 +62,229 @@ def test_doctor_runs_without_api_key(workspace, monkeypatch):
     # Missing key / SDK must never be reported as a hard failure.
     assert r["provider_anthropic"]["api_key_present"] is False
     assert "sessions" in r["workspace"]
+
+
+# ── doctor's own failures must not render as green ticks (#12) ──────────────────
+#
+# Every test in this block asserts that the *healthy* and the *broken* case produce **different**
+# output. A test that only showed the broken case producing something would pass equally well
+# against a doctor that reports a problem for everything — and the defect here was never that doctor
+# is silent, it is that two of its states are spelled the same way.
+
+
+def _check_line(text: str, name: str) -> str:
+    """The status line for the named doctor check — the one carrying a tick.
+
+    Matched on the two-space indent a check line has, because the indented detail lines beneath it
+    mention the same words (`     sessions        <path>` sits right above `  ✅ sessions …`), and a
+    tick asserted against the wrong line is an assertion about nothing."""
+    return next(ln for ln in text.splitlines()
+                if ln.startswith("  ") and not ln.startswith("   ") and name in ln)
+
+
+def test_doctor_tells_a_loaded_context_dir_from_a_lost_one_and_from_an_unreadable_one(workspace):
+    """Three states, three renderings. `available_cards()` failing used to be written into
+    `schema["error"]` — a *different* check's field — with `schema["ok"]` left True and the message
+    printed nowhere, while the card line printed a tick unconditionally. A wheel that ships `assets/`
+    but loses `assets/context/` therefore showed three green ticks and reasoned with no product
+    context at all."""
+    import requivo.deterministic as det
+
+    def _unreadable():
+        raise OSError("boom")
+
+    healthy = _run_json(["doctor", "--json"])
+    assert healthy["context"]["ok"] is True, "fixture is blind: the bundled cards did not load"
+    assert healthy["context"]["status"] == "ok"
+    assert healthy["context"]["count"] > 0 and healthy["context"]["error"] is None
+    healthy_text = _run(["doctor"])
+
+    # (a) the directory is gone — `_card_paths` skips what does not exist and returns nothing.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(det, "available_cards", list)
+        empty = _run_json(["doctor", "--json"])
+        empty_text = _run(["doctor"])
+    assert empty["context"]["ok"] is False
+    assert empty["context"]["status"] == "empty"
+    assert empty["context"]["count"] == 0
+    assert empty["schema"]["ok"] is True and empty["schema"]["error"] is None
+
+    # (b) the directory cannot be read at all — a different answer again, and it must not be
+    #     laundered through a neighbouring check's field.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(det, "available_cards", _unreadable)
+        broken = _run_json(["doctor", "--json"])
+        broken_text = _run(["doctor"])
+    assert broken["context"]["ok"] is False
+    assert broken["context"]["status"] == "unreadable"
+    assert "boom" in (broken["context"]["error"] or "")
+    assert broken["schema"]["ok"] is True and broken["schema"]["error"] is None, (
+        "a context-card failure must not be reported as a schema failure")
+
+    # The human rendering distinguishes them too — the JSON being right is no use to a reader
+    # counting ticks.
+    assert "✅" in _check_line(healthy_text, "context cards")
+    assert "✅" not in _check_line(empty_text, "context cards")
+    assert "✅" not in _check_line(broken_text, "context cards")
+    assert "boom" in broken_text, "the captured error was never shown to the reader"
+    assert healthy_text != empty_text and empty_text != broken_text
+
+
+def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
+    """`_session_health` caught every exception and returned `{"total": 0, "inconsistent": {}}` —
+    byte-identical to a genuinely empty workspace. Twelve unreachable sessions then read as "you have
+    no sessions", and the user concludes they were deleted rather than that a directory is
+    unreadable."""
+    import requivo.deterministic as det
+
+    def _unreadable():
+        raise PermissionError("Permission denied")
+
+    empty = _run_json(["doctor", "--json"])["sessions"]
+    assert empty["total"] == 0 and empty["readable"] is True and empty["error"] is None
+    empty_text = _run(["doctor"])
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(det.store, "list_session_slugs", _unreadable)
+        unreadable = _run_json(["doctor", "--json"])["sessions"]
+        unreadable_text = _run(["doctor"])
+    assert unreadable["readable"] is False
+    assert unreadable["total"] is None, "0 is a claim about the workspace; we could not look"
+    assert "Permission denied" in (unreadable["error"] or "")
+
+    assert "✅" in _check_line(empty_text, "sessions")
+    assert "✅" not in _check_line(unreadable_text, "sessions")
+    assert "0 in this workspace" in empty_text
+    assert "0 in this workspace" not in unreadable_text
+    assert "unreadable" in unreadable_text and "Permission denied" in unreadable_text
+
+
+def _deny_read(directory: Path) -> None:
+    """Make `directory` genuinely unreadable, or skip loudly naming what went untested.
+
+    `chmod 000` is not a read denial everywhere: Windows ignores POSIX mode bits entirely, and root
+    bypasses them. Branching silently on that would leave a test that *passes* on those runs while
+    asserting nothing — a green leg nobody re-reads, reporting a coverage it does not have. So it
+    skips instead, and says which platform or condition the assertion did not reach."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny reads on Windows — the unreadable-card-directory "
+                    "path is untested on this platform")
+    directory.chmod(0o000)
+    try:
+        list(directory.iterdir())
+    except OSError:
+        return                                  # the denial took: the assertion below is real
+    directory.chmod(0o755)
+    pytest.skip("chmod 000 did not deny reads here (running as root?) — the "
+                "unreadable-card-directory path is untested on this run")
+
+
+def test_a_card_directory_that_cannot_be_read_is_unreadable_not_empty(workspace, tmp_path):
+    """The `unreadable` state has to be reachable by the thing that actually makes a directory
+    unreadable, and it was not.
+
+    `_card_paths()` enumerated with `Path.glob("*.md")`, and `glob` **swallows `PermissionError` and
+    yields nothing**. So a card directory denied by permissions — the ordinary way one becomes
+    unreadable — produced an empty card list and no exception: `doctor` said `empty` (or, with a
+    second readable root, a confident `ok` at a smaller count), and a session naming a card in that
+    directory was told `unknown_context_card`, whose remedy is "put the card back" when the card is
+    right there and merely unreadable. That is #12's own defect class one layer under #12's fix.
+
+    Both halves are here, on the same directory, with only its mode changing.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "walled-domain.md").write_text("# Walled domain\n")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+        _run(["session", "init", "Something.", "--slug", "s", "--context", "walled-domain", "--json"])
+
+        # ── readable: the must-fire control ───────────────────────────────────
+        healthy = _run_json(["doctor", "--json"])
+        assert healthy["context"]["status"] == "ok"
+        assert "walled-domain" in healthy["context_cards"]
+        assert healthy["sessions"]["cards_checked"] is True
+        assert healthy["sessions"]["unresolved_cards"] == {}
+
+        _deny_read(cards)
+        try:
+            broken = _run_json(["doctor", "--json"])
+            broken_text = _run(["doctor"])
+        finally:
+            cards.chmod(0o755)
+
+    assert broken["context"]["status"] == "unreadable", (
+        "a permission-denied card directory is not an install with no cards; the remedy differs")
+    assert broken["context"]["ok"] is False
+    assert "walled-domain" not in broken["context_cards"]
+
+    # The session must not be accused of naming a card that does not exist — it does exist, and we
+    # could not read it. `checked` false is the honest answer, and it must not read as clean.
+    assert broken["sessions"]["cards_checked"] is False
+    assert broken["sessions"]["unresolved_cards"] == {}
+    assert "✅" not in _check_line(broken_text, "context cards")
+    assert "✅" not in _check_line(broken_text, "sessions"), (
+        "the sessions line ticked while nobody had checked their product context")
+    assert "not checked" in _check_line(broken_text, "sessions")
+
+
+def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, tmp_path):
+    """A session's `context_cards` are validated once, at creation. The cards live *outside* the
+    session directory, so the answer can change afterwards without the session changing — and since
+    `load_context` refuses an unresolvable selection (#13), the session is hard-stopped at its next
+    (paid) turn while doctor still calls it healthy.
+
+    Both halves are in this one fixture: the same session, checked twice, with only the card moving.
+    """
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    card = cards / "lost-domain.md"
+    card.write_text("# Lost domain\n\nSome product context.\n")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+        _run(["session", "init", "Something.", "--slug", "s", "--context", "lost-domain", "--json"])
+
+        # ── healthy: the card is where the session left it ────────────────────
+        healthy_doctor = _run_json(["doctor", "--json"])["sessions"]
+        assert healthy_doctor["unresolved_cards"] == {}
+        assert healthy_doctor["inconsistent"] == {}
+        healthy_verify = _run_json(["session", "verify", "s", "--json"])
+        assert healthy_verify["ok"] is True
+        assert healthy_verify["context_cards"]["checked"] is True
+        assert healthy_verify["context_cards"]["problem"] is None
+        healthy_text = _run(["session", "verify", "s"])
+
+        # ── broken: the card is gone, and nothing else changed ────────────────
+        card.unlink()
+
+        broken_doctor = _run_json(["doctor", "--json"])["sessions"]
+        assert "s" in broken_doctor["unresolved_cards"]
+        assert broken_doctor["unresolved_cards"]["s"]["code"] == "unknown_context_card"
+        assert "lost-domain" in broken_doctor["unresolved_cards"]["s"]["details"]["unknown"]
+        # It is not an *integrity* problem: the directory still tells the truth about itself.
+        assert broken_doctor["inconsistent"] == {}
+        assert "✅" not in _check_line(_run(["doctor"]), "sessions")
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+            app(["session", "verify", "s", "--json"], client=None)
+        assert e.value.code == 1
+        report = json.loads(buf.getvalue())
+        assert report["ok"] is False
+        assert report["problems"] == []            # nothing is wrong *inside* the directory
+        assert report["context_cards"]["checked"] is True
+        assert report["context_cards"]["problem"]["code"] == "unknown_context_card"
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), pytest.raises(SystemExit):
+            app(["session", "verify", "s"], client=None)
+        broken_text = buf.getvalue()
+
+    assert healthy_text != broken_text
+    assert "lost-domain" in broken_text and "lost-domain" not in healthy_text
+    assert "REQUIVO_CONTEXT_DIR" in broken_text, "the reader is not told how to recover"
 
 
 # ── the acceptance scenario ─────────────────────────────────────────────────────

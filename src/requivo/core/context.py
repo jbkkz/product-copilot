@@ -4,7 +4,9 @@ This is the string-assembly half of what used to live in `core/llm.py`: it reads
 files, the framework schema, and the context cards, and injects them into a prompt template. It makes
 **no LLM call and imports no provider** — it only turns assets into a system-prompt string — so it is
 safe to keep in `core`. The provider imports `build_prompt()` to feed a model; the CLI and `doctor`
-import `available_cards()` to validate a `--context` selection, none of which needs the SDK.
+import `available_cards()` to validate a `--context` selection, and `check_selection()` to ask
+whether a *saved* selection still resolves without paying for a turn to find out. None of it needs
+the SDK.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from requivo.core.errors import EmptySelectorTokenError, UnknownContextCardError
+from requivo.core.errors import ContextUnreadableError, EmptySelectorTokenError, RequivoError, UnknownContextCardError
 from requivo.core.selectors import normalize_tokens
 from requivo.paths import CONTEXT, FRAMEWORK, PROMPTS, user_context_dir
 
@@ -27,6 +29,22 @@ def _card_paths() -> dict[str, Path]:
     for directory in (CONTEXT, user_context_dir()):  # user dir second → its cards win on stem clash
         if not directory.exists():
             continue
+        # `Path.glob` swallows `PermissionError` and yields nothing, so a directory that cannot be
+        # read is indistinguishable from one holding no cards — the absence this module is most
+        # expensive to get wrong, since the empty result then reads as a complete vocabulary and
+        # every card in that directory becomes an "unknown context card" whose stated remedy is to
+        # restore a file that is already there. `iterdir()` raises where `glob` does not, so it is
+        # used as the readability probe; the selection itself still goes through `glob`, whose match
+        # rule (case-insensitive on Windows, case-sensitive on POSIX) is deliberately left alone.
+        # The cost is one extra directory walk over a handful of files.
+        try:
+            list(directory.iterdir())
+        except OSError as e:
+            raise ContextUnreadableError(
+                f"the context-card directory {directory} exists but cannot be read: {e}. Fix its "
+                "permissions — cards in it would otherwise be reported as missing.",
+                details={"directory": str(directory)},
+            ) from e
         for p in sorted(directory.glob("*.md")):
             if not p.name.startswith("_"):
                 paths[p.stem] = p
@@ -82,42 +100,80 @@ def load_context(only: list[str] | None = None) -> str:
     for the empty string on every subsequent call — the engine reasoning with no product context at
     all, which is the `information_value = uncertainty x impact` driver gone, silently, mid-session.
     Refusing does break a session that used to appear to work — it appeared to work while producing
-    worse questions for an invisible reason — and the recovery today is to put the card back, or to
-    point `REQUIVO_CONTEXT_DIR` at wherever it now lives. There is deliberately no fallback to "then
-    load nothing": that is the bug. Two gaps are known and out of this change: no verb re-scopes a
-    session's `context_cards` after creation, and neither `doctor` nor `session verify` checks that a
-    persisted selection still resolves, so the refusal is discovered by the next (paid) turn rather
-    than by the health check.
+    worse questions for an invisible reason — and the recovery is to put the card back, or to point
+    `REQUIVO_CONTEXT_DIR` at wherever it now lives. There is deliberately no fallback to "then load
+    nothing": that is the bug. The refusal is no longer *discovered* by the next paid turn either —
+    `check_selection` asks this same guard as a question, and `doctor` and `session verify` both run
+    it. One gap remains and is out of scope here: no verb re-scopes a session's `context_cards` after
+    creation, so restoring the card is the only recovery.
 
     `only=[]` is refused for the same reason: a selection that selects nothing is not the same thing
     as `None`, the explicit "no restriction" sentinel, and guessing which one was meant is how this
     class of bug gets written.
     """
     paths = _card_paths()
-    keep = None
-    if only is not None:
-        only = list(only)                       # materialised before the helper iterates it
-        wanted = normalize_tokens(only, what="context card")
-        if not wanted:
-            raise EmptySelectorTokenError(
-                "an empty context-card selection selects nothing. Pass no selection at all to load "
-                "every card, or name the cards to load.",
-                details={"selector": "context card", "tokens": 0})
-        known = {stem.lower() for stem in paths}
-        # echoed as typed, like `resolve_cards` — the two are one design and a caller reading the
-        # error should see the name they wrote, not the lower-cased key it was matched by
-        missing = [raw.strip() for raw, key in zip(only, wanted) if key not in known]
-        if missing:
-            raise UnknownContextCardError(
-                f"unknown context card(s): {', '.join(missing)}. Available: "
-                f"{', '.join(sorted(paths)) or '(none)'}",
-                details={"unknown": missing},
-            )
-        keep = set(wanted)
+    # `only` is materialised before the guard iterates it — a generator read twice yields nothing
+    keep = _selection_keys(list(only), paths) if only is not None else None
     cards = [f"## {stem}\n{paths[stem].read_text()}"
              for stem in sorted(paths)
              if keep is None or stem.lower() in keep]
     return "\n\n".join(cards)
+
+
+def _selection_keys(only: list[str], paths: dict[str, Path]) -> set[str]:
+    """The guard a card selection must pass, as one function: the normalized keys it names, or the
+    refusal it earns.
+
+    It exists so that the check and the thing checked cannot drift. `load_context` applies it, and
+    `check_selection` asks it as a question — a health check that reimplemented the rule would
+    eventually answer differently from the call it is supposed to predict, which is this issue's own
+    defect class one level up.
+    """
+    wanted = normalize_tokens(only, what="context card")
+    if not wanted:
+        raise EmptySelectorTokenError(
+            "an empty context-card selection selects nothing. Pass no selection at all to load "
+            "every card, or name the cards to load.",
+            details={"selector": "context card", "tokens": 0})
+    known = {stem.lower() for stem in paths}
+    # echoed as typed, like `resolve_cards` — the two are one design and a caller reading the
+    # error should see the name they wrote, not the lower-cased key it was matched by
+    missing = [raw.strip() for raw, key in zip(only, wanted) if key not in known]
+    if missing:
+        raise UnknownContextCardError(
+            f"unknown context card(s): {', '.join(missing)}. Available: "
+            f"{', '.join(sorted(paths)) or '(none)'}",
+            details={"unknown": missing},
+        )
+    return set(wanted)
+
+
+def check_selection(only: list[str] | None) -> RequivoError | None:
+    """Whether a stored card selection still loads **on this machine** — reported, never raised.
+
+    `None` when it loads (including for `only=None`, the "every card" sentinel, which cannot fail);
+    otherwise the exact `RequivoError` `load_context` would raise, so a caller gets the stable code
+    and the offending names in `details` rather than a re-derived message.
+
+    Why a session needs asking at all: `resolve_cards` validates a selection **once**, at creation,
+    but the cards live outside the session — in the installed package or in `user_context_dir()`. A
+    card renamed, an install replaced, a session opened on another machine, and the selection
+    persisted in `session.json` no longer resolves. Since that is now a refusal rather than a silent
+    empty context, such a session is hard-stopped at its next provider call; this lets `doctor` and
+    `session verify` say so first, offline and for free.
+
+    It deliberately does not swallow a failure of the *card directory* itself. An unreadable
+    `CONTEXT` raises out of here, because "we could not look" is a different answer from "we looked
+    and the card is gone", and the caller owes its reader that distinction rather than a selection
+    reported as fine.
+    """
+    if only is None:
+        return None
+    try:
+        _selection_keys(list(only), _card_paths())
+    except (EmptySelectorTokenError, UnknownContextCardError) as e:
+        return e
+    return None
 
 
 def build_prompt(name: str, only: list[str] | None = None) -> str:
