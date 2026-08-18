@@ -52,6 +52,13 @@
     for (var i = 0; i < buttons.length; i++) buttons[i].disabled = busy;
   }
 
+  // Known limit, inert today and written down so it stays that way. HTMX exits early when a listener
+  // cancels `htmx:beforeRequest`, and no `afterRequest` follows — but our listener has already
+  // incremented, so the page would stay muted until the next `pageshow`. Nothing here cancels that
+  // event: there is no `hx-confirm` and no `preventDefault` on it anywhere in `web/`. Adding one is
+  // what would reintroduce this, and reading `defaultPrevented` from our own listener cannot fix it
+  // because listener order decides who runs first. The clamp below keeps the count from going
+  // negative, which is the other half of the same bookkeeping.
   function setBusy(on) {
     inFlight = Math.max(0, inFlight + (on ? 1 : -1));
     applyBusy();

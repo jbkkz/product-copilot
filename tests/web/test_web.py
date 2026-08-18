@@ -1072,3 +1072,29 @@ def test_the_generator_forms_all_target_one_region_which_is_why_the_rule_is_page
     assert set(targets) == {"#artifacts-region"}, (
         "every generator form posts to one region, so their responses collide — mutual exclusion has "
         "to be page-wide (#50)")
+
+
+def test_every_rendered_button_is_reachable_by_the_page_wide_busy_rule(client, monkeypatch):
+    """The busy rule selects `button[type="submit"]`, so a button without that attribute escapes it.
+
+    HTML makes `type="submit"` the default for a bare `<button>` inside a form, which is exactly what
+    makes this worth pinning: such a button submits, buys a provider call, and is invisible to the one
+    selector that is supposed to mute it. It would reproduce #50 for that button alone while every test
+    here stayed green — the same shape as the original defect, one attribute lower.
+
+    A CSS-side rule cannot be asserted from Python, and the selector lives in `app.js`; what is
+    assertable here is the other half of the contract, which is that the markup holds up its end.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_session("leave-approval", problem=HIGH_EXPLICIT)
+    pages = {path: client.get(path).text for path in ("/", "/sessions/leave-approval")}
+
+    for path, html in pages.items():
+        opening_tags = re.findall(r"<button\b[^>]*>", html)
+        # must fire: these pages really do render buttons, so the loop below is checking something
+        # rather than iterating over nothing.
+        assert opening_tags, f"expected buttons on {path}, found none — this assertion saw nothing"
+        for tag in opening_tags:
+            assert 'type="submit"' in tag, (
+                f'{path} renders a button with no explicit type="submit", so the page-wide busy rule '
+                f"in static/js/app.js cannot reach it and it can still buy a provider call: {tag}")
