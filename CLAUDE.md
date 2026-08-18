@@ -135,7 +135,17 @@ bug that looked like correct behaviour.
    an `id` recomputed from their own text on every validation. Never trust a supplied one.
 6. **Provenance is real or absent.** Each revision records provider, model, surface and a hash of the
    exact prompt it was reasoned against. Don't add a provenance field you do not populate.
-7. **Core stays provider-free and IO-free.** `tests/test_boundaries.py` enforces it.
+7. **Core stays provider-free, and talks to its caller rather than to the process.** It may read and
+   write files — `persistence.py`, `context.py`, `contracts.py` and `analysis.py` all do, by design;
+   *IO-free*, which this invariant used to say, was false as written and a guard against the literal
+   wording would have to fail on correct code. What core may not do is import a provider or the
+   Anthropic SDK, and may not touch **argv, the standard streams, the environment, or process exit** —
+   `cli.py`/`deterministic.py` own argv and stdout, `paths.py` owns the environment. `logging` is
+   fine; it is the library-correct way of *not* printing. `tests/test_boundaries.py` enforces both
+   halves, walks `core/` recursively, resolves relative imports, and **fails when its scan set is
+   empty** — a glob over a directory that no longer exists returns `[]`, and `assert not []` is an
+   all-clear nobody earned. Each rule in that file carries the reason it is there, so the next person
+   argues with a line instead of deleting the file.
 8. **The session format and the `--json` outputs are public.** `.requivo/sessions/` is the interface
    between every surface, at `format_version` 1. Adding a field is free; renaming or repurposing a
    *populated* one needs a version bump and a migration in `migrate_session()`. A frozen 0.8.2
