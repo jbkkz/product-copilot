@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, resolve_cards
-from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionNotFoundError
+from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionExistsError, SessionNotFoundError
 from requivo.core.integrity import check_session, check_session_dir
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, session_root, workspace_root
@@ -281,8 +281,23 @@ def _cmd_session_show(a, client) -> None:
 
 
 def _cmd_session_migrate(a, client) -> None:
-    """The explicit, opt-in bulk migration of every legacy out/<slug>/ session into the canonical
-    store (the automatic path only migrates a session on its own first mutation)."""
+    """The bulk migration of every legacy out/<slug>/ session into the canonical store. Since 0.9.8
+    this is the *only* thing that reads that layout — there is no automatic migrate-on-first-write.
+
+    The `session_exists` check below is **reporting, not the guard**: it is what fills the
+    `skipped_already_present` row, and it is kept because a sweep that names what it declined is worth
+    a cheap stat call. The guard is `migrate_legacy`'s own atomic claim on the slug — which is why the
+    `SessionExistsError` arm exists. A session that appears between the check and the migration is the
+    TOCTOU window the check cannot close, and the correct outcome there is the same skip.
+
+    **That arm covers the occupied-slug case and nothing else, deliberately, and the gap is stated
+    here rather than left to be discovered.** A legacy session whose `model.json` does not parse still
+    aborts the whole pass: `migrate_legacy` raises before it claims the slug, nothing catches it, and
+    the run ends with no output at all — so slugs sorted after the bad one are neither migrated nor
+    reported, and the ones already done are never printed. That is invariant 15's shape and this loop
+    does not yet satisfy it. It is left loud on purpose rather than widened to `except Exception`
+    here: turning a corrupt session into one row of a list is the calm-wrong-answer direction, and
+    doing it properly means designing what the receipt says, which is a decision and not a catch."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
@@ -291,7 +306,11 @@ def _cmd_session_migrate(a, client) -> None:
         if store.session_exists(slug):
             skipped.append(slug)
             continue
-        store.migrate_legacy(slug)
+        try:
+            store.migrate_legacy(slug)
+        except SessionExistsError:
+            skipped.append(slug)
+            continue
         migrated.append(slug)
     if a.json:
         _print_json({"migrated": migrated, "skipped_already_present": skipped, "source": str(root)})
