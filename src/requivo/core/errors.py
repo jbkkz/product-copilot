@@ -106,11 +106,15 @@ class InvalidSlugError(RequivoError):
 
 class InvalidFilenameError(RequivoError):
     """A filename is not a safe name for a file inside a session's `artifacts/`. The sibling of
-    `InvalidSlugError`, and for the same reason: a filename is a *write target*, so it must be a bare
-    name — anything with a path separator, a dot segment or a leading dot can put the write outside
+    `InvalidSlugError`, and for the same reason: a filename is a *path target*, so it must be a bare
+    name — anything with a path separator, a dot segment or a leading dot can put the access outside
     the session directory (or shadow the store's own reserved dot-prefixed entries). Enforced in Core,
     at the same chokepoint as the slug, so every surface inherits it rather than the one caller that
-    happened to pass a literal."""
+    happened to pass a literal.
+
+    Raised on reads as well as writes, and the two are separate exposures: a write target decides
+    what this code may create, a read target decides what it may disclose. Closing one does not
+    close the other."""
 
     code = "invalid_filename"
 
