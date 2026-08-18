@@ -9,7 +9,7 @@
       "name": "requivo",
       "source": "./plugins/claude-code",
       "description": "Find what could change the solution before you commit to the scope — reasoning happens in your Claude Code session, so no Anthropic API key is needed.",
-      "version": "0.9.10",
+      "version": "0.10.0",
       "author": {
         "name": "jbkkz"
       }

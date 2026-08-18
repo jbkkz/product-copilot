@@ -6,6 +6,280 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-18
+
+### Added
+
+- `CONTRIBUTING.md` now states what the changelog gate does **not** cover (#37). The gate triggers on
+  `pull_request` only, so direct pushes to `main` are never checked by it — and this is a
+  solo-maintained repository whose own working style is to commit straight to `main`. Every release
+  cycle so far has included commits that reached `main` without a pull request, so the uncovered
+  class is routinely non-empty rather than theoretical. A green board
+  therefore means *the changelog gate passed on the commits it was shown*, not that every change in
+  the release carries a fragment; those are different claims and nothing on the board distinguished
+  them.
+- The limit is documented rather than closed, deliberately (#37). Adding a `push:` trigger on `main`
+  would fail *after* the fact — a fragment cannot be added retroactively to a commit already pushed —
+  which installs a permanently red default branch, a worse lie than the one it fixes. Abandoning
+  direct-to-main would cost the workflow this repository chose on purpose. So the honest move is to
+  say where the coverage stops, next to the list of checks a change is expected to pass.
+- Compatibility: compatible - documentation only; no workflow, code or behaviour changes.
+  `.github/workflows/oss-changelog.yml` is deliberately untouched, since it is scaffolded by the
+  `oss` plugin and overwritten on every scaffold run — an edit there would be lost silently, which is
+  the same class of defect as the one being documented.
+
+### Fixed
+
+- `requivo session migrate` can no longer overwrite a live session (#4). `migrate_legacy()` checked
+  only that the *legacy* model existed, so pointed at a slug a real session already occupied it reset
+  `session.json` to revision 0 and wrote the legacy model over `revisions/0001-model.json` —
+  destroying revision 1 with no copy anywhere, and leaving the session failing its own integrity
+  check. It now makes the same atomic claim on the slug that `create_session` does, and refuses with
+  `session_exists` before writing anything; the whole migration runs under one session lock instead of
+  three, so a concurrent apply cannot interleave with it.
+
+- Artifact filenames are validated like the slug beside them (#5). `write_artifact_file()` and
+  `save_session_artifact()` validated `slug` and not `filename`, so a caller passing
+  `../../../x.md` wrote outside the session directory entirely — and, on the second of the two,
+  persisted that path into `session.json`, where the integrity checker and the artifact-show paths
+  read it back. Both now go through one chokepoint, `artifact_path()`, which applies the new
+  `validate_filename()` and confirms the resolved path is a genuine child of `artifacts/`. A filename
+  must be a bare lowercase name such as `prd.md`; anything else raises `invalid_filename`. No
+  in-repo caller could reach this, and none is affected — every one passes a literal or an
+  `ARTIFACT_FILENAMES` lookup.
+
+- The request and answer boxes no longer clip a long paste before the server can refuse it (#8).
+  Both textareas — and the optional session-name field — carried an HTML `maxlength` set to the same
+  number as the server's ceiling, and a browser enforces that attribute by silently dropping the
+  overflow: no event, no message, no visual difference. Pasting a 26,000-character email thread
+  submitted the first 20,000 of it, which is exactly the length the server admits, so the refusal
+  that exists precisely to stop half a request being reasoned over as if it were the whole thing
+  could never fire from the browser. The attributes are gone; an over-long paste now submits in full
+  and comes back refused, on a page naming the limit it exceeded. The ceilings themselves are
+  unchanged, and input at exactly the ceiling is still accepted. **What that refusal costs you today:
+  it is a full-page error that preserves none of the submitted text** — a 26,000-character email
+  thread that arrived through the clipboard has to be fetched again from wherever it came from, and
+  on the answers box the error fragment replaces the region containing the textarea. That is a
+  strictly better position than the silent truncation it replaced, and it is not the finished one;
+  re-rendering the page with the text intact is tracked in #30.
+
+- The architectural boundary guard (`tests/test_boundaries.py`) no longer passes while scanning
+  nothing (#10). `Path.glob` over a directory that does not exist returns an empty list and raises
+  nothing, so both boundary tests asserted "no offenders" over an empty set and went green — the
+  package has already been renamed once (`product_copilot` -> `requivo`) and the guard survived it by
+  luck. The scan set is now asserted non-empty and named, an unscannable root is an error rather than
+  an all-clear, and every negative assertion is paired with a fixture the guard must flag.
+- The same guard now sees three things it was blind to (#10): relative imports (`from .anthropic
+  import ...`, which it skipped outright on `node.level != 0`), dotted absolute imports
+  (`import requivo.providers.anthropic`), and anything in a `core/<subpackage>/`, since the walk was
+  not recursive.
+- The guard reads source with an explicit `encoding="utf-8"` (#10). Every module in core carries an
+  em dash, and `read_text()` with no encoding decodes with the locale codepage, so under `LC_ALL=C`
+  or a DBCS Windows shell the guard died with `UnicodeDecodeError` rather than running. Its control
+  forces the fallback encoding and, on the interpreters where that force cannot be made to take,
+  skips loudly naming what went untested instead of passing.
+- The half of the core boundary that nothing enforced is now enforced (#10): no `print`, `input` or
+  `breakpoint`, no `sys.argv`/`stdout`/`stderr`/`stdin`/`exit`, no `os.environ`/`getenv`/`putenv`, and
+  no terminal framework. File IO and `logging` stay allowed, and a test pins that so a later
+  tightening which would fail correct code goes red first. Invariant 7 said core was "IO-free", which
+  was never true — `persistence.py`, `context.py`, `contracts.py` and `analysis.py` all read files by
+  design. Its wording, and the matching lines in `docs/architecture.md` and
+  `docs/open-source-strategy.md`, now say what the rule actually means.
+
+- `requivo doctor` no longer renders two of its own failures as green ticks (#12). A context-card
+  loading failure was written into the *schema* check's error field, left `schema.ok` true, and was
+  printed nowhere — so a wheel or container layer that ships `assets/` but loses `assets/context/`
+  showed three green ticks while every impact estimate was made with no product context at all. And
+  an unreadable `.requivo/sessions/` was caught and reported as `{"total": 0}`, byte-identical to a
+  genuinely empty workspace, so twelve unreachable sessions read as "you have none" and a user
+  concludes they were deleted. Both checks now carry a third state: `doctor --json` gains a
+  `context` verdict (`status` is `ok`, `empty` or `unreadable`, alongside the existing
+  `context_cards` list, which is unchanged), and `sessions` gains `readable`/`error` with `total`
+  set to `null` — not `0` — when the directory could not be listed.
+- `requivo doctor` and `requivo session verify` now check that a session's saved context cards still
+  resolve. Since #13 an unresolvable card selection is refused rather than silently loading nothing,
+  so a session that has lost a card is hard-stopped at its next (paid) reasoning turn — and both
+  health verbs called it healthy right up to that moment. `session verify --json` gains a
+  `context_cards` block (`checked`, `problem`, `error`) and `doctor --json` a
+  `sessions.unresolved_cards` map, each naming the missing cards and how to recover.
+- This is reported as an *environment* finding and deliberately not as a session-integrity problem:
+  a context card lives outside the session directory, so the same session would be "broken" on one
+  machine and coherent on another, and `session import` — which refuses an archive on integrity
+  problems — would reject a colleague's perfectly good session over a card you do not happen to
+  have.
+- A context-card directory that exists but **cannot be read** is now reported as `context_unreadable`
+  instead of reading as a directory holding no cards. `Path.glob` swallows `PermissionError` and
+  yields nothing, so a denied directory was indistinguishable from an empty one: the card vocabulary
+  came back quietly short, `doctor` said `ok` at a smaller count when a second root was readable, and
+  a session naming a card in the denied directory was told `unknown_context_card` — whose stated
+  remedy is to restore a file that was in fact right there. The two conditions have opposite
+  remedies, so they are now two errors.
+- `session verify` and `session import` no longer stat a path a session names outside itself. A
+  recorded artifact's `filename` is an unconstrained string read out of `session.json`, and it was
+  joined into the artifacts directory and passed to `.is_file()` without validation — an absolute
+  value replaces the prefix entirely under `pathlib`, so `artifacts/` + `/etc/passwd` was
+  `/etc/passwd`. Recording a problem for an unknown artifact type or a filename mismatch did not stop
+  it: execution fell through to the join either way. No content was ever read, but whether the reply
+  carried `missing_artifact_file` answered whether that outside path existed. The name now goes
+  through the same bare-filename chokepoint every artifact write uses, and a refused one is reported
+  as `unsafe_artifact_filename` rather than probed.
+- The Claude Code `discover` skill now confirms `context.ok` as well as `schema.ok` before
+  reasoning; `schema.ok` was true in exactly the broken state above, so the plugin proceeded.
+- Compatibility: compatible - every existing `doctor --json` and `session verify --json` key keeps
+  its name and meaning, with three exceptions that are the fix: `sessions.total` is `null` instead of
+  `0` when the session directory cannot be read; `session verify` now exits non-zero (and reports
+  `ok: false`) for a session whose context cards no longer resolve, which is a session that cannot
+  take another turn; and a session or archive recording an artifact under a name that is not a bare
+  filename is now refused as `unsafe_artifact_filename`, where it previously passed whenever the path
+  it named happened to exist.
+
+- Selectors no longer widen to everything, or empty to nothing, when a name is blank or no longer
+  resolves (#13). An empty slot name — `requivo impact <slug> ""`, which is what an unset shell
+  variable expands to — matched every label and reported the whole model as changed with no unmatched
+  token to explain it; an empty `--context` name fell through to "every card", the widening
+  `resolve_cards` exists to prevent; and a context card that had been renamed, or that lived in
+  `REQUIVO_CONTEXT_DIR` on another machine, silently replaced `{{CONTEXT}}` with the empty string on
+  every later turn, so the engine reasoned with no product context at all and nothing said so. All
+  three are now refusals carrying a structured error (`empty_selector_token`, `unknown_context_card`),
+  from one shared rule in `requivo.core.selectors` rather than three local ones.
+- Compatibility: breaking - a session whose `context_cards` no longer resolve now fails its next turn
+  with a named card instead of quietly reasoning without product context, and `--context "a,"` is
+  refused rather than read as `a`. Both were previously silent; neither has a persisted-format change,
+  so an unaffected session is untouched.
+
+- The `ReasoningProvider` protocol now declares `name`, the member `DiscoveryService` reads first
+  (#19). It reaches for `provider.name` when it claims the session, before any reasoning happens, but
+  the protocol declared only `analyze`, `generate`, `model_name` and `provenance` — so a second
+  implementation satisfied the published contract, satisfied `isinstance`, and then failed with an
+  `AttributeError` on the first `discover`. The seam reported conformance it had not checked.
+  `isinstance(p, ReasoningProvider)` now catches that provider, because `@runtime_checkable` does
+  cover non-method members; `docs/providers.md` lists `name` alongside the four methods, and states
+  what that check can and cannot tell you.
+- Compatibility: breaking - only for code calling `issubclass(X, ReasoningProvider)`, which Python
+  refuses for any protocol carrying a non-method member and now raises `TypeError`; `isinstance` is
+  the replacement and is stricter than before. Nothing in Requivo calls either, `AnthropicProvider`
+  already carried `name`, and no persisted format or CLI output changes.
+
+- Artifact filenames are validated on the way **out** as well as in (#23). #5 closed the traversal on
+  the two mutating paths; `FileSessionRepository.load_artifact` still joined
+  `canonical_dir(slug) / "artifacts" / filename` inline, one layer above the chokepoint, so
+  `load_artifact(slug, "../../../../secret.md")` read and returned a file outside the session
+  directory. The two are separate exposures — a write target decides what this code may create, a read
+  target decides what it may disclose — so closing one did not close the other. Reads now go through
+  the same `artifact_path()` chokepoint, which is where they should have been: the read side is the
+  proof of the rule `artifact_path()` exists for, that a guard applied per-caller is a guard the next
+  caller forgets.
+- A refused read raises `invalid_filename`; only a genuinely missing artifact returns nothing (#23).
+  Returning nothing for both was the tempting shape and the quiet one — a rejected traversal would
+  have been indistinguishable from an artifact nobody has generated yet, and a caller that cannot tell
+  a refusal from an absence has been handed the wrong answer in the more dangerous direction.
+- Artifact content is decoded as UTF-8 explicitly, matching how it was written (#23). The same read
+  took the locale's encoding, so under `LC_ALL=C` or a DBCS Windows shell an artifact died on its
+  first em-dash — and every artifact this engine generates has them.
+- Compatibility: compatible - no in-repo caller and no valid filename changes behaviour; every caller
+  reaches this through `ArtifactService.show` with an `ARTIFACT_FILENAMES` lookup, and those still
+  load byte for byte. The only behaviour that moved is for a filename that was previously a traversal,
+  where an exception replaces a silently-wrong answer.
+
+- The files that declare the project version are now checked against each other on every test run
+  (#32). Four of them declare it — `pyproject.toml`, `src/requivo/__init__.py`, the Claude Code
+  plugin manifest and the marketplace catalog — and nothing compared them; a release edits them by
+  hand, one at a time. The two expensive drifts are both silent on both ends: a stale
+  `plugins/claude-code/.claude-plugin/plugin.json` is the version the Claude Code updater compares,
+  so a release that leaves it behind uploads to PyPI, announces itself correctly and is never
+  offered to plugin users at all; a stale `src/requivo/__init__.py` is what `requivo doctor` prints
+  as `requivo_version`, so the diagnostic whose job is answering *is anything wrong* becomes the
+  thing that is wrong, and every bug report from that install cites the wrong version.
+- The guard derives its site list by scanning for a version at a known structural position, rather
+  than reading the registered list in `.oss.json` (#32). That distinction was not academic: the
+  registry was swept by hand at `aed734c` specifically to catch unregistered sites, and that sweep
+  still missed `src/requivo/__init__.py` — so a guard reading the registry would have certified
+  agreement across the files somebody remembered while the one they forgot sat unchecked, which is
+  the failure it exists to close. `src/requivo/__init__.py` is now registered, and the registry is
+  cross-checked rather than trusted: a derived site missing from `version_sites` is itself a
+  failure, since it is a site a release will not know to update.
+- Scanning by structural position is also what keeps `CHANGELOG.md` out of it (#32). A history file
+  names every version the project has ever had, and it is in `version_sites` because a release must
+  *edit* it — not because it declares anything. The cross-check is therefore one-directional:
+  registered-but-not-declaring is fine, declaring-but-unregistered is a finding.
+- The guard has three states rather than two, and refuses on the third (#32). An unreadable
+  manifest, a known site that has moved, and an empty scan are each a failure worded as *could not
+  check* and distinguishable from drift — because a version guard that skips a file it could not
+  read and passes anyway certifies an agreement it never looked for, converting "nobody checked"
+  into "checked and fine". That is strictly worse than having no guard.
+- Compatibility: compatible - a test-only addition plus one new entry in `.oss.json`. No product
+  code, no public output and no on-disk format changes, and no version number moves.
+
+- An install with no context cards at all is now refused instead of reasoning without them (#33).
+  `load_context(None)` — what every session with no card selection sends on each turn — comprehended
+  over an empty card directory and returned the empty string, and `build_prompt` substituted that into
+  `{{CONTEXT}}` with no check. A wheel or container layer that shipped `assets/` but lost
+  `assets/context/` therefore reasoned with no product context at all, on calls that cost money, for
+  as long as the install lasted: `information_value = uncertainty x impact` is the engine's central
+  idea and it runs entirely on those cards. Two earlier fixes had closed the narrow instances — a
+  selection that resolves to nothing, and `doctor` learning to tell `ok` from `empty` from
+  `unreadable` — but both are about a *selection*, and `None` is the absence of one. The new
+  `no_context_cards` error names where it looked, `check_selection` reports it so `doctor` and
+  `session verify` still answer for free and in advance, and the test that used to assert
+  `load_context() == ""` asserted the defect as the contract.
+
+- A server-side fault is no longer reported to the browser as your bad request (#34). Requivo Web
+  mapped error codes to HTTP statuses through a table that defaulted to `400` for anything unlisted,
+  so a code added anywhere else arrived wearing a plausible, wrong status. `context_unreadable` — the
+  server unable to read its own context-card directory, entirely the operator's environment — told
+  the reader they had done something wrong. Three more codes were sitting on that same default
+  unnoticed: `provider_output_invalid` and `session_locked`, and `session_exists`. Every code now has
+  an explicit status (`500`, `502`, `503` and `409` respectively), an unrecognised code is a `500`
+  rather than a `400` because "we could not classify this" is not evidence the caller erred, and a
+  test walks the error vocabulary so the next code added is a red build instead of a wrong answer to
+  a user. A `5xx` is now also logged for the operator, who otherwise had no record of it.
+
+- `empty_selector_token` no longer carries two different facts behind two different payload shapes
+  (#35). One code covered both an empty *token inside* a selection (`details: {selector, position}`)
+  and a selection that was *itself* empty (`details: {selector, tokens}`) — a distinction the
+  selector's own docstring had already argued for, and then not honoured seventy lines later in the
+  same change. Since the documented advice for consumers is to assert on the code, anyone following
+  it and reading `details["position"]` got a `KeyError` from a payload that correctly carried the
+  code they had matched. The second case is now `empty_selection`, a sibling rather than a subclass
+  so the two cannot be re-conflated by an `except`, `position` is guaranteed on every
+  `empty_selector_token` payload, and `docs/compatibility.md` carries the mapping for anyone matching
+  the old code.
+
+### Security
+
+- A session's stored context-card names can no longer forge a line of `doctor` or `session verify`
+  (#40). `context_cards` is an unconstrained list of strings in `session.json`, `session import`
+  passes it through intact, and both health verbs rendered those names into their output bare. A
+  name containing a newline therefore did not merely look odd — it ended the line and started a new
+  one at whatever column it chose, so a session could print `doctor`'s own `sessions` row,
+  byte-identical in shape and column, answering *all clear* directly beneath the row reporting it.
+  `session verify`, the verb whose entire job is to say whether a session is telling the truth, was
+  forged the same way and still exited 1, so its text and its exit code disagreed.
+- The fix refuses rather than escapes, at `normalize_tokens` — the one function every selector
+  passes through — so a hostile name cannot reach a render site at all, rather than being made safe
+  at the two sites that exist today. The new refusal is `unsafe_selector_token`, with
+  `details: {selector, position}`; it is reported by `check_selection` rather than raised, so one
+  tampered session degrades its own row instead of taking the whole listing down. `session show`,
+  a third render site the issue does not name, prints stored names through a one-line display rule
+  instead, because nothing there is selecting and no refusal can run.
+- Also fixed, and outside the issue's footprint: `_SLUG_RE` and `_FILENAME_RE` were anchored with
+  `$`, which in Python matches at the end of the string *or just before a trailing newline*. Both
+  guards therefore accepted one trailing newline, which is what made `integrity.py`'s
+  `artifacts/<name> is missing` line — the one place that renders a recorded filename without `!r` —
+  reachable with a name that splits it in two. Both are now anchored with `\Z`.
+- Found in review of this fix and fixed here: `resolve_slots` echoed the **unstripped** token into
+  its unmatched list, where `resolve_cards` and `_selection_keys` both echo `raw.strip()`. Because
+  the new guard inspects the stripped token — `str.strip()` removes the control characters Python
+  classifies as whitespace — a slot token with a *leading* newline passed the guard and then broke
+  the line `requivo impact` prints. Lower severity than the card path (a slot token is a live argv
+  value the same user typed, not persisted data), but `core/selectors.py` claimed the value could
+  never reach a render site, so the claim had to be made true. The docstrings now state the guard's
+  actual scope rather than the loose version of it.
+- Compatibility: compatible - no name Requivo writes is affected, and `--json` output is unchanged
+  and still carries the bytes verbatim. A `session.json` hand-edited or imported with a control
+  character in `context_cards` now reports `unsafe_selector_token` where it previously printed the
+  name; `docs/compatibility.md` carries the new code.
+
 ## [0.9.10] - 2026-08-04
 
 A documentation release. No contract, no session format, no prompt, no generator and no engine
@@ -907,7 +1181,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jbkkz/requivo/releases/tag/v0.10.0
 [0.9.10]: https://github.com/jbkkz/requivo/releases/tag/v0.9.10
 [0.9.9]: https://github.com/jbkkz/requivo/releases/tag/v0.9.9
 [0.9.8]: https://github.com/jbkkz/requivo/releases/tag/v0.9.8
