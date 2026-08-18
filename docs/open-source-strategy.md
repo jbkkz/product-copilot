@@ -26,8 +26,8 @@ Requivo is one engine behind several surfaces. The layering is described in
 
 ### Requivo Core — open source
 
-The deterministic requirements-reasoning engine (`requivo.core`). No LLM call, no I/O, no argv. It
-holds:
+The deterministic requirements-reasoning engine (`requivo.core`). No LLM call, no argv, no terminal —
+it reads and writes files, and nothing else about the process. It holds:
 
 - the model schema and typed slots;
 - validation and the slot vocabulary;

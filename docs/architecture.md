@@ -17,8 +17,10 @@ single LLM call per turn, and that call lives in a **provider**, never in the Co
 
 The code is the `requivo` package under `src/`. The layers form a strict DAG:
 
-- **`core/`** — the deterministic engine. No LLM, no provider, no argv/stdout (enforced by
-  `tests/test_boundaries.py`). It validates, versions and reasons over the model; it never *produces*
+- **`core/`** — the deterministic engine. No LLM, no provider, and no argv, standard streams,
+  environment or process exit — all of it enforced by `tests/test_boundaries.py`, which walks the
+  package recursively and fails rather than passing when it finds nothing to scan. Reading and
+  writing files *is* core's job. It validates, versions and reasons over the model; it never *produces*
   one. Holds the Pydantic contracts, validation, readiness, the dependency graph, persistence and the
   structured error hierarchy.
 - **`providers/`** — the only place an LLM is called. `anthropic.py` (behind the optional
