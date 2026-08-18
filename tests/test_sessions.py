@@ -541,6 +541,48 @@ def test_discovery_runs_on_a_provider_that_is_not_anthropic(workspace):
     assert [(r.provider, r.model_name) for r in meta.revisions] == [("fake", "fake-model-1")]
 
 
+class _NamelessProvider:
+    """Implements every member `ReasoningProvider` *declares* — and nothing more.
+
+    The stand-in for the second implementation the seam exists for. `name` is read by the very first
+    thing a discovery does, so an object without one is not a provider; whether anything can *tell*
+    is what this pins."""
+
+    def analyze(self, request, *, current_model=None, answers=None, only=None):
+        raise AssertionError("a provider missing `name` must fail before it is asked to reason")
+
+    def generate(self, artifact_type, model, *, only=None):
+        raise AssertionError("not reached")
+
+    def model_name(self):
+        return "nameless-1"
+
+    def provenance(self, op, *, only=None):
+        return {"provider": "nameless", "model_name": self.model_name(), "prompt_version": "sha256:x"}
+
+
+def test_the_provider_protocol_declares_every_member_the_orchestration_reads(workspace):
+    """`provider.name` is read on the first discovery, so it is part of the contract or the contract
+    is not the contract. `@runtime_checkable` does check a bare data annotation — only `issubclass`
+    is refused for a protocol with non-method members — so declaring it is enforcement, not comment."""
+    from requivo.providers.anthropic import AnthropicProvider
+    from requivo.providers.base import ReasoningProvider
+    from requivo.services.discovery import DiscoveryService
+
+    # Must-fire half: real conformers satisfy the protocol. Without it, a protocol that rejected
+    # everything — or one that stopped being runtime-checkable — would pass the assertion below.
+    assert isinstance(_FakeProvider(), ReasoningProvider)
+    assert isinstance(AnthropicProvider.__new__(AnthropicProvider), ReasoningProvider)  # no API key needed
+
+    # Must-not-fire half: everything declared, `name` absent.
+    assert not isinstance(_NamelessProvider(), ReasoningProvider)
+
+    # …and the positive control that keeps the line above from being about a decorative member:
+    # `name` is what the orchestration actually reaches for, before it reasons.
+    with pytest.raises(AttributeError, match="name"):
+        DiscoveryService(_NamelessProvider()).start("A leave approval system.", slug="nameless")
+
+
 def test_a_revision_records_the_prompt_it_was_reasoned_against(workspace):
     # A revision log that is only "anthropic, at 14:02" cannot reproduce anything: behaviour here is
     # tuned by editing prompts and context cards, so the prompt identity is half the provenance.
