@@ -245,12 +245,14 @@ is never possible to mistake a short list for the whole list.
    `max_tokens` whose JSON is nonetheless complete still succeeds.
 3. The `system` prompt carries a `cache_control: ephemeral` breakpoint **only when its caller will
    send it again** (`_complete(..., reuse_system=)`). It pays across the calls of *one* operation — a
-   golden capture's K runs, `converse()`'s turns, each retry — and cannot pay across operations, since
+   golden capture's K runs, `converse()`'s turns — and cannot pay across operations, since
    `build_prompt` substitutes the shared schema+context into a per-op template that places them near
    its *end*: the shared bulk is a suffix, caching is a prefix match, so no breakpoint placement lets a
    second operation hit a warm entry. A write costs 1.25x input and a read 0.1x, so a one-call verb
-   that cached was paying a flat ~25% surcharge (#9). Keep the prompt byte-identical per call or the
-   cache is lost where it does pay. `_complete()` records per-call usage into a session-scoped
+   that cached was paying a flat ~25% surcharge (#9). The accepted cost: a one-call verb that hits the
+   JSON **retry** loop re-sends the identical prompt and is no longer cached, paying 2.0x where it used
+   to pay 1.35x — the better bet only while a retry is rarer than ~1 call in 4, which it is. Keep the
+   prompt byte-identical per call or the cache is lost where it does pay. `_complete()` records per-call usage into a session-scoped
    `UsageLedger`; `render_usage()` prints it (tokens are exact, cost is a labelled estimate from a
    dated table with expiry-aware launch pricing).
 

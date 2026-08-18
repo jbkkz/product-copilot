@@ -1610,20 +1610,68 @@ def test_cache_breakpoint_rides_a_reused_prefix_and_not_a_single_call():
     assert "cache_control" not in _system_block(fake, 1)                     # must not fire
 
 
-def test_every_generator_defaults_to_no_cache_write():
-    # Covers all six registered generators plus `estimate` without needing a valid reply fixture for
-    # each contract, so fixing one and leaving five is caught. The control is `_complete` itself: its
-    # default stays True, because "will this be sent again?" is the caller's question and an unknown
-    # caller should keep paying the safe answer rather than silently losing a real cache.
+# A minimal contract-valid reply per generator, so the assertions below can drive the *real* call
+# rather than reading a signature. An earlier version of this test checked
+# `inspect.signature(fn).parameters["reuse_system"].default is False` and nothing else, which both
+# reviewers independently called vacuous and they were right: a generator that declared the parameter
+# and then ignored it — passing nothing to `_complete`, falling back to its `True` default — satisfied
+# every assertion while writing exactly the cache entry #9 is about. A signature is not a behaviour.
+_GENERATOR_REPLIES = {
+    "brief": _BRIEF_REPLY,
+    "stories": json.dumps({"stories": [{"id": "S1", "title": "T"}]}),
+    "prd": json.dumps({"title": "T", "problem": "P"}),
+    "criteria": json.dumps({"title": "T", "features": [
+        {"name": "F", "scenarios": [{"id": "SC1", "title": "T", "when": "w", "then": ["t"]}]}]}),
+    "epic": json.dumps({"title": "T", "issues": [{"id": "E1", "title": "T"}]}),
+    "release": json.dumps({"title": "T"}),
+}
+
+
+@pytest.mark.parametrize("artifact_type", sorted(_GENERATOR_REPLIES))
+def test_every_generator_drives_a_real_call_without_a_cache_write(artifact_type):
+    # Drives each registered generator for real and reads the request that came out, so a generator
+    # that takes `reuse_system` and drops it on the floor fails here. Both arms in one test: the
+    # default must not carry the directive, and `reuse_system=True` must — so "deleted it everywhere"
+    # fails too, per generator rather than only for `brief`.
+    from requivo.providers.anthropic import _GENERATORS
+
+    reply = _GENERATOR_REPLIES[artifact_type]
+    model = out({"problem": slot(80, "explicit", "high")})
+    fake = FakeClient(reply, reply)
+    _GENERATORS[artifact_type](fake, model)
+    _GENERATORS[artifact_type](fake, model, reuse_system=True)
+    assert "cache_control" not in _system_block(fake, 0), f"{artifact_type} pays for a cache nothing reads"
+    assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}, f"{artifact_type} lost its opt-in"
+
+
+def test_estimate_drives_a_real_call_without_a_cache_write():
+    # `estimate` is not in `_GENERATORS` — the CLI calls it directly, past the provider seam — so it
+    # needs its own case or it is the one single-call verb nothing covers.
+    from requivo.core.contracts import Story
+    from requivo.providers.anthropic import estimate
+
+    reply = json.dumps({"items": [
+        {"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]})
+    model = out({"problem": slot(80, "explicit", "high")})
+    stories = Stories(stories=[Story(id="S1", title="T")])
+    fake = FakeClient(reply, reply)
+    estimate(fake, model, stories)
+    estimate(fake, model, stories, reuse_system=True)
+    assert "cache_control" not in _system_block(fake, 0)                     # must not fire
+    assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}  # must fire
+
+
+def test_complete_still_defaults_to_caching_for_an_undeclared_caller():
+    # The control for every assertion above. "Will this be sent again?" is the caller's question, and
+    # a caller that has not considered it should pay the safe answer — 25% once — rather than silently
+    # lose a real cache worth up to 90% per repeat. If this default ever flips, the generators' saving
+    # stops being a decision and becomes the accident of a global.
     import inspect
 
-    from requivo.providers.anthropic import _GENERATORS, estimate
-
-    for name, fn in list(_GENERATORS.items()) + [("estimate", estimate)]:
-        param = inspect.signature(fn).parameters.get("reuse_system")
-        assert param is not None, f"{name} cannot declare whether its prefix is re-read"
-        assert param.default is False, f"{name} should not pay the cache write premium by default"
-    assert inspect.signature(_complete).parameters["reuse_system"].default is True  # must fire
+    assert inspect.signature(_complete).parameters["reuse_system"].default is True
+    fake = FakeClient(_BRIEF_REPLY)
+    _complete(fake, "SYSTEM", [{"role": "user", "content": "u"}], Brief)
+    assert _system_block(fake, 0)["cache_control"] == {"type": "ephemeral"}
 
 
 def test_a_generator_can_opt_back_in_when_its_caller_loops_it():

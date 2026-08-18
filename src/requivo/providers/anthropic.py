@@ -244,9 +244,19 @@ def _system_blocks(system: str, reuse_system: bool) -> list[dict]:
     second send. Which of those it is depends entirely on the caller's loop, and this is a fixed cost
     the caller alone can predict — hence the parameter rather than a rule here.
 
-    It genuinely pays *within* one operation: a JSON retry re-sends the identical system (that is what
-    the retry-loop test pins), `converse()` runs up to 8 discovery turns off one prompt, and a golden
-    capture runs K of them. It cannot pay *across* operations, and no breakpoint placement can change
+    It genuinely pays *within* one operation: a JSON retry re-sends the identical system, `converse()`
+    runs up to 8 discovery turns off one prompt, and a golden capture runs K of them.
+
+    **The retry case is the accepted cost of `reuse_system=False`, and is stated here rather than
+    glossed.** A one-shot generator that *does* retry now pays full price twice (2.0x the system block)
+    where caching would have paid 1.25x + 0.1x = 1.35x. That is a real regression on that path, taken
+    deliberately: with `p` the probability of a retry, not caching wins while `1 + p < 1.25 + 0.1p`,
+    i.e. `p < ~0.28`, and a contract violation from these generators is far rarer than that. Caching
+    only from the second attempt was considered and rejected — it costs 1.0 + 1.25 = 2.25x on two
+    attempts, worse than the 2.0x above, and comes out ahead only past the same ~0.28 threshold at
+    which simply caching everywhere would have been the right call anyway.
+
+    It cannot pay *across* operations, and no breakpoint placement can change
     that: `build_prompt()` substitutes the shared schema + context cards into a **per-operation**
     template, and every template puts `{{SCHEMA}}`/`{{CONTEXT}}` near its end with an "Output format"
     section after them. The shared bulk is a *suffix*, caching is a *prefix* match, and a suffix has
