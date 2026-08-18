@@ -7,14 +7,14 @@
     "pyproject.toml",
     "CHANGELOG.md"
   ],
-  "changelog_dir": null,
+  "changelog_dir": "changelog.d",
   "changelog_untagged": ["0.6.1"],
   "docs_targets": [
     "README.md"
   ],
   "labels": {
-    "priority": [],
-    "lanes": []
+    "priority": ["priority-blocker", "priority-high", "priority-low"],
+    "lanes": ["lane-core", "lane-services", "lane-providers", "lane-surfaces", "lane-tests", "lane-infra"]
   },
   "milestones": [],
   "release": {
