@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, resolve_cards
-from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionNotFoundError
+from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionExistsError, SessionNotFoundError
 from requivo.core.integrity import check_session, check_session_dir
 from requivo.core.validation import validate_proposal
 from requivo.paths import ASSETS, session_root, workspace_root
@@ -282,7 +282,14 @@ def _cmd_session_show(a, client) -> None:
 
 def _cmd_session_migrate(a, client) -> None:
     """The explicit, opt-in bulk migration of every legacy out/<slug>/ session into the canonical
-    store (the automatic path only migrates a session on its own first mutation)."""
+    store (the automatic path only migrates a session on its own first mutation).
+
+    The `session_exists` check below is **reporting, not the guard**: it is what fills the
+    `skipped_already_present` row, and it is kept because a sweep that names what it declined is worth
+    a cheap stat call. The guard is `migrate_legacy`'s own atomic claim on the slug — which is why the
+    `SessionExistsError` arm exists. A session that appears between the check and the migration is the
+    TOCTOU window the check cannot close, and the correct outcome there is the same skip, not a
+    traceback that abandons every slug after it (the rule invariant 15 states for a listing)."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
@@ -291,7 +298,11 @@ def _cmd_session_migrate(a, client) -> None:
         if store.session_exists(slug):
             skipped.append(slug)
             continue
-        store.migrate_legacy(slug)
+        try:
+            store.migrate_legacy(slug)
+        except SessionExistsError:
+            skipped.append(slug)
+            continue
         migrated.append(slug)
     if a.json:
         _print_json({"migrated": migrated, "skipped_already_present": skipped, "source": str(root)})
