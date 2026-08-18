@@ -3,10 +3,16 @@
 This is the string-assembly half of what used to live in `core/llm.py`: it reads the bundled prompt
 files, the framework schema, and the context cards, and injects them into a prompt template. It makes
 **no LLM call and imports no provider** — it only turns assets into a system-prompt string — so it is
-safe to keep in `core`. The provider imports `build_prompt()` to feed a model; the CLI and `doctor`
-import `available_cards()` to validate a `--context` selection, and `check_selection()` to ask
-whether a *saved* selection still resolves without paying for a turn to find out. None of it needs
-the SDK.
+safe to keep in `core`. The provider imports `build_prompt()` to feed a model, which assembles the
+cards through `load_context()`; every surface imports `resolve_cards()` to validate a `--context`
+selection on the way in; `doctor` and `session verify` import `check_selection()` to ask whether a
+*saved* selection still resolves without paying for a turn to find out, and `available_cards()` to
+report the vocabulary itself. None of it needs the SDK.
+
+Exactly three of those resolve a name against the installed cards — `resolve_cards`, `load_context`
+and `check_selection` — and they must agree about an install that has none, so
+`_cards_for_selection()` is the single guarded read all three share. `available_cards()` is
+deliberately outside it, because reporting an empty install is its job rather than refusing one.
 """
 
 from __future__ import annotations
@@ -74,9 +80,36 @@ def _card_paths() -> dict[str, Path]:
     return paths
 
 
+def _cards_for_selection() -> dict[str, Path]:
+    """The card table a **selection** is resolved against: `_card_paths()` with the empty-install
+    guard already applied.
+
+    It exists because "call `_require_any_card` too" is a rule three functions each had to remember,
+    and one of them did not (#41). The miss had a mechanism worth naming: `load_context` and
+    `check_selection` reach the table through `_card_paths()` directly, while `resolve_cards` reached
+    it through `available_cards()` — so a sweep over the callers of `_card_paths()` found two of the
+    three and reported itself complete. One name, called by all three, makes that sweep exhaustive
+    and makes a fourth selector inherit the guard instead of re-deriving it.
+
+    `available_cards()` deliberately does **not** route through here, and that is the reason the
+    guard cannot simply live in `_card_paths()` itself: `doctor` reports the card vocabulary in three
+    states — `ok`, `empty`, `unreadable` — and `empty` is a public `--json` field it can only produce
+    by *observing* an install with no cards rather than raising on one. A table that refused to be
+    empty would leave the one caller whose job is to see the emptiness unable to. So the split is
+    between looking (`_card_paths`, `available_cards`) and selecting (this), not between guarded and
+    unguarded by accident.
+    """
+    paths = _card_paths()
+    _require_any_card(paths)
+    return paths
+
+
 def available_cards() -> list[str]:
     """Stems of the loadable context cards (bundled + user), sorted — the vocabulary of the
-    `--context` selector."""
+    `--context` selector.
+
+    Reports an empty install as `[]` rather than refusing it; `_cards_for_selection` is the guarded
+    read, and the paragraph there says why this one must stay observational."""
     return sorted(_card_paths())
 
 
@@ -94,17 +127,50 @@ def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
     and bought every card — the widening this function's own docstring says it closes, reached
     through the empty-token entrance. The empty-token rule now lives in `normalize_tokens`, shared
     with every other selector, so `picked` can only be empty when `tokens` itself was.
+
+    **An install with no cards at all is refused here too, ahead of the whole selection** (#41) —
+    ahead of the name lookup and ahead of the token-shape checks, so on a card-less install even a
+    stray comma reports the install rather than the comma. That precedence is not new and is not this
+    function's to choose: `load_context` has diagnosed the install ahead of `_selection_keys` since
+    #33, deliberately and with a test on it, and the two are read side by side. This used to run off
+    a bare `available_cards()`, so on a card-less install it answered
+    `unknown_context_card` for a name that was typed correctly — sending the reader to check their
+    spelling when the fault is that there is nothing to match against, which is the sentence
+    `_require_any_card`'s own docstring gives as the reason it must run first. This is the earliest
+    and therefore the worst place to get it wrong: every surface resolves its selection here, at
+    session creation, so a broken install blamed the reader (400 in the Web) and then blamed itself
+    (500) on the very next call — one condition wearing two verdicts, the wrong one arriving first.
+
+    **A selection of no tokens at all is deliberately left outside that guard**, and the reason is
+    uniformity rather than leniency. `[]` is not an empty token: `normalize_tokens` documents it as
+    *no selection was made*, and the answer is `None`, the every-card sentinel. `SessionService`,
+    the CLI and the deterministic verbs all skip this function entirely when no cards were named, so
+    refusing `[]` would make the Web — the one caller that passes it through — the single surface
+    that refuses, which is the lenient/strict split this function exists to prevent. The install is
+    still caught, by `load_context`, at the point the cards are actually read.
     """
     tokens = list(tokens)
+    if not tokens:
+        return None
+    # One guarded read of the table, used for both the lookup and the error's `Available:` line. Those
+    # were two separate `available_cards()` calls, so the vocabulary a reader was told to choose from
+    # was enumerated separately from the one their name was matched against.
+    paths = _cards_for_selection()
     keys = normalize_tokens(tokens, what="context card")
-    avail = {c.lower(): c for c in available_cards()}
+    # `sorted` is a tie-break, not tidiness, so do not drop it: two installed stems can differ only
+    # in case — a bundled `foo.md` beside a user `Foo.md` — and they are two entries here, since
+    # `_card_paths()` only collapses an *exact* stem clash. Which one a typed `foo` resolves to is
+    # then decided by iteration order, and `sorted` is what `available_cards()` applied before this
+    # read replaced it. Preserved deliberately: which of the two should win is a real question, and a
+    # bug fix silently loading a different card than it did yesterday is not the place to answer it.
+    avail = {stem.lower(): stem for stem in sorted(paths)}
     picked, unknown = [], []
     for raw, key in zip(tokens, keys):
         # an unknown name is echoed as typed (stripped), so the error names what the caller wrote
         (picked if key in avail else unknown).append(avail.get(key, raw.strip()))
     if unknown:
         raise UnknownContextCardError(
-            f"unknown context card(s): {', '.join(unknown)}. Available: {', '.join(available_cards())}",
+            f"unknown context card(s): {', '.join(unknown)}. Available: {', '.join(sorted(paths))}",
             details={"unknown": unknown},
         )
     return picked or None
@@ -141,8 +207,7 @@ def load_context(only: list[str] | None = None) -> str:
     `{{CONTEXT}}` on every paid call, forever, and nothing on that path said so. One rule covers all
     three: an empty context is never a legitimate thing to send a provider, whatever emptied it.
     """
-    paths = _card_paths()
-    _require_any_card(paths)
+    paths = _cards_for_selection()
     # `only` is materialised before the guard iterates it — a generator read twice yields nothing
     keep = _selection_keys(list(only), paths) if only is not None else None
     # `encoding` is explicit because `read_text()` defaults to the *locale's* encoding, not the file's:
@@ -233,8 +298,7 @@ def check_selection(only: list[str] | None) -> RequivoError | None:
     reported as fine.
     """
     try:
-        paths = _card_paths()
-        _require_any_card(paths)
+        paths = _cards_for_selection()
         if only is not None:
             _selection_keys(list(only), paths)
     except _SELECTION_REFUSALS as e:

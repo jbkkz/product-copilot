@@ -87,6 +87,29 @@ the session directory: the same session is fine on a machine that has the card. 
 [cli.md](cli.md#context-cards-a-session-can-no-longer-find) for why that distinction is load-bearing
 for `session import`.
 
+## An install with no cards at all
+
+The third state, and the one worth telling apart from the other two: not *the card you named is
+missing* and not *we could not look*, but **we looked, at every root, and there is nothing**. A wheel
+or container layer that ships `assets/` and loses `assets/context/` produces it.
+
+```console
+$ requivo discover --context b2b-platform "…"
+no context cards are installed, so there is no product context to reason from — impact estimation is
+the product's central idea and it runs on these cards. Looked in: … and …. This install is
+incomplete: reinstall requivo, or point REQUIVO_CONTEXT_DIR at a directory holding your cards.
+```
+
+That refusal now arrives when the selection is **validated**, at session creation, and not only when
+the cards are first read a turn later (#41). It used to answer *unknown context card: b2b-platform*
+at creation — technically true, since with nothing installed every name is unknown, and the wrong
+remedy: it sent you to check a name you had typed correctly. In Requivo Web the same shift moves the
+condition from a 400 to a 500, which is the honest side of that line — nothing you sent caused the
+install to arrive without cards. See [compatibility.md](compatibility.md#http-statuses-in-requivo-web).
+
+Passing no `--context` at all is unaffected: that is not a selection, so there is nothing to
+validate, and the install is caught at the point the cards are actually loaded.
+
 A card directory that exists but **cannot be read** is reported separately, as
 `context_unreadable`, and never as a missing card. The two have opposite remedies — restore the file
 versus fix the permissions — and they used to be indistinguishable, because `Path.glob` yields

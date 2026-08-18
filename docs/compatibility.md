@@ -82,6 +82,16 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   named is not there) and from `context_unreadable` (we could not look): here we looked, at every
   root, and there is nothing. `details` carries `{roots}` — the directories searched.
 
+- **`no_context_cards` now also reaches session creation** (#41). It was wired into the calls that
+  *read* the cards and not into `resolve_cards`, the validator every surface runs on the way in — so
+  on a card-less install, naming a card at creation answered `unknown_context_card` (a name you
+  typed wrongly) and the very next call answered `no_context_cards` (an install that is incomplete).
+  One condition, two codes, and the misleading one arrived first. A caller matching
+  `unknown_context_card` on a creation path should match `no_context_cards` alongside it; nothing
+  changes on an install that has cards, where an unknown name is still `unknown_context_card`.
+  Passing *no* selection at all is unaffected and still resolves to the every-card sentinel — the
+  install is caught when the cards are read, as before.
+
 - **`unsafe_selector_token` is new** (#40). A selector token — a context card name or a slot token —
   carrying a control character is refused rather than echoed back. `details` carries
   `{selector, position}`, the same shape as `empty_selector_token`. This can turn a *previously
@@ -123,6 +133,14 @@ default in 0.10.0, and the one that is new:
 
 An unrecognised code is now a 500 rather than a 400, for the same reason: "we could not classify
 this" is not evidence that the caller erred.
+
+No status in that table moves for #41, but one **condition** crosses it. `POST /sessions` naming a
+context card on an install that has none used to answer **400** — the reader was told their request
+was bad — and now answers **500**, because the code it raises changed from `unknown_context_card` to
+`no_context_cards`. That is the split this table exists to hold: nothing the caller sent caused an
+install to ship without cards, and the previous 400 was the same misattribution one call earlier
+than the one #34 fixed. A client scripting session creation and branching on a 4xx should expect a
+5xx for this condition.
 
 One populated field has changed meaning under that rule, and the changelog carries the note:
 `doctor --json`'s `sessions.total` is `null`, not `0`, when the session directory could not be read
