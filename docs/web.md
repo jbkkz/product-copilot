@@ -118,9 +118,14 @@ Even though it is a local app:
   HTMX is vendored rather than fetched from a CDN for exactly that reason, and because the app is meant
   to work offline; its version and licence are recorded in `THIRD-PARTY-NOTICES.md`.
 - Input is length-bounded, and an over-long request or answer is **refused, not truncated** — half a
-  request folded into the model reads exactly like a whole one. Request bodies are capped before they
-  are parsed. An unknown context card is an error too: filtering it out would leave an empty selection,
-  which every reader downstream treats as "load every card".
+  request folded into the model reads exactly like a whole one. That refusal is the only bound the
+  reader meets: no field carries an HTML `maxlength`, because a browser clips a paste to the remaining
+  allowance silently — no event, no message, no visual difference — so an over-long request would
+  arrive at exactly the ceiling and sail through the very check written to stop it (#8). A client-side
+  affordance is welcome here, but it has to count and warn; it must never trim what the reader typed.
+  Request bodies are capped before they are parsed. An unknown context card is an error too:
+  filtering it out would leave an empty selection, which every reader downstream treats as "load
+  every card".
 
 ## Limits of this first version
 
