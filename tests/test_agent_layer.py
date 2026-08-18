@@ -8,10 +8,16 @@ rather than re-deriving:
 A jit-context rule is **data**. The only thing that reads it is a `PreToolUse` hook, and that hook is
 registered by the `claude-jit-context` plugin, in that plugin's own `hooks/hooks.json`, as
 `bash ${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-hook.sh`. A Claude Code project acquires hooks from
-exactly four places: the user's own settings, the project's `.claude/settings.json`, the gitignored
+exactly four places: the user's own settings, the project's `.claude/settings.json`, the project's
 `.claude/settings.local.json`, and an installed plugin. This repository ships nothing into the first
 three. So without the plugin there is no hook, nothing reads the layer, and every native Read, Edit,
 Write, Glob and Grep works normally.
+
+`settings.local.json` is the one of those a contributor could commit by accident -- it is where a
+personal hook would be written, and `.gitignore` now excludes it. It was *not* excluded when this
+file was first written; it merely looked excluded, because the maintainer's machine carries a global
+`~/.config/git/ignore` entry for it that no contributor has. The guard below scans whatever is
+tracked, so it catches such a commit either way, but the exclusion stops the accident happening.
 
 That inertness is a property of **this repository**, not of the plugin, and it is one commit away
 from being false. A `hooks` block added to the tracked `.claude/settings.json`, or a hook script
@@ -40,8 +46,22 @@ PROJECT_SETTINGS = ".claude/settings.json"
 
 # Suffixes a hook command could plausibly name. A hook is a shell command, so this is a heuristic --
 # but a committed script is the only way one reaches a contributor from this repository, and every
-# tracked file under `.claude/` today is data (`.md`, `.tsv`, `.json`).
-EXECUTABLE_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".ts", ".rb", ".pl", ".exe"}
+# tracked file under `.claude/` today is data (`.md`, `.tsv`, `.json`). The Windows spellings are
+# here even though every CI job in this repo runs on ubuntu-latest: a contributor's pull request is
+# what this guard reads, and their machine is not this matrix.
+EXECUTABLE_SUFFIXES = {
+    ".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".ts", ".rb", ".pl",
+    ".exe", ".bat", ".cmd", ".ps1",
+}
+
+
+def _looks_executable(rel: str) -> bool:
+    """Does a tracked path look like a script a hook could be pointed at?
+
+    Named, like `_declares_hooks`, so the control below can prove it fires. Case-folded because a
+    `.SH` committed from a case-insensitive filesystem is the same file.
+    """
+    return Path(rel).suffix.lower() in EXECUTABLE_SUFFIXES
 
 
 def _declares_hooks(data: object) -> bool:
@@ -73,6 +93,23 @@ def _tracked_under_dot_claude() -> list[str]:
     except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover - environment
         pytest.skip(f"git ls-files failed ({exc}); the .claude/ guards went unchecked in this run")
     return [p for p in out.split("\0") if p]
+
+
+def _tracked_content(rel: str) -> str:
+    """The content git tracks at `rel` -- read from the index, never from the working copy.
+
+    The question this file asks is what a *clone* gets, and a working-tree read answers a different
+    one. CONTRIBUTING.md tells a contributor they may delete `.claude/` in their working copy; doing
+    that leaves the path still listed by `git ls-files` while `Path.read_text` raises
+    `FileNotFoundError`, so the documented advice and the guard shipped in the same commit collided
+    and turned a local `pytest tests/` into an error. Reading the index is not a workaround for that
+    -- it is the reading that matches the claim, and it happens to be immune to the working copy.
+    """
+    out = subprocess.run(
+        ["git", "show", f":{rel}"],
+        cwd=REPO, capture_output=True, check=True,
+    ).stdout
+    return out.decode("utf-8")
 
 
 # -- the positive controls, first: a guard that cannot fire is not a guard ----------------------
@@ -110,6 +147,19 @@ def test_the_hook_detector_fires_on_a_settings_file_that_does_register_hooks():
     assert not _declares_hooks(["hooks"]), "a non-mapping document registers nothing"
 
 
+def test_the_script_detector_fires_on_the_shapes_a_hook_could_point_at():
+    """The must-fire half of `test_no_hook_script_is_tracked_under_dot_claude`.
+
+    Every tracked file under `.claude/` today is data, so that guard's clean run exercises none of
+    this classifier. Without a control it is a set literal nothing has ever read in anger.
+    """
+    for rel in (".claude/hooks/pre.sh", ".claude/x.py", ".claude/x.PS1", ".claude/nested/a.bat"):
+        assert _looks_executable(rel), f"{rel!r} should be flagged as a script"
+    for rel in (".claude/settings.json", ".claude/jit-context/tools/01-oss/00-index.tsv",
+                ".claude/remember/identity.md", ".claude/no-suffix"):
+        assert not _looks_executable(rel), f"{rel!r} is data and must not be flagged"
+
+
 # -- the guards themselves ----------------------------------------------------------------------
 
 
@@ -126,11 +176,13 @@ def test_the_repository_registers_no_hooks():
             continue
         checked += 1
         try:
-            data = json.loads((REPO / rel).read_text(encoding="utf-8"))
+            data = json.loads(_tracked_content(rel))
         except json.JSONDecodeError as exc:
-            pytest.fail(f"{rel}: tracked settings must be readable JSON ({exc})")
+            pytest.fail(f"{rel!r}: tracked settings must be readable JSON ({exc})")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            pytest.fail(f"{rel!r}: git lists it but could not produce its content ({exc})")
         assert not _declares_hooks(data), (
-            f"{rel} registers hooks. A tracked hook runs for everyone who clones this repository, "
+            f"{rel!r} registers hooks. A tracked hook runs for everyone who clones this repository, "
             "including a contributor with none of the maintainer's plugins installed -- which is "
             "the barrier issue #2 reported and measurement found absent. If this is deliberate, it "
             "needs to be documented in CONTRIBUTING.md as a hard requirement to contribute."
@@ -144,7 +196,12 @@ def test_no_hook_script_is_tracked_under_dot_claude():
     Everything tracked under `.claude/` today is data a plugin may read. Nothing there is code this
     repository asks anyone to run.
     """
-    offenders = [rel for rel in _tracked_under_dot_claude() if Path(rel).suffix in EXECUTABLE_SUFFIXES]
+    tracked = _tracked_under_dot_claude()
+    # The must-fire control lives in a sibling test, which is not enough: run this function alone,
+    # under `-k`, or under any test sharding, and an empty scan would report a clean tree it never
+    # looked at. The guard belongs in the same function as the assertion it protects.
+    assert tracked, "scanned no tracked files under .claude/ -- this guard would pass vacuously"
+    offenders = [rel for rel in tracked if _looks_executable(rel)]
     assert not offenders, (
         f"executable-looking files tracked under .claude/: {offenders}. Nothing under .claude/ is "
         "code a contributor runs; if that changed, say so in CONTRIBUTING.md first."
@@ -159,7 +216,12 @@ def test_the_contributor_baseline_is_written_down():
     two from drifting apart while the guards above stay green.
     """
     contributing = (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    assert ".claude/" in contributing, (
-        "CONTRIBUTING.md must tell a contributor what the tracked .claude/ directory is and that "
-        "none of it is required to contribute (issue #2)"
-    )
+    # Two tokens rather than one. `.claude/` alone would be satisfied by any incidental later
+    # mention anywhere in the file; requiring the mechanism word as well means the assertion is
+    # about the explanation existing, not about the string appearing. Deliberately not pinned to a
+    # sentence: prose drifts, and a test that fails on a reworded paragraph gets deleted.
+    for token in (".claude/", "jit-context"):
+        assert token in contributing, (
+            f"CONTRIBUTING.md must tell a contributor what the tracked .claude/ directory is and "
+            f"that none of it is required to contribute -- {token!r} is missing (issue #2)"
+        )
