@@ -199,6 +199,13 @@ bug that looked like correct behaviour.
     pass it, and the second overwrites the first's identity, provider and context cards. Identity is
     the request **and** its context-card selection: same request, different cards is a different
     discovery, because the cards are what the impact estimates are read against.
+
+    **A claim is only decidable while nothing else can make a directory of that name**, so
+    `create_session` is the only producer of one. `session_lock` used to be a second: it created the
+    session directory in order to put `.lock` inside it, so locking a slug with no session left a
+    directory that `list_session_slugs` cannot see and the rename cannot win — a refusal naming a
+    session nobody had created. It refuses such a slug now rather than materialising one, which is
+    also why a *failed* lock has to leave the store as it found it (#22).
 12. **A provider call reasons from one snapshot.** `SessionService.snapshot(slug)` reads the revision,
     the model, the request and the cards under the session lock; `run_discovery`, `answer`, `generate`
     and `reason` all take one. Reading the revision and the model separately yields revision N with the
