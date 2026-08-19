@@ -803,7 +803,10 @@ def _cmd_artifact_save(a, client) -> None:
         _print_json({"type": a.type, "filename": st.filename, "revision": st.revision,
                      "stale": st.stale})
         return
-    where = store.canonical_dir(slug) / "artifacts" / st.filename
+    # Through the chokepoint, not re-joined here (#36). This line only prints the path, which is
+    # exactly how it survived the sweeps that closed the writes and the read — `artifact_path` says
+    # why display is not exempt, and which caller can actually hand this an unvalidated `st.filename`.
+    where = store.artifact_path(slug, st.filename)
     print(f"Saved {a.type} → {where} (from revision {st.revision})")
     if st.stale:
         print(f"  Marked stale: the model has moved past revision {st.revision} in ways this "

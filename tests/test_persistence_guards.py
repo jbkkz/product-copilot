@@ -1,12 +1,23 @@
-"""Two guards that lived one layer above the function that needed them.
+"""Guards in `core/persistence.py` that lived one layer above the function that needed them.
 
-Both are `core/persistence.py` write paths whose *sibling* argument was already validated, and both
-were reachable by any caller that is not the one in-repo caller that happened to be careful. Offline,
-like the rest of the session tests: a temp workspace via REQUIVO_WORKSPACE.
+Not one subject but two, and the file is worth reading as two. `#4` is the session store's atomic
+slug claim: `migrate_legacy` must lose to a live session rather than overwrite it, which is
+invariant 11 and touches no filename at all. Everything after it is the artifact-path chokepoint,
+which began as two write paths whose *sibling* argument was unvalidated and has since grown a read
+(#23), the end-of-line anchor a recorded name can carry (#40), and the two display-only joins that
+printed a path they never opened (#36).
+
+What the second group shares is the chokepoint rather than the direction of travel, and what both
+groups share is the shape of the defect: a rule stated at the callers that happened to be careful,
+in a store whose threat model is the caller that is not one of them. Offline, like the rest of the
+session tests: a temp workspace via REQUIVO_WORKSPACE.
 """
 from __future__ import annotations
 
+import io
 import json
+from contextlib import redirect_stdout
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,11 +26,13 @@ import pytest
 # that drifts is the one that silently stops firing.
 from test_boundaries import _force_default_encoding
 
+from requivo.cli import _build_parser, _wrote
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import RequivoError
 from requivo.core.integrity import check_session
+from requivo.services.artifacts import ArtifactService
 from requivo.services.repository import FileSessionRepository
 from requivo.services.sessions import SessionService
 
@@ -551,3 +564,137 @@ def test_the_lock_still_guards_a_session_that_exists(workspace):
     assert _problem("live") == "REAL v2"
     assert store.read_meta("live").artifact_status["brief"].revision == 1
     assert [p.code for p in check_session("live")] == []
+# ── #36: a path that is only printed is still a path this code built ─────────────
+#
+# `deterministic.py`'s `artifact save` and `cli.py`'s `_wrote` each re-joined
+# `canonical_dir(slug) / "artifacts" / <recorded filename>` inline, so the chokepoint the two
+# writes (#5) and the read (#23) were routed through was closed in three places and open in two.
+# Neither of the two opens the file, which is exactly how they survived both sweeps — "it only
+# prints it" reads as harmless. It is a different harm, not an absent one: a printed path is a
+# disclosure in the plainest form there is, and the join is the same join.
+#
+# Nothing in-repo reaches either site with a name that is not an `ARTIFACT_FILENAMES` value, so both
+# tests hand the site what a `SessionRepository` that is not this file backing would hand it. That is
+# invariant 14's threat model verbatim, and the same reason
+# `test_write_artifact_file_refuses_a_filename_that_is_not_a_filename` above drives Core directly.
+#
+# `session import` is NOT that route, and the difference is worth stating because the invariant's own
+# sentence is about `context_cards` and reads as though it covered this field too. It does not:
+# `check_session_dir` pins each recorded filename to its `ARTIFACT_FILENAMES` value and to
+# containment, and import refuses the whole archive on either. A `session.json` edited in place is a
+# live route — nothing re-validates the field when `read_meta` loads it back — but that is a
+# different door, and naming the shut one as the open one is how a docstring stops being evidence.
+
+
+def _recorded(filename: str) -> store.ArtifactStatus:
+    """The `ArtifactStatus` a display site is handed — `filename` is an unconstrained `str` on it."""
+    return store.ArtifactStatus(revision=1, filename=filename, updated_at="2026-08-19T00:00:00Z")
+
+
+def _run_command(argv: list) -> str:
+    """Run one deterministic verb through the real parser and command function, capturing stdout.
+
+    Deliberately not through `app()`: its `except RequivoError` turns a refusal into a printed
+    envelope and `SystemExit`, and what this test needs to see is which of the two the site produced.
+    """
+    ns = _build_parser().parse_args(argv)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        ns.func(ns, None)
+    return buf.getvalue()
+
+
+def test_artifact_save_reports_where_it_wrote_through_the_chokepoint(workspace, tmp_path, monkeypatch):
+    """`artifact save`'s human branch printed the join itself. Routing it through `artifact_path`
+    costs nothing on the ordinary path and refuses a name that is not a filename.
+
+    The absence/refusal distinction #23 turned on survives here because there is nothing to confuse
+    it with: this line runs immediately after the write, states where the content went, and never
+    asks whether the file is there. `artifact_path` does not stat either, so a session with nothing
+    generated is not newly an error — it never reached this line in the first place.
+    """
+    _session("say-where")
+    (workspace / "ESCAPED.md").write_text("TOP SECRET", encoding="utf-8")
+    doc = tmp_path / "brief.md"
+    doc.write_text("# A brief\n", encoding="utf-8")
+    argv = ["artifact", "save", "say-where", "--type", "brief", "--file", str(doc), "--revision", "1"]
+
+    # Positive control first, and it is the load-bearing half: the ordinary save must still name the
+    # real file under artifacts/. A site that raised on everything, or printed nothing at all, would
+    # satisfy the refusal assertions below without ever having said anything true.
+    out = _run_command(argv)
+    assert str(store.artifact_path("say-where", ARTIFACT_FILENAMES["brief"])) in out
+
+    # And the refusal. `ArtifactService.save` is the layer that hands this line a filename; a
+    # repository that is not this repo's file backing is what can hand it one of these.
+    for name in ESCAPES:
+        monkeypatch.setattr(ArtifactService, "save", lambda *a, _n=name, **k: _recorded(_n))
+        with pytest.raises(RequivoError) as ei:
+            _run_command(argv)
+        assert ei.value.code == "invalid_filename", name
+
+
+def test_a_generated_document_reports_its_path_through_the_chokepoint(workspace):
+    """`cli.py::_wrote` is the same join, and it is the one of the two that is shared: five generator
+    verbs say where their document went through it, so one guard here covers all five.
+
+    Driven directly rather than through a generator, for the reason the write-side test gives — every
+    in-repo caller arrives with an `ARTIFACT_FILENAMES` value, and the caller that does not is the
+    external consumer holding the services. `result` is a stand-in because `_wrote` reads exactly one
+    field off it; a real generation result would only make the fixture longer.
+    """
+    _session("wrote-where")
+    (workspace / "ESCAPED.md").write_text("TOP SECRET", encoding="utf-8")
+
+    # Positive control: an ordinary generated document still names its real file.
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _wrote("wrote-where", SimpleNamespace(status=_recorded(ARTIFACT_FILENAMES["prd"])), "PRD")
+    assert str(store.artifact_path("wrote-where", ARTIFACT_FILENAMES["prd"])) in out.getvalue()
+
+    for name in ESCAPES:
+        with pytest.raises(RequivoError) as ei:
+            _wrote("wrote-where", SimpleNamespace(status=_recorded(name)), "PRD")
+        assert ei.value.code == "invalid_filename", name
+
+
+def test_neither_display_site_can_be_made_to_print_a_path_outside_the_session(workspace, tmp_path,
+                                                                             monkeypatch):
+    """The consequence the two tests above are guards for, asserted as the thing a reader cares about
+    rather than as an exception type: whatever these lines print stays under this session's
+    `artifacts/`.
+
+    **Both** sites, because the name says both. Each of the two above pins one, and a test whose name
+    claims a pair while driving one of them is the overclaim this file exists to catch, one layer
+    down in its own fixture. The shapes here are the ones the shared `ESCAPES` list does not carry.
+
+    A backslash separator and a drive-letter path are in the list on every platform rather than
+    behind a platform branch. On POSIX a backslash is an ordinary character, so there this asserts
+    that the *name* is refused; on Windows it additionally asserts that the path could not have
+    escaped — and the leg most likely to be handed one is the leg that could not have said so if the
+    list were POSIX-only. The over-long name rides the same guard: it is the one vector the traversal
+    shapes do not cover, and it fails as a bare OSError without the boundary. The uppercase name is
+    here because `_FILENAME_RE` is deliberately lowercase-only, which is a refusal a reader is more
+    likely to mistake for a bug than for the guard it is.
+    """
+    _session("stay-inside")
+    artifacts = store.canonical_dir("stay-inside") / "artifacts"
+    doc = tmp_path / "brief.md"
+    doc.write_text("# A brief\n", encoding="utf-8")
+    argv = ["artifact", "save", "stay-inside", "--type", "brief", "--file", str(doc), "--revision", "1"]
+
+    for name in [r"..\..\ESCAPED.md", r"c:\windows\win.ini", "a" * 300 + ".md", "PRD.MD"]:
+        with pytest.raises(RequivoError):
+            _wrote("stay-inside", SimpleNamespace(status=_recorded(name)), "PRD")
+        with monkeypatch.context() as m:
+            m.setattr(ArtifactService, "save", lambda *a, _n=name, **k: _recorded(_n))
+            with pytest.raises(RequivoError):
+                _run_command(argv)
+
+    # must fire, on both sites: each still prints, and prints inside artifacts/, for a real name.
+    # Without this the block above is satisfied by two sites that refuse everything.
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _wrote("stay-inside", SimpleNamespace(status=_recorded(ARTIFACT_FILENAMES["epic"])), "epic")
+    assert str(artifacts / ARTIFACT_FILENAMES["epic"]) in out.getvalue()
+    assert str(artifacts / ARTIFACT_FILENAMES["brief"]) in _run_command(argv)
