@@ -179,6 +179,43 @@ def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = Fa
             f"runs on every platform; only the symlink half of it is unreachable.")
 
 
+def _blind_to_dangling_links(monkeypatch) -> None:
+    """Give the store's own resolution the semantics CPython 3.9 has on Windows, on any platform.
+
+    `_WindowsFlavour.resolve` (Lib/pathlib.py, 3.9) asks `nt._getfinalpathname`, which has to *open*
+    the path, so it fails on a symlink whose target does not exist. The non-strict branch then splits
+    the unresolvable tail off, resolves the longest prefix that does exist, and re-joins the rest
+    verbatim — which is what the substitute below does. A dangling symlink out of the session root
+    therefore reports itself as sitting inside it, and a containment check that trusts the answer
+    waves it through. 3.10 routes pathlib through `realpath`, which reads the reparse point itself,
+    so the hole is that one combination and no other.
+
+    The point of simulating it is that `py3.9, windows-latest` is one leg of thirteen, and is not a
+    required check. What it was the only thing guarding is a containment guarantee, so the mechanism
+    is pinned here and every leg runs it.
+
+    **It patches `store._resolve` — the resolution the product performs — and not `Path.resolve`.**
+    Patching `Path.resolve` is what this did first, and it was a guard that could not fire: the store
+    stopped calling `Path.resolve` in the same commit, so the substitute never reached the code under
+    test and four tests passed on POSIX for a reason unrelated to the one their names give. Two
+    reviewers found it independently. The rule that cost: a simulation has to be installed where the
+    code under test looks, and *the assertion passed* is not evidence that it was."""
+    real_resolve = store._resolve
+
+    def resolve(path):
+        s = Path(path)
+        tail: list[str] = []
+        while True:
+            if s.exists():                       # stands in for `_getfinalpathname` succeeding
+                return Path(real_resolve(s), *reversed(tail))
+            if s.parent == s:                    # nothing resolved: 3.9 hands the path straight back
+                return Path(path)
+            tail.append(s.name)
+            s = s.parent
+
+    monkeypatch.setattr(store, "_resolve", resolve)
+
+
 # ── what the first Windows leg found (#3) ─────────────────────────────────────
 # Both of these are product defects the platform matrix exposed on its first run. Neither could fail
 # on Linux or macOS, and both are written to fail on every platform now that the mechanism is known.
@@ -194,17 +231,22 @@ def test_a_session_path_is_not_resolved_before_it_exists(tmp_path, monkeypatch):
     session at that moment. Four of twelve concurrent creators died that way on the Windows leg.
 
     Pinned as "performs no resolution" rather than by reproducing the race, because a timing test that
-    only sometimes reopens the window is not a regression test. No resolution, no disagreement."""
+    only sometimes reopens the window is not a regression test. No resolution, no disagreement.
+
+    What is counted is `store._resolve`, the store's own resolution, and not `Path.resolve` — which is
+    what this counted until the store stopped calling it. A counter on a function the code under test
+    never reaches records zero for a module that resolves on every call, so the assertion would have
+    stayed green while saying nothing at all."""
     root = tmp_path / "sessions"
     root.mkdir()
     resolved: list = []
-    real_resolve = Path.resolve
+    real_resolve = store._resolve
 
-    def counting_resolve(self, *a, **k):
-        resolved.append(str(self))
-        return real_resolve(self, *a, **k)
+    def counting_resolve(path):
+        resolved.append(str(path))
+        return real_resolve(path)
 
-    monkeypatch.setattr(Path, "resolve", counting_resolve)
+    monkeypatch.setattr(store, "_resolve", counting_resolve)
     assert store._child_of(root, "s") == root / "s"
     assert resolved == [], (
         "_child_of resolved paths for a child that does not exist; every such resolution is a "
@@ -239,6 +281,59 @@ def test_an_ordinary_existing_session_directory_is_still_accepted(tmp_path):
     assert store._child_of(root, "s") == root / "s"
 
 
+def test_a_dangling_symlink_is_refused_where_the_platform_cannot_resolve_it(tmp_path, monkeypatch):
+    """The same must-fire assertion as above, with the resolver blinded the way CPython 3.9 blinds it
+    on Windows — the shape that turned the guard off on that one leg while every other leg stayed
+    green, because a dangling link resolved to its own location instead of to its target.
+
+    A containment decision must not rest on the platform being able to follow the link. This is the
+    test that says so on Linux and macOS too, so the next regression is caught by the leg that runs on
+    every push rather than by the one that runs on one platform and one Python."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    _symlink_or_skip(root / "dangling", tmp_path / "not-yet", target_is_directory=True)
+    _blind_to_dangling_links(monkeypatch)
+    assert store._resolve(root / "dangling") == store._resolve(root) / "dangling", (
+        "the simulation is not reproducing the defect: the blinded resolver is supposed to report the "
+        "dangling link as living inside the root")
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "dangling")
+
+
+def test_a_blinded_resolver_still_accepts_what_is_genuinely_inside(tmp_path, monkeypatch):
+    """The must-not-fire control for the test above: a guard that refuses everything passes every
+    must-fire assertion, so the simulation needs cases it must *not* refuse. The live symlink is the
+    one that matters — a blinded resolver follows a link whose target exists perfectly well, so
+    refusing it would mean the guard had stopped reading the resolver's answer and started refusing
+    links on sight."""
+    root = tmp_path / "sessions"
+    (root / "s").mkdir(parents=True)
+    (root / "target").mkdir()
+    _blind_to_dangling_links(monkeypatch)
+    assert store._child_of(root, "s") == root / "s"
+    assert store._child_of(root, "absent") == root / "absent"
+
+    # Last, because creating a symlink is what skips on a platform that refuses them, and the two
+    # assertions above hold everywhere.
+    _symlink_or_skip(root / "live", root / "target", target_is_directory=True)
+    assert store._child_of(root, "live") == root / "live"
+
+
+def test_a_dangling_symlink_inside_the_root_is_accepted_where_the_platform_can_follow_it(tmp_path):
+    """No blinding: the direction is what the refusal is about, not the dangling.
+
+    Where the resolver can follow the link, this is answered on where it points, and a link into the
+    root is inside the root. Where the resolver *cannot* follow it — 3.9 on Windows — the answer is
+    refuse, because *we cannot tell* and the alternative is the defect this pair of tests exists for.
+    Stating both halves here is the point: the conservative answer is confined to the platform that
+    forces it, rather than becoming the rule everywhere."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    _symlink_or_skip(root / "inside", root / "not-yet", target_is_directory=True)
+    assert not (root / "inside").exists() and (root / "inside").is_symlink()
+    assert store._child_of(root, "inside") == root / "inside"
+
+
 def test_an_artifact_path_is_not_resolved_before_it_exists(workspace, monkeypatch):
     """`artifact_path` is `_child_of`'s sibling and had the identical two-resolution shape. It gets
     the same pin, because the previous commit claimed to have fixed it and tested only `_child_of` --
@@ -247,16 +342,18 @@ def test_an_artifact_path_is_not_resolved_before_it_exists(workspace, monkeypatc
     `canonical_dir` runs inside `artifact_path` and legitimately resolves an existing session
     directory, so the count is not zero. The property is that the *artifact* half adds nothing to it
     for a file that is not there — measured as a difference against `canonical_dir` alone rather than
-    asserted as an absolute, which would just be a test of `canonical_dir`."""
+    asserted as an absolute, which would just be a test of `canonical_dir`.
+
+    Counts `store._resolve` rather than `Path.resolve`, for the reason its sibling above gives."""
     _healthy()
     resolved: list = []
-    real_resolve = Path.resolve
+    real_resolve = store._resolve
 
-    def counting_resolve(self, *a, **k):
-        resolved.append(str(self))
-        return real_resolve(self, *a, **k)
+    def counting_resolve(path):
+        resolved.append(str(path))
+        return real_resolve(path)
 
-    monkeypatch.setattr(Path, "resolve", counting_resolve)
+    monkeypatch.setattr(store, "_resolve", counting_resolve)
 
     store.canonical_dir("s")                           # the baseline this test is not about
     baseline = len(resolved)
@@ -275,10 +372,28 @@ def test_an_artifact_filename_that_escapes_is_still_refused(workspace):
     traversal guard off. These names are refused by `validate_filename` before any path is built,
     which is why the containment check can safely skip an absent target."""
     _healthy()
-    for name in ("../../../ESCAPED.md", "/etc/passwd", "..", ".hidden", "a/b.md"):
+    # Windows-shaped escapes as well as POSIX-shaped ones. `_FILENAME_RE` refuses both for the same
+    # reason on every platform, so this is not a platform branch — it is that the list was POSIX-only
+    # while the leg most likely to be handed a backslash is the one that could not have said so.
+    for name in ("../../../ESCAPED.md", "/etc/passwd", "..", ".hidden", "a/b.md",
+                 r"..\..\ESCAPED.md", r"c:\windows\system32\drivers\etc\hosts", r"a\b.md"):
         with pytest.raises(RequivoError) as ei:
             store.artifact_path("s", name)
         assert ei.value.code == "invalid_filename", name
+
+
+def test_an_artifact_symlink_is_refused_where_the_platform_cannot_resolve_it(workspace, tmp_path,
+                                                                             monkeypatch):
+    """`artifact_path` gets the blinded resolver too, because it and `_child_of` share the decision
+    and a fix applied to one of them is this branch's own recurring defect."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")
+    _blind_to_dangling_links(monkeypatch)
+    with pytest.raises(RequivoError) as ei:
+        store.artifact_path("s", "prd.md")
+    assert ei.value.code == "invalid_filename"
 
 
 def test_atomic_write_survives_a_transient_permission_error(tmp_path, monkeypatch):
@@ -769,6 +884,27 @@ def test_an_artifact_that_is_a_symlink_out_of_the_session_is_still_refused(works
     _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")   # dangling, still outside
     assert not (artifacts / "prd.md").exists() and (artifacts / "prd.md").is_symlink()
     assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
+
+
+def test_an_artifact_symlink_is_reported_unsafe_where_the_platform_cannot_resolve_it(workspace,
+                                                                                     tmp_path,
+                                                                                     monkeypatch):
+    """`session verify`'s copy of the decision, blinded the same way. Its failure mode is quieter than
+    the other two and worth stating on its own: nothing raises, the row simply comes back
+    `missing_artifact_file` — *there is no file there* — about a link that is very much there and
+    points out of the session. A verdict that is wrong is worse here than a verdict that is missing,
+    because this is the verb whose whole job is telling you whether the session is intact.
+
+    The classification has to be reached before the existence check for that to be visible at all,
+    which is why the second assertion is not decoration."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")
+    _blind_to_dangling_links(monkeypatch)
+    codes = {p.code for p in check_session("s")}
+    assert "unsafe_artifact_filename" in codes
+    assert "missing_artifact_file" not in codes
 
 
 def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(workspace, tmp_path,

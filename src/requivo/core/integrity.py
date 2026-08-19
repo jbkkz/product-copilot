@@ -46,7 +46,7 @@ from pydantic import ValidationError
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import InvalidFilenameError, RequivoError
-from requivo.core.persistence import _hash, canonical_dir, migrate_session, validate_filename
+from requivo.core.persistence import _hash, _is_contained, canonical_dir, migrate_session, validate_filename
 
 
 @dataclass(frozen=True)
@@ -195,24 +195,28 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         # from an archive that is not in the store — it would answer confidently about the wrong
         # directory, which is this module's own defect class.
         #
-        # The containment confirmation resolves `f` only when something is actually there, for the
-        # reason `_child_of` gives at length (#3): two independent `resolve()` calls, on paths where
-        # one is derived from the other, disagree whenever the tree moves between them — and a
-        # spurious disagreement here reports `unsafe_artifact_filename` about a name that is
-        # perfectly bare, which is this module's own defect class. `validate_filename` has already
-        # made a separator, a dot segment and an absolute path unrepresentable, so an absent `f`
-        # cannot escape; the only escape is a symlink at `f`, which has to exist to be one, and
-        # `is_symlink()` is there because `exists()` follows the link and would miss a dangling one.
+        # The containment confirmation is `_is_contained`, the store's, rather than a third statement
+        # of the same rule (#3). It used to be written out here, and was then corrected twice for
+        # defects the sibling copies had each been corrected for separately: a spurious disagreement
+        # between two resolutions, reporting `unsafe_artifact_filename` about a perfectly bare name,
+        # and a dangling symlink out of the session reported as a *missing* file on the one platform
+        # whose resolver cannot follow one. Both are this module's own defect class — a confident
+        # answer about the wrong thing — from the verb whose job is saying whether a session is
+        # intact.
+        #
+        # The classification runs before the existence check below, and that ordering is what makes
+        # the second of those visible at all: a name refused here is reported as refused, never
+        # probed and then reported as absent.
         try:
             f = artifacts / validate_filename(st.filename)
-            safe = (not (f.exists() or f.is_symlink())
-                    or f.resolve().is_relative_to(artifacts.resolve()))
+            safe = _is_contained(f, artifacts)
         except (InvalidFilenameError, OSError, ValueError):
             safe = False
         if not safe:
             bad("unsafe_artifact_filename",
-                f"the {atype!r} artifact is recorded under {st.filename!r}, which is not a bare "
-                "filename inside artifacts/ — refused without checking whether it exists")
+                f"the {atype!r} artifact is recorded under {st.filename!r}, which this session "
+                "cannot confirm is a bare file inside artifacts/ — refused without checking whether "
+                "it exists")
         elif not f.is_file():
             bad("missing_artifact_file",
                 f"session.json records a {atype!r} artifact but artifacts/{st.filename} is missing")

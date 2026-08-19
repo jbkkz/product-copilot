@@ -245,8 +245,28 @@ bug that looked like correct behaviour.
     case that can fail: `validate_slug`/`validate_filename` already make a separator or a dot segment
     unrepresentable, so the sole escape is a symlink at the target, and an absent path is not one —
     `exists() or is_symlink()`, never `exists()` alone, because `exists()` follows the link and a
-    dangling symlink out of the root is precisely the case to catch. The general form: if a check can
-    answer differently for the same argument depending on when it runs, it is not a check (#3).
+    dangling symlink out of the root is precisely the case to catch. The three are now **one**
+    function, `core/persistence.py`'s `_is_contained`, because each had to be corrected separately
+    for this and then again for its sequel, below.
+
+    **Nor may it depend on where it runs.** The sequel: the decision was made with `Path.resolve()`,
+    which on Windows under CPython 3.9 asks `nt._getfinalpathname` — a call that has to open the path
+    and therefore fails on a link whose target is missing, after which the non-strict branch re-joins
+    the unresolvable tail to the parent it could resolve. A dangling symlink then resolves to its own
+    location and reads as contained, so the guard was off on that one leg of thirteen while the other
+    twelve were green. Two things hold it now, and the second is the one that matters: `_resolve` is
+    `os.path.realpath`, never `Path.resolve()` — realpath reads the reparse point itself, and its
+    `strict=` keyword is 3.10+ and must not be reached for — and `_is_contained` **refuses a symlink
+    whose resolution comes back equal to its own location**, because a symlink never legitimately
+    resolves to where it sits, so that equality is the resolver saying *I could not look*. Refusing
+    there is the third state, and it is what takes the guarantee off the platform entirely.
+    `_blind_to_dangling_links` in `tests/test_integrity.py` gives every leg the 3.9 semantics so the
+    class is caught on Linux; it patches `store._resolve` and **not** `Path.resolve`, which is where
+    it was first installed — a simulation aimed at a function the code no longer calls is a test that
+    passes for a reason unrelated to its name. The general form has two halves now: a check that can
+    answer differently for the same argument depending on **when** it runs is not a check, and
+    neither is one whose answer depends on **whether the platform happened to be able to look**
+    (#3, #11).
 18. **`_atomic_write` retries a denied rename, briefly and only that.** On Windows `rename` is
     `MoveFileEx`, which fails with `PermissionError(13)` whenever anything holds a handle to the
     destination — an antivirus scanner or the Search Indexer, opening a file microseconds after it is

@@ -156,9 +156,10 @@ open-source strategy — is indexed in [`docs/`](docs/README.md).
 
 An untested platform and a supported platform look identical from outside, so this table says which
 is which. The ends of the version range are tested on macOS and Windows rather than every minor
-version: a path separator, a console codepage or a rename-over-existing does not care which 3.x it
-meets, while a language-level difference does — and that one shows on the Linux axis, which runs all
-five.
+version, and the ends are the point: a platform's own standard library can behave differently at each
+one. Windows on 3.9 cannot resolve a symlink whose target is missing, where Windows on 3.13 can —
+which once left a path-containment guard holding on twelve of thirteen CI legs and not on the
+thirteenth. Differences in the language itself show on the Linux axis, which runs all five.
 
 Requivo reads and writes **UTF-8 everywhere**, regardless of the machine's locale or the console's
 codepage. A session written on one machine reads back byte-identically on another. Where a console

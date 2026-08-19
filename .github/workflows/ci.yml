@@ -56,9 +56,11 @@ jobs:
   # three separate audits graded them *reasoned* rather than observed for the same reason each time
   # — there was no leg that could run them.
   #
-  # The ends of the supported range rather than every minor version: a path separator, a console
-  # codepage or a rename-over-existing does not care which 3.x it meets, while a language-level
-  # difference does — and that one is covered above, on all five. 4 legs rather than 10.
+  # The ends of the supported range rather than every minor version, and the ends are the point: a
+  # platform's own standard library can differ between them. Windows on 3.9 cannot resolve a symlink
+  # whose target does not exist, where Windows on 3.13 can — which left a containment guard holding
+  # on twelve of these thirteen legs and not on the thirteenth (#3, #11). A difference in the
+  # language itself is covered above, on all five. 4 legs rather than 10.
   #
   # NOT YET REQUIRED by branch protection. Adding it is one command, and it should be run once this
   # merges, or these legs become the thing everybody scrolls past:
