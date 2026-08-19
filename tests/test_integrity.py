@@ -773,6 +773,31 @@ def test_a_recorded_artifact_with_no_file_is_caught(workspace):
     assert "missing_artifact_file" in {p.code for p in check_session("s")}
 
 
+def test_a_model_from_a_newer_requivo_is_not_reported_as_a_defect(workspace):
+    """#14. The checker read model.json through the strict boundary contract, so an unknown key — the
+    thing `docs/compatibility.md` explicitly permits without a format bump — came back as
+    `invalid_model`. Now that the loader carries such a key, the diagnostic still refusing it would be
+    the worse half of the two: the session opens fine and `doctor` reports a defect in it, which is a
+    health verdict measured against a rule this version no longer follows."""
+    _healthy()
+    d = store.canonical_dir("s")
+    for f in (d / "model.json", d / "revisions" / "0001-model.json"):
+        payload = json.loads(f.read_text(encoding="utf-8"))
+        f.write_text(json.dumps({**payload, "risk_register": []}), encoding="utf-8")
+    codes = {p.code for p in check_session("s")}
+    assert "invalid_model" not in codes
+    assert "invalid_revision_model" not in codes
+
+    # The positive control. The assertions above are absences, and an absence also arrives from a
+    # check that stopped looking — so the same two codes must still fire on a model that is broken
+    # rather than merely newer.
+    (d / "model.json").write_text('{"model": {"workflow": ', encoding="utf-8")
+    (d / "revisions" / "0001-model.json").write_text('{"model": {"workflow": ', encoding="utf-8")
+    broken = {p.code for p in check_session("s")}
+    assert "invalid_model" in broken
+    assert "invalid_revision_model" in broken
+
+
 def test_a_structurally_invalid_session_json_is_a_problem_not_a_traceback(workspace):
     """A session.json that is valid JSON but not valid metadata raised a bare Pydantic
     `ValidationError` through the CLI. Every failure a user can cause has to arrive as a Requivo

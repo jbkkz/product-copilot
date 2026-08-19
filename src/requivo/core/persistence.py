@@ -17,7 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from requivo import __version__
-from requivo.core.contracts import EngineOutput
+from requivo.core.contracts import EngineOutput, PersistedEngineOutput
 from requivo.core.errors import (
     InvalidFilenameError,
     InvalidSessionError,
@@ -187,8 +187,17 @@ def _slug(text: str) -> str:
 
 
 def load_model(path: Path) -> EngineOutput:
-    """Load a saved model so artifacts can be regenerated without redoing discovery."""
-    return EngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
+    """Load a saved model so artifacts can be regenerated without redoing discovery.
+
+    Read through `PersistedEngineOutput` — still an `EngineOutput`, so the annotation holds — because
+    a model on disk may have been written by a newer Requivo, and refusing an unknown key there costs
+    the reader a session they can otherwise understand completely. The block at the foot of
+    `contracts.py` says why the disk side and the provider side answer that question oppositely.
+
+    The explicit codec is #11's and is not optional here either: `_atomic_write` writes UTF-8, so a
+    read that takes the platform default decodes a model holding an accented value into mojibake that
+    is still valid JSON, on exactly the platforms this repo now has CI legs for."""
+    return PersistedEngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 # ── Canonical session store (.requivo/sessions/<slug>/) ────────────────────────
@@ -611,7 +620,7 @@ def load_session_model(slug: str) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
-    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
+    return PersistedEngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def load_revision_model(slug: str, revision: int) -> EngineOutput:
@@ -620,7 +629,7 @@ def load_revision_model(slug: str, revision: int) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
-    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
+    return PersistedEngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def session_request(slug: str) -> str:
@@ -751,7 +760,7 @@ def migrate_legacy(slug: str) -> SessionMeta:
             old = {}
     # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
     # leaving an empty session behind holding a name nothing can now use.
-    model = EngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
+    model = PersistedEngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
 
     if request:
         req_hash = _hash(request)

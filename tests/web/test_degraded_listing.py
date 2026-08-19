@@ -83,7 +83,7 @@ def break_request(slug: str) -> None:
 def break_model(slug: str) -> None:
     """A crash mid-write leaves `model.json` truncated — scenario B, and the sharpest of the three.
 
-    `status()` reaches `EngineOutput.model_validate_json`, which raises a pydantic `ValidationError`.
+    `status()` reaches `PersistedEngineOutput.model_validate_json`, which raises a pydantic `ValidationError`.
     That is not a `RequivoError`, so it misses the viewmodel's `SessionNotFoundError` catch *and*
     `create_app`'s `RequivoError` handler, and lands on the bare `Exception` handler as a 500 over
     the whole page.

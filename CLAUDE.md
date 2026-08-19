@@ -76,7 +76,8 @@ requivo/
   streams.py       stdout/stderr encoding — one chokepoint, called once by cli.app() (see invariant 16)
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the deterministic engine — no LLM, no provider, no argv/stdout
-    contracts.py     Pydantic contracts (StrictModel base) + stable ids + slot vocabulary
+    contracts.py     Pydantic contracts (StrictModel base) + stable ids + slot vocabulary, and the
+                     permissive PersistedEngineOutput mirror everything reads off disk through
     analysis.py      readiness / soft slots / blockers    context.py   card + prompt assembly (no LLM)
     persistence.py   session store: .requivo layout, revisions, migrate_legacy, atomic writes
     validation.py    validate_proposal → structured errors  errors.py  RequivoError (+ .to_dict())
@@ -157,6 +158,21 @@ bug that looked like correct behaviour.
    `docs/compatibility.md` is the written contract — update it in the same change, not later. Forward
    compatibility is the other half: persisted models are `extra="allow"`, so a field from a *newer*
    Requivo survives a round-trip through an older one. Retiring a key is explicit, in `_RETIRED_KEYS`.
+   That held for `session.json` and, until #14, was simply false for `model.json`, which was read
+   through the *provider* contract and therefore refused an unknown key outright — so the promise
+   most likely to be believed was the one nothing enforced. The two directions are two contracts
+   now: `StrictModel` for what an LLM fills (invariant 4), `PersistedEngineOutput` for what is read
+   off disk. They disagree on purpose; the block at the foot of `contracts.py` says why, and
+   `test_the_persisted_contract_is_permissive_all_the_way_down` fails if a nested contract gains a
+   strict-only twin, with `…_copies_every_constraint_it_restates` beside it for the other half of a
+   field's contract — a mirror **must** restate `Field(...)` (pydantic drops the parent's `FieldInfo`
+   on re-annotation, which would silently make the field required), so shared limits live in a
+   constant like `MAX_QUESTIONS` and the graph guard is what stops them drifting.
+   **Whatever reads a persisted model must read it permissively — including `integrity.py`**, or
+   `doctor` reports a defect in a session the loader opens without complaint.
+   And a permissive read is only half: **whatever writes one must preserve what it could not name.**
+   Reading alone left `resolve()` dropping the key on the next turn — the visible refusal traded for
+   a silent loss, which is the worse of the two. See invariant 10.
 9. **A precondition is held across the writes it authorises.** `save_revision` checks
    `expected_revision` and then performs five writes; without `session_lock` around both, two writers
    pass the same check and the second overwrites the first — the check reads as protection while
@@ -171,6 +187,12 @@ bug that looked like correct behaviour.
     apply, and the provider's `run(…, carry_from=…)` for a turn it reasons itself. Read as an
     `EngineOutput` instead, an ordinary refinement turn — which `engine.md` never asks to re-state the
     brief — deleted every decision the assessment had produced, silently.
+    A key this version cannot *name* is a fourth thing the proposal cannot speak to, and `resolve()`
+    carries it for the same reason (#14): a `ModelProposal` is `extra="forbid"`, so its silence about
+    a field a newer Requivo added is not a decision to delete it. That is why the reasoning
+    collections carry `SerializeAsAny` — a carried-forward item is a permissive instance under a
+    strict annotation, and pydantic serializes by the annotation — and why `resolve()` returns a
+    `PersistedEngineOutput` when the model it refines holds a top-level key it could not name.
 11. **Creating a session is one atomic claim on its slug.** `create_session` assembles the session in a
     staging directory and renames it into place; the rename either wins the slug or raises
     `SessionExistsError`. Never decide with a preceding existence check — two concurrent creations both

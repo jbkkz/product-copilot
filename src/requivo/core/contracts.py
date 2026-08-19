@@ -6,11 +6,22 @@ import json
 from enum import Enum
 from typing import Annotated, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, model_validator
 
 from requivo.paths import FRAMEWORK
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+
+# The engine asks at most this many questions per turn. A constant rather than a literal because two
+# contracts carry the cap — `ModelProposal` and its persisted mirror — and pydantic does **not** let
+# the mirror inherit it: re-annotating a field in a subclass without restating `Field(...)` drops the
+# parent's constraints *and* its default, which would silently make `questions` required. So the
+# mirror is forced to say it again, and two hand-written numbers that must agree and are checked by
+# nothing is the defect class #14 exists to remove. `test_the_persisted_mirror_copies_every_
+# constraint_it_restates` pins the general property; this name removes the instance.
+# The prompt asset says 3–6 in prose and cannot read this, so `engine.md` is the one place the number
+# is genuinely duplicated — deliberately, and it is a floor-and-ceiling hint there rather than a cap.
+MAX_QUESTIONS = 6
 
 
 class StrictModel(BaseModel):
@@ -152,29 +163,54 @@ class ModelProposal(StrictModel):
     # inherited from StrictModel and restated here so the whole config is visible in one place.
     model_config = ConfigDict(protected_namespaces=(), extra="forbid")
     model: dict[str, Slot]
-    # The engine asks at most 6 (the prompt says 3–6; the stop signal is []). The cap is an invariant,
-    # not a suggestion — a turn that floods 12 questions has stopped prioritising by information value.
-    questions: list[Question] = Field(default_factory=list, max_length=6)
+    # The engine asks at most MAX_QUESTIONS (the prompt says 3–6; the stop signal is []). The cap is an
+    # invariant, not a suggestion — a turn that floods 12 questions has stopped prioritising by
+    # information value. The persisted mirror restates this field and must restate the cap with it.
+    questions: list[Question] = Field(default_factory=list, max_length=MAX_QUESTIONS)
     summary: Summary
     # The reasoning layer — persisted so generators inherit it, not just the facts. Filled at discovery
     # finalization by absorbing advise()'s Brief. These types are defined below (Brief section);
     # forward-referenced here, resolved by model_rebuild() at the end of this module.
-    decisions: Optional[list[DesignDecision]] = None
-    challenges: Optional[list[Challenge]] = None
-    opportunities: Optional[list[Opportunity]] = None
+    #
+    # `SerializeAsAny` on these three and nowhere else, because these three are the only fields a
+    # value read off disk survives into: `resolve()` carries an unstated collection forward from the
+    # model being refined (invariant 10), so a `PersistedDesignDecision` loaded from a newer
+    # Requivo ends up sitting under this strict annotation. Pydantic serializes by the *annotated*
+    # type, so without this the item keeps its unknown key in memory and loses it on the very next
+    # write — the loud failure #14 removed, coming back as a quiet one. Validation is untouched: an
+    # invented field in a provider reply is still refused here, because that arrives as a dict and
+    # is validated, not carried.
+    decisions: Optional[list[SerializeAsAny[DesignDecision]]] = None
+    challenges: Optional[list[SerializeAsAny[Challenge]]] = None
+    opportunities: Optional[list[SerializeAsAny[Opportunity]]] = None
 
     def resolve(self, current: Optional[EngineOutput] = None) -> EngineOutput:
         """Collapse the proposal onto the model it refines, yielding a complete `EngineOutput`.
 
         Every collection the proposal left unstated is carried forward from `current`; every one it
         stated — including as an empty list — replaces what was there. With no `current` (a first
-        discovery) an unstated collection is simply empty: there is nothing to carry."""
+        discovery) an unstated collection is simply empty: there is nothing to carry.
+
+        A key `current` carries that this version cannot name is carried the same way, and for the
+        same reason (#14). A proposal is `extra="forbid"`, so it *cannot* speak to a field a newer
+        Requivo added — silence there is not a decision to delete it, exactly as an omitted
+        `decisions` is not. Dropping it here would undo the fix one layer along: the model would
+        load with the unknown key and lose it on the first refinement turn, which is the loud
+        failure #14 removed returning as a quiet one. The result is then a `PersistedEngineOutput`,
+        because that is the only kind of `EngineOutput` that can hold such a key; the round trip
+        through `model_dump()` is what re-admits it, and it costs one extra validation on the rare
+        path rather than on every apply.
+
+        What is *not* carried, and is a real narrowing rather than an oversight: the slots, the
+        summary and the questions come from the proposal, which replaces them wholesale. An unknown
+        key inside a slot written by a newer Requivo does not survive an apply, because the apply
+        supersedes that slot with one this version built."""
         prior = current or EngineOutput(model={}, summary=Summary())
 
         def keep(stated, established):
             return list(established) if stated is None else list(stated)
 
-        return EngineOutput(
+        resolved = EngineOutput(
             model=self.model,
             questions=self.questions,
             summary=self.summary,
@@ -182,6 +218,10 @@ class ModelProposal(StrictModel):
             challenges=keep(self.challenges, prior.challenges),
             opportunities=keep(self.opportunities, prior.opportunities),
         )
+        carried = getattr(prior, "__pydantic_extra__", None) or {}
+        if not carried:
+            return resolved
+        return PersistedEngineOutput.model_validate({**resolved.model_dump(), **carried})
 
     @model_validator(mode="after")
     def _validate_slot_vocabulary(self):
@@ -230,9 +270,9 @@ class EngineOutput(ModelProposal):
     means none or means unstated. A proposal becomes one through `resolve()`, which is the only place
     that question is answered."""
 
-    decisions: list[DesignDecision] = Field(default_factory=list)
-    challenges: list[Challenge] = Field(default_factory=list)
-    opportunities: list[Opportunity] = Field(default_factory=list)
+    decisions: list[SerializeAsAny[DesignDecision]] = Field(default_factory=list)
+    challenges: list[SerializeAsAny[Challenge]] = Field(default_factory=list)
+    opportunities: list[SerializeAsAny[Opportunity]] = Field(default_factory=list)
 
 
 class Story(StrictModel):
@@ -503,3 +543,95 @@ class ReleaseNotes(StrictModel):
 # The reasoning fields forward-reference the types defined above; resolve them on both contracts.
 ModelProposal.model_rebuild()
 EngineOutput.model_rebuild()
+
+
+# ── The persisted model: the same shape, the opposite rule on unknown keys ────────────────────────
+#
+# Two invariants ask opposite things of this one shape, and neither of them is negotiable.
+#
+#   Invariant 4 — what an LLM fills is `extra="forbid"`. A field the model invented must fail loudly
+#   and ride `_complete()`'s retry loop, because a silently dropped key makes a prompt that has
+#   drifted away from its contract read as a clean success. `StrictModel` says all of this already.
+#
+#   Invariant 8 — what is on disk is forward-compatible. `.requivo/sessions/` is public at
+#   format_version 1 and `docs/compatibility.md` says adding a field, anywhere, needs no bump; so a
+#   key written by a *newer* Requivo must survive a round-trip through an older one rather than
+#   making the session unopenable. `SessionMeta` and `RevisionRecord` have said this since 0.9.4.
+#
+# The two are not inconsistent, and this comment exists so the next reader does not "fix" them into
+# agreement. What differs is where the bytes came from, and therefore what an unknown key is
+# evidence *of*. From a provider it means something is wrong now, and there is a retry that can put
+# it right — so refusing is the cheap, self-healing answer. From disk it means something is newer,
+# there is no retry, and refusing costs the user a session they can otherwise read perfectly well.
+# Relaxing `StrictModel` to settle the argument would persist a hallucinated field as though it were
+# part of the model; tightening the disk side is the bug this block was written to close (#14).
+#
+# Reading permissively is only half of it, and the first version of this fix stopped there. What a
+# reader accepts and what a *writer* preserves are two questions, and getting the first right while
+# the second silently drops the key is worse than the refusal it replaced: nothing fails and nothing
+# says so. Two places had to move with it, both in `resolve()` — `SerializeAsAny` on the strict
+# tree's three reasoning collections, because those are where a value read off disk survives into,
+# and carrying `current`'s top-level unknown keys, because a proposal is `extra="forbid"` and so
+# cannot speak to them at all. `resolve()` states the argument for each.
+#
+# What this genuinely does not promise, and the distinction is worth keeping sharp. An *apply*
+# replaces the slots, the summary and the questions with the ones the proposal carries (invariant
+# 10), so an unknown key inside one of those does not survive a refinement turn — it is superseded,
+# not dropped. And an unknown *slot id* is still refused: that is `schema_version`'s frontier, which
+# refuses a newer slot schema with a message naming the upgrade, and absorbing it here as an extra
+# key would route it around that.
+#
+# The mirror is written out class by class rather than generated from the strict tree, so it greps
+# and so nothing about it is clever. Its one failure mode — a nested contract nobody remembered to
+# twin, which re-forbids extras one level down and says nothing — is guarded by a test that walks
+# the field graph of both trees rather than listing them
+# (`test_the_persisted_contract_is_permissive_all_the_way_down`).
+
+
+class PersistedSlot(Slot):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedQuestion(Question):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedSummary(Summary):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedDesignDecision(DesignDecision):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedChallenge(Challenge):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedOpportunity(Opportunity):
+    model_config = ConfigDict(extra="allow")
+
+
+class PersistedEngineOutput(EngineOutput):
+    """An `EngineOutput` as it is read back from `model.json` or `revisions/NNNN-model.json`.
+
+    A subclass, so every reader annotated `EngineOutput` keeps working and every validator the
+    strict tree carries — the slot vocabulary, the DAG edges, the derived ids — still runs. The only
+    difference is that an unknown key is carried instead of refused, at every level: the nested
+    fields are re-declared against the permissive twins because pydantic serializes by the
+    *annotated* type, so a permissive value under a strict annotation would load fine and then lose
+    its extras on the next write — which is the half of the promise that matters.
+
+    Read the block above for why this and `StrictModel` disagree on purpose."""
+
+    model_config = ConfigDict(protected_namespaces=(), extra="allow")
+    # Every re-declared field has to restate its constraints, because pydantic drops the parent's
+    # `FieldInfo` when a subclass re-annotates: annotation alone would lose the cap *and* the default,
+    # making `questions` required. `MAX_QUESTIONS` is why the cap cannot drift by value, and
+    # `test_the_persisted_mirror_copies_every_constraint_it_restates` is why it cannot drift at all.
+    model: dict[str, PersistedSlot]
+    questions: list[PersistedQuestion] = Field(default_factory=list, max_length=MAX_QUESTIONS)
+    summary: PersistedSummary
+    decisions: list[PersistedDesignDecision] = Field(default_factory=list)
+    challenges: list[PersistedChallenge] = Field(default_factory=list)
+    opportunities: list[PersistedOpportunity] = Field(default_factory=list)
