@@ -43,7 +43,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from requivo.core.contracts import EngineOutput
+from requivo.core.contracts import PersistedEngineOutput
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import InvalidFilenameError, RequivoError
 from requivo.core.persistence import _hash, _is_contained, canonical_dir, migrate_session, validate_filename
@@ -138,7 +138,11 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
                 f"revisions/{i:04d}-model.json does not match the hash recorded for it — the file "
                 "was changed after it was written")
         try:
-            EngineOutput.model_validate_json(payload)
+            # The permissive contract, matching `load_revision_model`: a field a newer Requivo added
+            # is legal on disk, so a checker that refused it would report a defect in a session that
+            # opens perfectly well — the diagnostic disagreeing with the loader about the same file
+            # is worse than either answer on its own (#14).
+            PersistedEngineOutput.model_validate_json(payload)
         except (ValidationError, ValueError) as e:
             bad("invalid_revision_model", f"revisions/{i:04d}-model.json is not a valid model: {e}")
 
@@ -161,7 +165,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
     else:
         payload = model_path.read_text(encoding="utf-8")
         try:
-            EngineOutput.model_validate_json(payload)
+            PersistedEngineOutput.model_validate_json(payload)  # permissive, as above
         except (ValidationError, ValueError) as e:
             bad("invalid_model", f"model.json is not a valid model: {e}")
         last_hash = seen_hashes.get(n)

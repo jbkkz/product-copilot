@@ -112,7 +112,7 @@ def _revision_file(slug: str, revision: int):
 
 def test_a_corrupt_revision_file_is_refused_as_a_structured_error(moved):
     """#6 F2. `except RequivoError` only caught a *missing* revision. A file that is present but
-    truncated — an interrupted sync — reaches `EngineOutput.model_validate_json`, which raises
+    truncated — an interrupted sync — reaches `PersistedEngineOutput.model_validate_json`, which raises
     pydantic's `ValidationError`: a `ValueError`, so the guard never fired and a raw traceback came
     out of a service call, from inside the session lock.
     """

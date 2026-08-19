@@ -134,7 +134,7 @@ class ArtifactService:
         alone, which covers exactly one way a revision fails to load: `load_revision_model` raises
         `SessionNotFoundError` for a file that is *absent*. A file that is present and unreadable took
         every other route out — a truncated `0002-model.json` from an interrupted sync reaches
-        `EngineOutput.model_validate_json` and raises pydantic's `ValidationError` (a `ValueError`),
+        `PersistedEngineOutput.model_validate_json` and raises pydantic's `ValidationError` (a `ValueError`),
         a revision that fails to decode raises `UnicodeDecodeError` (also a `ValueError`), and a
         permission or device error raises `OSError`. None of the three is a `RequivoError`, so the
         one block that exists to turn "I cannot establish freshness" into a refusal never ran, and a
@@ -143,16 +143,17 @@ class ArtifactService:
         their base classes rather than by name so the next reader of a corrupt file joins them; the
         `try` wraps only the two loads, so a defect in the diff below still surfaces as itself.
 
-        **What this does not close, stated rather than implied.** The decode arm only fires if the
+        **What this used to leave open, and no longer does (#11).** The decode arm only fires if the
         decode actually *raises*, and that is decided one layer down, in `load_revision_model` /
-        `load_session_model`, which call `p.read_text()` with **no explicit encoding** while
-        `_atomic_write` writes those same files as UTF-8. Where the locale default is not UTF-8 —
-        cp1252 on a default Windows install — most UTF-8 byte sequences decode to *something*
-        instead of failing, so a revision holding an em-dash comes back mojibaked and this guard sees
-        nothing to catch. `_stale_since` would then answer from quietly corrupted text, which is the
-        silent failure this refusal exists to avoid, arriving by a different door. Closing it means
-        `encoding="utf-8"` on those two reads — `read_artifact_file` already carries it and says why —
-        and that file belongs to another lane, so it is named here rather than reached into."""
+        `load_session_model`. Those two called `p.read_text()` with no explicit encoding while
+        `_atomic_write` writes the same files as UTF-8, so where the locale default is not UTF-8 —
+        cp1252 on a default Windows install — most UTF-8 byte sequences decode to *something* rather
+        than failing: a revision holding an em-dash came back mojibaked, this guard saw nothing to
+        catch, and `_stale_since` answered from quietly corrupted text. Both reads name
+        `encoding="utf-8"` now, as does every other text read in the package, and
+        `tests/test_encoding.py` fails the build if one loses it again. The paragraph is kept rather
+        than deleted because the *shape* is the point: this refusal can only catch a decode that
+        raises, so a decode that silently succeeds on the wrong codepage bypasses it entirely."""
         if source_revision >= current_revision:
             return False
         if source_revision < 1:

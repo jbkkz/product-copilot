@@ -6,11 +6,13 @@ canonical `.requivo/sessions/` layout is exercised in isolation.
 from __future__ import annotations
 
 import json
+import typing
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from requivo.core import persistence as store
-from requivo.core.contracts import EngineOutput, _schema_order, schema_slot_ids
+from requivo.core.contracts import EngineOutput, ModelProposal, PersistedEngineOutput, _schema_order, schema_slot_ids
 from requivo.core.errors import MissingRequiredSlotError, RequivoError, SessionNotFoundError, UnknownSlotError
 from requivo.core.validation import validate_proposal
 from requivo.services.artifacts import ArtifactService
@@ -662,6 +664,175 @@ def test_a_session_from_a_newer_requivo_is_refused_not_guessed(workspace):
         store.read_meta("from-the-future")
     assert ei.value.code == "invalid_session"
     assert "upgrade requivo" in str(ei.value).lower()
+
+
+# ── the other half of the format promise: model.json (#14) ────────────────────
+# `session.json` has carried forward compatibility since 0.9.4; `model.json` never did, although
+# `docs/compatibility.md` promised it for the layout as a whole. The tests below are the model-side
+# mirror of the two above: a model a *newer* Requivo wrote loads and survives a round-trip, and the
+# provider boundary that shares its shape still refuses the same payload.
+
+
+def _model_from_the_future() -> dict:
+    """A model as a Requivo one minor version ahead might write it — a field added at the top level,
+    inside a slot, inside the summary, inside a question and inside the reasoning layer. "Anywhere"
+    is the word `docs/compatibility.md` uses, so the fixture puts one in each kind of place rather
+    than only at the root, where a top-level-only relaxation would pass and still be broken."""
+    m = _full_model()
+    m["risk_register"] = [{"id": "R1", "text": "adoption"}]        # a new top-level collection
+    m["model"]["workflow"]["provenance"] = "interview-3"           # a new field inside a slot
+    m["summary"]["horizon"] = "two quarters"                       # a new field inside the summary
+    m["questions"] = [{"q": "Who approves?", "slot": "workflow", "why": "unclear", "asked_at": "r2"}]
+    m["decisions"] = [{"decision": "Approve-first", "derived_from": ["workflow"], "settled_at": "r1"}]
+    return m
+
+
+def test_a_model_written_by_a_newer_requivo_loads_and_survives_a_round_trip(workspace):
+    """The forward half of invariant 8, for `model.json`. Before #14 this raised a bare pydantic
+    `ValidationError` — `EngineOutput` inherits `extra="forbid"` from `StrictModel` — so a 0.9.x
+    install in a mixed-version workspace could not open the session at all, and the failure arrived
+    as a traceback rather than as anything a user could act on."""
+    store.create_session("mixed", "A leave approval system.")
+    d = store.canonical_dir("mixed")
+    (d / "model.json").write_text(json.dumps(_model_from_the_future(), indent=2), encoding="utf-8")
+
+    loaded = store.load_session_model("mixed")           # used to raise ValidationError
+    assert loaded.summary.objective == "A leave approval system"
+    assert loaded.model["workflow"].confidence.value == "empty"
+
+    # Loading is only half of it. Under `extra="ignore"` the load succeeds and the unknown keys are
+    # dropped the first time this version writes the file back, which turns "an old reader tolerates
+    # a new field" into "an old reader destroys it" — the exact regression 0.9.4 fixed for
+    # session.json. So the assertion is on what is on disk after a write.
+    store.save_revision("mixed", loaded)
+    for path in (d / "model.json", d / "revisions" / "0001-model.json"):
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert written["risk_register"] == [{"id": "R1", "text": "adoption"}], path.name
+        assert written["model"]["workflow"]["provenance"] == "interview-3", path.name
+        assert written["summary"]["horizon"] == "two quarters", path.name
+        assert written["questions"][0]["asked_at"] == "r2", path.name
+        assert written["decisions"][0]["settled_at"] == "r1", path.name
+
+
+def test_an_unknown_key_survives_a_refinement_turn_and_not_only_a_re_save(workspace):
+    """The half the first version of this fix got wrong, and the reason it is worth a second test.
+
+    Making the *read* permissive is not enough: `resolve()` carries an unstated reasoning collection
+    forward from the model being refined (invariant 10), so the carried items are permissive
+    instances sitting under the strict tree's annotation — and pydantic serializes by the annotated
+    type, so the unknown key stayed alive in memory and vanished on the next write. The same held
+    for a key at the top level, which the proposal cannot speak to at all because it is
+    `extra="forbid"`. Both turned the refusal #14 removed into a silent loss on the first ordinary
+    turn, which is strictly worse: nothing failed and nothing said so."""
+    store.create_session("refined", "A leave approval system.")
+    d = store.canonical_dir("refined")
+    (d / "model.json").write_text(json.dumps(_model_from_the_future(), indent=2), encoding="utf-8")
+    store.save_revision("refined", store.load_session_model("refined"))   # now at revision 1
+
+    # An ordinary refinement turn: the full slot set and a new objective, saying nothing about the
+    # reasoning layer — the shape `engine.md` actually asks for.
+    SessionService().update_model("refined", {**_full_model(), "summary": {"objective": "Refined"}})
+
+    written = json.loads((d / "model.json").read_text(encoding="utf-8"))
+    assert written["summary"]["objective"] == "Refined", "the turn did not land"
+    assert written["decisions"][0]["settled_at"] == "r1"
+    assert written["risk_register"] == [{"id": "R1", "text": "adoption"}]
+    # And the narrowing that is real, pinned so it is a stated limit rather than a belief: the
+    # slots, the summary and the questions come *from* the proposal, which replaces them wholesale,
+    # so an unknown key inside one of those does not survive an apply. `docs/compatibility.md` says
+    # exactly this; the assertion is here so the sentence cannot quietly stop being true.
+    assert "provenance" not in written["model"]["workflow"]
+    assert "horizon" not in written["summary"]
+
+
+def test_the_provider_boundary_still_refuses_the_same_payload():
+    """The positive control for the test above, and the reason the fix is a sibling contract rather
+    than a relaxed flag on `StrictModel`. Invariant 4 is not collateral damage: the *same* keys that
+    are carried when they come off disk must still be rejected when they come from a provider, where
+    they mean a drifted prompt and where `_complete()` has a retry that can fix it."""
+    for contract in (EngineOutput, ModelProposal):
+        with pytest.raises(ValidationError) as ei:
+            contract.model_validate(_model_from_the_future())
+        assert "risk_register" in str(ei.value)
+    # And permissive is not the same as credulous: the persisted contract still enforces the slot
+    # vocabulary, because a slot id from the future is `schema_version`'s business and is refused
+    # with its own message rather than absorbed as an unknown key.
+    with pytest.raises(ValidationError):
+        PersistedEngineOutput.model_validate(
+            {**_full_model(), "model": {**_full_model()["model"], "real_problem": _slot()}})
+
+
+def _contracts_reachable_from(cls: type[BaseModel]) -> set[type[BaseModel]]:
+    """Every pydantic contract reachable from `cls` through its own fields, including `cls`."""
+    found: set[type[BaseModel]] = set()
+
+    def walk_type(ann) -> None:
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            walk_model(ann)
+        for arg in typing.get_args(ann):
+            walk_type(arg)
+
+    def walk_model(model: type[BaseModel]) -> None:
+        if model in found:
+            return
+        found.add(model)
+        for field in model.model_fields.values():
+            walk_type(field.annotation)
+
+    walk_model(cls)
+    return found
+
+
+def test_the_persisted_contract_is_permissive_all_the_way_down():
+    """The guard on the shape of the fix. `PersistedEngineOutput` mirrors the model tree class by
+    class, and the failure mode of a hand-written mirror is a nested contract nobody remembered to
+    twin — which does not fail loudly, it just re-forbids extras one level in. So the tree is walked
+    rather than listed: add a nested contract to the model and this fails until it has a sibling.
+
+    Both directions are asserted, because the point is the asymmetry and not either half of it."""
+    persisted = _contracts_reachable_from(PersistedEngineOutput)
+    strict = _contracts_reachable_from(EngineOutput)
+    # A walk that finds nothing is an all-clear nobody earned; the model tree has seven contracts.
+    assert len(persisted) == len(strict) >= 7
+    assert [c.__name__ for c in persisted if c.model_config.get("extra") != "allow"] == []
+    assert [c.__name__ for c in strict if c.model_config.get("extra") != "forbid"] == []
+
+
+def test_the_persisted_mirror_copies_every_constraint_it_restates():
+    """The sibling of the walk above, for the other half of a field's contract.
+
+    That test compares `extra` policy; this one compares *constraints*, and the gap between them was
+    a live bug: both trees carried a hand-written `max_length=6` on `questions` and nothing made them
+    agree. The failure is asymmetric and does not need any version skew to bite — raise the strict cap
+    to 8, miss the mirror, and a session **this build just wrote** with seven questions fails to load.
+    That is the loud-failure-on-read #14 exists to remove, reintroduced one field along.
+
+    The mirror cannot simply inherit its way out of this. Pydantic drops the parent's `FieldInfo`
+    when a subclass re-annotates a field, so `questions: list[PersistedQuestion]` with no `Field(...)`
+    loses the cap *and* the default factory — which would quietly make `questions` required, a worse
+    failure than the drift. Restating is forced; what is not forced is restating it *correctly*, so
+    that is what gets pinned."""
+    pairs = [(p, p.__mro__[1]) for p in _contracts_reachable_from(PersistedEngineOutput)]
+    for permissive, strict in pairs:
+        assert issubclass(strict, BaseModel) and strict is not BaseModel, permissive.__name__
+    # Not vacuous, on both counts: seven twins exist, and the mirror really does re-point six fields
+    # at permissive types — which is exactly why it has to restate their constraints.
+    assert len(pairs) == 7
+    redeclared = {name for p, s in pairs for name in p.model_fields
+                  if p.model_fields[name].annotation != s.model_fields[name].annotation}
+    assert redeclared == {"model", "questions", "summary", "decisions", "challenges", "opportunities"}
+
+    drift = []
+    for permissive, strict in pairs:
+        assert set(permissive.model_fields) == set(strict.model_fields), permissive.__name__
+        for name, pf in permissive.model_fields.items():
+            sf = strict.model_fields[name]
+            if (pf.metadata != sf.metadata                                     # min/max length, ge/le…
+                    or pf.is_required() != sf.is_required()
+                    or (pf.default_factory is None) != (sf.default_factory is None)
+                    or pf.default != sf.default):
+                drift.append(f"{permissive.__name__}.{name}: {sf.metadata} vs {pf.metadata}")
+    assert drift == []
 
 
 def test_update_missing_session_raises(workspace):

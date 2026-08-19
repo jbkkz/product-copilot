@@ -30,6 +30,24 @@ Concretely, guaranteed:
   know", and it is what makes adding a field genuinely safe — before 0.9.4 the unknown key was dropped
   the first time an older Requivo wrote the file, so a mixed-version workspace quietly destroyed it.
   Keys that Requivo has *retired* are the deliberate exception: those are dropped, in `migrate_session()`.
+- **The same is now true of `model.json`, and was not before** (#14). This page said "adding a
+  field, anywhere" from the start and only `session.json` delivered it. `model.json` and
+  every `revisions/NNNN-model.json` were read through the same contract an LLM reply is validated
+  against, which is `extra="forbid"` on purpose, so a key added by a later version did not merely get
+  dropped on write — the session could not be opened at all, and the refusal arrived as a Pydantic
+  traceback rather than as a message naming the upgrade. Reads now go through a permissive sibling
+  contract; the provider boundary is unchanged and still refuses an invented field, because there the
+  unknown key means a drifted prompt and there is a retry that can correct it. Preservation is the
+  same promise `session.json` carries: the key survives a **load, a mutation and a write back**, so
+  an ordinary refinement turn through an older Requivo keeps it rather than quietly destroying it.
+  Two limits are worth stating rather than leaving to be discovered. An *apply* **replaces** the
+  slots, the summary and the questions with the ones the proposal carries, so an unknown key inside
+  one of those does not survive a turn — it is superseded by a value this version built, not dropped
+  by a reader that could not hold it. The reasoning layer (`decisions`, `challenges`,
+  `opportunities`) and any key at the top level are carried, because a turn that says nothing about
+  them is not a turn that deleted them. And an unknown **slot id** is still refused — that is
+  `schema_version`'s frontier, described below, and absorbing a future slot as an unknown key would
+  route it around the clear refusal that frontier exists to give.
 
 What may change without a `format_version` bump:
 
