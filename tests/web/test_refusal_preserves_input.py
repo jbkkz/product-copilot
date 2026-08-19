@@ -108,6 +108,31 @@ def test_the_empty_request_refusal_also_keeps_the_session_name(client):
     assert input_value(r.text, "slug") == "leave-approval"
 
 
+# Every refusal on the form, paired with a session-name field the reader left **blank**. The cases
+# above all submit a name, so none of them can see a refusal that invents one.
+REFUSALS_WITH_NO_NAME = [
+    ("an over-long request", {"request_text": LONG_REQUEST}, 413),
+    ("an empty request", {"request_text": "   "}, 400),
+]
+
+
+@pytest.mark.parametrize("label, data, status", REFUSALS_WITH_NO_NAME)
+def test_a_refusal_never_fills_in_a_session_name_the_reader_did_not_type(client, label, data, status):
+    """A refusal must hand back the form as submitted — and a field left blank was submitted blank.
+
+    `create_session` reuses one name for two meanings: the string the reader typed, and the argument
+    the service takes, where `None` means *derive a slug from the request*. An empty name collapses to
+    `None` before the empty-request arm is reached, and Jinja stringifies that, so the reader got
+    `value="None"` in a box they never touched. It also fails the field's own
+    `pattern="[a-z0-9]+(-[a-z0-9]+)*"`, so they had to notice it and clear it before they could
+    resubmit — the refusal path #30 built to stop costing the reader work had started adding some.
+    """
+    r = client.post("/sessions", data={**data, "provider": "create_only"})
+    assert r.status_code == status, label
+    assert input_value(r.text, "slug") == "", label
+    assert "None" not in input_value(r.text, "slug"), label
+
+
 # ── the context-card selection ────────────────────────────────────────────────
 
 def test_a_refusal_keeps_the_context_cards_the_reader_picked(client):

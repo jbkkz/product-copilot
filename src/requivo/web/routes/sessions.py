@@ -39,7 +39,14 @@ def create_session(
     # Bounds are refusals, not truncations: a request silently cut at 20k would be reasoned over as if
     # it were the whole thing, and the user would never learn which half the engine saw.
     text = request_text.strip()
-    chosen_slug = slug.strip()
+    # Two names because there are two meanings, and sharing one was a bug. `typed_slug` is the string
+    # the reader put in the box — always a string, empty when they left it alone. `chosen_slug` is the
+    # argument the service takes, where `None` means *derive a slug from the request*. When one
+    # variable carried both, an empty box became `None` before the empty-request arm was reached, and
+    # the re-render stringified it: the reader got `value="None"` in a field they never touched, which
+    # also fails the field's own `pattern` and so had to be cleared before they could resubmit. A
+    # refusal built to stop costing the reader work had started adding some.
+    typed_slug = slug.strip()
 
     def refused(status: int, code: str, message: str):
         """Hand the page back with the submission still in it, rather than sending the reader to an
@@ -47,30 +54,34 @@ def create_session(
 
         Every refusal on this form goes through here, so a reader never has to learn which of them
         keeps their work. The status is unchanged — 413 is still 413 — and so is the error code,
-        which rides the banner rather than a full page.
+        which rides the banner rather than a full page. It reads `typed_slug`, never `chosen_slug`:
+        what goes back in the form is what the reader submitted, not what the service was going to be
+        told.
         """
         return templates.TemplateResponse(request, "home.html", home_context(
             sessions, error=message, error_code=code,
-            form={"request_text": text, "slug": chosen_slug, "cards": cards, "provider": provider},
+            form={"request_text": text, "slug": typed_slug, "cards": cards, "provider": provider},
         ), status_code=status)
 
     if len(text) > MAX_REQUEST_CHARS:
         return refused(413, InputTooLargeError.code,
                        f"the product request exceeds {MAX_REQUEST_CHARS:,} characters — trim it and "
                        "resubmit")
-    if len(chosen_slug) > MAX_SLUG_CHARS:
+    if len(typed_slug) > MAX_SLUG_CHARS:
         return refused(413, InputTooLargeError.code,
                        f"the session name exceeds {MAX_SLUG_CHARS} characters")
-    if chosen_slug:
+    if typed_slug:
         # The session-name field's *other* refusal, and it re-renders for the same reason. Leaving one
         # of one field's two refusals throwing the reader's work away is a worse state than either
         # arm alone, because which one they hit is not something they can predict.
         try:
-            validate_slug(chosen_slug)
+            validate_slug(typed_slug)
         except InvalidSlugError as exc:
             return refused(400, exc.code, exc.message)
-    else:
-        chosen_slug = None
+    # An empty box means *derive a slug from the request*, which the service spells `None`. Computed
+    # here as its own value rather than by overwriting `typed_slug`, so nothing below can hand the
+    # service's vocabulary back to the reader as if they had typed it.
+    chosen_slug = typed_slug or None
     # An unknown card is an error, not something to filter out: dropping it leaves an empty selection,
     # which every reader downstream treats as "load every card" — the opposite of narrowing.
     #
