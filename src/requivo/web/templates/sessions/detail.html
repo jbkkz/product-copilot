@@ -21,6 +21,17 @@ CLI — they read the same session.</div>
 
 {% else %}
 <h1>{{ s.understood.objective if s.understood.objective else s.slug }}</h1>
+{# State at a glance, beside the title, so the page answers "where is this?" before it is scrolled.
+   Every value here is already computed and already stated in full further down — this is a summary
+   of the page, never a second source for it. #}
+{% set open_count = s.questions|length + s.more_questions|length %}
+<div class="page-meta">
+  {% if s.readiness.ready %}<span class="badge ok">Ready</span>
+  {% else %}<span class="badge warn">Not ready</span>{% endif %}
+  {% if open_count %}<span class="badge">{{ open_count }} open question{{ '' if open_count == 1 else 's' }}</span>{% endif %}
+  {% if s.primary_artifact and s.primary_artifact.stale %}<span class="badge danger">Needs updating</span>{% endif %}
+  <span class="page-meta-slug">{{ s.slug }}</span>
+</div>
 <h2 class="quiet">The request</h2>
 <blockquote class="request">{{ s.request_text }}</blockquote>
 
