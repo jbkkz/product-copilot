@@ -139,7 +139,7 @@ deleted (and what rested on them goes stale); send a list and it replaces. A ref
 nothing about them. To check a partial projection without applying it, use
 `model validate --allow-partial`. See [compatibility.md](compatibility.md#what-a-proposal-means).
 
-### Text encoding, and what exit code 3 means
+### Exit codes, and what 3 and 4 mean
 
 Requivo reads and writes UTF-8 throughout, whatever the machine's locale. A file *you* name —
 `requivo discover ./brief.md`, `requivo model apply <slug> proposal.json` — must be UTF-8 too; one
@@ -158,6 +158,7 @@ is impossible — a stream Requivo could not reconfigure, which
 | 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
 | 2 | Bad arguments (argparse) |
 | 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
+| 4 | **`session list` listed everything it could and had to degrade at least one row.** The listing is on stdout in full |
 
 Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
 its provider call, applies the revision and writes the artifact *before* it prints anything — so a
@@ -168,6 +169,37 @@ The message reads the run's usage ledger rather than assuming: it says a call **
 only when one was, because several verbs (`doctor`, `status`, `schema`) never call the provider at
 all and `discover` prints before it does. Telling you not to re-run a command that cost nothing
 would be the same misreport one layer up.
+
+Four exists for the same reason one number along. A session written by a newer Requivo, or one left
+half-written by a crash, cannot be read — and `requivo session list` used to answer that by exiting 1
+with a single message, **every other session invisible and nothing naming which one was the
+problem**. It now lists every session it can and gives the one it could not its own row:
+
+```
+Sessions under /work/.requivo/sessions:
+  leave-approval                           rev 3  (anthropic, 2026-08-19T09:04:11Z)
+  event-checkin                            could not be read — session format v2 is newer than this Requivo understands (v1) — upgrade requivo.
+
+1 session could not be read. `requivo session verify <slug>` reports what is wrong in full.
+```
+
+The degraded row **names the session and states nothing it could not read** — no revision, no
+provider, no timestamp. A plausible `rev 0` on a session nobody managed to open is a worse answer
+than no answer. It keeps the underlying error text, because *written by a newer Requivo, upgrade* is
+a remedy where a flattened *unreadable* is not. `session verify <slug>` is where the full story lives:
+it reports an integrity code for each way a `session.json` can be refused — a newer `format_version`,
+an unparseable file, a field of the wrong type. The one thing it cannot report on is a session
+directory whose *name* is not a valid slug, since it has no slug to take; there the row's own line is
+already the whole answer.
+
+A session at **revision 0** is not this state. It has no model yet because nothing has analysed it,
+which is a normal row and reads as one — *we could not look* and *we have not looked yet* are two
+different answers, and only the first is a problem.
+
+Neither 0 nor 1 is true of a listing with a hole in it, which is why it gets a number of its own:
+0 says nothing is wrong, 1 says nothing was listed. Making it non-zero is safe precisely because
+nothing is withheld — a script that only wants the rows still gets all of them on stdout, and
+`--json` carries `readable` and `error` per row for a caller that would rather branch than parse.
 
 ### Documents on stdin
 

@@ -70,10 +70,10 @@ the user never typed. An older `schema_version` keeps loading.
 
 ## The `--json` outputs are public
 
-`requivo status --json`, `model apply --json`, `model diff --json`, `artifact list --json`, `doctor
---json` and the structured error envelope (`{code, message, path?, details?}`) are what the Claude Code
-plugin drives. They follow the same rule as the session format: fields get added, populated fields do
-not change meaning without a note in the changelog.
+`requivo status --json`, `model apply --json`, `model diff --json`, `artifact list --json`, `session
+list --json`, `doctor --json` and the structured error envelope (`{code, message, path?, details?}`)
+are what the Claude Code plugin drives. They follow the same rule as the session format: fields get
+added, populated fields do not change meaning without a note in the changelog.
 
 Error `code` values are stable identifiers — assert on the code, never on the message text.
 
@@ -117,6 +117,29 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   embedded newline now reports `unsafe_selector_token` from `doctor` and `session verify` instead of
   printing it. No name Requivo itself writes is affected — `resolve_cards` has always resolved a
   selection against the installed cards, so such a value can only have arrived by import or by hand.
+
+- **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
+  `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
+  and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on
+  a workspace where every session loads.
+
+  What is new is that the command **no longer fails for the whole set** when one session cannot be
+  read — a `session.json` from a newer Requivo, or one left half-written by a crash. It used to exit
+  1 with a single message and no payload at all; it now prints the complete listing and exits **4**.
+
+  A degraded row **keeps the same key set** as a healthy one, with `null` in `revision`, `provider`
+  and `updated_at` rather than a missing key or a plausible `0`: a consumer looping over the payload
+  reading `row["revision"]` gets `None` from a row it was handed deliberately, not a `KeyError`.
+  **Branch on `readable`**, and treat `null` in those three as *we could not read this*, never as a
+  value. A session at revision 0 is `readable: true` with `revision: 0` — not analysed yet is a
+  normal state and is not this one.
+
+  The **terminal** output of the same command changed alongside it, in the same way `#40` changed
+  `doctor`'s: a `slug`, `provider` or `updated_at` carrying a control character is now escaped rather
+  than echoed, because all three are read back out of `session.json` and could otherwise write what
+  reads as a second, authoritative row at column 0. A value that is already one safe line is returned
+  byte-for-byte, so no session Requivo itself wrote is affected — such a value can only have arrived
+  by import or by hand. `--json` is unchanged and was never affected: `json.dumps` escapes it.
 
 - **`artifact save` without `--revision` is now `invalid_session`** (#6). It used to succeed, filling
   the omission in with the session's current revision and recording `stale: false` — an answer that
