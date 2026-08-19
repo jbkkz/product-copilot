@@ -32,6 +32,12 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   (`FileSessionRepository` today; Postgres-swappable for a future service).
 - **`render/`** turns data into strings; **`cli.py` + `deterministic.py`** are the only layers that
   touch argv/stdout/TTY. **`web/`** is a thin FastAPI + Jinja2 + HTMX layer over the same services.
+- **`streams.py`** owns the *encoding* of stdout and stderr, as `paths.py` owns the environment —
+  one place where "what happens when the console cannot represent this character" is answered.
+  `cli.app()` calls it once, before anything can print. It exists because a renderer must not be able
+  to kill a process **after** the mutation it was reporting has landed: `requivo brief … > out.txt`
+  used to complete its paid provider call, apply the revision, write the artifact, and only then die
+  on an em dash, so the operator re-ran and paid twice (#29).
 
 Every interface — the terminal CLI, the Claude Code plugin, the local Web app — is a thin layer over
 the same Core. There is no second implementation of the apply path.

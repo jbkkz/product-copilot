@@ -10,13 +10,14 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from pathlib import Path
 
 import pytest
 
 from requivo.core import persistence as store
 from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
-from requivo.core.errors import InvalidSlugError, RevisionConflictError
+from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
 from requivo.core.integrity import check_session
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
@@ -155,9 +156,292 @@ def test_concurrent_atomic_writes_do_not_collide_on_a_temp_file(workspace):
         t.join(timeout=30)
 
     assert errors == []
-    lines = set(target.read_text().splitlines())
+    lines = set(target.read_text(encoding="utf-8").splitlines())
     assert len(lines) == 1                                    # one writer's payload, not a blend
     assert not list(d.glob(".*tmp"))                          # no scratch left behind
+
+
+def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    """Create a symlink, or skip loudly naming what went untested.
+
+    Windows refuses `CreateSymbolicLink` unless the process holds `SeCreateSymbolicLinkPrivilege` or
+    the machine is in Developer Mode, and whether a CI runner has either is not something this suite
+    can assume. Letting that surface as a failure would be the harness reporting an environment limit
+    as a product verdict — the exact trap #3 names — and silently passing instead would claim a
+    coverage that does not exist. So it skips, and says which assertion did not run.
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as e:
+        pytest.skip(
+            f"this platform refuses to create a symlink ({type(e).__name__}: {e}). UNTESTED HERE: "
+            f"that a symlink escaping the session root is refused. The containment check itself still "
+            f"runs on every platform; only the symlink half of it is unreachable.")
+
+
+def _blind_to_dangling_links(monkeypatch) -> None:
+    """Give the store's own resolution the semantics CPython 3.9 has on Windows, on any platform.
+
+    `_WindowsFlavour.resolve` (Lib/pathlib.py, 3.9) asks `nt._getfinalpathname`, which has to *open*
+    the path, so it fails on a symlink whose target does not exist. The non-strict branch then splits
+    the unresolvable tail off, resolves the longest prefix that does exist, and re-joins the rest
+    verbatim — which is what the substitute below does. A dangling symlink out of the session root
+    therefore reports itself as sitting inside it, and a containment check that trusts the answer
+    waves it through. 3.10 routes pathlib through `realpath`, which reads the reparse point itself,
+    so the hole is that one combination and no other.
+
+    The point of simulating it is that `py3.9, windows-latest` is one leg of thirteen, and is not a
+    required check. What it was the only thing guarding is a containment guarantee, so the mechanism
+    is pinned here and every leg runs it.
+
+    **It patches `store._resolve` — the resolution the product performs — and not `Path.resolve`.**
+    Patching `Path.resolve` is what this did first, and it was a guard that could not fire: the store
+    stopped calling `Path.resolve` in the same commit, so the substitute never reached the code under
+    test and four tests passed on POSIX for a reason unrelated to the one their names give. Two
+    reviewers found it independently. The rule that cost: a simulation has to be installed where the
+    code under test looks, and *the assertion passed* is not evidence that it was."""
+    real_resolve = store._resolve
+
+    def resolve(path):
+        s = Path(path)
+        tail: list[str] = []
+        while True:
+            if s.exists():                       # stands in for `_getfinalpathname` succeeding
+                return Path(real_resolve(s), *reversed(tail))
+            if s.parent == s:                    # nothing resolved: 3.9 hands the path straight back
+                return Path(path)
+            tail.append(s.name)
+            s = s.parent
+
+    monkeypatch.setattr(store, "_resolve", resolve)
+
+
+# ── what the first Windows leg found (#3) ─────────────────────────────────────
+# Both of these are product defects the platform matrix exposed on its first run. Neither could fail
+# on Linux or macOS, and both are written to fail on every platform now that the mechanism is known.
+
+
+def test_a_session_path_is_not_resolved_before_it_exists(tmp_path, monkeypatch):
+    """`_child_of` must reach no resolution at all for a child that is not there.
+
+    It used to compare `d.resolve()` with `root.resolve()`: two independent resolutions, of paths
+    where one is derived from the other, each reflecting the filesystem at the instant it ran. Create
+    a directory between them and they disagree — so `canonical_dir("s")` raised `InvalidSlugError`,
+    which means *you gave me a bad slug*, about the slug `s`, because another thread was creating a
+    session at that moment. Four of twelve concurrent creators died that way on the Windows leg.
+
+    Pinned as "performs no resolution" rather than by reproducing the race, because a timing test that
+    only sometimes reopens the window is not a regression test. No resolution, no disagreement.
+
+    What is counted is `store._resolve`, the store's own resolution, and not `Path.resolve` — which is
+    what this counted until the store stopped calling it. A counter on a function the code under test
+    never reaches records zero for a module that resolves on every call, so the assertion would have
+    stayed green while saying nothing at all."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    resolved: list = []
+    real_resolve = store._resolve
+
+    def counting_resolve(path):
+        resolved.append(str(path))
+        return real_resolve(path)
+
+    monkeypatch.setattr(store, "_resolve", counting_resolve)
+    assert store._child_of(root, "s") == root / "s"
+    assert resolved == [], (
+        "_child_of resolved paths for a child that does not exist; every such resolution is a "
+        f"verdict that depends on what the filesystem happened to look like: {resolved}")
+
+
+def test_a_symlink_out_of_the_session_root_is_still_refused(tmp_path):
+    """The must-fire half, and the reason the check exists at all. Skipping the resolution when the
+    child is absent is only safe because an absent path cannot be a symlink — so a symlink that *is*
+    there must still be caught, including a dangling one, which `exists()` alone reports as absent."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    _symlink_or_skip(root / "live", outside, target_is_directory=True)
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "live")
+
+    # Dangling: `exists()` follows the link and reports False, so an `exists()`-only guard would wave
+    # this through and then write through it the moment the target appeared.
+    _symlink_or_skip(root / "dangling", tmp_path / "not-yet", target_is_directory=True)
+    assert not (root / "dangling").exists() and (root / "dangling").is_symlink()
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "dangling")
+
+
+def test_an_ordinary_existing_session_directory_is_still_accepted(tmp_path):
+    """The must-not-fire half: a guard that refuses correct input is deleted by the next person."""
+    root = tmp_path / "sessions"
+    (root / "s").mkdir(parents=True)
+    assert store._child_of(root, "s") == root / "s"
+
+
+def test_a_dangling_symlink_is_refused_where_the_platform_cannot_resolve_it(tmp_path, monkeypatch):
+    """The same must-fire assertion as above, with the resolver blinded the way CPython 3.9 blinds it
+    on Windows — the shape that turned the guard off on that one leg while every other leg stayed
+    green, because a dangling link resolved to its own location instead of to its target.
+
+    A containment decision must not rest on the platform being able to follow the link. This is the
+    test that says so on Linux and macOS too, so the next regression is caught by the leg that runs on
+    every push rather than by the one that runs on one platform and one Python."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    _symlink_or_skip(root / "dangling", tmp_path / "not-yet", target_is_directory=True)
+    _blind_to_dangling_links(monkeypatch)
+    assert store._resolve(root / "dangling") == store._resolve(root) / "dangling", (
+        "the simulation is not reproducing the defect: the blinded resolver is supposed to report the "
+        "dangling link as living inside the root")
+    with pytest.raises(InvalidSlugError):
+        store._child_of(root, "dangling")
+
+
+def test_a_blinded_resolver_still_accepts_what_is_genuinely_inside(tmp_path, monkeypatch):
+    """The must-not-fire control for the test above: a guard that refuses everything passes every
+    must-fire assertion, so the simulation needs cases it must *not* refuse. The live symlink is the
+    one that matters — a blinded resolver follows a link whose target exists perfectly well, so
+    refusing it would mean the guard had stopped reading the resolver's answer and started refusing
+    links on sight."""
+    root = tmp_path / "sessions"
+    (root / "s").mkdir(parents=True)
+    (root / "target").mkdir()
+    _blind_to_dangling_links(monkeypatch)
+    assert store._child_of(root, "s") == root / "s"
+    assert store._child_of(root, "absent") == root / "absent"
+
+    # Last, because creating a symlink is what skips on a platform that refuses them, and the two
+    # assertions above hold everywhere.
+    _symlink_or_skip(root / "live", root / "target", target_is_directory=True)
+    assert store._child_of(root, "live") == root / "live"
+
+
+def test_a_dangling_symlink_inside_the_root_is_accepted_where_the_platform_can_follow_it(tmp_path):
+    """No blinding: the direction is what the refusal is about, not the dangling.
+
+    Where the resolver can follow the link, this is answered on where it points, and a link into the
+    root is inside the root. Where the resolver *cannot* follow it — 3.9 on Windows — the answer is
+    refuse, because *we cannot tell* and the alternative is the defect this pair of tests exists for.
+    Stating both halves here is the point: the conservative answer is confined to the platform that
+    forces it, rather than becoming the rule everywhere."""
+    root = tmp_path / "sessions"
+    root.mkdir()
+    _symlink_or_skip(root / "inside", root / "not-yet", target_is_directory=True)
+    assert not (root / "inside").exists() and (root / "inside").is_symlink()
+    assert store._child_of(root, "inside") == root / "inside"
+
+
+def test_an_artifact_path_is_not_resolved_before_it_exists(workspace, monkeypatch):
+    """`artifact_path` is `_child_of`'s sibling and had the identical two-resolution shape. It gets
+    the same pin, because the previous commit claimed to have fixed it and tested only `_child_of` --
+    a claim of "both are fixed" backed by one test is the shape this repo keeps finding.
+
+    `canonical_dir` runs inside `artifact_path` and legitimately resolves an existing session
+    directory, so the count is not zero. The property is that the *artifact* half adds nothing to it
+    for a file that is not there — measured as a difference against `canonical_dir` alone rather than
+    asserted as an absolute, which would just be a test of `canonical_dir`.
+
+    Counts `store._resolve` rather than `Path.resolve`, for the reason its sibling above gives."""
+    _healthy()
+    resolved: list = []
+    real_resolve = store._resolve
+
+    def counting_resolve(path):
+        resolved.append(str(path))
+        return real_resolve(path)
+
+    monkeypatch.setattr(store, "_resolve", counting_resolve)
+
+    store.canonical_dir("s")                           # the baseline this test is not about
+    baseline = len(resolved)
+    resolved.clear()
+
+    p = store.artifact_path("s", "epic.json")          # a valid name, no such file
+    assert p.name == "epic.json"
+    assert len(resolved) == baseline, (
+        f"artifact_path resolved {len(resolved) - baseline} path(s) beyond canonical_dir's for a "
+        f"file that does not exist; each one is a verdict that depends on what the filesystem "
+        f"looked like at that instant: {resolved[baseline:]}")
+
+
+def test_an_artifact_filename_that_escapes_is_still_refused(workspace):
+    """The must-fire half for `artifact_path`, so the relaxation above cannot have turned the
+    traversal guard off. These names are refused by `validate_filename` before any path is built,
+    which is why the containment check can safely skip an absent target."""
+    _healthy()
+    # Windows-shaped escapes as well as POSIX-shaped ones. `_FILENAME_RE` refuses both for the same
+    # reason on every platform, so this is not a platform branch — it is that the list was POSIX-only
+    # while the leg most likely to be handed a backslash is the one that could not have said so.
+    for name in ("../../../ESCAPED.md", "/etc/passwd", "..", ".hidden", "a/b.md",
+                 r"..\..\ESCAPED.md", r"c:\windows\system32\drivers\etc\hosts", r"a\b.md"):
+        with pytest.raises(RequivoError) as ei:
+            store.artifact_path("s", name)
+        assert ei.value.code == "invalid_filename", name
+
+
+def test_an_artifact_symlink_is_refused_where_the_platform_cannot_resolve_it(workspace, tmp_path,
+                                                                             monkeypatch):
+    """`artifact_path` gets the blinded resolver too, because it and `_child_of` share the decision
+    and a fix applied to one of them is this branch's own recurring defect."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")
+    _blind_to_dangling_links(monkeypatch)
+    with pytest.raises(RequivoError) as ei:
+        store.artifact_path("s", "prd.md")
+    assert ei.value.code == "invalid_filename"
+
+
+def test_atomic_write_survives_a_transient_permission_error(tmp_path, monkeypatch):
+    """On Windows `rename` is `MoveFileEx`, which fails with `PermissionError(13, 'Access is denied')`
+    whenever anything holds a handle to the destination — an antivirus scanner or the Search Indexer,
+    neither of which this process can serialise against. `model.json` is the durable product, so
+    losing a completed write to a scanner is not an acceptable outcome. Eight concurrent writers hit
+    exactly this on the Windows leg."""
+    target = tmp_path / "model.json"
+    target.write_text("old", encoding="utf-8")
+    attempts = {"n": 0}
+    real_replace = Path.replace
+
+    def flaky(self, dst):
+        attempts["n"] += 1
+        if attempts["n"] <= 3:
+            raise PermissionError(13, "Access is denied")
+        return real_replace(self, dst)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    store._atomic_write(target, "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert attempts["n"] == 4, "the write did not actually go through the retry path"
+
+
+def test_atomic_write_still_gives_up_on_a_permanent_permission_error(tmp_path, monkeypatch):
+    """Bounded, and the bound is the point: a genuinely unwritable destination — a read-only file, a
+    real permissions problem — must still fail loudly and quickly. Turning a permanent error into a
+    slow permanent error helps nobody, and a retry that never gives up is how a crash becomes a hang."""
+    target = tmp_path / "model.json"
+    target.write_text("old", encoding="utf-8")
+    attempts = {"n": 0}
+
+    def always_denied(self, dst):
+        attempts["n"] += 1
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(Path, "replace", always_denied)
+    with pytest.raises(PermissionError):
+        store._atomic_write(target, "new")
+    # The attempt count is the part that makes this a test of the *retry* rather than of `replace`:
+    # without it the assertions below hold identically whether the retry exists or not, so the test
+    # would pass against the code it was written to pin. Found by review, and it is the whole reason
+    # the bound is worth asserting -- an unbounded retry turns a crash into a hang.
+    assert attempts["n"] == store._REPLACE_ATTEMPTS, (
+        f"expected exactly {store._REPLACE_ATTEMPTS} attempts before giving up, got {attempts['n']}")
+    assert target.read_text(encoding="utf-8") == "old"      # the old content is intact
+    assert not list(tmp_path.glob(".*tmp")), "scratch left behind after a failed write"
 
 
 def test_a_failed_atomic_write_leaves_no_scratch_file(workspace):
@@ -179,12 +463,12 @@ def test_a_field_from_a_future_requivo_survives_a_round_trip(workspace):
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
 
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["future_field"] = {"added_by": "requivo 1.4", "keep": True}
     p.write_text(json.dumps(raw, indent=2))
 
     svc.update_model("s", _full_model())        # a real mutation: reads, then rewrites session.json
-    after = json.loads(p.read_text())
+    after = json.loads(p.read_text(encoding="utf-8"))
     assert after["future_field"] == {"added_by": "requivo 1.4", "keep": True}
     assert after["current_revision"] == 1       # and the known fields still moved
 
@@ -196,12 +480,12 @@ def test_a_retired_key_is_dropped_rather_than_carried_forever(workspace):
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
 
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["prompt_versions"] = {"engine.md": "sha256:dead"}   # declared once, never written, now retired
     p.write_text(json.dumps(raw, indent=2))
 
     svc.update_model("s", _full_model())
-    assert "prompt_versions" not in json.loads(p.read_text())
+    assert "prompt_versions" not in json.loads(p.read_text(encoding="utf-8"))
 
 
 # ── slug bounds ───────────────────────────────────────────────────────────────
@@ -356,7 +640,7 @@ def test_a_session_from_a_newer_slot_schema_is_refused_clearly(workspace):
     svc = SessionService()
     svc.create_session("Something.", slug="s")
     p = store.canonical_dir("s") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["schema_version"] = store.SCHEMA_VERSION + 1
     p.write_text(json.dumps(raw))
 
@@ -479,7 +763,7 @@ def test_a_model_swapped_out_from_under_its_hash_is_caught(workspace):
 def test_a_hand_edited_revision_file_is_caught(workspace):
     _healthy()
     f = store.canonical_dir("s") / "revisions" / "0001-model.json"
-    f.write_text(f.read_text().replace('"completeness": 0', '"completeness": 5', 1))
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
     assert "revision_hash_mismatch" in {p.code for p in check_session("s")}
 
 
@@ -502,7 +786,7 @@ def test_a_structurally_invalid_session_json_is_a_problem_not_a_traceback(worksp
 def test_a_revision_log_that_does_not_match_the_revision_count_is_caught(workspace):
     _healthy()
     p = store.canonical_dir("s") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["revisions"] = raw["revisions"][:1]          # claims revision 2, logs one
     p.write_text(json.dumps(raw))
     assert "revision_count_mismatch" in {p_.code for p_ in check_session("s")}
@@ -512,7 +796,7 @@ def _point_artifact_at(slug: str, filename: str) -> None:
     """Rewrite the recorded artifact's `filename` in `session.json` — what a crafted or hand-edited
     session does. `ArtifactStatus.filename` is a bare `str` with no constraint, so this round-trips."""
     p = store.canonical_dir(slug) / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["artifact_status"]["prd"]["filename"] = filename
     p.write_text(json.dumps(raw))
 
@@ -560,7 +844,7 @@ def test_an_unknown_artifact_type_does_not_fall_through_to_the_filesystem(worksp
 
     _healthy("probe")
     p = store.canonical_dir("probe") / "session.json"
-    raw = json.loads(p.read_text())
+    raw = json.loads(p.read_text(encoding="utf-8"))
     raw["artifact_status"]["not-an-artifact-type"] = dict(raw["artifact_status"]["prd"],
                                                           filename=str(outside))
     p.write_text(json.dumps(raw))
@@ -579,6 +863,48 @@ def test_a_safe_but_missing_artifact_file_is_still_reported(workspace):
     codes = {p.code for p in check_session("s")}
     assert "missing_artifact_file" in codes
     assert "unsafe_artifact_filename" not in codes
+
+
+def test_an_artifact_that_is_a_symlink_out_of_the_session_is_still_refused(workspace, tmp_path):
+    """The branch the #3 fix leans on. `check_session_dir` now resolves the artifact path only when
+    something is there, because two independent `resolve()` calls disagree whenever the tree moves
+    between them and a spurious disagreement reports `unsafe_artifact_filename` about a bare name.
+    That is only safe if a symlink which *is* there still gets caught — including a dangling one,
+    which `exists()` reports as absent because it follows the link."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("not part of this session", encoding="utf-8")
+
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", outside)
+    assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
+
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")   # dangling, still outside
+    assert not (artifacts / "prd.md").exists() and (artifacts / "prd.md").is_symlink()
+    assert "unsafe_artifact_filename" in {p.code for p in check_session("s")}
+
+
+def test_an_artifact_symlink_is_reported_unsafe_where_the_platform_cannot_resolve_it(workspace,
+                                                                                     tmp_path,
+                                                                                     monkeypatch):
+    """`session verify`'s copy of the decision, blinded the same way. Its failure mode is quieter than
+    the other two and worth stating on its own: nothing raises, the row simply comes back
+    `missing_artifact_file` — *there is no file there* — about a link that is very much there and
+    points out of the session. A verdict that is wrong is worse here than a verdict that is missing,
+    because this is the verb whose whole job is telling you whether the session is intact.
+
+    The classification has to be reached before the existence check for that to be visible at all,
+    which is why the second assertion is not decoration."""
+    _healthy()
+    artifacts = store.canonical_dir("s") / "artifacts"
+    (artifacts / "prd.md").unlink()
+    _symlink_or_skip(artifacts / "prd.md", tmp_path / "never-created.md")
+    _blind_to_dangling_links(monkeypatch)
+    codes = {p.code for p in check_session("s")}
+    assert "unsafe_artifact_filename" in codes
+    assert "missing_artifact_file" not in codes
 
 
 def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(workspace, tmp_path,

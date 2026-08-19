@@ -18,6 +18,7 @@ from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
+from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
 from requivo.providers.anthropic import EngineError, advise, estimate, new_client, run, track_usage
@@ -35,11 +36,75 @@ from requivo.render.terminal import (
 from requivo.services.artifacts import ARTIFACT_FILENAMES
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
+from requivo.streams import configure_streams, safe_write
 
 load_dotenv()
 
 
 MAX_TURNS = 8
+
+# A command whose *work* succeeded and whose *report* could not be encoded. Distinct from 1 (a clean,
+# expected failure) so a script can tell "nothing happened" from "it happened and you cannot see it";
+# see the `UnicodeEncodeError` arm in `app()` and `streams.py` for why the distinction is the point.
+EXIT_RENDER_FAILED = 3
+
+# Two messages, because this arm cannot see how far the handler got and must not pretend it can.
+# `app()` wraps the whole handler, and several verbs print before they mutate anything -- `discover`
+# echoes its context cards before the provider call, and `doctor`/`status`/`schema` never mutate at
+# all. A single message asserting "whatever this changed HAS been applied" is therefore false about
+# roughly half the verbs, which is the same misreporting this branch exists to remove, one layer up.
+#
+# What the arm *can* see is the usage ledger: a non-empty one means a provider call completed and was
+# billed. That is the fact worth being precise about, so it is read rather than assumed.
+_RENDER_FAILED_HEAD = (
+    "\n"
+    "Requivo could not encode its output for this console: {error}\n"
+    "\n"
+    "This failed while *printing*, which happens after the command has done its work.\n"
+)
+
+_RENDER_FAILED_PAID = (
+    "A provider call HAS completed and been billed on this run, and any revision it produced has\n"
+    "already been applied. Do not re-run this command -- you would pay for a second call and stack\n"
+    "a second revision on the first. Check with `requivo status <session>`.\n"
+)
+
+_RENDER_FAILED_UNPAID = (
+    "No provider call was made on this run, so nothing has been billed. A local change may still\n"
+    "have been written -- `model apply` and `artifact save` mutate without calling out -- so check\n"
+    "with `requivo status <session>` before re-running rather than assuming either way.\n"
+)
+
+_USAGE_UNPRINTABLE = (
+    "\n(the API usage summary for this run could not be encoded for this console)\n"
+)
+
+
+def _render_usage_safely(ledger) -> None:
+    """`render_usage`, made unable to end the process.
+
+    Found by the audit on this branch, and it is the same ordering bug one call further out.
+    `render_usage` prints a middle dot and an em dash, and two of its three call sites are *outside*
+    the `UnicodeEncodeError` arm below -- one in the `RequivoError` handler, one after a wholly
+    successful run. On a stream `configure_streams` could not reach, a successful `requivo brief`
+    therefore still died at the usage line: after the provider call was billed and the revision
+    applied, which is precisely the failure #29 exists to close.
+
+    A usage summary is never worth that, so it degrades to a stated absence rather than an exception.
+    Stated, not silent: a line nobody can read is a different thing from a run that made no calls,
+    and the two must not print the same way.
+    """
+    try:
+        render_usage(ledger)
+    except UnicodeEncodeError:
+        safe_write(sys.stderr, _USAGE_UNPRINTABLE)
+
+
+_RENDER_FAILED_TAIL = (
+    "\n"
+    "Set PYTHONIOENCODING=utf-8, or redirect to a file, to see the output itself.\n"
+    "Run `requivo doctor` to see which stream could not be configured.\n"
+)
 
 
 def converse(client, request: str, only: list[str] | None = None) -> EngineOutput | None:
@@ -114,7 +179,7 @@ def _cmd_discover(a, client) -> None:
         raise SystemExit(2)
     client = client or new_client()
     is_file = _is_file_arg(a.request)
-    request = Path(a.request).read_text() if is_file else a.request
+    request = read_user_text(Path(a.request)) if is_file else a.request
 
     # One resolver, in Core, shared with the deterministic verbs and the Web: an unknown card is a hard
     # error. This used to warn and carry on with `only = None`, which does not mean "the cards you
@@ -235,9 +300,9 @@ def _cmd_demo(a, client) -> None:
     # Read from the frozen payload bundled in the package (so `requivo demo` works from a wheel, no clone),
     # but point the visitor at the browsable copy under examples/ at the repo root.
     demo = DEMO
-    request = (demo / "request.md").read_text().strip()
+    request = (demo / "request.md").read_text(encoding="utf-8").strip()
     out = load_model(demo / "model.json")
-    assessment = _fenced_text((demo / "solution-assessment.md").read_text())
+    assessment = _fenced_text((demo / "solution-assessment.md").read_text(encoding="utf-8"))
 
     bar = "═" * 72
     print(bar)
@@ -469,6 +534,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def app(argv: list[str] | None = None, client=None) -> None:
     """Entry point for the `requivo` command (and its `pc` alias, and `python -m requivo`)."""
+    # First, before anything can print: make stdout and stderr unable to kill this process on a
+    # character they cannot encode (#29). Not at import time — importing `requivo` must not
+    # reconfigure the streams of a program that merely imported it.
+    configure_streams()
     args = _build_parser().parse_args(argv)
     # A global --workspace redirects where sessions are read/written, for the duration of this run.
     if getattr(args, "workspace", None):
@@ -483,10 +552,31 @@ def app(argv: list[str] | None = None, client=None) -> None:
             # Every clean, expected failure — a core validation/session error OR a provider transport
             # error (EngineError is a RequivoError) — surfaces without a traceback. With --json the
             # caller (e.g. Claude Code) gets the structured envelope; otherwise a one-line message.
-            render_usage(ledger)
+            _render_usage_safely(ledger)
             if want_json:
                 print(json.dumps(e.to_dict(), indent=2))
             else:
-                print(f"\n{e}", file=sys.stderr)
+                safe_write(sys.stderr, f"\n{e}\n")
             raise SystemExit(1) from None
-    render_usage(ledger)
+        except UnicodeEncodeError as e:
+            # The braces to `configure_streams`' belt, and the reason this arm exists at all: a
+            # `UnicodeEncodeError` escaping a handler was raised by a `print`, which means the
+            # handler had already finished the work it was reporting. Letting it surface as a
+            # traceback tells the operator the command failed when the revision has landed and the
+            # artifact has been written — so they re-run, and pay for a second provider call on top
+            # of the first (#29). Say what actually happened instead.
+            #
+            # Reached only where `configure_streams` reported `could-not` for this stream, which
+            # `requivo doctor` prints. Narrow on purpose: a broad `except Exception` here would
+            # swallow real failures and claim they had landed.
+            _render_usage_safely(ledger)
+            paid = bool(getattr(ledger, "calls", None))
+            safe_write(sys.stderr, _RENDER_FAILED_HEAD.format(error=e)
+                       + (_RENDER_FAILED_PAID if paid else _RENDER_FAILED_UNPAID)
+                       + _RENDER_FAILED_TAIL)
+            raise SystemExit(EXIT_RENDER_FAILED) from None
+    # Outside the `with`, and therefore outside the arm above -- which is exactly why it needs the
+    # safe wrapper. This is the wholly-successful path: the provider call is billed and the revision
+    # is applied by the time it runs, so an exception here is the #29 ordering bug on the one route
+    # where nothing was wrong in the first place.
+    _render_usage_safely(ledger)

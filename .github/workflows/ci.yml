@@ -23,6 +23,11 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests scripts
 
+  # The compatibility axis: every supported Python, on one OS. Deliberately left with its original
+  # job name and matrix shape — `main`'s branch protection requires these five checks by their exact
+  # names (`Test (py3.9)` … `Test (py3.13)`), so folding an `os` axis in here would rename all five,
+  # none of the required checks would ever report again, and no pull request could merge. The
+  # platform axis is a separate job below for that reason.
   test:
     name: Test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -38,7 +43,55 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       # Pure-logic + offline CLI units, no API calls (a fake client is injected), so no key needed.
-      - run: python -m pytest tests/ -q
+      # `-rs` so a skip prints its reason: this suite skips loudly on purpose in several places
+      # (a platform that will not create a symlink, an interpreter where an encoding lever cannot be
+      # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
+      - run: python -m pytest tests/ -q -rs
+
+  # The platform axis (#3). Every job in every workflow was `ubuntu-latest` and the only matrix axis
+  # anywhere was `python-version`, so no leg had ever executed this code on the platform most users
+  # install it on. #11 and #29 are what that gap cost: every read decoded with the platform's codec
+  # while every write encoded UTF-8, so a French session round-tripped into mojibake on Windows and
+  # `session verify` then accused the user of editing a file nobody had touched. Both shipped, and
+  # three separate audits graded them *reasoned* rather than observed for the same reason each time
+  # — there was no leg that could run them.
+  #
+  # The ends of the supported range rather than every minor version, and the ends are the point: a
+  # platform's own standard library can differ between them. Windows on 3.9 cannot resolve a symlink
+  # whose target does not exist, where Windows on 3.13 can — which left a containment guard holding
+  # on twelve of these thirteen legs and not on the thirteenth (#3, #11). A difference in the
+  # language itself is covered above, on all five. 4 legs rather than 10.
+  #
+  # NOT YET REQUIRED by branch protection. Adding it is one command, and it should be run once this
+  # merges, or these legs become the thing everybody scrolls past:
+  #
+  #   gh api -X PATCH repos/jbkkz/requivo/branches/main/protection/required_status_checks \\
+  #     -f 'contexts[]=Test (py3.9, macos-latest)'   -f 'contexts[]=Test (py3.13, macos-latest)' \\
+  #     -f 'contexts[]=Test (py3.9, windows-latest)' -f 'contexts[]=Test (py3.13, windows-latest)'
+  test-platforms:
+    name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      # Deliberately NOT run under a forced UTF-8 mode. `tests/test_encoding.py` spawns subprocesses
+      # that set PYTHONIOENCODING and PYTHONWARNDEFAULTENCODING themselves, and a PYTHONUTF8=1 in the
+      # job environment would be inherited by those children and override every lever they use —
+      # turning the whole encoding suite green for the wrong reason, on the one platform it exists to
+      # measure.
+      # `-rs` so a skip prints its reason: this suite skips loudly on purpose in several places
+      # (a platform that will not create a symlink, an interpreter where an encoding lever cannot be
+      # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
+      - run: python -m pytest tests/ -q -rs
 
   wheel:
     name: Wheel install (no clone)

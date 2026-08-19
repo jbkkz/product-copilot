@@ -56,11 +56,38 @@ def _atomic_write(path: Path, content: str) -> Path:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # never leave scratch behind on a failed write
         raise
     return path
+
+
+# On POSIX `rename` over an existing file always succeeds. On Windows it is `MoveFileEx`, which needs
+# the destination to be openable, so it fails with `PermissionError(13, 'Access is denied')` whenever
+# *anything* holds a handle to it — most often an antivirus scanner or the Search Indexer, which open
+# a file microseconds after it is written, and neither of which this process can serialise against.
+# The failure is transient by nature, and `model.json` is the durable product, so losing a completed
+# write to a scanner is not an acceptable outcome.
+#
+# Deliberately bounded and deliberately narrow. It retries `PermissionError` only, a handful of times,
+# over a few hundred milliseconds, and then re-raises the original: a genuinely unwritable destination
+# (a read-only file, a real permissions problem) still fails loudly and quickly, because turning a
+# permanent error into a slow permanent error helps nobody. This is the one place where retrying is
+# right rather than a way of hiding something -- the operation is idempotent and the cause is external.
+_REPLACE_ATTEMPTS = 8
+_REPLACE_BACKOFF_S = 0.01
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S * (attempt + 1))
 
 
 # ── Session locking ────────────────────────────────────────────────────────────
@@ -161,7 +188,7 @@ def _slug(text: str) -> str:
 
 def load_model(path: Path) -> EngineOutput:
     """Load a saved model so artifacts can be regenerated without redoing discovery."""
-    return EngineOutput.model_validate_json(path.read_text())
+    return EngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 # ── Canonical session store (.requivo/sessions/<slug>/) ────────────────────────
@@ -310,12 +337,98 @@ def validate_filename(filename: str) -> str:
     return filename
 
 
+def _resolve(path: Path) -> Path:
+    """Canonicalise `path` for a containment comparison — `os.path.realpath`, deliberately, and not
+    `Path.resolve()`.
+
+    The two agree on POSIX and on Windows from CPython 3.10, where pathlib routes `resolve()` through
+    `realpath()` — with one exception worth knowing, because it is a second thing this switch quietly
+    fixed: on 3.9 a **symlink loop** makes `Path.resolve()` raise `RuntimeError`, which no caller here
+    catches (`check_session_dir` catches `OSError`/`ValueError`), while `realpath` collapses the path
+    lexically and returns an answer the containment check can act on. Verified on 3.9.6: a self-
+    referencing link raises `RuntimeError: Symlink loop from …` through pathlib and resolves cleanly
+    to its out-of-root target through `realpath`, where it is then correctly refused.
+
+    **On Windows under 3.9 the two disagree in the direction that matters, and the disagreement was a
+    hole in the containment check below.** `_WindowsFlavour.resolve` asks `nt._getfinalpathname`,
+    which has to
+    *open* the path, so it fails on a symlink whose target does not exist; the non-strict branch then
+    splits the unresolvable tail off, resolves the longest prefix that does exist, and re-joins the
+    rest verbatim. A dangling symlink at `<root>/<slug>` therefore comes back as
+    `<resolved root>/<slug>` — reported as living exactly where it sits, however far out of the root
+    it actually points — and `is_relative_to` says yes. `ntpath.realpath` does not take that route:
+    when `_getfinalpathname` fails it reads the reparse point itself and follows the link to its
+    missing target, which is the answer a containment check needs.
+
+    Seen as `DID NOT RAISE InvalidSlugError` on the `py3.9, windows-latest` leg and on no other: the
+    3.13 Windows leg and every POSIX leg were green, because only that one combination takes the
+    broken route (#3, #11). Nothing here needs anything newer than 3.9 — `os.path.realpath` is
+    non-strict by default, and the `strict=` keyword that would otherwise be the obvious thing to
+    reach for is 3.10+.
+    """
+    return Path(os.path.realpath(path))
+
+
+def _is_contained(child: Path, parent: Path) -> bool:
+    """Is `child` genuinely inside `parent`? The one containment decision in the store.
+
+    `_child_of`, `artifact_path` and `check_session_dir` each used to state this in their own words,
+    and each then had to be corrected for the same two defects in turn — the race below, and the
+    dangling link above. Three statements of one rule is three places for the next correction to miss,
+    and this branch has already missed one of them once.
+
+    The resolution happens **only when `child` is there in some form**, which is load-bearing rather
+    than an optimisation. Comparing two independently resolved paths, where one is derived from the
+    other, gives a verdict that depends on what the filesystem looked like between the two calls:
+    create a directory in that window and they disagree, so `canonical_dir("s")` raised
+    `InvalidSlugError` — *you gave me a bad slug* — about a perfectly good slug, because somebody else
+    was creating a session at that moment. Reproduced on POSIX by symlinking a parent between the two
+    calls, and seen in CI as four of twelve concurrent creators crashing on the Windows leg (#3).
+
+    `is_symlink()` as well as `exists()`, and not `exists()` alone: `exists()` follows the link, so a
+    **dangling** symlink pointing out of `parent` reports False and would skip the very check it is
+    the reason for.
+
+    Answering True for a child that is not there is a claim about the caller as much as about the
+    path. Every caller has put the name through `validate_slug` or `validate_filename` first, so what
+    was joined is a single flat component — no separator, no dot segment, nothing absolute — sitting
+    lexically one level below `parent`. The only way out is a symlink at `child` itself, and a path
+    that does not exist is not a symlink. So the check runs in exactly the case that can fail it,
+    against a parent resolved once.
+
+    False therefore means *not confirmed to be inside*, which is two situations and deliberately one
+    answer: the resolved path is somewhere else, or the resolver could not tell us where it goes. The
+    second is the third state, and folding it in with *inside* is what the Windows 3.9 defect was —
+    a guard that could not look, reporting what it reports when it looked and found nothing. Callers
+    word their refusal to cover both, because from here they are the same decision.
+    """
+    if not (child.exists() or child.is_symlink()):
+        return True
+    root = _resolve(parent)
+    resolved = _resolve(child)
+    # A resolver that could not follow the link hands back the link's own location — literally so on
+    # 3.9/Windows, whose non-strict branch re-joins the unresolvable tail to the parent it *could*
+    # resolve (see `_resolve`). A symlink never legitimately resolves to where it sits, so the
+    # equality is a reliable tell and not a heuristic, and the answer to it is to refuse.
+    #
+    # This is what keeps the guarantee off the platform. Without it the containment decision rests on
+    # the resolver being able to follow a link, which is an assumption that held on twelve legs of
+    # thirteen and was invisible on the twelfth. `child.parent` is `parent` at all three call sites,
+    # so `root / child.name` costs no third resolution; anywhere it is not, the equality simply does
+    # not match and the containment test below answers on its own.
+    if child.is_symlink() and resolved == root / child.name:
+        return False
+    return resolved.is_relative_to(root)
+
+
 def _child_of(root: Path, slug: str) -> Path:
-    """`root / slug`, having validated the slug and confirmed the resolved path is genuinely a child of
-    `root` — the defence-in-depth check the traversal guard is built around."""
+    """`root / slug`, having validated the slug and confirmed the result is genuinely a child of
+    `root` — the defence-in-depth check the traversal guard is built around. `_is_contained` carries
+    the reasoning for both halves of that confirmation, and for why it is one function."""
     d = root / validate_slug(slug)
-    if not d.resolve().is_relative_to(root.resolve()):
-        raise InvalidSlugError(f"slug {slug!r} resolves outside the session root", details={"slug": slug})
+    if not _is_contained(d, root):
+        raise InvalidSlugError(f"slug {slug!r} does not resolve to a path inside the session root",
+                               details={"slug": slug})
     return d
 
 
@@ -337,12 +450,14 @@ def artifact_path(slug: str, filename: str) -> Path:
     One function rather than a check at each call site, for the reason `_child_of` gives for the slug:
     a rule applied per-caller is a rule the next caller forgets. Belt-and-suspenders in the same
     shape too — the pattern already makes a separator or a dot segment unrepresentable, and the
-    resolved path is confirmed to be a genuine child of `artifacts/` anyway."""
+    result is confirmed to be a genuine child of `artifacts/` anyway, through the same
+    `_is_contained` the slug half uses. `artifacts/` is created lazily, so the race that check is
+    written around is real here too."""
     d = canonical_dir(slug) / "artifacts"
     p = d / validate_filename(filename)
-    if not p.resolve().is_relative_to(d.resolve()):
+    if not _is_contained(p, d):
         raise InvalidFilenameError(
-            f"artifact filename {filename!r} resolves outside {d}",
+            f"artifact filename {filename!r} does not resolve to a path inside {d}",
             details={"slug": slug, "filename": filename})
     return p
 
@@ -398,7 +513,7 @@ def read_meta(slug: str) -> SessionMeta:
     if not p.exists():
         raise SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
     try:
-        return migrate_session(json.loads(p.read_text()))
+        return migrate_session(json.loads(p.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:
         raise InvalidSessionError(f"session '{slug}' has an unreadable session.json: {e}",
                                   details={"slug": slug}) from e
@@ -496,7 +611,7 @@ def load_session_model(slug: str) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
-    return EngineOutput.model_validate_json(p.read_text())
+    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def load_revision_model(slug: str, revision: int) -> EngineOutput:
@@ -505,12 +620,12 @@ def load_revision_model(slug: str, revision: int) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
-    return EngineOutput.model_validate_json(p.read_text())
+    return EngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def session_request(slug: str) -> str:
     p = canonical_dir(slug) / "request.md"
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
@@ -626,17 +741,17 @@ def migrate_legacy(slug: str) -> SessionMeta:
     request = ""
     for name in ("request.md", "request.txt"):
         if (src / name).exists():
-            request = (src / name).read_text()
+            request = (src / name).read_text(encoding="utf-8")
             break
     old: dict = {}
     if (src / "session.json").exists():
         try:
-            old = json.loads((src / "session.json").read_text())
+            old = json.loads((src / "session.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             old = {}
     # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
     # leaving an empty session behind holding a name nothing can now use.
-    model = EngineOutput.model_validate_json((src / "model.json").read_text())
+    model = EngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
 
     if request:
         req_hash = _hash(request)
@@ -666,6 +781,6 @@ def migrate_legacy(slug: str) -> SessionMeta:
         for fn, atype in filename_to_type.items():
             legacy_file = src / fn
             if legacy_file.exists():
-                content = legacy_file.read_text()
+                content = legacy_file.read_text(encoding="utf-8")
                 save_session_artifact(slug, atype, fn, content, source_revision=rev)
         return read_meta(slug)

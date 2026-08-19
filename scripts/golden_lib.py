@@ -33,7 +33,7 @@ def parse_requests(path: Path) -> list[dict]:
     """Parse requests.md into ``[{slug, form, card, request}, …]`` (see the file's own header)."""
     runs: list[dict] = []
     current: dict | None = None
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("### "):
             current = {"slug": line[4:].strip(), "form": "", "card": "", "request": ""}
             runs.append(current)
@@ -59,7 +59,11 @@ def dump_runs(slug: str, request: str, models: list[EngineOutput],
     if briefs is not None:
         payload["briefs"] = [b.model_dump() for b in briefs]
     path = runs_path(slug)
-    path.write_text(json.dumps(payload, indent=2))
+    # Explicitly UTF-8, matching the read in `golden_diff.py`. `json.dumps` defaults to
+    # `ensure_ascii=True`, so today's payload is pure ASCII and the codec never bites -- but the
+    # baseline is provider-written prose, and one `ensure_ascii=False` here would silently write a
+    # cp1252 file that the next diff reads as a prompt regression that never happened (#11).
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
 
 
