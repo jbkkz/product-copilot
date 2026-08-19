@@ -363,7 +363,13 @@ def _generator_service(a, client) -> tuple[str, DiscoveryService]:
 
 
 def _wrote(slug: str, result, label: str) -> None:
-    print(f"\nWrote {label} → {store.canonical_dir(slug) / 'artifacts' / result.status.filename}")
+    """Say where a generated document went — the one line five generator verbs share.
+
+    The path goes through `artifact_path` rather than being re-joined here (#36). Printing a path is
+    still disclosing one, and `result.status.filename` is a plain `str` off an `ArtifactStatus` that
+    nothing re-validates on the way out; that function carries the argument for why a display-only
+    join is not exempt from the chokepoint, and which door is actually open."""
+    print(f"\nWrote {label} → {store.artifact_path(slug, result.status.filename)}")
 
 
 def _cmd_brief(a, client) -> None:

@@ -490,7 +490,33 @@ def artifact_path(slug: str, filename: str) -> Path:
     shape too — the pattern already makes a separator or a dot segment unrepresentable, and the
     result is confirmed to be a genuine child of `artifacts/` anyway, through the same
     `_is_contained` the slug half uses. `artifacts/` is created lazily, so the race that check is
-    written around is real here too."""
+    written around is real here too.
+
+    **Display-only callers come through here too, and that is not ceremony.** Two sites printed
+    `canonical_dir(slug) / "artifacts" / <recorded filename>` inline — a path neither of them ever
+    opened — and survived both the sweep that closed the writes (#5) and the one that closed the
+    read (#23), because "it only prints it" reads as harmless. It is a different harm rather than an
+    absent one: a read traversal answers what this code may *disclose* rather than what it may
+    create, and a printed path is the plainest disclosure there is.
+
+    The name in both arrives on an `ArtifactStatus`, whose `filename` is a plain `str` that nothing
+    re-validates when `read_meta` loads it back — so it is invariant 14's threat model exactly: the
+    external consumer holding the services over a repository that is not this file backing, where
+    `save_artifact` hands back whatever its store held. **`session import` is not that door, and
+    saying so is the point.** The invariant's argument is written about `context_cards`, which import
+    deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` pins every
+    recorded filename to its `ARTIFACT_FILENAMES` value and to containment, and `session import`
+    refuses the whole archive when either fails — reproduced, both for a traversal and for a merely
+    wrong name. Read as covering both fields, this would claim a vector that is shut and quietly drop
+    the one that is open.
+
+    Coming through here also means such a name cannot forge a line in the terminal it is printed to:
+    `_FILENAME_RE` is anchored at end-of-string and admits no line break (#40).
+
+    A target that is not there is not an error here. `_is_contained` does stat it — `exists()` is a
+    stat — and answers True for what it cannot find rather than raising, so routing a display site
+    through this does not turn a session with nothing generated into a refusal. Absence and refusal
+    stay the two different answers `read_artifact_file` keeps them as."""
     d = canonical_dir(slug) / "artifacts"
     p = d / validate_filename(filename)
     if not _is_contained(p, d):
