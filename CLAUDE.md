@@ -237,6 +237,19 @@ bug that looked like correct behaviour.
     a session at revision 0 has no model — `status()` raises for it. Letting that propagate turned one
     un-analysed session into a 404 for the *whole* list, hiding every other session behind it. Any
     aggregate view catches per-item failure and degrades that row, never the page.
+
+    **The guard belongs above the rows, not around them.** `SessionService.list_entries()` is the
+    degrading read — `list_sessions()` is a single comprehension over `read_meta`, so an unreadable
+    `session.json` raises before any row exists to degrade. Both aggregates now use it: the home page
+    (#7) and `requivo session list` (#62), which had the identical duty and no guard at all for a
+    release. Where a row makes further reads of its own, as the web row does with `request_text` and
+    `status()`, it carries a bare `except Exception` too; the CLI row reads nothing past the metadata
+    and deliberately carries none, because a guard that provably cannot fire is worse than none.
+
+    **Three outcomes, and the third is the point.** A degraded row names its session and states no
+    fact it could not read — no timestamp, no revision, no question count. *Could not be read* and
+    *not analysed yet* must render differently. On the CLI that third state also has an exit code of
+    its own (`EXIT_DEGRADED_LISTING`), because 0 says nothing is wrong and 1 says nothing was listed.
 16. **Text is UTF-8 on both sides, and a renderer cannot kill the process.** Every text read and write
     names `encoding="utf-8"` — the default is the *locale's* codec, so a file this project wrote as
     UTF-8 decodes as cp1252 on Windows and the round-trip corrupts while still validating: mojibake in

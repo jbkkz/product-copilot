@@ -34,6 +34,18 @@ from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
+# A listing that rendered every row it could and had to degrade at least one. Neither 0 nor 1 is
+# true of it: 0 says nothing is wrong, 1 says nothing was listed, and a script that does not parse
+# stdout reads the exit code alone — so collapsing this into either neighbour is invariant 15's own
+# defect in the one channel left. It is safe to make non-zero *because* stdout is complete: unlike
+# the error path, nothing is withheld, so a caller that only wants the rows still gets all of them.
+#
+# 0/1/2 are success, `RequivoError` and argparse; 3 is `cli.EXIT_RENDER_FAILED`. It cannot be
+# imported from there — `cli` imports this module, so the dependency runs one way only — and
+# `test_the_degraded_code_collides_with_nothing` is what stops the two numbers drifting into each
+# other.
+EXIT_DEGRADED_LISTING = 4
+
 
 def _print_json(obj) -> None:
     print(json.dumps(obj, indent=2))
@@ -425,18 +437,123 @@ def _cmd_session_init(a, client) -> None:
     print(f"    requivo model apply {meta.slug} proposal.json")
 
 
+# Said once rather than at each of the sites that need it, because they have to agree: an entry with
+# no error text still has to read as *we could not look*, and an empty string there would render as a
+# row that failed for no reason.
+_NO_DETAIL = "no further detail"
+
+
+def _session_list_row(entry) -> dict:
+    """One `--json` row, with the **same key set** whether the session could be read or not.
+
+    That is the compatibility decision, and it is why a degraded row is not simply a shorter dict:
+    `session list --json` is a public output (invariant 8), and a consumer looping over the payload
+    reading `row["revision"]` would get a `KeyError` from a row it was handed deliberately — trading
+    a command that fails loudly for a caller that fails obscurely, one layer along.
+
+    So the fields are always present and `null` where the fact is missing. `null`, never `0` or `""`:
+    we did not read revision 0, we failed to read the revision, and a plausible value on a session
+    nobody could open is the quiet-wrong-answer form of the bug this whole guard exists for.
+    `readable` is what a consumer should branch on; `error` carries the reason, because *written by a
+    newer Requivo, upgrade* is a remedy and a flattened code is not.
+    """
+    if not entry.readable:
+        return {"slug": entry.slug, "revision": None, "provider": None, "updated_at": None,
+                "readable": False, "error": entry.error or _NO_DETAIL}
+    m = entry.meta
+    return {"slug": m.slug, "revision": m.current_revision, "provider": m.provider,
+            "updated_at": m.updated_at, "readable": True, "error": None}
+
+
+def _session_list_line(entry) -> str:
+    """One terminal row. A session that could not be read still gets one, and still names itself.
+
+    **Every text field on both branches is untrusted, and all of them go through `display_token`**
+    (#40). An earlier draft of this docstring wrapped only the degraded branch and argued the
+    readable one was safe because "the slug comes back through `read_meta`, which validates it".
+    That was wrong, and wrong in the way this codebase keeps finding: `read_meta` validates the slug
+    it is *called with* — the directory name, via `canonical_dir` — and then returns
+    `SessionMeta.slug`, which is the `"slug"` field inside `session.json`'s own body, declared a bare
+    `str` with no pattern. The two are not the same value and nothing checks that they agree outside
+    `session import`. Reproduced on this branch: a `session.json` whose `slug` carries a newline
+    printed a second, entirely fabricated row — `rev 999 (trusted, …)` — into the listing, and the
+    command exited 0.
+
+    That is invariant 14's second door. A persisted `session.json` is untrusted input every time it
+    is read back, exactly as a persisted `context_cards` is; creation resolving a value is a
+    guarantee about creation, never about what is on disk. So:
+
+    * **the degraded row's slug** is the raw directory name — `list_session_slugs` returns `p.name`
+      filtered only on a leading dot, and the `read_meta` that would have refused a non-kebab name is
+      precisely why this row is degraded, so it never ran;
+    * **the readable row's `slug`, `provider` and `updated_at`** all come out of the file's body.
+      `current_revision` does not need wrapping: it is an `int`, so `read_meta` refuses a string
+      there already;
+    * **the error text** is whatever the failure said. `read_meta` refusing a `session.json` whose
+      `current_revision` is a string raises a pydantic `ValidationError` whose message is four lines
+      long; printed raw that is four rows of listing for one session, with the reader unable to tell
+      where the row ends. `display_token` collapses it to one escaped line — the same `!r` treatment
+      `core/integrity.py` gives the recorded artifact filename, its sibling untrusted field.
+
+    A value that is already one safe line comes back byte-for-byte, so every real session's row is
+    unchanged and no reader learns a new shape for the normal case.
+
+    **`session show` has the same defect in five fields and is deliberately not fixed here** — it is
+    a different verb needing its own tests, and is reported for filing rather than ridden in on this
+    diff. The `--json` path needs none of this: `json.dumps` defaults to `ensure_ascii=True`, so the
+    encoder escapes a control character before it can reach a line of its own.
+
+    The reason rides the row rather than being replaced by a pointer, because for the commonest break
+    mode the reason *is* the remedy. `requivo session verify <slug>` is the acting surface the footer
+    points at for the cases where one line is not enough: measured against each way `read_meta` can
+    refuse — a newer `format_version`, an unparseable `session.json`, a field of the wrong type — it
+    reports an integrity code and exits 1 rather than raising. The **one** case it does not report on
+    is a slug that is not a slug, where it refuses the name instead; there the row's own text is
+    already the whole story, because the name is the defect.
+    """
+    if not entry.readable:
+        return (f"  {display_token(entry.slug):<40} could not be read — "
+                f"{display_token(entry.error or _NO_DETAIL)}")
+    m = entry.meta
+    return (f"  {display_token(m.slug):<40} rev {m.current_revision}  "
+            f"({display_token(m.provider or '—')}, {display_token(m.updated_at)})")
+
+
 def _cmd_session_list(a, client) -> None:
-    sessions = SessionService().list_sessions()
+    """Every session, degrading the ones that cannot be read rather than failing for the set.
+
+    Invariant 15 — *a listing survives its own members* — and this is the surface that did not get
+    the fix when the web half shipped (#7, #62). `list_sessions()` is the strict read: a single
+    comprehension over `read_meta`, so one `session.json` written by a newer Requivo raised before
+    any row existed, the command exited 1 with a single message, every other session was invisible,
+    and nothing named which session was the problem. `list_entries()` is the same read degrading per
+    member, and it is where the guard belongs — above the rows, not around them.
+
+    **This row needs no second `except` and the web's does.** Everything rendered here comes off the
+    metadata `list_entries` has already loaded and guarded; the web row additionally calls
+    `request_text` and `status()`, which is why it wraps its row builder as well. That is a fact
+    about the current row shape rather than a promise: adding a read to this row means adding that
+    guard too, and `test_a_break_below_the_metadata_does_not_reach_this_listing` is what will say so.
+    """
+    entries = SessionService().list_entries()
+    degraded = [e for e in entries if not e.readable]
     if a.json:
-        _print_json([{"slug": m.slug, "revision": m.current_revision, "provider": m.provider,
-                      "updated_at": m.updated_at} for m in sessions])
-        return
-    if not sessions:
+        _print_json([_session_list_row(e) for e in entries])
+    elif not entries:
         print(f"No sessions under {session_root()}.")
-        return
-    print(f"Sessions under {session_root()}:")
-    for m in sessions:
-        print(f"  {m.slug:<40} rev {m.current_revision}  ({m.provider or '—'}, {m.updated_at})")
+    else:
+        print(f"Sessions under {session_root()}:")
+        for e in entries:
+            print(_session_list_line(e))
+        if degraded:
+            n = len(degraded)
+            print()
+            print(f"{n} session{'' if n == 1 else 's'} could not be read. "
+                  f"`requivo session verify <slug>` reports what is wrong in full.")
+    # Raised after the listing is printed, never instead of it: the rows are the answer, and the exit
+    # code is the third state in the one channel a script that does not parse stdout can read.
+    if degraded:
+        raise SystemExit(EXIT_DEGRADED_LISTING)
 
 
 def _cmd_session_show(a, client) -> None:
