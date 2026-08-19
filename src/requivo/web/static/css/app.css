@@ -1,42 +1,96 @@
-/* Requivo Web — aligned to the landing DA: warm off-white, white cards with soft shadows, one indigo
-   accent, monospace meta labels, dot-coded reasoning. Calm, legible, works fully without JavaScript. */
+/* Requivo Web.
+ *
+ * A calm, modern product interface. The engine keeps an epistemic ledger — every topic carries an
+ * evidence grade (explicit / inferred / empty) and an impact weight — so the one thing this design
+ * has to do well is make those three states readable at a glance, everywhere they appear, without
+ * turning the page into a dashboard of scores.
+ *
+ * The rules that hold it together:
+ *   - Colour encodes state, never decoration. Emerald = known, amber = assumed, slate = open. Nothing
+ *     else on the page is allowed to use those hues.
+ *   - Interactive weight is ink, not a brand colour. Buttons are near-black; blue is for links and
+ *     focus, where a reader already expects it. That leaves the semantic triad unopposed.
+ *   - Depth is minimal and consistent: a white surface, a 1px border, one soft shadow. Never two.
+ *
+ * Built inside real constraints rather than around them: the CSP is `style-src \'self\'` and the app is
+ * local-first and ships in a wheel, so there are no web fonts and no remote assets. The page works
+ * fully without JavaScript.
+ */
 
 :root {
-  --bg: #f4f3f1;
+  /* Neutrals with genuine steps — a grey page so white surfaces read as surfaces. */
+  --page: #f6f7f9;
   --surface: #ffffff;
-  --surface-2: #faf9f7;
-  --border: #e7e4de;
-  --ink: #14161a;            /* near-black, headings + logo */
-  --text: #24272d;
-  --muted: #6b7078;
-  --accent: #4263eb;         /* indigo — the landing's accent */
-  --accent-hover: #354fc7;
-  --accent-soft: #eef1fe;
-  --fact: #2f9e6f;           /* explicit / fact  */
-  --assum: #c0902a;          /* inferred / assumption */
-  --unkwn: #9aa0a8;          /* unknown */
-  --warn: #9a6a00;
-  --warn-soft: #fbf1dd;
-  --danger: #b23b3b;
-  --danger-soft: #fbeaea;
-  --radius: 14px;
-  --radius-sm: 9px;
-  --maxw: 880px;
-  --shadow: 0 1px 2px rgba(20, 22, 26, .04), 0 6px 20px rgba(20, 22, 26, .05);
-  --shadow-sm: 0 1px 2px rgba(20, 22, 26, .05);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --surface-2: #f1f3f6;
+  --surface-3: #e9ecf1;
+  --border: #e2e6ec;          /* decorative dividers */
+  /* A control's boundary is not decoration — with a white field on a grey page the border is the only
+     thing saying where the field is, so it is held at 3:1. Measured against both stocks, not picked. */
+  --border-strong: #8a8e95;
+
+  --ink: #10131a;             /* headings */
+  --text: #464e5a;            /* body */
+  --muted: #676f7b;           /* labels, meta, hints — 4.57:1 on the tinted surface */
+
+  /* The evidence triad. These three hues mean one thing each, everywhere. */
+  --known: #047857;
+  --known-soft: #e7f5ef;
+  --assumed: #b45309;
+  --assumed-soft: #fdf1e3;
+  --open: #5b6472;
+  --open-soft: #eef0f4;
+
+  --link: #2657d6;
+  --link-hover: #1c44ad;
+  --accent: #2f61de;          /* the primary action; deliberately outside the triad's hues */
+  --accent-hover: #2450bd;
+  --accent-soft: #eaf0fd;
+  --danger: #b42318;
+  --danger-soft: #fdeceb;
+
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Inter,
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --r-lg: 12px;
+  --r-md: 9px;
+  --r-sm: 6px;
+  --maxw: 900px;
+
+  --shadow: 0 1px 2px rgba(16, 19, 26, .05), 0 1px 3px rgba(16, 19, 26, .04);
+  --shadow-lift: 0 2px 4px rgba(16, 19, 26, .06), 0 6px 16px rgba(16, 19, 26, .06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131417; --surface: #1c1e22; --surface-2: #191b1f; --border: #2e3138;
-    --ink: #f1f0ee; --text: #dcdde0; --muted: #9aa0a8;
-    --accent: #7f9bff; --accent-hover: #98afff; --accent-soft: #1e2436;
-    --fact: #57c298; --assum: #d8b25e; --unkwn: #7b818b;
-    --warn: #e0b667; --warn-soft: #2c2618; --danger: #e98a8a; --danger-soft: #2c1c1c;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.28);
-    --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+    --page: #0b0d11;
+    --surface: #14171d;
+    --surface-2: #1a1e26;
+    --surface-3: #222732;
+    --border: #262b35;
+    --border-strong: #5f6a7d;
+
+    --ink: #f2f4f7;
+    --text: #b9c0cb;
+    --muted: #8b94a1;
+
+    --known: #34d399;
+    --known-soft: #10251f;
+    --assumed: #f0b357;
+    --assumed-soft: #251c10;
+    --open: #98a2b1;
+    --open-soft: #1c212a;
+
+    --link: #7ea2ff;
+    --link-hover: #9db8ff;
+    --accent: #3d6fe8;
+    --accent-hover: #5183f0;
+    --accent-soft: #16203a;
+    --danger: #f38c81;
+    --danger-soft: #2a1614;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-lift: 0 2px 4px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .35);
   }
 }
 
@@ -44,246 +98,426 @@
 
 body {
   margin: 0;
-  font-family: var(--font);
-  color: var(--text);
-  background: var(--bg);
+  font-family: var(--ui);
+  font-size: 15px;
   line-height: 1.6;
-  font-size: 16px;
+  color: var(--text);
+  background: var(--page);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.container { max-width: var(--maxw); margin: 0 auto; padding: 0 1.5rem; }
+.container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { color: var(--accent-hover); text-decoration: underline; }
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--link-hover); text-decoration: underline; text-underline-offset: 2px; }
 
-/* ── header / footer ─────────────────────────────────────────────────────── */
-header.site { background: var(--surface); border-bottom: 1px solid var(--border); }
-header.site .container { display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1.5rem; }
-.brand { display: flex; align-items: center; gap: 0.6rem; }
+/* ── header ──────────────────────────────────────────────────────────────────*/
+header.site {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+}
+header.site .container {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 24px;
+}
+.brand { display: flex; align-items: center; gap: 9px; }
+.brand:hover { text-decoration: none; }
 .brand .mark {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: 8px; background: var(--ink);
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--ink); color: var(--surface); flex: none;
 }
 .brand .mark svg { display: block; }
-.brand .wordmark { font-weight: 700; font-size: 1.12rem; letter-spacing: -0.02em; color: var(--ink); line-height: 1; }
-.brand .wordmark span { color: var(--accent); }
-.brand small { display: block; font-weight: 400; font-size: 0.72rem; color: var(--muted); letter-spacing: 0; margin-top: 2px; }
-.brand:hover { text-decoration: none; }
+.brand .wordmark {
+  font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--ink); line-height: 1;
+}
+.brand .wordmark span { color: var(--link); }
 
-main { padding: 2rem 0 4.5rem; }
+/* A single soft wash at the top of the page. The only purely atmospheric thing in this file, and it
+   is one gradient rather than a decorated header. */
+main {
+  padding: 40px 0 80px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 340px);
+}
 
-footer.site { border-top: 1px solid var(--border); color: var(--muted); font-size: 0.8rem; padding: 1.3rem 0; }
+footer.site {
+  border-top: 1px solid var(--border); color: var(--muted);
+  font-size: 12.5px; line-height: 1.55; padding: 20px 0 32px;
+}
 
-/* ── typography ──────────────────────────────────────────────────────────── */
-h1 { font-size: 1.85rem; line-height: 1.15; letter-spacing: -0.03em; margin: 0 0 0.5rem; color: var(--ink); font-weight: 800; }
-/* Section headers read as small mono eyebrows, like the landing's REQUEST / MODEL / READINESS labels. */
+/* ── typography ──────────────────────────────────────────────────────────────*/
+/* The session title is the engine's objective sentence, which is a sentence and not a title — it can
+   run to several hundred characters. Clamped to three lines rather than set as a wall of display
+   type; nothing is lost, because the same sentence is restated in full as the first paragraph of
+   "What Requivo understood" directly below. */
+h1 {
+  font-size: 27px; font-weight: 640; line-height: 1.3; letter-spacing: -0.021em;
+  color: var(--ink); margin: 0 0 12px; max-width: 40ch; text-wrap: balance;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* Section labels carry a rule across the remaining width. A small grey caption on its own does not
+   divide a long page — the rule is what makes a band read as a band, and it costs nothing to read. */
 h2 {
-  font-family: var(--mono); text-transform: uppercase; font-size: 0.74rem; letter-spacing: 0.09em;
-  color: var(--muted); font-weight: 600; margin: 2.2rem 0 0.8rem;
+  display: flex; align-items: center; gap: 14px;
+  font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--ink); margin: 38px 0 14px;
 }
-h3 { font-size: 0.98rem; margin: 1.2rem 0 0.5rem; color: var(--ink); letter-spacing: -0.01em; }
-p.lead { color: var(--muted); margin: 0 0 1.5rem; max-width: 62ch; font-size: 1.02rem; }
-.eyebrow { font-family: var(--mono); text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.1em; color: var(--accent); font-weight: 600; }
-.meta { color: var(--muted); font-size: 0.82rem; }
-.meta.mono { font-family: var(--mono); letter-spacing: 0.01em; }
-.muted { color: var(--muted); }
+h2::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+h3 {
+  font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin: 22px 0 8px;
+}
+h2.quiet { margin-top: 26px; }
 
-/* ── cards ───────────────────────────────────────────────────────────────── */
+/* The state strip under a session title. */
+.page-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; }
+.page-meta-slug {
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: 2px;
+}
+
+p { margin: 0 0 12px; max-width: 68ch; }
+p:last-child { margin-bottom: 0; }
+p.lead { font-size: 16px; color: var(--text); max-width: 60ch; margin-bottom: 24px; }
+
+.meta { color: var(--muted); font-size: 12.5px; }
+.meta.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); font-size: 13px; }
+.hint { color: var(--muted); font-size: 12.5px; font-weight: 400; line-height: 1.5; }
+code { font-family: var(--mono); font-size: 0.88em; color: var(--ink); }
+
+/* ── surfaces ────────────────────────────────────────────────────────────────*/
 .card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 1.15rem 1.3rem; margin: 0 0 1rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
+  padding: 18px 20px; margin: 0 0 12px;
 }
-.card.flush { padding: 0.4rem 0.2rem; }
+.card.flush { padding: 6px 0; }
 
-/* ── buttons ─────────────────────────────────────────────────────────────── */
+/* ── the least explored area ─────────────────────────────────────────────────
+   The engine names the topic it has established least about, and that is usually the thing most
+   likely to move the scope. It was a grey footnote inside the understanding card; here it is its own
+   callout, in the assumed hue, because it is a statement about the limits of what is above it. */
+.unsurveyed {
+  margin: 16px 0 0; padding: 16px 18px;
+  background: var(--assumed-soft); border: 1px solid color-mix(in srgb, var(--assumed) 22%, var(--border));
+  border-radius: var(--r-lg);
+}
+.unsurveyed-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--assumed); margin-bottom: 6px;
+}
+.unsurveyed-label::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+}
+.unsurveyed p { margin: 0; font-size: 14.5px; line-height: 1.55; color: var(--ink); max-width: 62ch; }
+
+/* ── controls ────────────────────────────────────────────────────────────────
+   The primary action carries the accent. An ink button reads austere rather than calm, and blue is
+   the one hue the semantic triad does not use — so the accent can be warm without ever being
+   mistaken for a state. */
 .btn {
-  display: inline-flex; align-items: center; gap: 0.4rem; font: inherit; font-weight: 600;
-  padding: 0.55rem 1.05rem; border-radius: var(--radius-sm); border: 1px solid var(--accent);
-  background: var(--accent); color: #fff; cursor: pointer; line-height: 1.2;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  font-family: inherit; font-size: 13.5px; font-weight: 600; line-height: 1.2;
+  padding: 9px 16px; border-radius: var(--r-md);
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  cursor: pointer; box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  transition: background .13s ease, border-color .13s ease, box-shadow .13s ease, transform .13s ease;
 }
-.btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); text-decoration: none; color: #fff; }
-.btn.secondary { background: transparent; color: var(--accent); }
-.btn.secondary:hover { background: var(--accent-soft); color: var(--accent-hover); }
-.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--border); box-shadow: var(--shadow-sm); }
-.btn.ghost:hover { background: var(--surface-2); color: var(--ink); border-color: var(--muted); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.small { padding: 0.35rem 0.75rem; font-size: 0.85rem; }
+.btn:hover {
+  background: var(--accent-hover); border-color: var(--accent-hover);
+  color: #fff; text-decoration: none;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.btn:active { transform: translateY(1px); }
+.btn.secondary { background: var(--surface); color: var(--ink); border-color: var(--border-strong); }
+.btn.secondary:hover { background: var(--surface-2); color: var(--ink); border-color: var(--border-strong); }
+.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--border); box-shadow: none; }
+.btn.ghost:hover { background: var(--surface-2); color: var(--ink); border-color: var(--border-strong); box-shadow: var(--shadow); }
+.btn.small { padding: 6px 11px; font-size: 12.5px; border-radius: var(--r-sm); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
-/* ── forms ───────────────────────────────────────────────────────────────── */
-label { display: block; font-weight: 600; margin: 1rem 0 0.35rem; color: var(--ink); }
-.hint { font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+label {
+  display: block; font-size: 13px; font-weight: 600; color: var(--ink); margin: 16px 0 6px;
+}
+label .hint { font-weight: 400; }
+
 textarea, input[type=text], select {
-  width: 100%; font: inherit; color: var(--text); background: var(--surface);
-  padding: 0.65rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 100%; font-family: inherit; font-size: 14.5px; color: var(--text);
+  background: var(--surface); padding: 10px 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  transition: border-color .13s ease, box-shadow .13s ease;
 }
-textarea:focus, input[type=text]:focus, select:focus { border-color: var(--accent); }
-textarea { min-height: 8rem; resize: vertical; line-height: 1.55; }
-fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 1rem 0 0; padding: 0.6rem 0.95rem; }
-fieldset legend { font-weight: 600; color: var(--ink); padding: 0 0.3rem; }
-fieldset .check { display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin: 0.3rem 0; }
-fieldset .check label { display: inline; margin: 0; font-weight: 400; }
+textarea::placeholder { color: var(--muted); }
+/* The outline is deliberately NOT suppressed: `outline: none` here would out-specify the global
+   `:focus-visible` ring below and silently remove the keyboard focus indicator from every field. */
+textarea:focus, input[type=text]:focus, select:focus {
+  border-color: var(--link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 15%, transparent);
+}
+textarea { min-height: 128px; resize: vertical; line-height: 1.6; }
+select { font-size: 13.5px; }
 
-/* ── badges ──────────────────────────────────────────────────────────────── */
+fieldset { border: 1px solid var(--border); border-radius: var(--r-md); margin: 16px 0 0; padding: 12px 14px; }
+fieldset legend { font-size: 12.5px; font-weight: 600; color: var(--ink); padding: 0 4px; }
+fieldset .check { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+fieldset .check label { display: inline; margin: 0; font-size: 13.5px; font-weight: 400; color: var(--text); }
+input[type=checkbox] { accent-color: var(--link); width: 15px; height: 15px; }
+
+/* ── state chips ─────────────────────────────────────────────────────────────
+   One shape for every state on the page, tinted by the triad. The dot repeats the hue so the chip
+   still reads when the tint is washed out by a low-quality display. */
 .badge {
-  display: inline-flex; align-items: center; gap: 0.35rem; font-family: var(--mono);
-  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 0.18rem 0.55rem; border-radius: 999px; border: 1px solid var(--border);
-  color: var(--muted); background: var(--surface); vertical-align: middle;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--muted); background: var(--surface-2); vertical-align: middle; white-space: nowrap;
 }
-.badge::before { content: ""; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; }
-.badge.ok { color: var(--fact); border-color: color-mix(in srgb, var(--fact) 40%, var(--border)); }
-.badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: var(--warn-soft); }
-.badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
+.badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.badge.ok { color: var(--known); background: var(--known-soft); border-color: color-mix(in srgb, var(--known) 22%, var(--border)); }
+.badge.warn { color: var(--assumed); background: var(--assumed-soft); border-color: color-mix(in srgb, var(--assumed) 24%, var(--border)); }
+.badge.danger { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 24%, var(--border)); }
 .badge.plain::before { display: none; }
 
-/* ── home: the request form leads the page ───────────────────────────────── */
-.card.start { padding: 1.3rem 1.4rem 1.1rem; }
-.card.start textarea { min-height: 9.5rem; font-size: 1.02rem; }
+/* ── home: the request field ─────────────────────────────────────────────────*/
+.card.start { padding: 20px; }
+.card.start textarea { min-height: 148px; font-size: 15px; }
 
-/* ── home: recent requests, read as a list of documents, not a card grid ─── */
-.session-list > li { padding: 0; }
+/* ── home: recent requests ───────────────────────────────────────────────────
+   A list of entries, hoverable as a whole row. */
+/* `ul.clean.session-list`, not `.session-list`: these rows also match `ul.clean > li` further down,
+   which carries the same specificity and is declared later, so a single class here would lose the
+   padding reset and the row would stop being a full-bleed hover target. */
+.session-list { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow); overflow: hidden; }
+ul.clean.session-list > li { padding: 0; border-bottom: 1px solid var(--border); }
+ul.clean.session-list > li:last-child { border-bottom: 0; }
 .session-item {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 1.2rem;
-  padding: 0.75rem 0.2rem; color: var(--text);
+  display: flex; justify-content: space-between; align-items: center; gap: 20px;
+  padding: 14px 18px; color: var(--text); transition: background .12s ease;
 }
-.session-item:hover { text-decoration: none; background: var(--surface-2); border-radius: var(--radius-sm); }
-.session-title { color: var(--ink); font-weight: 600; letter-spacing: -0.01em; }
-.session-item:hover .session-title { color: var(--accent); }
-.session-meta { display: flex; align-items: center; gap: 0.5rem; flex: none; font-size: 0.82rem; }
-.session-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.session-row a { color: var(--ink); font-weight: 700; letter-spacing: -0.01em; }
+.session-item:hover { text-decoration: none; background: var(--surface-2); }
+.session-title { color: var(--ink); font-weight: 550; font-size: 14.5px; }
+.session-item:hover .session-title { color: var(--link); }
+.session-meta { display: flex; align-items: center; gap: 8px; flex: none; }
+.session-meta .muted { font-family: var(--mono); font-size: 11.5px; }
+.session-list .hint { padding: 0 18px 12px; }
+.session-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.session-row strong { font-size: 14.5px; font-weight: 600; color: var(--ink); }
 
-/* ── understanding: dot-coded model rows (like the landing) ──────────────── */
+/* ── per-topic understanding ─────────────────────────────────────────────────
+   Colour AND a distinct mark shape, so the three grades survive a monochrome print and a
+   colour-blind reader: filled square = known, filled diamond = assumed, hollow = open. */
 .model-list { display: flex; flex-direction: column; }
-.model-row { display: flex; align-items: center; gap: 0.85rem; padding: 0.55rem 1rem; border-bottom: 1px solid var(--border); }
+.model-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  transition: background .12s ease;
+}
 .model-row:last-child { border-bottom: 0; }
-.dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
-.dot.fact { background: var(--fact); }
-.dot.assum { background: var(--assum); }
-.dot.unkwn { background: var(--unkwn); }
-.model-row .tag { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.06em; color: var(--muted); width: 4.6rem; flex: none; text-transform: uppercase; }
-.model-row .name { font-weight: 600; color: var(--ink); }
-.model-row .pillar { color: var(--muted); font-size: 0.8rem; margin-left: auto; font-family: var(--mono); }
-.pill-partial { font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--assum); border: 1px solid color-mix(in srgb, var(--assum) 45%, var(--border)); border-radius: 999px; padding: 0.02rem 0.4rem; margin-left: 0.5rem; }
+.model-row:hover { background: var(--surface-2); }
+.dot { width: 9px; height: 9px; flex: none; border-radius: 2px; }
+.dot.fact { background: var(--known); }
+.dot.assum { background: var(--assumed); border-radius: 1px; transform: rotate(45deg); }
+.dot.unkwn { background: transparent; border: 1.5px solid var(--open); border-radius: 50%; }
+.model-row .tag {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  width: 62px; flex: none; color: var(--muted);
+}
+.model-row .name { color: var(--ink); font-size: 14px; font-weight: 500; }
+.model-row .pillar {
+  color: var(--muted); font-size: 10.5px; margin-left: auto; flex: none;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+}
+.pill-partial {
+  font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--assumed); background: var(--assumed-soft);
+  border: 1px solid color-mix(in srgb, var(--assumed) 24%, var(--border));
+  border-radius: 999px; padding: 1px 7px; margin-left: 8px; white-space: nowrap;
+}
 
-/* ── readiness: segmented coverage bar ───────────────────────────────────── */
-.readiness-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.6rem; }
-.readiness-head .count { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
-.progress { display: flex; gap: 4px; }
-.seg { height: 7px; border-radius: 4px; flex: 1; background: var(--border); }
-.seg.on { background: var(--accent); }
-.seg.on.blocked { background: var(--assum); }
-.blockers { margin: 0.7rem 0 0; color: var(--muted); font-size: 0.9rem; }
-.blockers b { color: var(--text); font-weight: 600; }
+/* ── coverage, under traceability where it belongs ───────────────────────────
+   Kept off the primary screen on purpose: a bar with no explanation is a score, and a score a reader
+   cannot act on is noise. Here, beside the topic list it summarises, it is a legend. */
+.readiness-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.readiness-head .count { font-size: 12.5px; color: var(--muted); font-weight: 550; }
+.progress { display: flex; gap: 3px; }
+.seg { height: 6px; flex: 1; border-radius: 2px; background: var(--surface-3); }
+.seg.on { background: var(--known); }
+.seg.on.blocked { background: var(--assumed); }
+.coverage { margin: 18px 0 6px; }
 
-/* ── reasoning ───────────────────────────────────────────────────────────── */
-.reason { border-left: 3px solid var(--accent); padding: 0.1rem 0 0.1rem 0.95rem; margin: 0.9rem 0; }
-.reason .head { font-weight: 700; color: var(--ink); }
-.reason dl { margin: 0.35rem 0 0; }
-.reason dt { font-family: var(--mono); text-transform: uppercase; font-weight: 600; color: var(--muted); font-size: 0.68rem; letter-spacing: 0.05em; margin-top: 0.45rem; }
-.reason dd { margin: 0.1rem 0 0.2rem; }
+/* ── recorded reasoning ──────────────────────────────────────────────────────*/
+.reason {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 14px 16px; margin: 12px 0;
+}
+.reason .head { font-size: 14.5px; font-weight: 600; color: var(--ink); line-height: 1.45; }
+.reason dl { margin: 10px 0 0; }
+.reason dt {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin-top: 10px;
+}
+.reason dd { margin: 2px 0 0; max-width: 68ch; font-size: 14px; }
 
-/* ── questions ───────────────────────────────────────────────────────────── */
-ol.questions { margin: 0; padding: 0; list-style: none; counter-reset: q; }
-ol.questions > li { counter-increment: q; padding: 0.8rem 0; border-bottom: 1px solid var(--border); }
+/* ── open questions ──────────────────────────────────────────────────────────
+   The product's real output, and the part of the page that has to be a pleasure to read. Each entry
+   is a card row: the question at reading size, the reason underneath, the area it would move as a
+   quiet chip. No numbering — these are ranked by information value, not a sequence to work through
+   in order, and numbering them would claim an order the engine does not mean. */
+/* Rows run full-bleed inside their card and light up on hover, so the list reads as something you
+   work through rather than a paragraph with bullets. The negative margins cancel the card's own
+   padding — keep them in step if that padding changes. */
+ol.questions { margin: 0 0 4px; padding: 0; list-style: none; }
+ol.questions > li {
+  padding: 14px 0; border-bottom: 1px solid var(--border);
+  transition: background .12s ease;
+}
 ol.questions > li:last-child { border-bottom: 0; }
-ol.questions .q { font-weight: 600; color: var(--ink); display: flex; gap: 0.6rem; }
-ol.questions .q::before { content: counter(q); font-family: var(--mono); color: var(--accent); font-weight: 700; flex: none; }
-ol.questions .why { color: var(--muted); font-size: 0.88rem; margin: 0.25rem 0 0 1.6rem; }
-ol.questions .why b { color: var(--text); font-weight: 600; }
-ol.questions .area { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.03em; margin: 0.25rem 0 0 1.6rem; }
+/* Full-bleed and hoverable only where the list sits inside a card — the negative margins cancel that
+   card's own padding. The same list is reused under Traceability with no card around it, where these
+   margins would pull it out of the column, so the bleed is scoped to the parent rather than global. */
+.card > ol.questions { margin: -18px -20px 4px; }
+.card > ol.questions > li { padding: 16px 20px; }
+.card > ol.questions > li:hover { background: var(--surface-2); }
+ol.questions .q {
+  position: relative; padding-left: 22px;
+  font-size: 15.5px; font-weight: 570; color: var(--ink); line-height: 1.45;
+}
+ol.questions .q::before {
+  content: ""; position: absolute; left: 0; top: 0.42em;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+ol.questions .why { color: var(--text); font-size: 14px; margin: 6px 0 0 22px; max-width: 66ch; }
+ol.questions .why b {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+ol.questions .area {
+  display: inline-block; margin: 8px 0 0 22px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--muted); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+}
 
-/* ── the request, quoted rather than boxed ───────────────────────────────── */
-h2.quiet { margin-top: 1.2rem; }
+/* ── the request, quoted ─────────────────────────────────────────────────────*/
 blockquote.request {
-  margin: 0 0 1.4rem; padding: 0.15rem 0 0.15rem 1rem; border-left: 3px solid var(--border);
-  color: var(--text); white-space: pre-wrap; max-width: 68ch;
+  margin: 0 0 20px; padding: 14px 18px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg);
+  color: var(--text); white-space: pre-wrap; max-width: 68ch; font-size: 14.5px;
 }
 
-/* ── what changed: the answer to "did that matter?" ──────────────────────── */
-.changed .card { border-left: 3px solid var(--accent); background: var(--accent-soft); }
-.changed .card .lead { color: var(--ink); font-weight: 600; margin-bottom: 0.6rem; }
-ul.tight > li { padding: 0.2rem 0; border-bottom: 0; }
+/* ── what changed ────────────────────────────────────────────────────────────*/
+.changed .card { border-color: color-mix(in srgb, var(--link) 28%, var(--border)); }
+.changed .card .lead { color: var(--ink); font-size: 15.5px; font-weight: 600; margin-bottom: 10px; }
+/* Same reason as the session list: `ul.clean > li` is declared later at equal specificity. */
+ul.clean.tight > li { padding: 3px 0; border-bottom: 0; }
 
-.blind-spot { color: var(--muted); font-size: 0.9rem; margin: 0.8rem 0 0; }
-.blind-spot b { color: var(--text); }
-.readiness-headline { display: flex; align-items: center; gap: 0.6rem; font-weight: 600; color: var(--ink); margin: 0 0 0.5rem; }
+.readiness-headline {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  color: var(--ink); font-size: 15.5px; font-weight: 600; margin: 0 0 8px;
+}
 
-/* ── progressive disclosure ──────────────────────────────────────────────── */
-details.advanced, details.traceability, details.more-documents { margin: 1rem 0 0; }
-details.traceability { margin-top: 2.2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+/* ── progressive disclosure ──────────────────────────────────────────────────
+   Nothing here is hidden because it is unimportant; it is hidden because a reader deciding what to
+   ask next does not need the whole model to do it. The counts are always stated in the open. */
+details.advanced, details.traceability, details.more-documents { margin: 16px 0 0; }
+details.traceability { margin-top: 40px; border-top: 1px solid var(--border); padding-top: 20px; }
 details > summary {
-  cursor: pointer; font-family: var(--mono); text-transform: uppercase; font-size: 0.72rem;
-  letter-spacing: 0.08em; color: var(--muted); font-weight: 600; list-style-position: outside;
+  cursor: pointer; display: inline-block;
+  font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); border-radius: var(--r-sm); padding: 3px 0;
 }
-details > summary:hover { color: var(--accent); }
-.advanced-body, .traceability-body { padding: 0.4rem 0 0.2rem; }
-.coverage { margin: 1rem 0 0.4rem; }
+details > summary:hover { color: var(--link); }
+details[open] > summary { margin-bottom: 10px; }
+.advanced-body, .traceability-body { padding: 4px 0 2px; }
 
-/* ── artifacts ───────────────────────────────────────────────────────────── */
+/* ── lists and documents ─────────────────────────────────────────────────────*/
 ul.clean { list-style: none; padding: 0; margin: 0; }
-ul.clean > li { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+ul.clean > li { padding: 10px 0; border-bottom: 1px solid var(--border); }
 ul.clean > li:last-child { border-bottom: 0; }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
 pre.artifact {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm); padding: 1.1rem; overflow-x: auto; font-family: var(--mono);
-  font-size: 0.84rem; line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow); padding: 20px; overflow-x: auto; font-family: var(--mono);
+  font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-wrap: break-word;
+  color: var(--text); max-width: none;
 }
 
-/* ── notices ─────────────────────────────────────────────────────────────── */
-.notice { padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin: 0.9rem 0; border: 1px solid var(--border); font-size: 0.92rem; }
-.notice.info { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); border-left: 3px solid var(--accent); }
-.notice.warn { background: var(--warn-soft); border-color: var(--warn); }
-.notice.danger { background: var(--danger-soft); border-color: var(--danger); }
+/* ── notices ─────────────────────────────────────────────────────────────────*/
+.notice {
+  padding: 12px 14px; margin: 14px 0; font-size: 14px; border-radius: var(--r-md);
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+.notice.info { background: var(--surface-2); border-color: var(--border); }
+.notice.warn { background: var(--assumed-soft); border-color: color-mix(in srgb, var(--assumed) 24%, var(--border)); }
+.notice.danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 26%, var(--border)); color: var(--ink); }
 
-/* ── misc ────────────────────────────────────────────────────────────────── */
-.toolbar { display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap; margin: 1rem 0 0; }
-.row-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.backlink { font-family: var(--mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+/* ── misc ────────────────────────────────────────────────────────────────────*/
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 16px 0 0; }
+.backlink {
+  display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 4px;
+}
+.backlink:hover { color: var(--link); text-decoration: none; }
 
-/* A label a screen reader needs and the layout does not — the request box is self-evident on sight. */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* Inline dots in the understanding legend. */
-.hint .dot { display: inline-block; vertical-align: middle; margin: 0 0.1rem 0 0.35rem; }
+/* Inline grade marks in the understanding legend. */
+.hint .dot { display: inline-block; vertical-align: middle; margin: 0 2px 0 6px; }
 
-/* ── loading signals ─────────────────────────────────────────────────────── */
+/* ── loading signals ─────────────────────────────────────────────────────────
+   The whole motion budget of this page, spent on the one thing that is genuinely slow: a paid
+   provider call. */
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Top progress bar — the universal "something is happening" signal (HTMX swaps AND full-page nav). */
 #progress {
-  position: fixed; top: 0; left: 0; height: 3px; width: 0%; z-index: 2000;
-  background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
-  opacity: 0; transition: width 0.25s ease, opacity 0.3s ease; pointer-events: none;
+  position: fixed; top: 0; left: 0; height: 2px; width: 0%; z-index: 2000;
+  background: var(--link); opacity: 0;
+  transition: width .25s ease, opacity .3s ease; pointer-events: none;
 }
 #progress.on { opacity: 1; }
 
-/* A spinner inside the button that was just submitted (works for HTMX and plain forms). The
-   busy state mutes every submit button on the page, including this one — but the button that is
-   actually working must not read as muted, or nothing on the page says which call is running. */
 .btn.loading { pointer-events: none; }
 .btn.loading:disabled { opacity: 1; }
-/* The page-wide busy state. This is what makes `body.busy` a hook something reads rather than state
-   the page carries and nobody consumes — a review found it inert, and inert state that a test asserts
-   is a no-op wearing a passing assertion. A paid call is running; the cursor says so everywhere,
-   including over the muted buttons, which `pointer-events: none` would otherwise leave silent. */
+/* A paid call is running; the cursor says so everywhere, including over the muted buttons that
+   `pointer-events: none` would otherwise leave silent. */
 body.busy { cursor: progress; }
 .btn.loading::before {
-  content: ""; width: 0.85rem; height: 0.85rem; border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.45); border-top-color: #fff;
-  animation: spin 0.6s linear infinite; flex: none;
+  content: ""; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--surface) 40%, transparent); border-top-color: var(--surface);
+  animation: spin .6s linear infinite; flex: none;
 }
 .btn.secondary.loading::before, .btn.ghost.loading::before {
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent);
+  border-color: color-mix(in srgb, var(--ink) 22%, transparent); border-top-color: var(--ink);
 }
 
-/* Text hint next to an HTMX action (kept for a11y / no-JS-fallback context). */
-.spinner { display: none; color: var(--muted); font-size: 0.85rem; }
+.spinner { display: none; color: var(--muted); font-size: 13px; }
 .htmx-request .spinner, .htmx-request.spinner { display: inline; }
 
-:focus-visible { outline: 2.5px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  .btn.loading::before { animation: none; }
+}
+
+:focus-visible {
+  outline: 2px solid var(--link); outline-offset: 2px; border-radius: var(--r-sm);
+}
+
+/* ── narrow screens ──────────────────────────────────────────────────────────*/
+@media (max-width: 720px) {
+  .container { padding: 0 16px; }
+  header.site .container { padding: 12px 16px; }
+  main { padding: 28px 0 56px; }
+  h1 { font-size: 23px; }
+  .card { padding: 16px; }
+  .session-item { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .session-row { flex-direction: column; align-items: flex-start; }
+  .model-row { flex-wrap: wrap; gap: 8px 10px; }
+  .model-row .pillar { margin-left: 0; width: 100%; }
+}

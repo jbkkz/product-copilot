@@ -35,13 +35,21 @@
     <h3>What we are assuming</h3>
     <ul class="clean tight">{% for a in s.understood.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>
     {% endif %}
-    {% if s.understood.blind_spot %}
-    <p class="blind-spot"><b>Least explored:</b> {{ s.understood.blind_spot }}</p>
-    {% endif %}
     {% else %}
     <p class="muted">Nothing captured yet.</p>
     {% endif %}
   </div>
+
+  {# Deliberately the loudest block on this screen. Everything above is what the engine has
+     established; this is the topic it has established least about, and it was previously a grey
+     footnote inside the card above — the wrong weight for the thing most likely to move the scope.
+     It sits outside the card because it is not part of the understanding: it is the edge of it. #}
+  {% if s.understood.blind_spot %}
+  <aside class="unsurveyed">
+    <span class="unsurveyed-label">Least explored</span>
+    <p>{{ s.understood.blind_spot }}</p>
+  </aside>
+  {% endif %}
 
   {% include "discovery/_questions.html" %}
 
