@@ -131,13 +131,34 @@ def _release(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
+def _no_session(slug: str) -> SessionNotFoundError:
+    """The one refusal for "there is no such session", so the lock and the metadata read cannot drift
+    into telling a caller two different stories about the same absence."""
+    return SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
+
+
 @contextmanager
 def session_lock(slug: str) -> Iterator[None]:
     """Hold the exclusive lock on a session for the duration of the block.
 
     Re-entrant within a thread: a service that wraps a whole update can take the lock once, and the
     core calls inside it (`save_revision`, `save_session_artifact`) re-enter without deadlocking.
-    Across threads and across processes the lock is genuinely exclusive."""
+    Across threads and across processes the lock is genuinely exclusive.
+
+    **A session must already exist to be locked**, and this function creates nothing. It used to
+    `mkdir` the session directory before opening `.lock` inside it, which made the guard a producer of
+    the very state it guards: locking a slug with no session left behind a directory holding only
+    `.lock`, invisible to `list_session_slugs` (no session.json) and non-empty, so the next
+    `create_session` lost its rename and refused a slug nobody had ever taken (#22). Under invariant 11
+    that rename is the *only* claim on a slug; a second producer makes the claim decidable by
+    something other than the claim. So the lock refuses instead, and a failed lock leaves the store
+    exactly as it found it.
+
+    Removing the directory afterwards was the other repair, and it is worse: unlinking a `.lock` a
+    concurrent process is holding is legal on POSIX and silently breaks mutual exclusion — the waiter
+    proceeds holding a lock on an unlinked inode. Refusing costs an ordering change instead, and the
+    error is the same `SessionNotFoundError` the `read_meta` immediately inside every one of these
+    blocks already raised, so what moves is when it is raised, not what the caller is told."""
     depths: dict[str, int] = getattr(_held_locks, "depths", None) or {}
     _held_locks.depths = depths
     if depths.get(slug):
@@ -149,8 +170,16 @@ def session_lock(slug: str) -> Iterator[None]:
         return
 
     d = canonical_dir(slug)
-    d.mkdir(parents=True, exist_ok=True)
-    fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    if not session_exists(slug):
+        raise _no_session(slug)
+    try:
+        fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except FileNotFoundError as e:
+        # The session was removed between the check and the open. Not the check being pointless: it
+        # answers a directory that is a *file*, or that holds no session.json, both of which reach
+        # `os.open` as something other than FileNotFoundError. This arm closes the race the check
+        # cannot, and closes it by refusing rather than by re-creating what was deleted.
+        raise _no_session(slug) from e
     acquired = False
     try:
         _acquire(fd, slug)
@@ -520,7 +549,7 @@ def migrate_session(data: dict) -> SessionMeta:
 def read_meta(slug: str) -> SessionMeta:
     p = canonical_dir(slug) / "session.json"
     if not p.exists():
-        raise SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
+        raise _no_session(slug)
     try:
         return migrate_session(json.loads(p.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:

@@ -419,3 +419,135 @@ def test_an_artifact_round_trips_non_ascii_content(workspace, monkeypatch):
             # fatally on the 3.9 leg. Registered in `_LOCALE_DEFAULT_BY_DESIGN` in test_encoding.py.
             p.read_text()   # what the repository's own line did, meeting the locale it would meet
         assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body
+
+
+# ── #22: session_lock() must not materialise the session it guards ──────────────
+
+
+def _ghost_locking_calls() -> dict:
+    """Every route that takes the session lock on a slug the caller has not proven exists.
+
+    Named as a table rather than tested one by one because the defect was never in any of them: it
+    was in the lock, and each of these is only a way to reach it. A route added later that locks
+    before it reads belongs here, not in a test of its own."""
+    from requivo.services.artifacts import ArtifactService
+
+    def take_the_lock(slug):
+        with store.session_lock(slug):
+            pass
+
+    # The keys become slugs, so they are hyphenated: an underscore is not a legal slug character and
+    # `validate_slug` would refuse the name before the lock could be reached at all.
+    return {
+        "session-lock": take_the_lock,
+        "save-revision": lambda slug: store.save_revision(slug, _engine_output()),
+        "save-session-artifact": lambda slug: store.save_session_artifact(
+            slug, "brief", ARTIFACT_FILENAMES["brief"], "# Brief\n", source_revision=1),
+        "mark-stale": lambda slug: ArtifactService(FileSessionRepository()).mark_stale(slug, ["problem"]),
+    }
+
+
+def _engine_output(**overrides):
+    from requivo.core.contracts import EngineOutput
+    return EngineOutput.model_validate(_full_model(**overrides))
+
+
+def test_a_lock_on_a_slug_with_no_session_leaves_no_trace(workspace):
+    """The lock created `canonical_dir(slug)` before opening `.lock` inside it, so taking it on a slug
+    with no session left a directory behind holding nothing else. That directory is invisible to
+    `list_session_slugs` (no session.json) and non-empty, so `create_session`'s rename — the *only*
+    claim on a slug under invariant 11 — lost to a session nobody had created, and the user was told
+    one already existed that neither they nor the tool could see.
+
+    The property pinned here is the general one, not the symptom: a lock that fails, on a slug that
+    has no session, leaves the store exactly as it found it. `real` is the positive control — without
+    a session the same fixture *does* put on disk, every assertion below is also satisfied by a
+    workspace pointed somewhere nothing is ever written."""
+    SessionService().create_session("A real request.", slug="real")
+    before = sorted(p.name for p in store.session_root().iterdir())
+    assert before == ["real"], "the control session is not where this test is looking"
+
+    for name, call in _ghost_locking_calls().items():
+        with pytest.raises(RequivoError) as ei:
+            call(f"ghost-{name}")
+        assert ei.value.code == "session_not_found", name
+        assert not store.canonical_dir(f"ghost-{name}").exists(), name
+
+    assert sorted(p.name for p in store.session_root().iterdir()) == before
+    assert store.list_session_slugs() == ["real"]
+
+
+def test_a_session_deleted_between_the_check_and_the_open_is_refused_not_recreated(workspace,
+                                                                                    monkeypatch):
+    """The race the existence check cannot close, and the reason the fix is not that check alone. The
+    session is gone by the time `os.open` runs, and the old code would simply have made the directory
+    again. `session_exists` is forced rather than raced, so the arm is *executed* on every leg of the
+    matrix instead of being asserted about: the errno-to-exception mapping for opening a file whose
+    parent directory is missing is the platform-specific part of this, and a reasoned claim about
+    Windows is worth less than one CI can falsify."""
+    monkeypatch.setattr(store, "session_exists", lambda slug: True)
+
+    with pytest.raises(RequivoError) as ei:
+        with store.session_lock("vanished"):
+            pass                                    # pragma: no cover - the lock must not be granted
+    assert ei.value.code == "session_not_found"
+    assert not store.canonical_dir("vanished").exists()
+    root = store.session_root()
+    assert not root.exists() or list(root.iterdir()) == []
+
+
+def test_a_slug_a_failed_lock_touched_can_still_be_created(workspace):
+    """The reproduction from the issue, end to end. `list_session_slugs` and `create_session` have to
+    agree about whether a slug is taken — the refusal was false precisely because they did not."""
+    with pytest.raises(RequivoError):
+        store.save_session_artifact("later", "brief", ARTIFACT_FILENAMES["brief"], "x", source_revision=1)
+
+    assert "later" not in store.list_session_slugs()
+    meta = store.create_session("later", "A request that arrives afterwards.")
+    assert meta.current_revision == 0
+    assert store.list_session_slugs() == ["later"]
+    assert store.session_request("later") == "A request that arrives afterwards."
+
+
+def test_a_migration_onto_such_a_slug_is_performed_not_reported_as_skipped(workspace, capsys):
+    """Why this is more than a misleading message. `migrate_legacy` claims its slug through
+    `create_session`, and the bulk sweep turns `SessionExistsError` into `skipped_already_present` —
+    a row that reads as a decision. A ghost directory made the sweep report a session it had refused
+    to migrate as one that was already there, and the legacy work silently never landed."""
+    from requivo.deterministic import _cmd_session_migrate
+
+    _legacy("stale-lock", "LEGACY")
+    with pytest.raises(RequivoError):
+        store.save_revision("stale-lock", _engine_output())
+
+    _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["migrated"] == ["stale-lock"]
+    assert receipt["skipped_already_present"] == []
+    assert _problem("stale-lock") == "LEGACY"
+
+
+def test_the_lock_still_guards_a_session_that_exists(workspace):
+    """The other direction, and the one a fix here can break silently. The lock's job is the compound
+    mutations on sessions that *do* exist: `save_revision` and `save_session_artifact` write files
+    under a session directory while holding it, the service layer nests it around several core calls,
+    and `.lock` still belongs inside the session it locks (`session export` excludes it by name)."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="live")
+    svc.update_model("live", _full_model(**{"problem": _slot(80, "explicit", "high", "REAL")}))
+
+    lock_file = store.canonical_dir("live") / ".lock"
+    assert lock_file.exists(), "a writer that holds the lock leaves the lockfile in the session"
+
+    with store.session_lock("live"):
+        # Re-entrant within the thread: the service takes it around a whole update and every core
+        # call inside takes it again. A guard that refused the second acquisition would deadlock.
+        store.save_session_artifact("live", "brief", ARTIFACT_FILENAMES["brief"], "# Brief\n",
+                                    source_revision=1)
+        rev, meta = store.save_revision(
+            "live", _engine_output(**{"problem": _slot(90, "explicit", "high", "REAL v2")}))
+
+    assert (rev, meta.current_revision) == (2, 2)
+    assert _problem("live") == "REAL v2"
+    assert store.read_meta("live").artifact_status["brief"].revision == 1
+    assert [p.code for p in check_session("live")] == []

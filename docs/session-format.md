@@ -31,7 +31,9 @@ plugin and the Web app all read and write the same layout.
   temp file is unique per writer, so concurrent writers cannot collide on it.
 - **.lock** is an empty file held with an OS-level lock for the duration of a write. The kernel
   releases it when the process ends, so a crash cannot leave a session permanently locked — there is
-  no stale-lock state to clean up, and no timeout to wait out.
+  no stale-lock state to clean up, and no timeout to wait out. It only ever appears **inside a session
+  that already exists**: locking a name nothing has created is refused, not accommodated, so a
+  directory under `sessions/` is always a real session and never a lock file with nothing around it.
 
 ## Revisions and provenance
 
