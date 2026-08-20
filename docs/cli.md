@@ -398,6 +398,33 @@ A slug that already exists is refused unless `--force`, and a forced replacement
 existing session steps aside and is deleted only once the new one is in place, so a failure leaves you
 with the session you had rather than neither.
 
+**What a `--json` consumer branches on.** Every refusal here names the archive or the store, never a
+model. Assert on the code, never on the message.
+
+| Code | HTTP | The archive… |
+|---|---|---|
+| `unreadable_archive` | 400 | is not a readable `.zip` at all. `details`: `{archive}` |
+| `invalid_archive` | 400 | opens, but is not shaped like an export. `details`: `{problem, …}` |
+| `inconsistent_archive` | 400 | holds a session that fails the integrity check. `details`: `{slug, problems}` |
+| `session_exists` | 409 | is fine; that slug is taken and `--force` was not passed. `details`: `{slug}` |
+
+`invalid_archive` covers seven conditions under one code because they share one remedy — *give me a
+different archive*. `details["problem"]` is present on all seven and says which: `empty`,
+`too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory` or
+`multiple_sessions`. The size and count arms add the numbers they quote (`{files, max_files}`,
+`{bytes, max_bytes}`), the path arms add `{entry}` and the multi-session arm adds `{slugs}`; nothing
+is padded to a common shape, so read the shape after you have branched on `problem`.
+
+The first three are arms of `InvalidSessionError`, so `except InvalidSessionError` catches every
+*archive* refusal without enumerating them. Before #101 the seven shape conditions and the occupied
+slug all answered `invalid_model` — a code documented for a malformed *proposal*, which is not what
+anyone hands `session import`.
+
+Three more codes reach this verb and are about neither the archive's shape nor the store's state:
+`session_not_found` when the path you named is not a file, `invalid_slug` when the archive's one
+directory is named something that could not be a session, and `import_move_failed` (500) when the
+validated session could not be moved into place — the archive was fine and the store refused it.
+
 `session export` reads under the session's write lock, so an archive can never combine an old
 `session.json` with a newer `model.json`, and it excludes `.lock` and any scratch file.
 

@@ -701,11 +701,18 @@ def test_nothing_raises_the_malformed_session_family_base():
 
 
 def test_every_arm_of_the_family_names_a_distinct_fact():
-    """Nine arms, nine codes, and none of them the base.
+    """Ten arms, ten codes, and none of them the base.
 
-    Named individually rather than counted: a test asserting `len(subclasses) == 9` would pass just as
-    well if two arms were merged and a third invented, which is a different vocabulary answering the
-    same number.
+    Named individually rather than counted: a test asserting `len(subclasses) == 10` would pass just
+    as well if two arms were merged and a third invented, which is a different vocabulary answering
+    the same number.
+
+    `invalid_archive` is the tenth, added by #101. It joined here rather than standing alone because
+    it sits between `unreadable_archive` and `inconsistent_archive` on one code path in
+    `_cmd_session_import`, and a consumer writing `except InvalidSessionError` for *any*
+    malformed-session refusal would otherwise catch the arm on either side of it and miss the seven
+    conditions in between. **This list going red on a new arm is the guard doing its job** — it is
+    what made #101 state the family question rather than answer it by accident.
     """
     from requivo.core.errors import InvalidSessionError
     from requivo.services import artifacts  # noqa: F401  - registers the two service-layer arms
@@ -719,7 +726,7 @@ def test_every_arm_of_the_family_names_a_distinct_fact():
     assert codes == {
         "unsupported_format_version", "unsupported_schema_version", "session_unreadable",
         "artifact_revision_out_of_range", "unstated_source_revision", "unreadable_source_revision",
-        "inconsistent_archive", "unreadable_archive", "import_move_failed",
+        "inconsistent_archive", "unreadable_archive", "invalid_archive", "import_move_failed",
     }
     assert "invalid_session" not in codes, "the base is the family, not an arm"
 

@@ -64,6 +64,13 @@ _STATUS_BY_CODE = {
     "unreadable_source_revision": 500,  # a real revision was stated; the history is what is incomplete
     "inconsistent_archive": 400,      # the caller handed us this archive
     "unreadable_archive": 400,        # …and this one
+    # …and the seven shape refusals between them, which kept `invalid_model` — a code about a
+    # proposal — until #101. 400 for the same reason as its two siblings, and not 5xx: nothing is
+    # written to the store until the archive has passed, so the store is not what is wrong. Not 409
+    # either: nothing in the store conflicts with it, and re-sending the same archive unchanged can
+    # never succeed. The status does not move — 400 before under `invalid_model`, 400 now — so what
+    # a consumer sees change is the code, which is exactly what #101 set out to move.
+    "invalid_archive": 400,           # …and the seven shapes in between (#101)
     "import_move_failed": 500,        # the archive was fine and the store refused it
     # 400 and not 409: an `artifact save` with no source revision is not a conflict with the store's
     # state, it is a request that never said the one thing only the caller knows. Nothing about the

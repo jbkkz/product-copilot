@@ -260,6 +260,39 @@ class UnreadableArchiveError(InvalidSessionError):
     code = "unreadable_archive"
 
 
+class InvalidArchiveError(InvalidSessionError):
+    """The archive opens, but its *shape* is not an export: no entries, too many, expanding past the
+    size ceiling, an entry that is not safely inside exactly one session directory, or more than one
+    session in it.
+
+    **Why it is in this family and not on its own.** It sits between `unreadable_archive` and
+    `inconsistent_archive` on one code path in `_cmd_session_import`, and the three answer the same
+    two questions the same way: *is this a session we can accept* — no — and *whose fault is it* —
+    the caller's, so 400. `unreadable_archive`'s docstring argues that nothing has been identified
+    yet, which is true here too and did not take it out of the family; a consumer writing
+    `except InvalidSessionError` for *any* malformed-session refusal would otherwise catch the arm on
+    either side of this one and miss the seven in between. It was `InvalidModelError` until #101 —
+    a code documented as *"a proposed model is structurally or semantically invalid"*, answering for
+    an archive nobody proposed a model with.
+
+    **One code for seven conditions, and what that costs.** They share a remedy — *give me a
+    different archive* — and #82's rule is that a candidate sending a reader where an existing code
+    already sends them has not earned a line. But #82's finding was that `details` varying silently
+    under one code is what raised `KeyError` on three of eight payloads, so a single code owes a
+    discriminator rather than being excused one:
+
+    - `details["problem"]` is on **every** arm, and is one of `empty`, `too_many_files`,
+      `too_large`, `unsafe_entry`, `entry_outside_session_directory`, `multiple_sessions`. A
+      consumer that needs the distinction branches on a key that is always present.
+    - Each arm adds the numbers its own sentence quotes, and only those: `{files, max_files}`,
+      `{bytes, max_bytes}`, `{entry}`, `{slugs}`. `empty` adds nothing. Padding them to a common
+      shape would state measurements nobody took, which is the half of #82 that was a decision
+      rather than an obligation.
+    """
+
+    code = "invalid_archive"
+
+
 class ImportMoveFailedError(InvalidSessionError):
     """The validated session could not be moved into place. `details`: `{slug}`.
 
@@ -314,9 +347,23 @@ class RevisionConflictError(RequivoError):
 
 
 class SessionExistsError(RequivoError):
-    """A session already occupies that slug. Raised by the *creation* itself rather than found by a
-    prior existence check, so two callers creating the same session concurrently cannot both believe
-    they made it: the claim is the directory creation, and exactly one of them wins it."""
+    """A session already occupies that slug.
+
+    In `create_session` and `migrate_legacy` it is raised by the *creation* itself rather than found
+    by a prior existence check, so two callers creating the same session concurrently cannot both
+    believe they made it: the claim is the directory creation, and exactly one of them wins it
+    (invariant 11).
+
+    **`session import` is the one raiser where it is a check, and the difference is stated rather
+    than papered over** (#101). Import refuses an occupied slug unless `--force` was passed, and that
+    decision is made by a `session_exists` stat call before the archive is extracted — so it carries
+    the TOCTOU window the atomic claim above does not have: a session created between the check and
+    the final move is replaced without `--force`, silently. That window predates this code and is not
+    what #101 changed; what #101 changed is that the refusal used to answer `invalid_model` / 400,
+    which described a proposal nobody sent. The same shape is already written down for the sibling
+    case at `deterministic.py`'s `_cmd_session_migrate`, where the check is *reporting, not the
+    guard*. `details`: `{slug}`.
+    """
 
     code = "session_exists"
 
