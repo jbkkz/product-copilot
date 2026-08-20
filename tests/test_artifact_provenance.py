@@ -146,25 +146,43 @@ def test_a_missing_revision_file_is_still_refused_the_way_it_always_was(moved):
         ArtifactService().save(moved, "prd", "# PRD", source_revision=1)
 
 
-def test_both_invalid_session_refusals_carry_one_details_shape(moved):
-    """`invalid_session` now carries two conditions from this service — provenance not stated, and
-    provenance not readable — and `docs/compatibility.md` holds every code to one `details` shape.
+def test_the_two_provenance_refusals_carry_two_codes_and_one_details_shape(moved):
+    """Two facts, two codes — and the shape they share is a decision now, not a debt.
 
-    A key on one payload and not the other is the failure #35 measured: a consumer follows the
-    documented advice (match the code), reads a key out of `details`, and gets a `KeyError` from a
-    payload that correctly carried the code it matched. Asserted on the *key sets* rather than on
-    either one alone, so adding a field to one raise site and not its sibling fails here rather than
-    in somebody's consumer. The claim was prose in two places and checked by nothing until this test.
+    This service refuses on two grounds: provenance the caller never stated, and provenance it stated
+    that cannot be read. They rode one code, `invalid_session`, until #57 — not because they are one
+    fact but because a new code needs a row in `web/app.py::_STATUS_BY_CODE`, which
+    `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status` requires of every code
+    in the vocabulary, and that file was held by another lane in the round #6 landed. The precision
+    lived in the *type* meanwhile, which is invisible to a caller reading a serialized envelope.
+
+    The `details` shape stays shared anyway, and the reason changed with the code. It was owed while
+    the code was shared — a key on one payload and not the other is the failure #35 measured, where a
+    consumer follows the documented advice (match the code, read the key) and gets a `KeyError` from a
+    payload that correctly carried the code it matched. With the codes split that obligation is
+    discharged, and narrowing this payload to four keys would be a second breaking change nobody asked
+    for. #52 settled the same question the other way round: `opaque_origin` and `origin_mismatch`
+    share a shape and are still two codes, because a shared shape is not a shared meaning.
+
+    So both halves are asserted, and the key sets on the *sets* rather than either alone — adding a
+    field to one raise site and not its sibling still fails here rather than in somebody's consumer.
     """
     svc = ArtifactService()
-    with pytest.raises(InvalidSessionError) as unstated:
+    with pytest.raises(UnstatedSourceRevisionError) as unstated:
         svc.save(moved, "prd", "# PRD")
 
     _revision_file(moved, 1).write_text("{", encoding="utf-8")
     with pytest.raises(InvalidSessionError) as unreadable:
         svc.save(moved, "prd", "# PRD", source_revision=1)
 
-    assert unstated.value.code == unreadable.value.code == "invalid_session"
+    # The two codes differ, and each is named rather than only compared: a test that asserted
+    # inequality alone would pass just as well if both arms moved to some third code together.
+    assert unstated.value.code == "unstated_source_revision"
+    assert unreadable.value.code == "invalid_session"
+    # The split moved the code, not the hierarchy — `except InvalidSessionError` still catches both,
+    # which is what keeps this from breaking a caller that catches the class.
+    assert isinstance(unstated.value, InvalidSessionError)
+
     assert set(unstated.value.details) == set(unreadable.value.details)
     # must fire: the shared shape is the real one, not two empty dicts agreeing with each other.
     assert {"slug", "type", "source_revision", "current_revision", "cause"} == set(unstated.value.details)

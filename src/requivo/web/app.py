@@ -42,6 +42,10 @@ _STATUS_BY_CODE = {
     "unknown_context_card": 400,
     "missing_required_slot": 400,
     "invalid_session": 400,
+    # 400 and not 409: an `artifact save` with no source revision is not a conflict with the store's
+    # state, it is a request that never said the one thing only the caller knows. Nothing about the
+    # session is wrong, and the remedy is entirely in the caller's hands — state the revision (#57).
+    "unstated_source_revision": 400,
     "invalid_filename": 400,          # a path target the caller supplied
     "empty_selector_token": 400,      # a stray comma in what the caller typed
     "empty_selection": 400,           # a selection the caller supplied that selects nothing
