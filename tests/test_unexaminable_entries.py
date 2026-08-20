@@ -452,3 +452,33 @@ def test_a_plain_error_is_not_mangled_by_the_wrap():
 
     detail = _non_session_detail({"kind": "unknown", "error": "[Errno 13] Permission denied"})
     assert "[Errno 13] Permission denied" in detail
+
+
+def test_no_error_string_reaches_a_printed_line_unwrapped():
+    """The class guard, added because fixing the two named instances left four siblings (#90).
+
+    The first attempt at #90 wrapped the two sites the issue pointed at. Four more of exactly the
+    same shape stayed raw — three of them on `doctor`'s own report, the surface #40 and #90 are both
+    about, and one of them **eleven lines below** a sibling that had just been wrapped, in the same
+    function. A guard on the instances would have stayed green through all of that, which is the
+    whole reason this one reasons over the file.
+
+    Deliberately a source sweep and not a behavioural test: the hazard is a *new* interpolation
+    somebody adds later, and no runtime assertion can see a line nobody wrote yet. The same argument
+    `tests/test_encoding.py` makes for its own walk.
+
+    It matches `['error']` and `["error"]` reads inside an f-string, which is the shape every one of
+    the six had. A value renamed out of that spelling escapes this guard — stated so the next person
+    knows what it does not cover rather than trusting it further than it goes."""
+    src = (Path(__file__).resolve().parents[1] / "src" / "requivo" / "deterministic.py").read_text(
+        encoding="utf-8")
+    unwrapped = []
+    for lineno, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#") or "f\"" not in line and "f'" not in line:
+            continue
+        for m in re.finditer(r"\{([A-Za-z_][\w\[\]'\"]*)\[['\"]error['\"]\]\}", line):
+            unwrapped.append(f"{lineno}: {m.group(0)}  |  {stripped[:90]}")
+    assert not unwrapped, (
+        "an error string is interpolated into a printed line without display_token:\n  "
+        + "\n  ".join(unwrapped))
