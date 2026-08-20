@@ -1476,8 +1476,8 @@ def test_import_json_names_the_session_and_its_directory_the_way_its_siblings_do
     just put the session there.
 
     `imported` and `into` are **gone**, not kept as duplicates. Keeping both would leave the wrong
-    spelling in the payload a reader copies from, and the whole reason this ships before 1.0 is that
-    removing a `--json` key is breaking afterwards.
+    spelling in the payload a reader copies from, and the whole reason this ships in the 1.0 release
+    is that removing a `--json` key is breaking after it.
 
     **`path` is the session's own directory, not the session root**, and that is a correction to the
     issue as filed, which proposed `str(root)` — the value `into` carried. `session init --json`'s

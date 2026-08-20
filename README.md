@@ -172,7 +172,7 @@ refused by name rather than silently decoded into something that reads like pros
 
 ## Status
 
-Actively developed, pre-1.0. The Core, CLI, Claude Code plugin and local Web interface are usable
+Actively developed, and at **1.0**. The Core, CLI, Claude Code plugin and local Web interface are usable
 today. The **session format is a published contract** — versioned, forward-compatible, and shared by
 every interface; what is guaranteed and what is deprecated is written down in
 [compatibility](docs/compatibility.md). Output is non-deterministic — treat the assessment as a senior

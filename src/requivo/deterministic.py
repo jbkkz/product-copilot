@@ -742,7 +742,7 @@ def _cmd_session_list(a, client) -> None:
     if a.json:
         # An **object**, not the bare array this was until #87. It was the only array among the
         # fourteen JSON payloads this CLI prints, and an array has no top level, so no field could
-        # ever be added to it without the type change made here once, before the 1.0 freeze.
+        # ever be added to it without the type change made here once, in the 1.0 release itself.
         #
         # `degraded` recovers no fact. Every row carries `readable` and `error` whether it could be
         # read or not, so the count has always been derivable from the rows. What the key buys is
@@ -1171,7 +1171,7 @@ def _cmd_session_import(a, client) -> None:
         # `imported`/`into`, so a consumer looping over the session verbs and reading `row["slug"]`
         # got a `KeyError` from the one verb that had just put the session there. Both old keys are
         # gone rather than kept as duplicates: removing a key is breaking, so the rename ships
-        # before the 1.0 freeze or never.
+        # in the 1.0 release or never.
         #
         # `path` is the session's own directory, which is what `session init --json` means by the
         # word and what the line below already prints. `into` carried the session *root*; renaming
