@@ -242,7 +242,7 @@ def test_artifact_cannot_be_recorded_against_an_impossible_revision(workspace):
     svc.update_model("s", _full_model())          # session is at revision 1
     with pytest.raises(RequivoError) as ei:
         art.save("s", "prd", "# PRD\n", source_revision=999)
-    assert ei.value.code == "invalid_session"
+    assert ei.value.code == "artifact_revision_out_of_range"
     with pytest.raises(RequivoError):
         art.save("s", "prd", "# PRD\n", source_revision=0)
     assert "prd" not in art.list("s")            # nothing was recorded
@@ -456,7 +456,7 @@ def test_an_artifact_is_refused_when_its_freshness_cannot_be_established(workspa
 
     with pytest.raises(RequivoError) as e:
         art.save("s", "prd", "# PRD\n", source_revision=1)
-    assert e.value.code == "invalid_session"
+    assert e.value.code == "unreadable_source_revision"
     assert "prd" not in art.list("s")                                      # nothing was recorded
 
 
@@ -656,14 +656,85 @@ def test_a_session_written_by_an_older_requivo_still_loads(workspace):
     assert meta.revisions[0].prompt_version is None
 
 
+# ── the malformed-session family (#82) ───────────────────────────────────────
+#
+# `invalid_session` carried seven facts across eight raise sites with four `details` shapes, and
+# unlike `cross_site_request` it is serialized: `cli.py` prints `to_dict()` on every `--json` verb, so
+# a consumer could observe the inconsistency, and `details["slug"]` raised `KeyError` on three of the
+# eight. The split gives each fact a code. The two tests below are what keep it split.
+
+
+def test_nothing_raises_the_malformed_session_family_base():
+    """The base is a family, and a family with a raise site is not one.
+
+    The split is only worth anything while every arm names its fact. One `raise InvalidSessionError(`
+    added later re-creates the exact defect #82 removed — a code that means "one of eight things" —
+    and it would pass every other test in this suite, including the HTTP-status completeness check,
+    because the base legitimately keeps its row.
+
+    Scanned as source rather than by walking the vocabulary: an unraised class is invisible to a
+    subclass walk, which is the whole difficulty. `raise X(` is the only shape that constructs one to
+    throw; a bare `raise` re-raises something already built, and an `except InvalidSessionError` is
+    the catch this family exists to keep working.
+    """
+    import re
+    from pathlib import Path
+
+    import requivo
+
+    root = Path(requivo.__file__).parent
+    files = sorted(root.rglob("*.py"))
+    # must fire: a glob over a moved package returns [], and `assert not []` is an all-clear nobody
+    # earned — the same point `tests/test_boundaries.py` makes about its own scan set.
+    assert len(files) >= 10, f"scan set looks blind: {files}"
+
+    pattern = re.compile(r"\braise\s+InvalidSessionError\s*\(")
+    offenders = {}
+    for p in files:
+        hits = [i for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+                if pattern.search(line)]
+        if hits:
+            offenders[str(p.relative_to(root))] = hits
+    assert not offenders, (
+        "these sites raise the family base instead of an arm that names the fact; give the condition "
+        f"its own subclass and a row in web/app.py::_STATUS_BY_CODE: {offenders}")
+
+
+def test_every_arm_of_the_family_names_a_distinct_fact():
+    """Nine arms, nine codes, and none of them the base.
+
+    Named individually rather than counted: a test asserting `len(subclasses) == 9` would pass just as
+    well if two arms were merged and a third invented, which is a different vocabulary answering the
+    same number.
+    """
+    from requivo.core.errors import InvalidSessionError
+    from requivo.services import artifacts  # noqa: F401  - registers the two service-layer arms
+
+    def arms(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from arms(sub)
+
+    codes = {a.code for a in arms(InvalidSessionError)}
+    assert codes == {
+        "unsupported_format_version", "unsupported_schema_version", "session_unreadable",
+        "artifact_revision_out_of_range", "unstated_source_revision", "unreadable_source_revision",
+        "inconsistent_archive", "unreadable_archive", "import_move_failed",
+    }
+    assert "invalid_session" not in codes, "the base is the family, not an arm"
+
+
 def test_a_session_from_a_newer_requivo_is_refused_not_guessed(workspace):
     d = store.canonical_dir("from-the-future")
     d.mkdir(parents=True, exist_ok=True)
     (d / "session.json").write_text(SESSION_JSON_0_8_2.replace('"format_version": 1', '"format_version": 2'))
     with pytest.raises(RequivoError) as ei:
         store.read_meta("from-the-future")
-    assert ei.value.code == "invalid_session"
+    assert ei.value.code == "unsupported_format_version"
     assert "upgrade requivo" in str(ei.value).lower()
+    # `newer than what` is half the fact, and #82 made the payload carry it: a reader who learns only
+    # that their session is from the future still cannot tell which build they are holding.
+    assert ei.value.details == {"format_version": 2, "supported_format_version": 1}
 
 
 # ── the other half of the format promise: model.json (#14) ────────────────────

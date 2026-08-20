@@ -22,8 +22,11 @@ Concretely, guaranteed:
 - **A session written by an older Requivo keeps loading.** A field that has been retired is ignored
   rather than fatal; a field added since takes its default. Both are pinned by a test that loads a
   frozen 0.8.2 `session.json` verbatim.
-- **A session written by a newer Requivo is refused, clearly** (`invalid_session`, "upgrade requivo")
-  rather than half-understood.
+- **A session written by a newer Requivo is refused, clearly** (`unsupported_format_version`,
+  "upgrade requivo") rather than half-understood. `details` carries `{format_version,
+  supported_format_version}` — *newer than what* is half the fact. A model authored against a newer
+  **slot schema** is the second, independent version frontier and refuses under
+  `unsupported_schema_version`; a session can be format-current and schema-ahead.
 - **An older Requivo preserves a field it does not understand.** Since 0.9.4, an unknown key in
   `session.json` survives a round-trip: the older reader loads the session, mutates it, writes it back,
   and the newer version's field is still there. This is stronger than "readers ignore what they do not
@@ -271,6 +274,55 @@ incomplete — the one fact only the caller holds was not stated — and nothing
 wrong, so it sits with the other 4xx rows rather than with the 409 conflicts, which are about the
 store's state. **No status moves for it**: the condition answered 400 under `invalid_session` before
 the split, so what changed is the code the payload carries, not the number a client branches on.
+
+### `invalid_session` is a family, and every arm now names its fact (#82)
+
+`invalid_session` carried seven facts across eight raise sites with four `details` shapes, and no key
+was present on all eight — `details["slug"]` raised `KeyError` on three of them. This page told
+consumers to *assert on the code, never on the message text*, and then promised a condition
+(`invalid_session`, "upgrade requivo") that the code could not distinguish from a corrupt zip. The
+only handle separating them was the one handle this page forbids.
+
+`InvalidSessionError` is now a **family that nothing raises directly**, so `except InvalidSessionError`
+is unaffected and no caller has to enumerate nine names. Each arm carries its own code, its own
+`details` shape, and its own HTTP status:
+
+| Code | Condition | `details` | Status |
+|---|---|---|---|
+| `unsupported_format_version` | `session.json` written by a newer Requivo | `{format_version, supported_format_version}` | 409 |
+| `unsupported_schema_version` | model authored against a newer slot schema | `{schema_version, supported_schema_version}` | 409 |
+| `session_unreadable` | `session.json` truncated, mis-encoded or not JSON | `{slug}` | 500 |
+| `artifact_revision_out_of_range` | artifact recorded against a revision the session lacks | `{slug, source_revision, current_revision}` | 500 |
+| `unstated_source_revision` | `artifact save` stated no source revision | `{slug, type, source_revision, current_revision, cause}` | 400 |
+| `unreadable_source_revision` | the stated source revision cannot be read | the same five keys | 500 |
+| `inconsistent_archive` | an imported archive fails the integrity check | `{slug, problems}` | 400 |
+| `unreadable_archive` | the file is not a readable `.zip` | `{archive}` | 400 |
+| `import_move_failed` | the validated session could not be moved into place | `{slug}` | 500 |
+
+**The arms deliberately do not share a `details` shape.** Padding nine payloads to one key set would
+answer the `KeyError` by stating facts nobody measured: three of them identify no session at all,
+because none has been identified yet when a zip will not open, and a `slug: null` there is the
+plausible-wrong-answer form of the bug the split removes. Branch on the code, then read the shape
+documented for that code. `unstated_source_revision` and `unreadable_source_revision` do share five
+keys, and that is a decision rather than an obligation — the same answer #52 gave for `opaque_origin`
+and `origin_mismatch`: a shared shape is not a shared meaning.
+
+**Six of the nine conditions change status**, and each is the misattribution #34 fixed for
+`context_unreadable`, one condition further along. Everything under `invalid_session` answered 400, so
+a reader opening a session written by a newer Requivo was told *your request was bad* — as was one
+whose `session.json` would not parse, and one whose artifact history was incomplete. Those are facts
+about the store.
+
+A client that branched on 4xx should now expect **409** for the two version frontiers and **500** for
+the four store-state arms (`session_unreadable`, `artifact_revision_out_of_range`,
+`unreadable_source_revision`, `import_move_failed`). Three conditions keep 400 and are the ones that
+really are about the request: the two archive arms, because the caller did hand us the archive, and
+`unstated_source_revision`, which never moved. The family base keeps a row at **500** — nothing raises
+it, but a nominal number is still one a reader sees, and 400 was the wrong one to leave there.
+
+**This is breaking under the rule at the foot of this section** — moving a condition from one error
+code to another, and changing an HTTP status. It is taken before 1.0 deliberately: afterwards the
+same change costs a major version, or a sentence on this page that nobody can keep.
 
 No status in that table moves for #41, but one **condition** crosses it. `POST /sessions` naming a
 context card on an install that has none used to answer **400** — the reader was told their request

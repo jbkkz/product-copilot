@@ -119,7 +119,7 @@ def test_a_corrupt_revision_file_is_refused_as_a_structured_error(moved):
     _revision_file(moved, 1).write_text('{"model": {"workflow": ', encoding="utf-8")
     with pytest.raises(InvalidSessionError) as e:
         ArtifactService().save(moved, "prd", "# PRD", source_revision=1)
-    assert e.value.code == "invalid_session"
+    assert e.value.code == "unreadable_source_revision"
     assert e.value.details["source_revision"] == 1
     assert "ValidationError" in json.dumps(e.value.details), "the cause is not recorded"
 
@@ -135,7 +135,7 @@ def test_an_unreadable_revision_file_is_refused_as_a_structured_error(moved):
     p.mkdir()
     with pytest.raises(InvalidSessionError) as e:
         ArtifactService().save(moved, "prd", "# PRD", source_revision=1)
-    assert e.value.code == "invalid_session"
+    assert e.value.code == "unreadable_source_revision"
 
 
 def test_a_missing_revision_file_is_still_refused_the_way_it_always_was(moved):
@@ -178,10 +178,16 @@ def test_the_two_provenance_refusals_carry_two_codes_and_one_details_shape(moved
     # The two codes differ, and each is named rather than only compared: a test that asserted
     # inequality alone would pass just as well if both arms moved to some third code together.
     assert unstated.value.code == "unstated_source_revision"
-    assert unreadable.value.code == "invalid_session"
+    assert unreadable.value.code == "unreadable_source_revision"
     # The split moved the code, not the hierarchy — `except InvalidSessionError` still catches both,
     # which is what keeps this from breaking a caller that catches the class.
     assert isinstance(unstated.value, InvalidSessionError)
+    assert isinstance(unreadable.value, InvalidSessionError)
+    # must fire: neither arm may answer the family base. #57 gave one of them a code and left the
+    # other on `invalid_session`, which made the pair distinguishable in exactly one direction — a
+    # consumer branching on the unstated arm worked, and one branching on the unreadable arm caught
+    # every other malformed-session fact with it. #82 closed the other direction.
+    assert "invalid_session" not in {unstated.value.code, unreadable.value.code}
 
     assert set(unstated.value.details) == set(unreadable.value.details)
     # must fire: the shared shape is the real one, not two empty dicts agreeing with each other.

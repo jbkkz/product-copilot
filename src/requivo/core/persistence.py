@@ -20,13 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from requivo import __version__
 from requivo.core.contracts import EngineOutput, PersistedEngineOutput
 from requivo.core.errors import (
+    ArtifactRevisionOutOfRangeError,
     InvalidFilenameError,
-    InvalidSessionError,
     InvalidSlugError,
     RevisionConflictError,
     SessionExistsError,
     SessionLockedError,
     SessionNotFoundError,
+    SessionUnreadableError,
+    UnsupportedFormatVersionError,
+    UnsupportedSchemaVersionError,
 )
 from requivo.paths import output_root, session_root
 
@@ -577,10 +580,10 @@ def migrate_session(data: dict) -> SessionMeta:
     `SessionMeta`); known-retired ones are dropped."""
     fv = data.get("format_version", SESSION_FORMAT_VERSION)
     if fv > SESSION_FORMAT_VERSION:
-        raise InvalidSessionError(
+        raise UnsupportedFormatVersionError(
             f"session format v{fv} is newer than this Requivo understands (v{SESSION_FORMAT_VERSION}) "
             "— upgrade requivo.",
-            details={"format_version": fv},
+            details={"format_version": fv, "supported_format_version": SESSION_FORMAT_VERSION},
         )
     # The slot vocabulary is a second, independent contract, and it was recorded on every session and
     # then read by nothing. A model authored against a newer schema can hold slots this build has no
@@ -588,7 +591,7 @@ def migrate_session(data: dict) -> SessionMeta:
     # user never typed. An *older* schema is fine — that is ordinary backward compatibility.
     sv = data.get("schema_version", SCHEMA_VERSION)
     if isinstance(sv, int) and sv > SCHEMA_VERSION:
-        raise InvalidSessionError(
+        raise UnsupportedSchemaVersionError(
             f"this session was authored against slot schema v{sv}, newer than this Requivo understands "
             f"(v{SCHEMA_VERSION}) — upgrade requivo.",
             details={"schema_version": sv, "supported_schema_version": SCHEMA_VERSION},
@@ -603,8 +606,8 @@ def read_meta(slug: str) -> SessionMeta:
     try:
         return migrate_session(json.loads(p.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:
-        raise InvalidSessionError(f"session '{slug}' has an unreadable session.json: {e}",
-                                  details={"slug": slug}) from e
+        raise SessionUnreadableError(f"session '{slug}' has an unreadable session.json: {e}",
+                                     details={"slug": slug}) from e
 
 
 def create_session(slug: str, request: str, *, provider: str | None = None,
@@ -735,7 +738,7 @@ def save_session_artifact(slug: str, artifact_type: str, filename: str, content:
     with session_lock(slug):
         meta = read_meta(slug)
         if not 1 <= source_revision <= meta.current_revision:
-            raise InvalidSessionError(
+            raise ArtifactRevisionOutOfRangeError(
                 f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' "
                 f"has revisions 1..{meta.current_revision or 0}",
                 details={"slug": slug, "source_revision": source_revision,

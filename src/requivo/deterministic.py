@@ -25,7 +25,14 @@ from pathlib import Path, PurePosixPath
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, check_selection, resolve_cards
-from requivo.core.errors import InvalidModelError, InvalidSessionError, SessionExistsError, SessionNotFoundError
+from requivo.core.errors import (
+    ImportMoveFailedError,
+    InconsistentArchiveError,
+    InvalidModelError,
+    SessionExistsError,
+    SessionNotFoundError,
+    UnreadableArchiveError,
+)
 from requivo.core.integrity import IntegrityProblem, check_session, check_session_dir
 from requivo.core.selectors import display_token
 from requivo.core.validation import validate_proposal
@@ -948,7 +955,7 @@ def _validate_extracted(d: Path, slug: str) -> None:
     `requivo session verify` runs, so an archive is held to exactly the standard a live session is."""
     problems = check_session_dir(d, expected_slug=slug)
     if problems:
-        raise InvalidSessionError(
+        raise InconsistentArchiveError(
             f"the archive's session '{slug}' is not internally consistent: "
             + "; ".join(p.message for p in problems),
             details={"slug": slug, "problems": [p.to_dict() for p in problems]})
@@ -971,8 +978,8 @@ def _cmd_session_import(a, client) -> None:
     try:
         z = zipfile.ZipFile(archive)
     except (zipfile.BadZipFile, OSError) as e:
-        raise InvalidSessionError(f"{display_token(str(archive))} is not a readable .zip archive: {e}",
-                                  details={"archive": str(archive)}) from e
+        raise UnreadableArchiveError(f"{display_token(str(archive))} is not a readable .zip archive: {e}",
+                                     details={"archive": str(archive)}) from e
     with z:
         slug = _inspect_archive(z)
         if store.session_exists(slug) and not a.force:
@@ -1001,7 +1008,7 @@ def _cmd_session_import(a, client) -> None:
             except OSError as e:
                 if backup is not None:
                     backup.replace(target)
-                raise InvalidSessionError(
+                raise ImportMoveFailedError(
                     f"could not move the imported session into place: {e}"
                     + (" — the session that was already here has been restored" if backup else ""),
                     details={"slug": slug}) from e

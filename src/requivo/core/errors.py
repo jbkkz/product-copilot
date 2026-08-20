@@ -173,9 +173,101 @@ class InputTooLargeError(RequivoError):
 
 
 class InvalidSessionError(RequivoError):
-    """A session on disk is malformed, unreadable, or of an unsupported format version."""
+    """A session on disk is malformed, unreadable, or of an unsupported format version.
+
+    **A family, and nothing raises it directly** (#82). It carried seven different facts across eight
+    raise sites with four `details` shapes, and it is not inert the way `cross_site_request` was:
+    `cli.py` serializes `to_dict()` — `details` included — on every `--json` verb, so a consumer could
+    observe the inconsistency, and `details["slug"]` raised `KeyError` on three of the eight. Worse,
+    `docs/compatibility.md` promised *"a session written by a newer Requivo is refused, clearly
+    (`invalid_session`)"* while the same page says to assert on the code and never on the message —
+    so the only handle that separated that promise from a corrupt zip was the one handle the document
+    forbids.
+
+    The family is kept because `except InvalidSessionError` should still catch every arm, and because
+    a caller that wants *any* malformed-session refusal should not have to enumerate eight names.
+    `UnstatedSourceRevisionError` in `services.artifacts` is a ninth member, split out earlier by #57.
+
+    **The arms do not share a `details` shape, and that is the point.** Padding eight payloads to one
+    key set would answer the `KeyError` by stating facts nobody measured — three of them identify no
+    session at all, because no session has been identified yet when a zip will not open. The
+    `KeyError` goes away because the *code* now carries the fact and a consumer branches on it before
+    reading `details`. Each subclass names its keys below; `docs/compatibility.md` carries the same
+    table.
+    """
 
     code = "invalid_session"
+
+
+class UnsupportedFormatVersionError(InvalidSessionError):
+    """The session was written by a newer Requivo than this one. `details`:
+    `{format_version, supported_format_version}` — both, because *newer than what* is half the fact
+    and the reader has no other way to learn which build they are holding.
+
+    This is the arm `docs/compatibility.md` has promised by name since before the split, and the one
+    a consumer is most likely to match on.
+    """
+
+    code = "unsupported_format_version"
+
+
+class UnsupportedSchemaVersionError(InvalidSessionError):
+    """The model was authored against a newer *slot schema* than this build defines. `details`:
+    `{schema_version, supported_schema_version}`.
+
+    A second, independent contract from the session format, which is why it is a second code rather
+    than a `details` field on the one above: a session can be format-current and schema-ahead, and
+    without this check the first symptom is an `unknown_slot` error naming a slot the user never typed.
+    """
+
+    code = "unsupported_schema_version"
+
+
+class SessionUnreadableError(InvalidSessionError):
+    """`session.json` is absent-shaped, truncated, mis-encoded or not JSON. `details`: `{slug}`.
+
+    A fact about the state of the store, not about what the caller sent — which is why it answers 500
+    rather than 400. `changelog.d/62` put the raw message text into `session list --json`'s `error`
+    field precisely because no code existed for this and *written by a newer Requivo, upgrade* is a
+    remedy where a flattened `unreadable` is not. The text stays; a consumer can now branch instead.
+    """
+
+    code = "session_unreadable"
+
+
+class ArtifactRevisionOutOfRangeError(InvalidSessionError):
+    """An artifact was recorded against a revision this session does not have. `details`:
+    `{slug, source_revision, current_revision}`."""
+
+    code = "artifact_revision_out_of_range"
+
+
+class InconsistentArchiveError(InvalidSessionError):
+    """An imported archive holds a session that does not tell the truth about itself. `details`:
+    `{slug, problems}` — the same integrity codes `session verify` reports.
+
+    The caller handed us this archive, so it answers 400 rather than 500: the two archive arms are
+    the only members of this family that are about the request.
+    """
+
+    code = "inconsistent_archive"
+
+
+class UnreadableArchiveError(InvalidSessionError):
+    """The file is not a readable `.zip`. `details`: `{archive}` and no `slug`, because nothing has
+    been identified yet — a `slug: null` here would state a fact nobody measured."""
+
+    code = "unreadable_archive"
+
+
+class ImportMoveFailedError(InvalidSessionError):
+    """The validated session could not be moved into place. `details`: `{slug}`.
+
+    The archive was fine and the store refused it, so this is 500 while its two archive siblings are
+    400 — the same shape, a different answer to *whose fault is this*.
+    """
+
+    code = "import_move_failed"
 
 
 class SessionNotFoundError(RequivoError):

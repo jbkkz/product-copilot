@@ -41,7 +41,30 @@ _STATUS_BY_CODE = {
     "unknown_slot": 400,
     "unknown_context_card": 400,
     "missing_required_slot": 400,
-    "invalid_session": 400,
+    # The malformed-session family, one row per arm since #82. The arms disagree about the 4xx/5xx
+    # question — that disagreement is *why* they are eight codes rather than one, and it is the third
+    # of the three things that made this split worth doing before a 1.0 (the other two: `details`
+    # shapes with no common key, and a documented promise the code could not carry).
+    #
+    # The family base answers **500**, not the 400 it inherited. Nothing raises it directly, so the
+    # number is nominal — but a nominal number is still a number a reader sees, and "a session on disk
+    # is malformed" is a fact about the store. The old 400 was the same misattribution #34 fixed for
+    # `context_unreadable`: telling the reader their request was bad when the server could not read
+    # its own state.
+    "invalid_session": 500,           # the family base; nothing raises it directly
+    # 409, not 426. Upgrade Required is defined for *connection protocol* negotiation and the spec
+    # requires an `Upgrade` header naming what to move to; we have none to send, and the thing needing
+    # an upgrade is the reader's Requivo rather than the transport. A status that is exactly right in
+    # English and wrong in its RFC is worse than a general one, because the next client is written
+    # against the RFC. Conflict is what this is: the resource's state against what this build can do.
+    "unsupported_format_version": 409,
+    "unsupported_schema_version": 409,
+    "session_unreadable": 500,        # the store, not the request
+    "artifact_revision_out_of_range": 500,
+    "unreadable_source_revision": 500,  # a real revision was stated; the history is what is incomplete
+    "inconsistent_archive": 400,      # the caller handed us this archive
+    "unreadable_archive": 400,        # …and this one
+    "import_move_failed": 500,        # the archive was fine and the store refused it
     # 400 and not 409: an `artifact save` with no source revision is not a conflict with the store's
     # state, it is a request that never said the one thing only the caller knows. Nothing about the
     # session is wrong, and the remedy is entirely in the caller's hands — state the revision (#57).

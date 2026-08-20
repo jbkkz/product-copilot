@@ -107,10 +107,15 @@ nothing is written by a refused save. The third state here is not a flag value �
 record does not get made.
 
 A source revision that cannot be *read* — a `revisions/NNNN-model.json` that is missing, truncated,
-mis-encoded or unreadable — is refused the same way, under `invalid_session`. Provenance that cannot
-be verified is not recorded, because `stale: false` is a claim about the artifact rather than the
-absence of one. Two codes for two facts, sharing one `details` shape by choice; `docs/compatibility.md`
-carries the reasoning.
+mis-encoded or unreadable — is refused the same way, under `unreadable_source_revision`. Provenance
+that cannot be verified is not recorded, because `stale: false` is a claim about the artifact rather
+than the absence of one. Two codes for two facts, sharing one `details` shape by choice;
+`docs/compatibility.md` carries the reasoning.
+
+It answered `invalid_session` until #82; the changelog carries the release. #57 gave the *unstated*
+arm a code of its own and left this one on the family base, which made the pair distinguishable in
+exactly one direction: a consumer branching on the unstated arm worked, and one branching on this arm
+caught every other malformed-session fact along with it. #82 closed the other direction.
 
 ## Stable identifiers
 

@@ -62,6 +62,25 @@ class UnstatedSourceRevisionError(InvalidSessionError):
     code = "unstated_source_revision"
 
 
+class UnreadableSourceRevisionError(InvalidSessionError):
+    """`save` stated a source revision and the history at that revision cannot be read.
+
+    The sibling of the above, and the arm that kept `invalid_session` when #57 split the other one —
+    which left the pair distinguishable in exactly one direction. #82 finishes it: both arms of "we
+    cannot establish provenance" now carry a code that names which arm it is.
+
+    `details` is the same five keys, `{slug, type, source_revision, current_revision, cause}`, all
+    populated here where two are `null` on the sibling. That sharing is deliberate and is argued in
+    `UnstatedSourceRevisionError` above: a shared shape is not a shared meaning, and narrowing either
+    payload now would break a consumer for nothing.
+
+    Answers 500, not 400. The caller stated a revision and it was a real one; the session's history is
+    what is incomplete, and nothing the caller could have sent would have avoided it.
+    """
+
+    code = "unreadable_source_revision"
+
+
 class ArtifactService:
     def __init__(self, repo: SessionRepository | None = None):
         self.repo: SessionRepository = repo or default_repository()
@@ -176,7 +195,7 @@ class ArtifactService:
             # are different remedies. The full text goes in `details`; the message carries its first
             # line, because a multi-line pydantic report inside a sentence is unreadable in a terminal.
             cause = f"{type(e).__name__}: {e}"
-            raise InvalidSessionError(
+            raise UnreadableSourceRevisionError(
                 f"cannot establish whether this {artifact_type!r} is current: session '{slug}' is at "
                 f"revision {current_revision} but revision {source_revision}, the one it was reasoned "
                 f"from, cannot be read ({(cause.splitlines() or [cause])[0]}). The session's history is "
