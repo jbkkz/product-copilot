@@ -450,9 +450,19 @@ change without notice.
 | **Implicit `out/<slug>/` fallback** | **Removed** — migration is explicit | deprecated 0.8.0 | 0.9.8 | `requivo session migrate`, then `.requivo/sessions/` |
 | **`/requivo-<skill>` plugin skill names** | Renamed | 0.9.2 | gone | `/requivo:<skill>` — Claude Code namespaces plugin skills |
 | **`REQUIVO_OUTPUT_DIR`** | Deprecated | #89 | with `requivo session migrate` | nothing — it configures the retired `out/` layout that only the migrator reads. `REQUIVO_WORKSPACE` is the knob for where sessions live |
+| **`epic --json`** | **Renamed** — it wrote a file, it never emitted JSON | #83 | gone in the same change | `epic --export-json`, beside `--github` and `--gitlab`. `epic` deliberately has no stdout `--json`; the flag also silently switched the error channel, which is the half the rename fixes |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where
 that is possible, and names its replacement here. Nothing is removed in a patch release.
+
+**`epic --json` is the exception, and it is stated rather than left to be noticed.** It was removed in
+the same change that renamed it, with no grace version. The policy above is what a deprecation buys
+you, and a grace version buys nothing here: the flag did not do what its name said on any release it
+shipped in — it wrote a file where every other verb's `--json` emits a payload — so a version of
+*keeping it working* would have been a version of keeping it wrong, in the one window where removing
+it costs a minor rather than a major. Pre-1.0, `docs/compatibility.md` permits an interface change in
+a minor; after 1.0 this would not have been available and the flag would have been frozen into the
+tag.
 
 **The 0.9.8 removals.** These three were the last of the pre-store architecture, all deprecated for
 several versions and none of them with a known user. They were carried on a "removal in 1.1.0" plan,

@@ -341,7 +341,10 @@ def _cmd_context(a, client) -> None:
         return
     if a.session:
         if a.cards:
-            raise InvalidModelError("--session and --cards are alternatives; pass only one")
+            # Both spellings named, because #85 made them aliases: a refusal that names one of two
+            # accepted flags reads as a claim that the other is not the flag you passed.
+            raise InvalidModelError(
+                "--session and --cards/--context are alternatives; pass only one")
         svc = SessionService()
         cards = svc.cards(svc.resolve_slug(a.session))   # None == the session uses every card
     else:

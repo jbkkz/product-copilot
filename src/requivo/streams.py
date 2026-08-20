@@ -90,6 +90,13 @@ def configure_stream(stream, name: str) -> dict:
     Returns a report rather than raising or staying quiet — the three states are `configured`,
     `unchanged` (there was nothing to do) and `could-not` (with the reason). A stream this could not
     reach is the one that can still crash, so it must be nameable downstream.
+
+    **`could-not` keeps its hyphen because this report is not a `--json` output.** `cli.app()` is its
+    only consumer; `doctor` serializes `describe_stream`'s states, not these, which is why #88 could
+    respell `will-crash` and leave this alone. If this report is ever put into a payload — a plausible
+    `doctor --json` addition, *what happened at startup* — it becomes a published enum value and the
+    underscore rule in `test_the_published_stream_states_are_all_underscore_spelled` applies to it.
+    Respell it in the same change; do not publish the hyphen and fix it after.
     """
     report = {
         "stream": name,
