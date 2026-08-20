@@ -485,7 +485,7 @@ def test_session_list_does_not_call_one_of_these_a_session(workspace):
     _run(["session", "init", "A real one.", "--slug", "real", "--json"])
     _lock_ghost()
 
-    rows = _run_json(["session", "list", "--json"])
+    rows = _run_json(["session", "list", "--json"])["sessions"]
     assert [r["slug"] for r in rows] == ["real"]
     assert store.list_session_slugs() == ["real"]
 
@@ -1117,7 +1117,8 @@ def test_session_list_and_show(workspace, tmp_path):
     p.write_text(json.dumps(_full_model()))
     _run(["model", "apply", "one", str(p)])
     listing = _run_json(["session", "list", "--json"])
-    assert any(s["slug"] == "one" and s["revision"] == 1 for s in listing)
+    assert any(s["slug"] == "one" and s["revision"] == 1 for s in listing["sessions"])
+    assert listing["degraded"] == 0
     shown = _run_json(["session", "show", "one", "--json"])
     assert shown["slug"] == "one" and shown["format_version"] == 1
 
@@ -1361,8 +1362,45 @@ def test_export_import_round_trip(workspace, tmp_path, monkeypatch):
 
     monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path / "elsewhere"))
     r = _run_json(["session", "import", str(tmp_path / "s.zip"), "--json"])
-    assert r["imported"] == "s" and r["replaced"] is False
+    assert r["slug"] == "s" and r["replaced"] is False
     assert store.read_meta("s").current_revision == 1
+
+
+def test_import_json_names_the_session_and_its_directory_the_way_its_siblings_do(workspace, tmp_path,
+                                                                                 monkeypatch):
+    """#84. `session import --json` spelled the session `imported` and its location `into`; every
+    sibling verb spells them `slug` and (for the one that reports a directory) `path`. A consumer
+    looping over session verbs and reading `row["slug"]` got a `KeyError` from the one verb that had
+    just put the session there.
+
+    `imported` and `into` are **gone**, not kept as duplicates. Keeping both would leave the wrong
+    spelling in the payload a reader copies from, and the whole reason this ships before 1.0 is that
+    removing a `--json` key is breaking afterwards.
+
+    **`path` is the session's own directory, not the session root**, and that is a correction to the
+    issue as filed, which proposed `str(root)` — the value `into` carried. `session init --json`'s
+    `path` is `canonical_dir(slug)`, and `session import`'s own human-readable line already prints
+    `canonical_dir(slug)`. Renaming the key while leaving the container underneath it would give
+    `path` two meanings across two verbs of the same noun — the defect this issue exists to close,
+    reintroduced under the harmonised name and harder to see, because the key would then look right.
+    """
+    init = _run_json(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run(["session", "export", "s", "-o", str(tmp_path / "s.zip"), "--json"])
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path / "elsewhere"))
+    r = _run_json(["session", "import", str(tmp_path / "s.zip"), "--json"])
+
+    assert r.keys() == {"slug", "path", "replaced"}
+    assert "imported" not in r and "into" not in r
+    assert r["slug"] == "s"
+    assert r["path"] == str(store.canonical_dir("s"))
+    # the directory, not the root that holds it — and it is the same string the verb prints
+    assert Path(r["path"]).name == "s"
+    assert r["path"] != str(store.session_root())
+
+    # must fire: `path` means the same thing here as it does on the verb that creates a session
+    assert set(init) >= {"slug", "path"}
+    assert Path(init["path"]).name == "s"
 
 
 def test_import_refuses_a_directory_name_that_is_not_a_valid_slug(workspace, tmp_path):
@@ -1372,7 +1410,7 @@ def test_import_refuses_a_directory_name_that_is_not_a_valid_slug(workspace, tmp
     with pytest.raises(SystemExit):
         _run(["session", "import", str(tmp_path / "bad.zip"), "--json"])
     assert store.list_session_slugs() == []          # and nothing was written
-    assert _run_json(["session", "list", "--json"]) == []
+    assert _run_json(["session", "list", "--json"])["sessions"] == []
 
 
 @pytest.mark.parametrize("entry", [
@@ -1481,6 +1519,132 @@ def test_session_verify_reports_a_broken_history_and_exits_non_zero(workspace, t
     report = json.loads(buf.getvalue())
     assert report["ok"] is False
     assert [p["code"] for p in report["problems"]] == ["missing_revision_file"]
+
+
+# ── session verify: three answers, three exit codes (#86) ────────────────────────
+#
+# `_card_health` already renders three states and `_cmd_session_verify` collapsed two of them into
+# exit 1. These tests patch `check_selection` rather than denying reads on a real card directory:
+# the state under test is "the card layer raised", the raise is what the verb branches on, and a
+# POSIX mode bit is one platform's way of producing it. The real filesystem route is already covered
+# above by `test_a_card_directory_that_cannot_be_read_is_unreadable_not_empty`, loudly skipped where
+# the platform cannot deny a read; pinning the exit code to that route too would leave this rule
+# untested on Windows.
+
+
+def _cards_unreadable(monkeypatch) -> None:
+    """The card layer itself cannot be enumerated, so `check_selection` propagates rather than
+    returning a verdict — `_card_health`'s `{"checked": False}` arm, which is *we could not look*."""
+    import requivo.deterministic as det
+    from requivo.core.errors import ContextUnreadableError
+
+    def _boom(only):
+        raise ContextUnreadableError(
+            "the context-card directory exists but cannot be read: denied",
+            details={"directory": "walled"})
+
+    monkeypatch.setattr(det, "check_selection", _boom)
+
+
+def test_session_verify_exits_four_when_it_could_not_check_the_product_context(workspace, monkeypatch):
+    """*Checked, and it is broken* and *could not check* are two different answers and had one exit
+    code. The verb already printed them differently — the second has a glyph of its own — and then
+    exited 1 beside a session that really is inconsistent, in the command whose whole job is to say
+    whether a session is sound.
+
+    4 rather than a new 5: the code already means *the work was done and part of the answer was
+    unreachable*, and a code per verb rebuilds the problem 4 was introduced to solve.
+
+    The clean run is asserted first and is the control. Without it this test would pass equally well
+    against a verb that exits 4 unconditionally.
+    """
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    healthy = _run_json(["session", "verify", "s", "--json"])
+    assert healthy["ok"] is True                                    # must fire
+    assert healthy["context_cards"]["checked"] is True
+
+    _cards_unreadable(monkeypatch)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s", "--json"], client=None)
+    assert e.value.code == 4
+    report = json.loads(buf.getvalue())
+    assert report["ok"] is False
+    assert report["problems"] == []                                 # nothing is wrong inside it
+    assert report["context_cards"]["checked"] is False
+    assert report["context_cards"]["problem"] is None
+
+    # the same number on the human surface: the exit code is not a property of `--json`
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s"], client=None)
+    assert e.value.code == 4
+    assert "Could not check" in buf.getvalue()
+
+
+def test_session_verify_lets_a_firm_negative_outrank_a_partial_one(workspace, monkeypatch):
+    """Both at once: a session that really is inconsistent *and* whose product context could not be
+    checked. It exits **1**, not 4.
+
+    A script gating on *is this usable* wants the definite answer, and there is one — the session is
+    broken, and no reading of the cards could make it sound again. 4 would understate a finding that
+    is complete. `--json` still carries both facts, so nothing is withheld at either code.
+    """
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    (store.canonical_dir("s") / "revisions" / "0001-model.json").unlink()
+
+    # must fire: with the cards readable this is the ordinary firm negative
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s", "--json"], client=None)
+    assert e.value.code == 1
+    assert json.loads(buf.getvalue())["context_cards"]["checked"] is True
+
+    _cards_unreadable(monkeypatch)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s", "--json"], client=None)
+    assert e.value.code == 1, "a partial answer displaced a complete one"
+    report = json.loads(buf.getvalue())
+    assert [p["code"] for p in report["problems"]] == ["missing_revision_file"]
+    assert report["context_cards"]["checked"] is False
+
+
+def test_session_verify_exits_one_when_the_cards_were_checked_and_are_broken(workspace, tmp_path):
+    """The other firm negative, and the one most easily confused with the new 4: the cards *were*
+    read and the selection does not resolve. That is a complete answer about a session that is not
+    usable, so it stays at 1 — 4 is for the answer nobody could produce."""
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    card = cards / "lost-domain.md"
+    card.write_text("# Lost domain\n", encoding="utf-8")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+        _run(["session", "init", "Something.", "--slug", "s", "--context", "lost-domain", "--json"])
+        assert _run_json(["session", "verify", "s", "--json"])["ok"] is True   # must fire
+        card.unlink()
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+            app(["session", "verify", "s", "--json"], client=None)
+
+        # The text branch as well, and not for symmetry: it is the only arm that binds a local to a
+        # card-problem *code* string, so an exit status computed into a name that collides with it
+        # leaves SystemExit carrying `unknown_context_card` instead of a number. Reproduced while
+        # writing this change.
+        text = io.StringIO()
+        with redirect_stdout(text), pytest.raises(SystemExit) as e_text:
+            app(["session", "verify", "s"], client=None)
+
+    assert e.value.code == 1
+    assert e_text.value.code == 1
+    report = json.loads(buf.getvalue())
+    assert report["context_cards"]["checked"] is True
+    assert report["context_cards"]["problem"]["code"] == "unknown_context_card"
 
 
 def test_import_refuses_an_archive_whose_history_is_missing(workspace, tmp_path):

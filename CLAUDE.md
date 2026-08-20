@@ -262,7 +262,15 @@ bug that looked like correct behaviour.
     **Three outcomes, and the third is the point.** A degraded row names its session and states no
     fact it could not read — no timestamp, no revision, no question count. *Could not be read* and
     *not analysed yet* must render differently. On the CLI that third state also has an exit code of
-    its own (`EXIT_DEGRADED_LISTING`), because 0 says nothing is wrong and 1 says nothing was listed.
+    its own, `EXIT_DEGRADED` (4), because 0 says nothing is wrong and 1 says there is no answer.
+
+    **That code names a shape of answer, not a verb** (#86). It was `EXIT_DEGRADED_LISTING` and read
+    as belonging to one command; `session verify` then reached the same state from the other side —
+    it could not read a session's product context, which is *not an answer* — and exited 1 beside a
+    session that really is inconsistent. Both are 4 now. A new code per verb rebuilds the collapse 4
+    exists to undo. Where a verb can produce both at once, the firm negative wins: a session that is
+    inconsistent **and** whose cards were unreadable exits 1, because a complete answer outranks a
+    partial one.
 16. **Text is UTF-8 on both sides, and a renderer cannot kill the process.** Every text read and write
     names `encoding="utf-8"` — the default is the *locale's* codec, so a file this project wrote as
     UTF-8 decodes as cp1252 on Windows and the round-trip corrupts while still validating: mojibake in
