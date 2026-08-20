@@ -268,6 +268,19 @@ class SessionService:
         member failing, it is the aggregate having no members to speak for: there is no row to name
         the problem in, and answering `[]` would tell a reader their sessions were deleted. It is
         the same distinction `_session_health` draws with `total: None` versus `total: 0`.
+
+        **Between those two sits a third source of rows** (#80). `list_unexaminable` returns the
+        names the store found and could not decide about — a directory the process cannot stat into
+        is the file backing's case. That is neither a member failing to load nor the aggregate
+        having no members: it is a name that may or may not be a session, and until #80 it was not a
+        row at all, because the failure happened inside the scan and took the whole listing with it.
+        It is a degraded row here for the reason every other degraded row is one: the alternatives
+        are to drop it, which loses it silently, or to call it a session, which is what nobody
+        established.
+
+        Sorted by slug at the end so the two sources interleave into one listing. `list_slugs` is
+        already sorted, so a workspace with nothing unexaminable in it comes back in exactly the
+        order it always did.
         """
         entries = []
         for slug in self.repo.list_slugs():
@@ -275,7 +288,9 @@ class SessionService:
                 entries.append(SessionEntry(slug=slug, meta=self.repo.read_meta(slug)))
             except Exception as e:  # noqa: BLE001 - see the docstring: an open set, by contract
                 entries.append(SessionEntry(slug=slug, meta=None, error=str(e)))
-        return entries
+        for entry in self.repo.list_unexaminable():
+            entries.append(SessionEntry(slug=entry.name, meta=None, error=entry.error))
+        return sorted(entries, key=lambda e: e.slug)
 
     def cards(self, slug: str) -> list[str] | None:
         """The context-card selection recorded for a session (None == all cards)."""

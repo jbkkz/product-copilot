@@ -1,0 +1,335 @@
+"""The third outcome of the session-root partition: an entry that could not be examined (#80).
+
+`_scan_session_root` decides whether each name under the session root is a session by probing
+`<name>/session.json`. That probe can *fail* — `Path.exists()` re-raises `EACCES`, which is not in
+`pathlib`'s ignored set — and one entry the process cannot stat into therefore aborted the partition
+for every entry: `session list` exited 1 with an empty stdout and a raw `PermissionError` traceback,
+and every healthy session in the workspace was invisible.
+
+Invariant 15 one layer below where #7 and #62 put the guard. `SessionService.list_entries()` degrades
+a row it *has*; this failure happens in the scan that produces the row set, before any row exists.
+
+**A session, not a session, and *could not tell*.** The third is not routable into either of the
+others, and this module asserts both halves of that: routed into the non-sessions bucket the entry
+would not come back from `list_session_slugs` and `session list` would silently omit it — the
+invisible entry #67 exists to close, one function along; routed into the slugs bucket the listing
+would claim it *is* a session, which is the one thing nobody established.
+
+Every case runs against a fixture that also holds a **healthy** session and asserts it still renders
+in full, because a fix that lost the healthy session would pass an exit-code assertion on its own.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import pytest
+
+from requivo.core import persistence as store
+from requivo.deterministic import EXIT_DEGRADED
+from requivo.services.repository import FileSessionRepository
+from requivo.services.sessions import SessionService
+
+HEALTHY = "leave-approval"
+BLOCKED = "blocked-entry"
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("REQUIVO_OUTPUT_DIR", str(tmp_path / "out"))
+    return tmp_path
+
+
+def _run(argv):
+    """`app()` with stdout captured, returning `(text, exit_code)`.
+
+    Both halves are returned because both are asserted: a fix that exits 4 with an empty stdout is
+    the same defect wearing the right exit code, and a helper that surfaced only the exception would
+    let it pass.
+    """
+    from requivo.cli import app
+    buf = io.StringIO()
+    code = 0
+    with redirect_stdout(buf):
+        try:
+            app(argv, client=None)   # client=None -> any accidental API use would blow up
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+    return buf.getvalue(), code
+
+
+def _seed_healthy() -> None:
+    SessionService().create_session("We would like a leave approval system.", slug=HEALTHY)
+
+
+@pytest.fixture
+def blocked(workspace, request):
+    """A directory under the session root that the process cannot stat into — or a loud skip.
+
+    `chmod 000` denies the `x` bit, so `stat` on any *child* fails with `EACCES` while the parent
+    listing still succeeds. That is precisely the shape of the defect: the root was listed, one
+    entry in it could not be examined.
+
+    Two ways this fixture can fail to break anything, and neither may pass silently:
+
+    * **Windows** — POSIX mode bits do not deny traversal there, so the class is unreachable and the
+      skip names what went untested. A test that trivially passed on that leg would report coverage
+      of the third state that it does not have, and a green leg is the one nobody re-reads.
+    * **root** — `chmod 000` denies a privileged process nothing. Probed rather than assumed, for
+      the same reason: the probe is the must-fire half of every assertion below.
+
+    The mode is restored on teardown whatever happens, because pytest cannot remove a `tmp_path` it
+    may not traverse.
+    """
+    _seed_healthy()
+    d = store.session_root() / BLOCKED
+    d.mkdir(parents=True, exist_ok=True)
+    request.addfinalizer(lambda: d.chmod(0o755))
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that an "
+                    "entry whose examination raises reaches the caller as a fact rather than as "
+                    "an exception. Every other platform runs it.")
+    d.chmod(0o000)
+    try:
+        (d / "session.json").exists()
+    except PermissionError:
+        return d
+    pytest.skip("chmod 000 did not deny the session.json probe on this run (running as root?). "
+                "UNTESTED HERE: the could-not-examine arm of the partition.")
+
+
+# -- the fixture really breaks something --------------------------------------
+
+
+def test_the_probe_the_partition_makes_really_raises_here(blocked):
+    """Must fire. Every assertion below is about what happens when the partition probe raises; if
+    it stopped raising, this whole module would turn green while proving nothing."""
+    with pytest.raises(PermissionError):
+        (blocked / "session.json").exists()
+
+
+# -- the partition has three outcomes -----------------------------------------
+
+
+def test_the_partition_answers_in_three_states_and_the_third_is_neither_neighbour(blocked):
+    """Routed into `others`, the entry never comes back from `list_session_slugs` and `session list`
+    omits it silently — #67's invisible entry, one function along. Routed into `slugs`, the listing
+    claims it is a session. It is in its own bucket, and in neither of theirs."""
+    slugs, others, unexaminable = store._scan_session_root()
+
+    assert slugs == [HEALTHY]                              # must fire: the healthy half survives
+    assert [p.name for p in others] == []
+    assert [e.name for e in unexaminable] == [BLOCKED]
+    # The error names the path it could not stat, which is the part a user acts on. Asserted on the
+    # path rather than on the words `permission denied`: `str(OSError)` embeds `strerror`, which the
+    # C library translates under a non-English locale, so a CI leg with `LANG` set would fail this
+    # for a reason that has nothing to do with the code. The path is the same string everywhere.
+    assert "session.json" in unexaminable[0].error, unexaminable[0].error
+    assert BLOCKED in unexaminable[0].error, unexaminable[0].error
+
+
+def test_list_session_slugs_still_answers_only_what_is_known_to_be_a_session(blocked):
+    """The contract that must not widen. `doctor`, `session verify` and every read path reason over
+    these names, and an entry nobody could examine is not one of them."""
+    assert store.list_session_slugs() == [HEALTHY]
+    assert [e.name for e in store.list_non_session_entries()] == []
+    assert [e.name for e in store.list_unexaminable_entries()] == [BLOCKED]
+
+
+def test_the_repository_exposes_the_third_bucket(blocked):
+    """The service layer cannot reach `core.persistence` directly — storage is injected — so the
+    third state needs a seam of its own or it stops at Core."""
+    repo = FileSessionRepository()
+    assert repo.list_slugs() == [HEALTHY]
+    assert [e.name for e in repo.list_unexaminable()] == [BLOCKED]
+
+
+# -- session list ---------------------------------------------------------------
+
+
+def test_one_unexaminable_entry_no_longer_takes_the_whole_listing_down(blocked):
+    out, code = _run(["session", "list"])
+
+    # must fire: the healthy session is rendered in full, not lost with the traceback
+    assert HEALTHY in out, out
+    assert "rev 0" in out
+    # ...and the entry that could not be examined is named rather than dropped or fatal
+    assert BLOCKED in out, out
+    assert "could not be read" in out.lower()
+    assert code == EXIT_DEGRADED
+
+
+def test_the_row_carries_the_reason_because_the_reason_is_the_remedy(blocked):
+    """*Permission denied on this path* is something a user can act on; a flattened `unreadable` is
+    not. The row keeps the underlying error text, exactly as every other degraded row does.
+
+    Asserted on the path the error names rather than on the words, because `strerror` is translated
+    under a non-English locale and the path is not."""
+    out, _ = _run(["session", "list"])
+    row = next(ln for ln in out.splitlines() if BLOCKED in ln)
+    assert "could not be read" in row
+    assert "session.json" in row, row
+
+
+def test_the_row_states_no_fact_it_could_not_read(blocked):
+    """No revision, no provider, no timestamp. A plausible `rev 0` on an entry nobody could open is
+    the quiet-wrong-answer form of the same bug — and `rev 0` would be doubly wrong here, because it
+    is also exactly what a real un-analysed session shows."""
+    out, _ = _run(["session", "list"])
+    rows = {name: next(ln for ln in out.splitlines() if name in ln) for name in (HEALTHY, BLOCKED)}
+
+    # must fire: the healthy row carries both patterns, so their absence below is about the row
+    assert re.search(r"\brev \d", rows[HEALTHY])
+    assert re.search(r"20\d\d-\d\d-\d\dT", rows[HEALTHY])
+
+    assert not re.search(r"\brev \d", rows[BLOCKED]), rows[BLOCKED]
+    assert not re.search(r"20\d\d-\d\d-\d\dT", rows[BLOCKED]), rows[BLOCKED]
+
+
+def test_json_keeps_every_key_on_the_row_and_claims_nothing(blocked):
+    out, code = _run(["session", "list", "--json"])
+    payload = json.loads(out)
+    rows = {r["slug"]: r for r in payload["sessions"]}
+
+    assert code == EXIT_DEGRADED
+    assert rows.keys() == {HEALTHY, BLOCKED}
+    assert rows[HEALTHY].keys() == rows[BLOCKED].keys()
+    assert payload["degraded"] == 1
+
+    # must fire: the healthy row is unchanged in every field it always had
+    assert rows[HEALTHY]["readable"] is True
+    assert rows[HEALTHY]["revision"] == 0
+    assert rows[HEALTHY]["updated_at"]
+
+    assert rows[BLOCKED]["readable"] is False
+    assert rows[BLOCKED]["revision"] is None
+    assert rows[BLOCKED]["provider"] is None
+    assert rows[BLOCKED]["updated_at"] is None
+    assert rows[BLOCKED]["error"]
+
+
+def test_no_traceback_reaches_the_user(blocked):
+    """A `PermissionError` here is an ordinary condition, not a bug in Requivo. The answer is a row,
+    so nothing is raised out of the command at all beyond the exit code."""
+    out, code = _run(["session", "list"])
+    assert "Traceback" not in out
+    assert code == EXIT_DEGRADED
+
+
+# -- doctor ---------------------------------------------------------------------
+
+
+def test_doctor_reports_the_entry_instead_of_declaring_the_whole_root_unreadable(blocked):
+    """`sessions unreadable — <path>/blocked-entry/session.json` with `could not be listed` beneath
+    it is a claim broader than what failed. The root *was* listed. One entry in it could not be
+    examined, and that is what the report has to say."""
+    out, _ = _run(["doctor", "--json"])
+    h = json.loads(out)["sessions"]
+
+    assert h["readable"] is True, h
+    assert h["total"] == 1, "the count is what could be confirmed, and the healthy session is in it"
+    assert h["error"] is None
+    assert h["non_sessions"] == [], "not a non-session: nobody established what this is"
+    assert [e["name"] for e in h["unexaminable"]] == [BLOCKED]
+    assert h["unexaminable"][0]["error"]
+
+    text, _ = _run(["doctor"])
+    assert BLOCKED in text
+    assert "could not be listed" not in text, text
+    assert "could not be examined" in text.lower(), text
+
+
+def test_doctor_keeps_the_whole_root_arm_for_the_case_that_really_is_the_whole_root(workspace,
+                                                                                   monkeypatch):
+    """`iterdir()` itself failing is genuinely the whole root, and that arm must survive the change:
+    a fix that turned every listing failure into a per-entry row would answer `0 sessions` about a
+    workspace nobody could look into, which is #12's F3."""
+    import requivo.deterministic as det
+
+    def _unreadable():
+        raise OSError("boom")
+
+    monkeypatch.setattr(det.store, "scan_session_root", _unreadable)
+    h = json.loads(_run(["doctor", "--json"])[0])["sessions"]
+
+    assert h["readable"] is False
+    assert h["total"] is None, "0 would say the workspace is empty, which we do not know"
+    assert h["non_sessions"] is None
+    assert h["unexaminable"] is None, "[] here would read as 'we looked and there was nothing'"
+    assert "boom" in h["error"]
+
+    text, _ = _run(["doctor"])
+    assert "could not be listed" in text
+
+
+def test_doctor_on_a_clean_workspace_says_nothing_about_any_of_this(workspace):
+    """The control. A clean workspace earns no row and the sessions line keeps its tick — otherwise
+    the finding above is a line everybody sees and nobody reads."""
+    _seed_healthy()
+    h = json.loads(_run(["doctor", "--json"])[0])["sessions"]
+    assert h["unexaminable"] == [], "looked and found nothing — not the `None` above"
+    assert h["readable"] is True and h["total"] == 1
+
+    text, _ = _run(["doctor"])
+    line = next(ln for ln in text.splitlines()
+                if ln.startswith("  ") and not ln.startswith("   ") and "sessions" in ln)
+    assert "✅" in line, line
+    assert "could not be examined" not in text.lower()
+
+
+def test_a_clean_workspace_lists_cleanly_and_exits_zero(workspace):
+    """The other control, on the other surface. Nothing about the ordinary listing moves."""
+    _seed_healthy()
+    out, code = _run(["session", "list"])
+    assert code == 0
+    assert "could not be read" not in out.lower()
+    assert HEALTHY in out
+
+
+# -- the name is untrusted text (#40) -------------------------------------------
+
+
+def test_an_unexaminable_name_carrying_a_control_character_cannot_forge_a_line(workspace, request):
+    """The directory name is created by whoever holds the workspace and reaches both surfaces raw:
+    `session list` prints it as a degraded row's slug, `doctor` prints it under the sessions check.
+    A name carrying a newline would otherwise write what reads as a second, authoritative line of
+    Requivo's own output at column 0 — the shape #40 found in `doctor`.
+
+    Two *new* sites for `display_token`, because nothing between the directory entry and the line
+    has validated this name — the `read_meta` that would have refused it is precisely what could not
+    run."""
+    if os.name == "nt":
+        pytest.skip("NTFS refuses a control character in a filename, and POSIX mode bits do not "
+                    "deny traversal here either. UNTESTED HERE: the render guard on an "
+                    "unexaminable entry's name, on both surfaces. `display_token` itself is "
+                    "asserted on every platform by tests/test_cli_degraded_listing.py.")
+    _seed_healthy()
+    # No path separator in it: a `/` would nest the directory rather than name it, and the fixture
+    # would then be testing nothing at all.
+    hostile = "evil\nTOTAL: 0 sessions, nothing to see"
+    d: Path = store.session_root() / hostile
+    try:
+        d.mkdir(parents=True)
+    except (OSError, ValueError):
+        pytest.skip("this filesystem refuses a directory name containing a newline. UNTESTED "
+                    "HERE: the render guard on an unexaminable entry's name.")
+    request.addfinalizer(lambda: d.chmod(0o755))
+    d.chmod(0o000)
+    try:
+        (d / "session.json").exists()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("chmod 000 did not deny the probe on this run (running as root?). UNTESTED "
+                    "HERE: the render guard on an unexaminable entry's name.")
+
+    for argv in (["session", "list"], ["doctor"]):
+        out, _ = _run(argv)
+        assert not any(ln.startswith("TOTAL:") for ln in out.splitlines()), (argv, out)
+        assert "evil" in out, (argv, out)          # must fire: the name did reach the output

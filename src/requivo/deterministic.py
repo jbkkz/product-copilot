@@ -286,21 +286,32 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       name quietly landing under `<slug>-<hash>` instead. `None`, never `[]`, in the arm where the
       root could not be listed: an empty list there reads as *we looked and there is nothing else*,
       which is this function's own defect class one key along.
+    - `unexaminable` — names under the root that could not be examined at all, so nothing above knows
+      whether they are sessions (#80). Kept out of `non_sessions` because that key states a fact —
+      *this is not a session* — and here nobody established one; kept out of `total` for the same
+      reason, so the count stays what could be confirmed. `None` in the unreadable-root arm, on the
+      same terms as its neighbour.
+
+      This is the narrow claim `readable: False` used to swallow: one directory the process could
+      not stat into made the *whole root* read as unlistable, which was broader than what failed
+      and also, on the surface a user actually runs, fatal.
     """
     inconsistent: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
     try:
-        # One listing for both halves. Calling `list_session_slugs` and `list_non_session_entries`
-        # separately reads the directory at two instants, and a `session.json` landing between them
-        # puts a name in *neither* answer — the invisible state this key exists to end, reintroduced
-        # by the key itself. `_describe_non_session` never raises, so what this `except` catches is
-        # the listing, which is genuinely the whole root.
-        slugs, entries = store.scan_session_root()
+        # One listing for all three parts. Calling `list_session_slugs`, `list_non_session_entries`
+        # and `list_unexaminable_entries` separately reads the directory at three instants, and a
+        # `session.json` landing between them puts a name in *no* answer at all — the invisible
+        # state this key exists to end, reintroduced by the key itself. Neither
+        # `_describe_non_session` nor the partition's third bucket raises, so what this `except`
+        # catches is the listing, which is genuinely the whole root.
+        slugs, entries, blind = store.scan_session_root()
         non_sessions = [e.to_dict() for e in entries]
+        unexaminable = [e.to_dict() for e in blind]
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
                 "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False,
-                "non_sessions": None}
+                "non_sessions": None, "unexaminable": None}
     for slug in slugs:
         try:
             problems = check_session(slug)
@@ -317,7 +328,8 @@ def _session_health(*, cards_readable: bool = True) -> dict:
             inconsistent[slug] = codes
     return {"total": len(slugs), "readable": True, "error": None,
             "inconsistent": inconsistent, "unresolved_cards": unresolved,
-            "cards_checked": cards_readable, "non_sessions": non_sessions}
+            "cards_checked": cards_readable, "non_sessions": non_sessions,
+            "unexaminable": unexaminable}
 
 
 def _cmd_schema(a, client) -> None:
@@ -420,13 +432,20 @@ def _cmd_doctor(a, client) -> None:
     # cards refuses every load, `only=None` included — so "every card" is a selection that can fail
     # like any other.
     unchecked = not h["cards_checked"] and bool(h["total"])
+    blind = h["unexaminable"] or []
     notes = ([f"{len(bad)} inconsistent"] if bad else []) \
         + ([f"{len(lost)} with product context that no longer loads"] if lost else []) \
-        + (["product context not checked"] if unchecked else [])
+        + (["product context not checked"] if unchecked else []) \
+        + ([f"{len(blind)} entr{'y' if len(blind) == 1 else 'ies'} that could not be examined"]
+           if blind else [])
     # Three glyphs for three states, on the line a reader actually scans. Leaving "not checked" to
     # a trailing note put a tick on this line while nobody had looked — the defect this whole change
     # is about, one line further down than where it was filed.
-    glyph = "❌" if (bad or lost) else (warn if unchecked else ok)
+    # An unexaminable entry is a *could not look*, so it takes the same middle glyph as an unchecked
+    # card layer rather than the failure glyph: nothing here is known to be broken, and spelling
+    # "we could not tell" the same way as "this is wrong" is the merge the third state exists to
+    # prevent. It must not be the clean tick either, which was the whole finding.
+    glyph = "❌" if (bad or lost) else (warn if (unchecked or blind) else ok)
     print(f"  {glyph} sessions        {h['total']} in this workspace"
           + (f" · {' · '.join(notes)}" if notes else ""))
     for slug, codes in bad.items():
@@ -442,7 +461,42 @@ def _cmd_doctor(a, client) -> None:
     if unchecked:
         print("     └─ the card directory could not be read (see above), so nothing is known about "
               "whether these sessions' product context still loads.")
+    _print_unexaminable(blind, h["total"])
     _print_non_sessions(h["non_sessions"])
+
+
+def _print_unexaminable(entries: list[dict], total: int | None) -> None:
+    """Names under the session root that could not be examined, under the sessions check (#80).
+
+    Under *sessions* and not under *other entries*, because that is the one thing the failed probe
+    did not settle: this may be a session and it may not. `_print_non_sessions` says `Requivo does
+    not read these`, which would be a claim, and would be the wrong one on the reading where it
+    matters — a user's own session, invisible.
+
+    The count on the line above stays what could be *confirmed*, so this says so rather than leaving
+    a reader to reconcile `1 in this workspace` with a second entry named beneath it. A count that
+    silently absorbed these would be the quiet-wrong-answer form of the same bug.
+
+    The name and the error text both come off disk and both go through `display_token`: a new site
+    for the guard, and a fresh one — the name is a raw directory entry, and the `read_meta` that
+    would have refused a name carrying a newline is exactly what could not run (#40).
+    """
+    if not entries:
+        # `[]` is a clean workspace and earns no row. The unreadable-root arm passes `None`, but it
+        # has already returned above with a line of its own, so it never reaches here.
+        return
+    n = len(entries)
+    # Detail lines under the sessions check, not a check row of its own. The row above already
+    # carries the count as one of its notes and already wears the middle glyph for it; a second
+    # line at check indent reading `sessions` would be two rows answering one question, and a
+    # reader scanning the glyph column could not tell which was the verdict.
+    for entry in entries:
+        print(f"     └─ {display_token(entry['name'])} — could not be examined: "
+              f"{display_token(entry['error'] or _NO_DETAIL)}")
+    thing = "this is a session" if n == 1 else "these are sessions"
+    print(f"     Requivo cannot tell whether {thing}, so the count above ({total}) is what it could "
+          "confirm, not what is there. Nothing has been read, moved or changed; Requivo does not "
+          "alter permissions in your workspace.")
 
 
 def _non_session_detail(entry: dict) -> str:

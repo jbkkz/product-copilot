@@ -846,38 +846,87 @@ class NonSessionEntry:
                 "slug_shaped": self.slug_shaped}
 
 
-def _scan_session_root() -> tuple[list[str], list[Path]]:
-    """One listing of the session root, partitioned: the canonical sessions, and everything else.
+@dataclass(frozen=True)
+class UnexaminableEntry:
+    """A name under the session root whose examination **raised** — the partition's third outcome.
 
-    Both halves come out of one predicate, stated once, because they are each other's complement and
-    a second statement of it drifts. A name that neither function returns is exactly the state #67 is
-    about — invisible to `session list`, and so to `doctor` and `session verify`, which reason over
-    the slugs `list_session_slugs` gives them.
+    Not a session, and not *not* a session: unknown. The probe that decides which one it is failed,
+    so both of the other answers would be claims nobody established.
 
-    Dot-prefixed entries are in neither, on purpose. A slug cannot start with a dot, so they are
-    `create_session`'s staging areas: a session in flight rather than something left behind, and
-    reporting one is a race the reader cannot act on.
+    `error` is the exception's own text rather than a code, for the reason every other third state
+    in this codebase keeps it: *permission denied on this path* is a remedy and `unexaminable` is
+    not. It carries the path, which is the part a user acts on."""
+    name: str
+    error: str
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "error": self.error}
+
+
+def _scan_session_root() -> tuple[list[str], list[Path], list[UnexaminableEntry]]:
+    """One listing of the session root, partitioned three ways: the canonical sessions, everything
+    else, and the entries whose examination raised.
+
+    **Three outcomes, because the predicate can fail.** `(p / "session.json").exists()` is what
+    decides whether a name is a session, and `Path.exists()` swallows only the errnos in
+    `pathlib._IGNORED_ERRNOS` — ENOENT, ENOTDIR, EBADF, ELOOP. `EACCES` is not among them, so a
+    directory the process cannot stat into propagated out of this loop and aborted the partition for
+    *every* entry: `session list` exited 1 with an empty stdout and a raw traceback, and every
+    healthy session in the workspace was invisible (#80).
+
+    The first two halves used to be described here as each other's complement, and for two states
+    that was exactly right. It is not right for three, and the third belongs in neither of theirs:
+
+    * in `others` it would never come back from `list_session_slugs`, so `session list` would omit it
+      silently — the invisible entry #67 exists to close, reintroduced one function along;
+    * in `slugs` it would be claimed to *be* a session, which is the one thing the failed probe did
+      not establish, and every read path downstream reasons over that list.
+
+    So the predicate is still stated once and the buckets are still disjoint; what changed is that
+    the answer has a third value, and a caller has to be able to say *we could not tell*.
+
+    Dot-prefixed entries are in none of the three, on purpose. A slug cannot start with a dot, so
+    they are `create_session`'s staging areas: a session in flight rather than something left behind,
+    and reporting one is a race the reader cannot act on.
 
     A root that does not exist is an empty workspace and returns nothing. A root that cannot be
-    *listed* is not the same answer, and this raises rather than flattening the two — the caller is
-    the one that has to be able to say `we could not look`."""
+    *listed* is not the same answer, and this still raises rather than flattening the two — that
+    failure is genuinely the whole root, there is no entry to name it against, and the caller is the
+    one that has to be able to say `we could not look`. Per-entry and whole-root are two different
+    claims and this function must not merge them in either direction."""
     root = session_root()
     if not root.exists():
-        return [], []
+        return [], [], []
     slugs: list[str] = []
     others: list[Path] = []
+    unexaminable: list[UnexaminableEntry] = []
     for p in sorted(root.iterdir(), key=lambda p: p.name):
         if p.name.startswith("."):
             continue
-        if (p / "session.json").exists():
+        try:
+            is_session = (p / "session.json").exists()
+        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
+            # `Exception` rather than `OSError`, for `_describe_non_session`'s reason one function
+            # down: the set of ways a probe of a name off a directory listing can fail is open —
+            # EACCES here, and on Linux a filename that is not valid UTF-8 comes back from
+            # `iterdir` carrying surrogates, which every path operation on `p` is a candidate for.
+            # Whatever it was, it lands in a state this partition now has. `BaseException` is not
+            # caught: a `KeyboardInterrupt` is not an unexaminable directory.
+            unexaminable.append(UnexaminableEntry(p.name, str(e)))
+            continue
+        if is_session:
             slugs.append(p.name)
         else:
             others.append(p)
-    return slugs, others
+    return slugs, others, unexaminable
 
 
 def list_session_slugs() -> list[str]:
-    """Slugs of all canonical sessions, sorted — the backbone of `session list`."""
+    """Slugs of all canonical sessions, sorted — the backbone of `session list`.
+
+    **Names known to be sessions, and this contract does not widen.** `doctor`, `session verify` and
+    every read path reason over what comes back here, so an entry the partition could not examine is
+    deliberately not in it — see `list_unexaminable_entries`, which is where it goes instead."""
     return _scan_session_root()[0]
 
 
@@ -918,26 +967,49 @@ def _describe_non_session(p: Path) -> NonSessionEntry:
     return NonSessionEntry(p.name, kind, names[:_NON_SESSION_SAMPLE], len(names), None, slug_shaped)
 
 
-def scan_session_root() -> tuple[list[str], list[NonSessionEntry]]:
-    """Both halves of the session root from **one** listing — for the caller that asks both.
+def scan_session_root() -> tuple[list[str], list[NonSessionEntry], list[UnexaminableEntry]]:
+    """All three parts of the session root from **one** listing — for the caller that asks all of it.
 
-    `list_session_slugs` and `list_non_session_entries` each scan on their own, which is right when
-    only one question is being asked and wrong when both are. `doctor` asks both, and two scans are
-    two instants: a `session.json` appearing between them puts a name in *neither* answer, which is
-    the invisible state #67 is about, reintroduced by the report meant to close it; one disappearing
-    puts it in both. Transient and diagnostic-only, and still not something to leave in the one verb
-    whose job is to say whether anything is wrong. Found by review.
+    `list_session_slugs`, `list_non_session_entries` and `list_unexaminable_entries` each scan on
+    their own, which is right when only one question is being asked and wrong when more than one is.
+    `doctor` asks all three, and two scans are two instants: a `session.json` appearing between them
+    puts a name in *neither* answer, which is the invisible state #67 is about, reintroduced by the
+    report meant to close it; one disappearing puts it in both. Transient and diagnostic-only, and
+    still not something to leave in the one verb whose job is to say whether anything is wrong.
+    Found by review.
 
     The describe step is here rather than in `_scan_session_root` so that `list_session_slugs` — on
     every one of its call paths, `session list` included — keeps paying nothing for it: a stray
-    directory holding ten thousand files is one `iterdir` this function makes and that one does
-    not."""
-    slugs, others = _scan_session_root()
-    return slugs, [_describe_non_session(p) for p in others]
+    directory holding ten thousand files is one `iterdir` this function makes and that one does not.
+    The third part carries no describe step at all: whatever we would ask it, we have just failed to
+    ask it once."""
+    slugs, others, unexaminable = _scan_session_root()
+    return slugs, [_describe_non_session(p) for p in others], unexaminable
+
+
+def list_unexaminable_entries() -> list[UnexaminableEntry]:
+    """Names under the session root whose examination raised — the partition's third answer (#80).
+
+    Neither `list_session_slugs` nor `list_non_session_entries` returns one, and that is the point:
+    calling it a session claims what the failed probe did not establish, and calling it a non-session
+    hides it from `session list`, which is #67's defect one function along. It reaches a surface as a
+    fact of its own — a degraded row on `session list`, its own line under `doctor`'s sessions check.
+
+    **A report, not a repair**, on `list_non_session_entries`' terms: Requivo reads a workspace and
+    does not chmod anything in it. What is here is a name and the reason the probe failed.
+
+    A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
+    on its own, and two scans are two instants."""
+    return scan_session_root()[2]
 
 
 def list_non_session_entries() -> list[NonSessionEntry]:
-    """Everything else under the session root, described — the other half of `_scan_session_root`.
+    """Everything else under the session root, described — `_scan_session_root`'s second part.
+
+    Second of three since #80, not the other half of two: an entry whose examination *raised* is
+    neither a session nor established to be one of these, and is returned by
+    `list_unexaminable_entries` instead. Putting it here would hide it from `session list` for want
+    of a `session.json` nobody could look for, which is this function's own defect class.
 
     Nothing could see these before #67. `list_session_slugs` skips them for want of a `session.json`,
     so `doctor` and `session verify` never reach one; and `check_session` answers about a directory it
@@ -953,12 +1025,12 @@ def list_non_session_entries() -> list[NonSessionEntry]:
     breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted archive.
 
     It lives in Core beside `list_session_slugs` because that function owns the store layout and the
-    two answers are one predicate. Core reading a directory is not a boundary crossing: invariant 7
-    forbids importing a provider and touching argv, the streams, the environment and process exit —
-    not IO, which this module is made of.
+    answers come out of one predicate. Core reading a directory is not a boundary crossing:
+    invariant 7 forbids importing a provider and touching argv, the streams, the environment and
+    process exit — not IO, which this module is made of.
 
-    A caller that wants the sessions too should take `scan_session_root()` instead: this one scans on
-    its own, and two scans are two instants."""
+    A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
+    on its own, and two scans are two instants."""
     return scan_session_root()[1]
 
 

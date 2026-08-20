@@ -1868,6 +1868,13 @@ class InMemorySessionRepository:
     def write_meta(self, slug, meta): self._meta[slug] = meta
     def list_slugs(self): return sorted(self._meta)
 
+    def list_unexaminable(self):
+        # `[]`, and it is a real answer rather than a stub: a dict key either is a session or is not
+        # there, so the question this method exists for cannot arise on this backing (#80). What
+        # would be wrong is dropping a row that *was* enumerated and could not be decoded — see the
+        # protocol's docstring; there are none here to drop.
+        return []
+
     def load_model(self, slug):
         if slug not in self._model:
             raise _NotFound(f"no model '{slug}'", details={"slug": slug})

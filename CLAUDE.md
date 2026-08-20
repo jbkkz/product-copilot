@@ -259,6 +259,20 @@ bug that looked like correct behaviour.
     `status()`, it carries a bare `except Exception` too; the CLI row reads nothing past the metadata
     and deliberately carries none, because a guard that provably cannot fire is worse than none.
 
+    **And there is a layer below the rows, which is where it broke next** (#80). `list_entries` can
+    only degrade a row it *has*; the scan that decides what the rows *are* is underneath it, and it
+    could raise too. `_scan_session_root` partitioned the session root with
+    `(p / "session.json").exists()`, and `Path.exists()` re-raises EACCES — so one directory the
+    process could not stat into aborted the partition for every entry, and `session list` exited 1
+    with an empty stdout and a traceback. The fix is not a fourth `except` around the aggregate: it
+    is that **the predicate has three answers**, because it can fail. An entry it could not decide
+    about goes in neither of the other two buckets — `others` hides it from every listing, which is
+    #67's defect one function along, and `slugs` claims it is a session, which is the one thing the
+    failed probe did not establish. It reaches `list_entries` as a third source of rows and renders
+    as a degraded one. The general form: **a guard above the rows is only as good as the scan that
+    produced them**, and a partition whose predicate can raise has three outcomes whether or not its
+    return type says so.
+
     **Three outcomes, and the third is the point.** A degraded row names its session and states no
     fact it could not read — no timestamp, no revision, no question count. *Could not be read* and
     *not analysed yet* must render differently. On the CLI that third state also has an exit code of

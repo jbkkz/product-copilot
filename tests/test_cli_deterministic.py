@@ -328,11 +328,11 @@ def _deny_listing(directory: Path) -> None:
     """Make `directory` traversable but not listable — `--x`, the mode under which `stat` on a child
     succeeds and `iterdir` does not — or skip loudly naming what went untested.
 
-    Deliberately not `_deny_read`'s `chmod 000`. That denies the `session.json` probe in
-    `_scan_session_root` as well, and `Path.exists()` re-raises EACCES rather than swallowing it, so
-    the *whole root* reads as unlistable and this entry never gets a row of its own to be honest in.
-    That behaviour predates this change — `list_session_slugs` has always raised there — and is
-    reported separately rather than fixed on this branch."""
+    Deliberately not `chmod 000`, which denies the `session.json` probe in `_scan_session_root` as
+    well and so exercises a *different* state: the entry never reaches `_describe_non_session` at
+    all, because the partition above it could not decide what the entry is. That is #80, fixed since,
+    and it has its own module — `tests/test_unexaminable_entries.py`. What this fixture is for is the
+    entry the partition *did* place, whose contents then could not be listed."""
     if os.name == "nt":
         pytest.skip("POSIX mode bits do not deny listing on Windows — the entry-level "
                     "could-not-look arm is untested on this platform")
@@ -493,23 +493,31 @@ def test_session_list_does_not_call_one_of_these_a_session(workspace):
     assert "real" in text and "leave-approval" not in text
 
 
-def test_the_two_halves_of_the_session_root_are_one_partition(workspace):
-    """`list_session_slugs` and `list_non_session_entries` are complements over one predicate, and
-    are only worth having as a pair while nothing can fall between them — a name in neither is
-    precisely the state #67 is about. Staging directories are in neither on purpose: they are
-    `create_session` in flight rather than something left behind, and reporting one is a race the
-    reader cannot act on."""
+def test_the_parts_of_the_session_root_are_one_partition(workspace):
+    """`list_session_slugs`, `list_non_session_entries` and `list_unexaminable_entries` come out of
+    one predicate, and are only worth having as a set while nothing can fall between them — a name
+    in none of them is precisely the state #67 is about.
+
+    Three parts rather than two since #80: the predicate can *fail*, and an entry it could not
+    decide about belongs in neither of the other two. The third is empty in this fixture and
+    asserted as empty for that reason — it is populated in `tests/test_unexaminable_entries.py`,
+    which needs a platform skip this test does not.
+
+    Staging directories are in none of the three on purpose: they are `create_session` in flight
+    rather than something left behind, and reporting one is a race the reader cannot act on."""
     _run(["session", "init", "A real one.", "--slug", "real", "--json"])
     _lock_ghost()
     (store.session_root() / ".real.new-1-abcdef12").mkdir()
 
     slugs = set(store.list_session_slugs())
     others = {e.name for e in store.list_non_session_entries()}
+    blind = {e.name for e in store.list_unexaminable_entries()}
     on_disk = {p.name for p in store.session_root().iterdir()}
 
     assert slugs == {"real"} and others == {"leave-approval"}
-    assert slugs & others == set()
-    assert on_disk - (slugs | others) == {".real.new-1-abcdef12"}
+    assert blind == set(), "nothing here is unexaminable; the populated case is its own module"
+    assert slugs & others == set() and slugs & blind == set() and others & blind == set()
+    assert on_disk - (slugs | others | blind) == {".real.new-1-abcdef12"}
 
 
 def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, tmp_path):

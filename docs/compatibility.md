@@ -137,6 +137,22 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   `is_lock_ghost`. `slug_shaped` is the one derived value and it is a property of the name — whether
   `create_session` can be asked for it — not a claim about where the entry came from.
 
+- **`doctor --json` gained `sessions.unexaminable`** (#80). Additive, and `[]` on any workspace where
+  every entry could be examined. It carries the names under the session root whose examination
+  *raised*, one object per entry with `name` and `error` — a directory the process cannot stat into
+  is the case it was found on.
+
+  **It is deliberately not `non_sessions`, and a consumer must not merge them.** That key states a
+  fact — *this is not a session* — and here nobody established one; the entry may well be a session.
+  Nor is it in `total`, which stays the count that could be **confirmed**. `null` and `[]` read
+  exactly as they do on `non_sessions`: `null` when the session root could not be listed at all,
+  `[]` when it was listed and every entry in it could be examined.
+
+  What changed for a caller is narrower than it looks and worth stating plainly: this condition
+  previously produced `readable: false` with `total: null` for the **whole root**, which was broader
+  than what had failed. A consumer branching on `sessions.readable` sees `true` where it used to see
+  `false`, on a workspace where one entry is unexaminable and the root itself is fine.
+
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
   and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on
@@ -152,6 +168,17 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   **Branch on `readable`**, and treat `null` in those three as *we could not read this*, never as a
   value. A session at revision 0 is `readable: true` with `revision: 0` — not analysed yet is a
   normal state and is not this one.
+
+  **A degraded row can now name an entry that is not known to be a session at all** (#80). Until then
+  every row came from `list_session_slugs`, so even a degraded one was a name with a `session.json`
+  behind it. An entry whose examination *raised* — a directory the process cannot stat into — is now
+  a degraded row too, because the alternatives were to drop it, which loses it silently, or to
+  exclude it and take the whole listing down with the exception, which is what used to happen: the
+  command exited 1 with an empty payload and a `PermissionError` traceback, every healthy session
+  invisible. Nothing about the row's shape changed, and `readable` is still the field to branch on.
+  What a consumer must not do is read `slug` on a `readable: false` row as a name it can pass to
+  another verb — that was already true for a `session.json` whose name is not a valid slug, and this
+  widens the set slightly.
 
   The **terminal** output of the same command changed alongside it, in the same way `#40` changed
   `doctor`'s: a `slug`, `provider` or `updated_at` carrying a control character is now escaped rather

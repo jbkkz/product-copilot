@@ -28,7 +28,7 @@ from typing import Optional, Protocol, runtime_checkable
 from requivo.core import persistence as store
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import SessionNotFoundError
-from requivo.core.persistence import ArtifactStatus, SessionMeta
+from requivo.core.persistence import ArtifactStatus, SessionMeta, UnexaminableEntry
 
 
 @runtime_checkable
@@ -74,7 +74,27 @@ class SessionRepository(Protocol):
         ...
 
     def list_slugs(self) -> list[str]:
-        """Every session slug in the mutation-backed store, sorted."""
+        """Every session slug in the mutation-backed store, sorted. **Names known to be sessions** —
+        see `list_unexaminable` for the ones the backing could not decide about."""
+        ...
+
+    def list_unexaminable(self) -> list[UnexaminableEntry]:
+        """Every name the backing found and could **not** decide about, with the reason (#80).
+
+        The third answer to *what is in the store?*, and it exists because the other two are both
+        claims. Omitting the entry says nothing is wrong and loses it; listing it as a slug says it
+        is a session, which is what the backing has just failed to establish. So it comes back as
+        itself, and the service turns it into a degraded row.
+
+        On the file backing this is a directory the process cannot stat into. A backing on which the
+        question cannot arise — one whose enumeration either yields a row or raises for the whole
+        query — returns `[]`, and that is an honest *we looked and there was nothing*. What no
+        backing may do is drop a row it enumerated and could not decode: the point of the method is
+        that the caller can tell those two apart, and a silent drop is the absence this whole
+        listing path exists to end.
+
+        Failing to enumerate **at all** is not this — it is the aggregate having no members to speak
+        for, and it raises, exactly as `list_slugs` does."""
         ...
 
     def load_model(self, slug: str) -> EngineOutput:
@@ -165,6 +185,15 @@ class FileSessionRepository:
 
     def list_slugs(self) -> list[str]:
         return store.list_session_slugs()
+
+    def list_unexaminable(self) -> list[UnexaminableEntry]:
+        # A second scan rather than one shared with `list_slugs`, deliberately. The two are two
+        # instants and a session appearing between them can land in neither answer — the same race
+        # `scan_session_root` exists to close for `doctor`. It is the lesser cost here: sharing one
+        # scan means holding the partition's three parts as state on a repository that is
+        # constructed per call and documented as holding none, and the answer would then be as old
+        # as the handle. `session list` reads both within microseconds of each other.
+        return store.list_unexaminable_entries()
 
     def load_model(self, slug: str) -> EngineOutput:
         if not store.session_exists(slug):

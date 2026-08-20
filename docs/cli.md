@@ -80,6 +80,7 @@ at all.
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
 | `sessions.non_sessions` | What is under the session root and is **not** a session — see [Something here that is not a session](#something-here-that-is-not-a-session). `null`, not `[]`, when the root could not be listed |
+| `sessions.unexaminable` | Names under the session root that could **not be examined**, so whether they are sessions is unknown — `name` and `error` per entry. Not folded into `non_sessions`, which states a fact, nor into `total`, which stays what could be confirmed. `null`, not `[]`, when the root could not be listed. See [Something here that could not be examined](#something-here-that-could-not-be-examined) |
 | `output.streams[].state` | `safe` (a character the console cannot encode is escaped visibly, never fatal), `lossy` (it cannot crash but drops or blanks the character with no mark — only reachable by setting `errors=replace`/`ignore` yourself), `will_crash` (a strict handler on a narrow codec, so a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
 
 An `empty` context is a broken install rather than a quiet inconvenience: the cards are what impact
@@ -113,8 +114,8 @@ at a slug name costs exactly the same and is reported the same way.
 
 `doctor` rather than `session verify`, because `verify` is per-session and takes a slug — and the
 defining property of one of these is that no listing produces its name, so there is no slug to type.
-`session list` is unchanged and still shows only sessions: a listing of sessions must not grow a row
-for something that is not one.
+`session list` still shows only sessions: a listing of sessions must not grow a row for something
+that is *established* not to be one.
 
 **It is a report, not a repair.** Requivo does not delete, move or rewrite anything here, and it does
 not say what these are. A directory holding only `.lock` is almost certainly a leftover lock, and
@@ -140,6 +141,41 @@ and there is nothing else here*.
 
 Dot-prefixed entries are never reported: a slug cannot start with a dot, so they are `create_session`
 staging directories — a session in flight, not something left behind.
+
+### Something here that could not be examined
+
+A third state, and the sentence about what is *established* above is what it turns on (#80). Deciding
+whether a name is a session means asking whether `<name>/session.json` is there — and that question
+can itself fail. A directory the process cannot stat into (mode `000`, or one owned by another user)
+answers neither yes nor no, and that failure used to escape the partition and take **every** entry
+with it: `session list` exited 1 with an empty listing and a raw `PermissionError`, and every healthy
+session in the workspace was invisible.
+
+Such an entry is now its own answer, because both of the others would be claims nobody established.
+Calling it a non-session hides it from `session list` — the invisible entry the section above is
+about, one step along. Calling it a session says it *is* one, which is exactly what could not be
+checked. So it reaches both surfaces as *we could not tell*:
+
+```
+  🟡 sessions        1 in this workspace · 1 entry that could not be examined
+     └─ blocked — could not be examined: [Errno 13] Permission denied: …/sessions/blocked/session.json
+     Requivo cannot tell whether this is a session, so the count above (1) is what it could confirm,
+     not what is there. …
+```
+
+The count stays what could be **confirmed**. Absorbing the entry into it would trade a correct number
+for a vague one, which is the same trade `other entries` declines above. In `--json` it is
+`sessions.unexaminable`, one object per entry with `name` and `error`, and `null` rather than `[]`
+when the root could not be listed at all — the same reading as its neighbour.
+
+`session list` gives it a degraded row and exits **4**: the entry is named, every healthy session is
+still listed in full, and the row states nothing it could not read. `doctor` keeps its *whole root
+unreadable* arm for the case that genuinely is the whole root — `iterdir()` on `.requivo/sessions/`
+itself failing. One entry failing is not that, and answering it that way was a claim broader than
+what happened.
+
+**A report, not a repair here too.** Requivo reads your workspace; it does not change permissions in
+it.
 
 ### Context cards a session can no longer find
 
@@ -287,6 +323,14 @@ already the whole answer.
 A session at **revision 0** is not this state. It has no model yet because nothing has analysed it,
 which is a normal row and reads as one — *we could not look* and *we have not looked yet* are two
 different answers, and only the first is a problem.
+
+**A second condition reaches 4 on the same command** (#80), and it is one number further out than the
+paragraph above: an entry under the session root that could not be *examined at all*, so whether it
+is a session is unknown. That failure happened in the scan that produces the row set — before any row
+existed to degrade — so it used to take the whole listing down rather than degrade one member. It is
+now a degraded row like any other, and the same 4 covers it, because 4 describes the shape of the
+answer and this is that shape. See
+[Something here that could not be examined](#something-here-that-could-not-be-examined).
 
 Neither 0 nor 1 is true of a listing with a hole in it, which is why it gets a number of its own:
 0 says nothing is wrong, 1 says nothing was listed. Making it non-zero is safe precisely because
