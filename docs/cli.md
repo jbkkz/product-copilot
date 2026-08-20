@@ -264,7 +264,13 @@ two paths.
 
 The rows live under `artifacts`, keyed by type, and `stale` is the dependency graph's verdict — not
 a comparison of `revision` against the session's current one, which is provenance (see
-[the model is the product](architecture.md)). A session with nothing saved answers
+[dependencies and staleness](requirements-model.md#dependencies-and-staleness)).
+
+`slug` is the name you asked under, not the one stored inside `session.json` — the same reading
+`session verify` and `session import` give it, and the safe side of a value that is untrusted on
+every read back.
+
+A session with nothing saved answers
 `{"slug": …, "artifacts": {}}`, which states which session was asked about; it used to answer `{}`,
 which a consumer could not tell from a payload that failed to serialise.
 
