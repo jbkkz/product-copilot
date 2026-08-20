@@ -154,11 +154,25 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   Recorded here because a count in a compatibility note is the thing a later reader checks their own
   work against.
 
+  **`artifact list` renders two of the same fields and is fixed alongside it** (#70). It prints the
+  `artifact_status` key and the `filename` at the same fixed column, off the same file, through
+  `ArtifactService.list`. It is outside the issue's own footprint and is named here for that reason:
+  fixing one verb's copy of a two-field render turns the rule from *a persisted value is escaped
+  where it is shown* into *it is escaped where somebody looked*.
+
   Same rule as above, so the same guarantees: a value that is already one safe line comes back
-  byte-for-byte and no session Requivo itself wrote changes, and `--json` is unaffected because
-  `json.dumps` defaults to `ensure_ascii=True` and escapes a control character before it can reach a
-  line of its own. That default is load-bearing on this path rather than incidental, and there is now
-  a test that fails if it is turned off.
+  byte-for-byte and no session Requivo itself wrote changes, and `--json` is unaffected on all three
+  verbs.
+
+  **The reason `--json` is unaffected is narrower than the note above it says**, and is corrected
+  here rather than left standing. The #62 bullet, and #70's own issue text, both say `json.dumps`
+  defaults to `ensure_ascii=True` and therefore escapes a control character. Measured, that is not
+  what protects a newline: JSON's grammar forbids a literal control character below `U+0020` inside a
+  string, so `\n` is escaped whether the flag is on or off. What the flag decides is the *non-ASCII*
+  half of the guarded range, `U+007F`–`U+009F` — which carries `NEL` (`U+0085`), a line terminator
+  `str.splitlines()` and some terminals honour, and `CSI` (`U+009B`), an escape introducer. So the
+  default **is** load-bearing, for a different set of characters than was written down, and a test
+  now probes both halves; one probing only with a newline is green either way and pins nothing.
 
 - **`artifact save` without `--revision` is now `invalid_session`** (#6). It used to succeed, filling
   the omission in with the session's current revision and recording `stale: false` — an answer that

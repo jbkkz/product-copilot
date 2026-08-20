@@ -585,22 +585,93 @@ def test_session_show_leaves_an_ordinary_session_byte_for_byte(workspace, tmp_pa
 
 
 def test_session_show_json_escapes_a_control_character_before_it_reaches_a_line(workspace):
-    """`--json` needs no `display_token`, and this is the confirmation rather than the prose claim.
+    """`--json` needs no `display_token`. This is the confirmation, and it **corrects the reason**
+    #62 and #70 both give for it.
 
-    `_print_json` calls `json.dumps` without passing `ensure_ascii`, and the default is `True`, so a
-    newline inside a value is emitted as an escape sequence and can never reach a line of its own.
-    That default is therefore **load-bearing** — which is exactly the kind of fact somebody tidies
-    away while making non-ASCII output readable, and this is what will object. The bytes survive
-    intact in the *parsed* payload: escaping is a property of rendering to a terminal, not of the
-    data (#40, #62, #70).
+    The stated reason is that `json.dumps` defaults to `ensure_ascii=True`, so the encoder escapes a
+    control character before it can reach a line of its own. Written as one sentence that is not
+    true, and it is not true about the exact character both issues reproduced with. Measured:
+
+    | character | `ensure_ascii=True` | `ensure_ascii=False` |
+    |---|---|---|
+    | LF `U+000A` | escaped | **escaped** |
+    | DEL `U+007F` | escaped | raw |
+    | NEL `U+0085` | escaped | **raw, and `splitlines()` breaks on it** |
+    | CSI `U+009B` | escaped | raw |
+
+    A newline is escaped by **JSON's own grammar** — the format forbids a literal control character
+    below `U+0020` inside a string — and `ensure_ascii` has no say in it. What `ensure_ascii` decides
+    is the *non-ASCII* half of `core/selectors.py`'s `_CONTROL_CHARS`, `\\x7f-\\x9f`: NEL, which is a
+    line terminator `str.splitlines()` and some terminals honour, and CSI, which that module already
+    calls "an escape introducer in its own right on terminals that decode it".
+
+    So the default **is** load-bearing, for a different set of characters than anyone wrote down. A
+    test probing with a newline is green either way and pins nothing; this one probes with both and
+    says which mechanism covers which, so turning the default off fails here rather than in somebody's
+    terminal. The bytes survive intact in the *parsed* payload: escaping is a property of rendering,
+    not of the data (#40, #62, #70).
     """
     _run(["session", "init", "Something.", "--slug", "j"])
-    _forge_meta("j", _SHOW_FORGERIES)
+    _forge_meta("j", dict(_SHOW_FORGERIES, model_name="claude\x85FORGED BY A NEL"))
 
     raw = _run(["session", "show", "j", "--json"])
-    assert "\nSession 'trusted'" not in raw, raw        # no forged line at column 0
-    assert "\\nSession 'trusted'" in raw, raw           # …because the encoder escaped it
-    assert json.loads(raw)["slug"] == _SHOW_FORGERIES["slug"]   # and the value survives intact
+
+    # The newline half — safe by the grammar, and asserted so the guarantee is pinned even though
+    # this half would survive `ensure_ascii=False`.
+    assert "\nSession 'trusted'" not in raw, raw
+    assert "\\nSession 'trusted'" in raw, raw
+
+    # The half `ensure_ascii` actually decides. `\x85` is a line terminator: under
+    # `ensure_ascii=False` it reaches the payload raw, `splitlines()` breaks on it, and a reader
+    # piping `--json` through anything line-oriented sees a fabricated line.
+    assert "\x85" not in raw, raw
+    assert "\\u0085FORGED BY A NEL" in raw, raw
+    assert len(raw.splitlines()) == raw.count("\n"), "a value split a line of the payload"
+
+    # Neither escape is a change to the data.
+    parsed = json.loads(raw)
+    assert parsed["slug"] == _SHOW_FORGERIES["slug"]
+    assert parsed["model_name"] == "claude\x85FORGED BY A NEL"
+
+
+def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
+    """The sibling verb, found by sweeping the class rather than the instance (#70).
+
+    `artifact list` renders the *same two untrusted strings* `session show`'s artifact block does —
+    an `artifact_status` key and `ArtifactStatus.filename`, both read straight out of `session.json`
+    by `ArtifactService.list` — at the same fixed column, and had the identical defect. Fixing one
+    verb's copy of a two-field render and leaving the other's is the shape that makes a guard
+    unreliable: the rule stops being *a persisted value is escaped where it is shown* and becomes *it
+    is escaped in the places somebody happened to look*.
+
+    Not a separate issue on purpose. It is one line, in the same file, over the same two fields as
+    the change it rides in on, with the same fixture — but it *is* outside #70's own footprint and is
+    called out as such rather than left to read as scope creep.
+    """
+    _run(["session", "init", "Something.", "--slug", "al"])
+    _forge_meta("al", {"artifact_status": _SHOW_FORGERIES["artifact_status"]})
+
+    lines = _run(["artifact", "list", "al"]).splitlines()
+
+    # must not fire: two rows where one artifact is recorded
+    assert len(lines) == 2, lines
+    assert lines[0] == "Artifacts for 'al':", lines
+    assert len([ln for ln in lines if ln.startswith("  ")]) == 1, lines
+
+    # must fire: the one real row is still rendered, and still names what is stored
+    ((artifact_type, artifact), ) = _SHOW_FORGERIES["artifact_status"].items()
+    assert repr(artifact_type) in lines[1] and repr(artifact["filename"]) in lines[1], lines[1]
+    assert lines[1].endswith("rev 1  fresh"), lines[1]
+
+    # and an ordinary artifact row is byte-for-byte what it was
+    _run(["session", "init", "Other.", "--slug", "al2"])
+    _forge_meta("al2", {"artifact_status": {"prd": {"revision": 1, "filename": "prd.md",
+                                                    "updated_at": "2026-01-01T00:00:00Z",
+                                                    "stale": False}}})
+    assert _run(["artifact", "list", "al2"]).splitlines() == [
+        "Artifacts for 'al2':",
+        f"  {'prd':<12} {'prd.md':<26} rev 1  fresh",
+    ]
 
 
 # ── the acceptance scenario ─────────────────────────────────────────────────────

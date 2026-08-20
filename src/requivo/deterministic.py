@@ -48,6 +48,14 @@ EXIT_DEGRADED_LISTING = 4
 
 
 def _print_json(obj) -> None:
+    # `ensure_ascii` is left at its default and that is load-bearing (#70) — for a narrower set of
+    # characters than `session list` and `session show` claim between them. JSON's own grammar
+    # forbids a literal control character below U+0020 inside a string, so a newline is escaped
+    # whatever this flag says. What the flag decides is the *non-ASCII* half of
+    # `core/selectors.py`'s `_CONTROL_CHARS`, U+007F–U+009F: NEL, a line terminator `splitlines()`
+    # honours, and CSI, an escape introducer. Turning it off to make accented output readable would
+    # reopen the forgery by that route, and
+    # `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what objects.
     print(json.dumps(obj, indent=2))
 
 
@@ -498,10 +506,20 @@ def _session_list_line(entry) -> str:
     A value that is already one safe line comes back byte-for-byte, so every real session's row is
     unchanged and no reader learns a new shape for the normal case.
 
-    **`session show` has the same defect in five fields and is deliberately not fixed here** — it is
-    a different verb needing its own tests, and is reported for filing rather than ridden in on this
-    diff. The `--json` path needs none of this: `json.dumps` defaults to `ensure_ascii=True`, so the
-    encoder escapes a control character before it can reach a line of its own.
+    **`session show` had the same defect and is fixed in #70** — this paragraph used to say it was
+    deliberately left for its own change, which it was, and the pointer is kept rather than deleted
+    because the count it gave was wrong: five, where the verb turned out to print **eight** untrusted
+    strings. #62 counted the `SessionMeta` scalars and missed `slug` plus the two fields that live on
+    `ArtifactStatus` and its dict key. Read `_cmd_session_show`'s docstring for the surface-specific
+    half; the argument is this one.
+
+    The `--json` path needs none of this, **for a narrower reason than this file used to give**.
+    `json.dumps` defaults to `ensure_ascii=True`, and that default is load-bearing — but not for the
+    newline both issues reproduced with. A control character below U+0020 is escaped by JSON's own
+    grammar whatever the flag says; what the flag decides is the *non-ASCII* half of `_CONTROL_CHARS`,
+    U+007F–U+009F, which carries NEL and CSI. Measured, and pinned by
+    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line`, which probes both
+    halves because a newline probe is green either way and pins nothing (#70).
 
     The reason rides the row rather than being replaced by a pointer, because for the commonest break
     mode the reason *is* the remedy. `requivo session verify <slug>` is the acting surface the footer
@@ -586,13 +604,27 @@ def _cmd_session_show(a, client) -> None:
     cut an escape sequence in half and leave the quote unclosed — a neutralised value rendered as
     garbage, which is a second defect bought with the fix for the first.
 
-    The `--json` path needs none of this and is left alone: `json.dumps` defaults to
-    `ensure_ascii=True`, so the encoder escapes a control character before it can reach a line of its
-    own. That default is load-bearing rather than incidental, and
-    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what says so.
+    The `--json` path needs none of this and is left alone — but **not for the reason #62 and #70
+    both give**, which is worth stating here because that reason is what a later reader will act on.
+    It is not that `json.dumps` defaults to `ensure_ascii=True`: a control character below U+0020 is
+    escaped by JSON's own grammar whatever that flag says, so a *newline* — the character both issues
+    reproduced with — is safe either way. The default is still load-bearing, for the non-ASCII half of
+    `_CONTROL_CHARS` (U+007F–U+009F), which carries NEL, a line terminator `str.splitlines()` honours,
+    and CSI. Measured rather than argued, and pinned by
+    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line`, which probes both
+    halves precisely because a newline probe is green under either setting and pins nothing.
 
     A value that is already one safe line comes back byte-for-byte, so no real session's output
     changes — `test_session_show_leaves_an_ordinary_session_byte_for_byte` pins every line of it.
+
+    **One cosmetic cost, accepted rather than overlooked.** The first line wraps the slug in literal
+    quotes of its own, so a slug that has to be escaped renders nested — an apostrophe in the stored
+    value puts a `repr` in double quotes inside this line's single ones. Ugly, still one line, still
+    incapable of forging anything. Both available fixes are worse: dropping the literal quotes changes
+    the output of every clean session, which is the guarantee above and worth more than the nesting;
+    and quoting conditionally on whether `display_token` escaped puts a branch on that function's
+    *return shape* rather than on its contract, which is the coupling that survives until somebody
+    changes the escaper.
     """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
@@ -985,7 +1017,15 @@ def _cmd_artifact_list(a, client) -> None:
         return
     print(f"Artifacts for '{slug}':")
     for t, info in items.items():
-        print(f"  {t:<12} {info['filename']:<26} rev {info['revision']}  {'STALE' if info['stale'] else 'fresh'}")
+        # The same two untrusted strings `session show`'s artifact block renders, in the other verb
+        # that renders them (#70). `ArtifactService.list` passes `session.json`'s `artifact_status`
+        # through, so the key and the filename are whatever the file says; `core/integrity.py`
+        # already treats that filename as untrusted input. `slug` above is the resolved directory
+        # name, not the body's, and `revision`/`stale` are `int`/`bool` — none of the three needs it.
+        # Escape before padding: the widths exist so the block can be scanned, and padding a value
+        # that is about to grow quotes aligns it to a length the render does not have.
+        print(f"  {display_token(t):<12} {display_token(info['filename']):<26} "
+              f"rev {info['revision']}  {'STALE' if info['stale'] else 'fresh'}")
 
 
 def _cmd_artifact_show(a, client) -> None:

@@ -140,6 +140,17 @@ session that is at revision 12 is indistinguishable from the real thing. `curren
 artifact's `revision` and its `stale` flag need nothing: they are typed `int` and `bool`, so
 `read_meta` refuses a string there before the render runs.
 
+`artifact list` prints two of the same fields — the `artifact_status` key and the `filename` — and
+is escaped alongside it. Found by sweeping the class rather than the instance: escaping a stored
+value in one of the two verbs that render it leaves the rule meaning *wherever somebody looked*.
+
+`--json` is unaffected on all three verbs, and the reason is narrower than it looks. JSON's grammar
+forbids a literal control character below `U+0020` inside a string, so a newline is escaped
+regardless of any encoder option. `json.dumps`' `ensure_ascii=True` default is what covers the rest
+of the guarded range, `U+007F`–`U+009F` — `NEL`, a line terminator, and `CSI`, an escape introducer.
+Both halves are pinned by test, because a test probing only with a newline would be green with that
+default turned off.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty
