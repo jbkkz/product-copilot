@@ -38,4 +38,10 @@ away. The DVSI project-manager persona from the global config does not apply on 
 - Tooling lies by omission. A version number that does not move between releases, a
   symlink pinned to an old release, a config key nothing reads any more — each looked
   healthy right up to the moment it mattered.
-- Solo project: commit straight to main, no branches, and never push unless asked.
+- **Every change goes through a squash-merged pull request**; only `chore(release)` goes direct to
+  `main`. This line said the opposite for five weeks — *"solo project, commit straight to main"* —
+  and on 2026-08-20 I believed it over 30 merged PRs of evidence, including one from that morning.
+  Nine issues landed with no review, three merge commits went in that `main`'s protection will not
+  let anyone flatten, and a CI leg never ran on nine changelog fragments.
+- **Decide and show. Stop only for the irreversible** — publishing, a force-push, anything reaching a
+  third party. Everything else is decided and shown, so JB overrides rather than authorises.
