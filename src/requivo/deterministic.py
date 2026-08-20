@@ -34,17 +34,22 @@ from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
-# A listing that rendered every row it could and had to degrade at least one. Neither 0 nor 1 is
-# true of it: 0 says nothing is wrong, 1 says nothing was listed, and a script that does not parse
-# stdout reads the exit code alone — so collapsing this into either neighbour is invariant 15's own
-# defect in the one channel left. It is safe to make non-zero *because* stdout is complete: unlike
-# the error path, nothing is withheld, so a caller that only wants the rows still gets all of them.
+# The work was done and part of the answer was unreachable. Neither 0 nor 1 is true of that: 0 says
+# nothing is wrong, 1 says there is no answer at all, and a script that does not parse stdout reads
+# the exit code alone — so collapsing it into either neighbour is invariant 15's own defect in the
+# one channel left. It is safe to make non-zero *because* stdout is complete: unlike the error path,
+# nothing is withheld, so a caller that only wants what was produced still gets all of it.
+#
+# It was `EXIT_DEGRADED_LISTING` and it is `EXIT_DEGRADED` (#86): an exit code describes a shape of
+# answer, not a verb. `session list` rendering every row it could was the first instance;
+# `session verify` unable to read a session's product context is the second, and minting a number
+# per verb would rebuild the problem this one was introduced to solve.
 #
 # 0/1/2 are success, `RequivoError` and argparse; 3 is `cli.EXIT_RENDER_FAILED`. It cannot be
 # imported from there — `cli` imports this module, so the dependency runs one way only — and
 # `test_the_degraded_code_collides_with_nothing` is what stops the two numbers drifting into each
 # other.
-EXIT_DEGRADED_LISTING = 4
+EXIT_DEGRADED = 4
 
 
 def _print_json(obj) -> None:
@@ -545,9 +550,10 @@ def _session_list_row(entry) -> dict:
     """One `--json` row, with the **same key set** whether the session could be read or not.
 
     That is the compatibility decision, and it is why a degraded row is not simply a shorter dict:
-    `session list --json` is a public output (invariant 8), and a consumer looping over the payload
-    reading `row["revision"]` would get a `KeyError` from a row it was handed deliberately — trading
-    a command that fails loudly for a caller that fails obscurely, one layer along.
+    `session list --json` is a public output (invariant 8), and a consumer looping over
+    `payload["sessions"]` reading `row["revision"]` would get a `KeyError` from a row it was handed
+    deliberately — trading a command that fails loudly for a caller that fails obscurely, one layer
+    along.
 
     So the fields are always present and `null` where the fact is missing. `null`, never `0` or `""`:
     we did not read revision 0, we failed to read the revision, and a plausible value on a session
@@ -646,7 +652,16 @@ def _cmd_session_list(a, client) -> None:
     entries = SessionService().list_entries()
     degraded = [e for e in entries if not e.readable]
     if a.json:
-        _print_json([_session_list_row(e) for e in entries])
+        # An **object**, not the bare array this was until #87. It was the only array among the
+        # fourteen JSON payloads this CLI prints, and an array has no top level, so no field could
+        # ever be added to it without the type change made here once, before the 1.0 freeze.
+        #
+        # `degraded` recovers no fact. Every row carries `readable` and `error` whether it could be
+        # read or not, so the count has always been derivable from the rows. What the key buys is
+        # that exit 4 is readable on stdout rather than only signalled, which is the same argument
+        # that makes a degraded row name its session instead of disappearing.
+        _print_json({"sessions": [_session_list_row(e) for e in entries],
+                     "degraded": len(degraded), "session_root": str(session_root())})
     elif not entries:
         print(f"No sessions under {session_root()}.")
     else:
@@ -661,7 +676,7 @@ def _cmd_session_list(a, client) -> None:
     # Raised after the listing is printed, never instead of it: the rows are the answer, and the exit
     # code is the third state in the one channel a script that does not parse stdout can read.
     if degraded:
-        raise SystemExit(EXIT_DEGRADED_LISTING)
+        raise SystemExit(EXIT_DEGRADED)
 
 
 def _cmd_session_show(a, client) -> None:
@@ -852,19 +867,44 @@ def _cmd_session_verify(a, client) -> None:
 
     It is nonetheless part of `ok`, because a session whose cards are gone is refused at its next
     reasoning turn, and a verb that answers "is this session usable" with a tick right up to that
-    moment is the failure this whole change is about."""
+    moment is the failure this whole change is about.
+
+    **Three answers, three exit codes (#86).** The rendering has always distinguished them and the
+    exit code distinguished two, in the verb whose whole job is to answer *is this session sound*:
+
+    - `problems` — checked, the session is inconsistent. A complete answer. **1**.
+    - `cards["problem"]` — checked, its product context is broken. Also complete. **1**.
+    - `not cards["checked"]` — the context could not be checked. Not an answer at all. **4**.
+
+    4 rather than a code of this verb's own: it already means *the work was done and part of the
+    answer was unreachable*, and an exit code describes a shape of answer, not a verb. A code per
+    verb rebuilds the problem 4 was introduced to solve.
+
+    **A firm negative outranks a partial one**, so a session that is both inconsistent *and* whose
+    cards could not be read exits 1. A script gating on *is this usable* wants the definite answer,
+    and there is one. Nothing is withheld at either code: `--json` carries the whole story either
+    way, and `ok` keeps the meaning it always had — it is false in all three failing states.
+    """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
         raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
     problems = check_session(slug)
     cards = _card_health(slug)
-    ok = not problems and cards["checked"] and cards["problem"] is None
+    unsound = bool(problems) or cards["problem"] is not None
+    unchecked = not cards["checked"]
+    ok = not unsound and not unchecked
+    # `exit_code`, not `code`: the rendering below already binds `code` to a card-problem *code*
+    # string, and the collision reached the raise as `SystemExit('unknown_context_card')`, which
+    # CPython prints to stderr and turns into status 1 — the number this change is about replaced by
+    # a stray line, on the branch where the shadowing happens and only there. Caught by an existing
+    # test, not by this one, which is why the name rather than the number is the fix.
+    exit_code = 1 if unsound else (EXIT_DEGRADED if unchecked else 0)
     if a.json:
         _print_json({"slug": slug, "ok": ok, "problems": [p.to_dict() for p in problems],
                      "context_cards": cards})
-        if not ok:
-            raise SystemExit(1)
+        if exit_code:
+            raise SystemExit(exit_code)
         return
     if ok:
         print(f"✅ Session '{slug}' is internally consistent and its product context still loads.")
@@ -881,8 +921,8 @@ def _cmd_session_verify(a, client) -> None:
         print(f"    {_RESTORE_HINT if restorable else _REPAIR_HINT}")
     elif not cards["checked"]:
         print(f"🟡 Could not check '{slug}'s product context: {cards['error']}")
-    if not ok:
-        raise SystemExit(1)
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 # Ceilings for an imported archive. A session is a handful of small JSON and Markdown files; anything
@@ -1011,7 +1051,17 @@ def _cmd_session_import(a, client) -> None:
             shutil.rmtree(scratch, ignore_errors=True)
 
     if a.json:
-        _print_json({"imported": slug, "into": str(root), "replaced": replaced})
+        # `slug`/`path`, the spelling every sibling session verb uses (#84). It was
+        # `imported`/`into`, so a consumer looping over the session verbs and reading `row["slug"]`
+        # got a `KeyError` from the one verb that had just put the session there. Both old keys are
+        # gone rather than kept as duplicates: removing a key is breaking, so the rename ships
+        # before the 1.0 freeze or never.
+        #
+        # `path` is the session's own directory, which is what `session init --json` means by the
+        # word and what the line below already prints. `into` carried the session *root*; renaming
+        # the key over that value would give `path` two meanings across two verbs of one noun, which
+        # is this defect back under the harmonised name and harder to see for it.
+        _print_json({"slug": slug, "path": str(target), "replaced": replaced})
         return
     print(f"Imported session '{slug}' → {store.canonical_dir(slug)}"
           + (" (replaced an existing session)" if replaced else ""))

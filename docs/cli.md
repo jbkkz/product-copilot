@@ -242,7 +242,7 @@ is impossible — a stream Requivo could not reconfigure, which
 | 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
 | 2 | Bad arguments (argparse) |
 | 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
-| 4 | **`session list` listed everything it could and had to degrade at least one row.** The listing is on stdout in full |
+| 4 | **The work was done and part of the answer was unreachable.** What was produced is on stdout in full |
 
 Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
 its provider call, applies the revision and writes the artifact *before* it prints anything — so a
@@ -254,10 +254,14 @@ only when one was, because several verbs (`doctor`, `status`, `schema`) never ca
 all and `discover` prints before it does. Telling you not to re-run a command that cost nothing
 would be the same misreport one layer up.
 
-Four exists for the same reason one number along. A session written by a newer Requivo, or one left
-half-written by a crash, cannot be read — and `requivo session list` used to answer that by exiting 1
-with a single message, **every other session invisible and nothing naming which one was the
-problem**. It now lists every session it can and gives the one it could not its own row:
+Four exists for the same reason one number along, and it describes a **shape of answer rather than a
+verb** — it is not `session list`'s code, and a number minted per verb would rebuild the collapse it
+was introduced to undo. Two commands reach it today.
+
+`requivo session list` is the first. A session written by a newer Requivo, or one left half-written
+by a crash, cannot be read — and it used to answer that by exiting 1 with a single message, **every
+other session invisible and nothing naming which one was the problem**. It now lists every session
+it can and gives the one it could not its own row:
 
 ```
 Sessions under /work/.requivo/sessions:
@@ -283,7 +287,31 @@ different answers, and only the first is a problem.
 Neither 0 nor 1 is true of a listing with a hole in it, which is why it gets a number of its own:
 0 says nothing is wrong, 1 says nothing was listed. Making it non-zero is safe precisely because
 nothing is withheld — a script that only wants the rows still gets all of them on stdout, and
-`--json` carries `readable` and `error` per row for a caller that would rather branch than parse.
+`--json` carries `readable` and `error` per row, plus a top-level `degraded` count, for a caller
+that would rather branch than parse.
+
+`requivo session verify` is the second, and it reaches 4 from the other side. It answers three
+different things and had two exit codes:
+
+| What happened | Exit |
+|---|---|
+| The session is internally inconsistent — a complete answer | 1 |
+| Its product context was read and does not resolve — also complete | 1 |
+| Its product context **could not be read at all** — not an answer | 4 |
+
+The third already had a rendering of its own — *Could not check `<slug>`'s product context* — and
+then exited 1 beside a session that really is broken, in the verb whose whole job is to say whether a
+session is sound. Where both happen at once, the **firm negative wins**: a session that is
+inconsistent *and* whose cards were unreadable exits 1, because a script gating on *is this usable*
+wants the definite answer and there is one. `--json` carries the whole story at every code.
+
+**`requivo doctor` exits 0 whatever it finds, and that is deliberate.** It looks like `verify`'s
+sibling and is not one. `verify` is a **gate**: you run it to decide, and its exit code is the
+decision. `doctor` is a **report** — it describes what is on this machine and never concludes what
+it means, because the same directory can be a half-extracted archive or a leftover lock and nothing
+in it says which. A report that exits non-zero is concluding. Harmonising the two would cost the one
+verb that must not, so the difference is written down here rather than left to look like an
+oversight: read `doctor`'s output, not its status.
 
 ### Documents on stdin
 

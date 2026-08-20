@@ -31,7 +31,7 @@ import pytest
 
 from requivo.cli import EXIT_RENDER_FAILED, app
 from requivo.core.persistence import SESSION_FORMAT_VERSION, canonical_dir
-from requivo.deterministic import EXIT_DEGRADED_LISTING
+from requivo.deterministic import EXIT_DEGRADED
 from requivo.paths import session_root
 from requivo.services.sessions import SessionService
 
@@ -135,7 +135,7 @@ def test_one_unreadable_session_no_longer_takes_the_listing_down(workspace):
     # …and the broken one is named rather than dropped or fatal
     assert BROKEN_META in out
     assert "could not be read" in out.lower()
-    assert code == EXIT_DEGRADED_LISTING
+    assert code == EXIT_DEGRADED
 
 
 def test_the_degraded_row_carries_the_reason_because_the_reason_is_the_remedy(workspace):
@@ -222,8 +222,8 @@ def test_json_keeps_every_key_on_every_row(workspace):
     break_meta(BROKEN_META)
 
     out, code = _run(["session", "list", "--json"])
-    rows = {r["slug"]: r for r in json.loads(out)}
-    assert code == EXIT_DEGRADED_LISTING
+    rows = {r["slug"]: r for r in json.loads(out)["sessions"]}
+    assert code == EXIT_DEGRADED
     assert rows.keys() == {HEALTHY, BROKEN_META}
     assert rows[HEALTHY].keys() == rows[BROKEN_META].keys()
 
@@ -248,7 +248,56 @@ def test_json_is_still_a_complete_census(workspace):
     _seed(BROKEN_META)
     break_meta(BROKEN_META)
     out, _ = _run(["session", "list", "--json"])
-    assert {r["slug"] for r in json.loads(out)} == {HEALTHY, AWAITING, BROKEN_META}
+    assert {r["slug"] for r in json.loads(out)["sessions"]} == {HEALTHY, AWAITING, BROKEN_META}
+
+
+def test_json_is_an_object_so_it_can_ever_gain_a_top_level_field(workspace):
+    """#87. The payload is `{"sessions": [...], "degraded": n, "session_root": "..."}`.
+
+    It was a bare array, alone among the CLI's `--json` outputs, and an array has no top level: no
+    field can be added to it, ever, without the type change this test pins. The rows themselves are
+    unchanged — the wrap is the whole difference — so a consumer's `jq '.[] | .slug'` becomes
+    `jq '.sessions[] | .slug'` and nothing else moves.
+
+    `degraded` is **not** here to recover a fact stdout was missing: `_session_list_row` already
+    gives every row `readable` and `error`, so the count has always been derivable. It is here so
+    exit 4 is *readable* on stdout rather than only signalled, which is the same argument that makes
+    a degraded row name its session instead of disappearing.
+
+    Both halves are asserted on the same fixture, because `degraded: 0` on a clean workspace is what
+    tells a reader that `degraded: 1` means something — an assertion that the count is present would
+    pass against a field hardcoded to any number.
+    """
+    _seed(HEALTHY)
+
+    out, code = _run(["session", "list", "--json"])
+    clean = json.loads(out)
+    assert code == 0
+    assert clean.keys() == {"sessions", "degraded", "session_root"}
+    assert clean["degraded"] == 0
+    assert clean["session_root"] == str(session_root())
+    assert [r["slug"] for r in clean["sessions"]] == [HEALTHY]
+
+    _seed(BROKEN_META)
+    break_meta(BROKEN_META)
+
+    out, code = _run(["session", "list", "--json"])
+    degraded = json.loads(out)
+    assert code == EXIT_DEGRADED
+    assert degraded["degraded"] == 1                      # must fire
+    assert {r["slug"] for r in degraded["sessions"]} == {HEALTHY, BROKEN_META}
+    assert degraded["session_root"] == str(session_root())
+
+
+def test_json_on_an_empty_workspace_is_the_same_object(workspace):
+    """No sessions is not a special case and must not be a special shape. A caller reading
+    `payload["sessions"]` has to keep working on a workspace nobody has used yet — the bare-array
+    payload answered `[]` here, which at least had one meaning; an object that dropped its keys
+    would have none."""
+    out, code = _run(["session", "list", "--json"])
+    empty = json.loads(out)
+    assert code == 0
+    assert empty == {"sessions": [], "degraded": 0, "session_root": str(session_root())}
 
 
 # ── the exit code says which of the three happened ───────────────────────────
@@ -265,7 +314,7 @@ def test_the_three_outcomes_have_three_exit_codes(workspace):
 
     _seed(BROKEN_META)
     break_meta(BROKEN_META)
-    assert _run(["session", "list"])[1] == EXIT_DEGRADED_LISTING
+    assert _run(["session", "list"])[1] == EXIT_DEGRADED
 
     # could not read this one session at all: `session show` is the strict read and is the ordinary
     # clean failure. The point is that it is a *different* number from the one above.
@@ -276,7 +325,7 @@ def test_the_degraded_code_collides_with_nothing():
     """The two exit-code constants live in two modules — `cli.py` imports `deterministic.py`, so the
     dependency cannot run the other way — and nothing but this test stops them being given the same
     number. 0, 1 and 2 are taken by success, `RequivoError` and argparse."""
-    assert EXIT_DEGRADED_LISTING not in {0, 1, 2, EXIT_RENDER_FAILED}
+    assert EXIT_DEGRADED not in {0, 1, 2, EXIT_RENDER_FAILED}
 
 
 # ── the slug and the error are untrusted text (#40) ──────────────────────────
@@ -306,7 +355,7 @@ def test_a_slug_carrying_a_control_character_cannot_forge_a_line(workspace):
     (d / "session.json").write_text("{ not json", encoding="utf-8")
 
     out, code = _run(["session", "list"])
-    assert code == EXIT_DEGRADED_LISTING          # must fire: the fixture really is unreadable
+    assert code == EXIT_DEGRADED          # must fire: the fixture really is unreadable
     # no line of output begins with the forged text, and the name is still shown in escaped form
     assert not any(line.startswith("TOTAL:") for line in out.splitlines()), out
     assert "evil" in out
@@ -363,7 +412,7 @@ def test_json_never_lets_session_json_forge_a_line(workspace):
     out, _ = _run(["session", "list", "--json"])
     assert not any(ln.startswith("FORGED") for ln in out.splitlines()), out
     # must fire: the value did arrive, escaped rather than dropped
-    assert json.loads(out)[0]["provider"] == "x\nFORGED"
+    assert json.loads(out)["sessions"][0]["provider"] == "x\nFORGED"
 
 
 def test_a_multi_line_error_stays_one_row(workspace):
@@ -382,7 +431,7 @@ def test_a_multi_line_error_stays_one_row(workspace):
     p.write_text(json.dumps(data), encoding="utf-8")
 
     out, code = _run(["session", "list"])
-    assert code == EXIT_DEGRADED_LISTING
+    assert code == EXIT_DEGRADED
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert sum(1 for ln in lines if BROKEN_META in ln) == 1, out
     assert sum(1 for ln in lines if HEALTHY in ln) == 1, out       # must fire
