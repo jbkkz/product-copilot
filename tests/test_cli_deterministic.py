@@ -634,6 +634,45 @@ def test_session_show_json_escapes_a_control_character_before_it_reaches_a_line(
     assert parsed["model_name"] == "claude\x85FORGED BY A NEL"
 
 
+def test_the_two_output_paths_guard_different_ranges_and_json_is_the_stricter(workspace):
+    """Where the terminal guard stops, stated as a test so the claim cannot drift (#70).
+
+    Found by the audit on this branch. `core/selectors.py`'s `_CONTROL_CHARS` is C0, DEL and C1 —
+    *the class that can move a terminal's cursor or end its line*, which is what that module says it
+    is for. `str.splitlines()` breaks on a wider set: it also breaks on U+2028 and U+2029, and those
+    two come back from `display_token` byte-for-byte.
+
+    On a terminal that is the right answer — xterm and the VT sequences behind it answer to CR and
+    LF, not to Unicode `Zl`/`Zp` — so nothing here is a forgery on the surface `display_token`
+    guards. It matters for two things and both are worth pinning. Anything that reads this
+    human-readable output line by line sees a line the render did not write, which is why `--json`
+    exists and is asserted to cover it. And **this test suite is such a reader**: every assertion
+    about `session show` above counts `splitlines()`, so the boundary between what the guard catches
+    and what the harness would notice has to be stated somewhere rather than assumed to coincide.
+
+    Widening `_CONTROL_CHARS` is deliberately *not* done here. It would change what
+    `normalize_tokens` refuses — the public `unsafe_selector_token` code — and that module scopes
+    itself on purpose, so it is a decision for its owner and is reported rather than taken.
+    """
+    from requivo.core.selectors import display_token
+
+    # Written as an escape, never as the character. A raw U+2028 in a source file is invisible in
+    # every diff and every editor that will ever show this line — which is the property that makes it
+    # worth a test, and the property that makes pasting one a bad idea.
+    sep = "\u2028"
+    assert len(f"a{sep}b".splitlines()) == 2      # must fire: it really does split
+    assert display_token(f"a{sep}b") == f"a{sep}b", \
+        "the terminal guard is documented as not covering U+2028; if it now does, fix the prose too"
+
+    # …and the machine path is the stricter of the two, which is the half a consumer relies on.
+    _run(["session", "init", "Something.", "--slug", "lsep"])
+    _forge_meta("lsep", {"provider": f"anthropic{sep}FORGED BY A LINE SEPARATOR"})
+    raw = _run(["session", "show", "lsep", "--json"])
+    assert sep not in raw, raw
+    assert "\\u2028FORGED BY A LINE SEPARATOR" in raw, raw
+    assert len(raw.splitlines()) == raw.count("\n"), "a value split a line of the payload"
+
+
 def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
     """The sibling verb, found by sweeping the class rather than the instance (#70).
 

@@ -151,6 +151,14 @@ of the guarded range, `U+007F`–`U+009F` — `NEL`, a line terminator, and `CSI
 Both halves are pinned by test, because a test probing only with a newline would be green with that
 default turned off.
 
+**What the terminal rule does not cover**, stated because the two are easy to assume identical. The
+one-line rule guards C0, DEL and C1 — the class that can move a terminal's cursor or end its line.
+`str.splitlines()` breaks on a wider set, including `U+2028` and `U+2029`, which are returned
+unchanged. On a terminal that is right: xterm and the VT sequences behind it answer to CR and LF, not
+to Unicode `Zl`/`Zp`. It matters if you parse this human-readable output line by line — don't; that
+is what `--json` is for, and `--json` escapes those two as well, which makes it the stricter of the
+two paths.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty

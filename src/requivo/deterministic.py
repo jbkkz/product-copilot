@@ -51,11 +51,12 @@ def _print_json(obj) -> None:
     # `ensure_ascii` is left at its default and that is load-bearing (#70) — for a narrower set of
     # characters than `session list` and `session show` claim between them. JSON's own grammar
     # forbids a literal control character below U+0020 inside a string, so a newline is escaped
-    # whatever this flag says. What the flag decides is the *non-ASCII* half of
-    # `core/selectors.py`'s `_CONTROL_CHARS`, U+007F–U+009F: NEL, a line terminator `splitlines()`
-    # honours, and CSI, an escape introducer. Turning it off to make accented output readable would
-    # reopen the forgery by that route, and
-    # `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what objects.
+    # whatever this flag says. What the flag decides is everything *non-ASCII*: U+007F–U+009F, where
+    # NEL and CSI live, and also U+2028/U+2029, which the terminal-side guard deliberately does not
+    # cover. So this path is the *stricter* of the two and stays that way only while the default
+    # does; turning it off to make accented output readable would reopen the forgery by that route,
+    # and `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what
+    # objects.
     print(json.dumps(obj, indent=2))
 
 
@@ -616,6 +617,17 @@ def _cmd_session_show(a, client) -> None:
 
     A value that is already one safe line comes back byte-for-byte, so no real session's output
     changes — `test_session_show_leaves_an_ordinary_session_byte_for_byte` pins every line of it.
+
+    **What this does not cover, said here rather than left to be discovered.** `display_token`'s
+    `_CONTROL_CHARS` is C0, DEL and C1 — the class that can move a terminal's cursor or end its line.
+    `str.splitlines()` also breaks on U+2028 and U+2029, which are *not* in that class and come back
+    from `display_token` byte-for-byte. On a terminal that is correct: xterm and the VT sequences it
+    descends from answer to CR and LF, not to Unicode `Zl`/`Zp`. It is not correct for anything that
+    parses this human-readable output line by line — which is what `--json` is for, and which is
+    covered there, since `ensure_ascii=True` escapes those two as well. Widening `_CONTROL_CHARS`
+    would also change what `normalize_tokens` *refuses*, i.e. the public `unsafe_selector_token`
+    surface, and that module's own comment scopes it deliberately — so it is a decision for its
+    owner, reported rather than taken here (#70).
 
     **One cosmetic cost, accepted rather than overlooked.** The first line wraps the slug in literal
     quotes of its own, so a slug that has to be escaped renders nested — an apostrophe in the stored
