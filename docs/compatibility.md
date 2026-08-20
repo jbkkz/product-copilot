@@ -231,6 +231,21 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   session with nothing saved now answers `{"slug": …, "artifacts": {}}` where it answered `{}`,
   which named neither the session nor the fact that the question had been answered.
 
+- **`session verify --json` gained a `session` object** (#97). Additive; every existing field keeps
+  its name and meaning, so a consumer reading only `slug`, `ok`, `problems` and `context_cards` is
+  unaffected on a workspace where every session can be examined. It is present on every payload and
+  reads `{"checked": true, "error": null}` for a session that was examined.
+
+  It exists because **`problems: []` spells two different facts** — *checked, nothing wrong* and
+  *nothing was checked* — and an empty list cannot distinguish them. `session_exists` used a bare
+  `Path.exists()`, which re-raises `EACCES`, so the verb used to answer that case with a traceback;
+  it now answers it. **Branch on `session.checked`**, never on the emptiness of `problems`, exactly
+  as `context_cards.checked` already required.
+
+  The verb exits **4** in that state, not 1, under the rule below: 1 says *I checked and it is
+  broken* about a session nothing looked at. The precedence rule is unchanged — real `problems`
+  beside an unexaminable path still exits 1.
+
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
   and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on
@@ -630,6 +645,11 @@ introduced to solve. A new condition of that shape gets 4, not 5.
 that is both inconsistent *and* has cards it could not read exits **1**, not 4: a script asking *is
 this usable* wants the definite answer. That precedence is part of the contract, not an
 implementation detail.
+
+There are now **two** ways to reach the partial answer, and they are the same answer: the cards
+could not be read, or the session directory itself could not be stat-ed (#97). Both render as `4`
+and both set `ok` to false; `--json` says which, in `context_cards.checked` and `session.checked`
+respectively.
 
 ### The web error banner's `code` — **not stable**
 

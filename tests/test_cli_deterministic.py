@@ -2068,3 +2068,80 @@ def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_p
         names = z.namelist()
     assert not [n for n in names if ".lock" in n]
     assert "s/model.json" in names and "s/revisions/0001-model.json" in names
+
+
+# ── #111: a session created while the archive was being read is not destroyed ───
+#
+# `session import` used to decide the collision question twice: `session_exists(slug) and not
+# --force` before the extraction, and `replaced = target.exists()` after it. Between those two
+# decisions sits the whole unzip, and a session created in that window was moved aside and then
+# `rmtree`d — destroyed by an import whose user was never asked for `--force`, because at the moment
+# they would have been asked there was nothing to force past.
+#
+# Invariant 9 in the one verb that writes a whole session: a precondition is held across the writes
+# it authorises. The two arms below are what holds it — the free-slug arm claims by rename, which is
+# invariant 11's rule and the only thing that makes the window safe rather than merely narrow.
+
+
+def test_a_session_created_during_the_extraction_window_is_refused_not_destroyed(
+        workspace, tmp_path, monkeypatch):
+    """The defect, driven through the real CLI.
+
+    `_validate_extracted` runs after the archive is on disk and before anything is moved into place,
+    so patching it is the honest way to stand inside the window without reaching into the store."""
+    from requivo import deterministic as det
+
+    _zip(tmp_path / "race.zip", _good_entries("race"))
+    real = det._validate_extracted
+
+    def _claim_the_slug_mid_import(d, slug):
+        real(d, slug)
+        # A concurrent creator wins the slug while this import is still in scratch space.
+        if not store.session_exists(slug):
+            _run(["session", "init", "The one that was already here.", "--slug", slug, "--json"])
+    monkeypatch.setattr(det, "_validate_extracted", _claim_the_slug_mid_import)
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "race.zip"), "--json"])
+
+    # The whole point: the session that appeared is still there, unmodified.
+    assert store.session_exists("race") is True
+    assert "The one that was already here." in store.session_request("race")
+
+
+def test_that_window_refusal_names_the_conflict_rather_than_a_move_failure(
+        workspace, tmp_path, monkeypatch):
+    """`session_exists` / 409, the same code the guard would have raised — not `import_move_failed`.
+
+    The caller is entitled to the answer they would have got had the timing been different, and the
+    remedy is the same one: pass `--force`. `import_move_failed` would send them looking at their
+    filesystem for a fault that is not there."""
+    from requivo import deterministic as det
+
+    _zip(tmp_path / "race.zip", _good_entries("race"))
+    real = det._validate_extracted
+
+    def _claim_the_slug_mid_import(d, slug):
+        real(d, slug)
+        if not store.session_exists(slug):
+            _run(["session", "init", "Mine.", "--slug", slug, "--json"])
+    monkeypatch.setattr(det, "_validate_extracted", _claim_the_slug_mid_import)
+
+    envelope = _import_error(tmp_path / "race.zip")
+    assert envelope["code"] == "session_exists", envelope
+    assert envelope["details"]["slug"] == "race"
+    assert "--force" in envelope["message"]
+
+
+def test_the_ordinary_import_arms_still_work_so_the_guard_is_not_a_blanket_refusal(
+        workspace, tmp_path, monkeypatch):
+    """The positive control for both arms. A fix that refused every import, or that never replaced,
+    would pass the two tests above and fail here."""
+    _zip(tmp_path / "fresh.zip", _good_entries("fresh"))
+    r = _run_json(["session", "import", str(tmp_path / "fresh.zip"), "--json"])
+    assert r["replaced"] is False
+    assert store.session_exists("fresh") is True
+
+    r = _run_json(["session", "import", str(tmp_path / "fresh.zip"), "--force", "--json"])
+    assert r["replaced"] is True
+    assert store.session_exists("fresh") is True

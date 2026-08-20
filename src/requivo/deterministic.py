@@ -32,6 +32,7 @@ from requivo.core.errors import (
     InvalidModelError,
     SessionExistsError,
     SessionNotFoundError,
+    SessionUnreadableError,
     UnreadableArchiveError,
 )
 from requivo.core.integrity import IntegrityProblem, check_session, check_session_dir
@@ -521,12 +522,22 @@ def _non_session_detail(entry: dict) -> str:
     `session_lock` left (#22) and also what an interrupted unzip leaves, and this verb's evidence is
     the directory and only the directory (invariant 14).
 
-    The names come off disk, so each goes through `display_token`: one carrying a newline would
-    otherwise end this line and start another at column 0 of `doctor`'s own report, which is exactly
-    what a stored context-card name could do before #40."""
+    **Every value interpolated here comes off disk, so every one goes through `display_token`** —
+    the names and the error text alike. One carrying a newline would otherwise end this line and
+    start another at column 0 of `doctor`'s own report, which is exactly what a stored context-card
+    name could do before #40.
+
+    This docstring used to state the rule for the *names* only, on a line that carries two classes of
+    value, and the two `error` interpolations below went unwrapped for a release (#90). `error` is
+    `str(e)` from a deliberately wide `except Exception` in the store, where the docstring beside it
+    says the set of ways a member can be broken is open — an open set of causes feeding an unescaped
+    interpolation is the shape #40 was. Today it misreports rather than forges, because the reachable
+    exceptions are the `OSError` family and CPython's `OSError.__str__` already `repr()`s the
+    filename; that is a fact about today's exception space and not a property of this line, which is
+    why the wrap is here and not in a comment saying it is unnecessary."""
     kind, error = entry["kind"], entry["error"]
     if kind == "unknown":
-        return f"could not be examined — {error}"
+        return f"could not be examined — {display_token(error)}"
     if kind == "file":
         return "a file, not a directory"
     if kind == "symlink":
@@ -540,7 +551,7 @@ def _non_session_detail(entry: dict) -> str:
         # Not "an empty directory". We could not look inside, and an empty directory is the one
         # shape that costs nothing on POSIX (`rename(2)` replaces an empty destination) — so the two
         # answers must not be spelled the same way.
-        return f"a directory whose contents could not be listed — {error}"
+        return f"a directory whose contents could not be listed — {display_token(error)}"
     total, shown = entry["entry_count"], entry["entries"] or []
     if not total:
         return "an empty directory"
@@ -705,13 +716,11 @@ def _session_list_line(entry) -> str:
     slug is refused by name, and there the row's own text is already the whole story because the name
     is the defect. An entry the partition could not *examine* is the other, and it is the one worth
     knowing about: `session_exists` probes `session.json` with the same unguarded `.exists()` this
-    file's own listing had to stop using in #80, so `verify` raises a bare `PermissionError` on the
-    very row this footer sent the reader to. Filed as **#97** rather than fixed alongside #80 — what
-    `verify` should *answer* there is a verdict-class decision (`unsound` and 1, or `unchecked` and
-    4), and `session_exists` has callers on the write path where answering `False` would be the worse
-    bug. Both are settled on that issue: `unchecked` and **4**, and `session_exists` raises
-    `SessionUnreadableError` rather than widening a bool that has two states for a question with
-    three.
+    file's own listing had to stop using in #80, so `verify` raised a bare `PermissionError` on the
+    very row this footer sent the reader to. **Fixed in #97**, one release after it was filed here:
+    `session_exists` raises `SessionUnreadableError` rather than widening a bool that has two states
+    for a question with three, and `verify` folds that into `unchecked` and exits **4** — the footer
+    now reaches a verb that says it could not look, which is what this line always promised.
     """
     if not entry.readable:
         return (f"  {display_token(entry.slug):<40} could not be read — "
@@ -982,12 +991,27 @@ def _cmd_session_verify(a, client) -> None:
     """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    if not store.session_exists(slug):
-        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
-    problems = check_session(slug)
-    cards = _card_health(slug)
+    # The probe itself is a third source of `unchecked` (#97). `session_exists` no longer escapes as a
+    # bare traceback when it cannot stat — it raises `SessionUnreadableError` — and letting that
+    # propagate would exit 1, which says *I checked and it is broken* about a session nothing looked
+    # at. That is the collapse #86 removed from this verb; it must not come back through a different
+    # door. Nothing below this line can run either: `check_session` and `_card_health` both read the
+    # directory this call could not stat.
+    session_probe: dict = {"checked": True, "error": None}
+    try:
+        found = store.session_exists(slug)
+    except SessionUnreadableError as e:
+        session_probe = {"checked": False, "error": str(e)}
+        found = True
+    else:
+        if not found:
+            raise SessionNotFoundError(f"no canonical session {display_token(slug)}",
+                                       details={"slug": slug})
+    problems = check_session(slug) if session_probe["checked"] else []
+    cards = _card_health(slug) if session_probe["checked"] else {"checked": False, "problem": None,
+                                                                 "error": session_probe["error"]}
     unsound = bool(problems) or cards["problem"] is not None
-    unchecked = not cards["checked"]
+    unchecked = not cards["checked"] or not session_probe["checked"]
     ok = not unsound and not unchecked
     # `exit_code`, not `code`: the rendering below already binds `code` to a card-problem *code*
     # string, and the collision reached the raise as `SystemExit('unknown_context_card')`, which
@@ -996,13 +1020,21 @@ def _cmd_session_verify(a, client) -> None:
     # test, not by this one, which is why the name rather than the number is the fix.
     exit_code = 1 if unsound else (EXIT_DEGRADED if unchecked else 0)
     if a.json:
-        _print_json({"slug": slug, "ok": ok, "problems": [p.to_dict() for p in problems],
-                     "context_cards": cards})
+        # `session` is additive and always present (#97). It is a sibling of `context_cards` and
+        # carries the same two keys for the same reason: a consumer reading `problems: []` has to be
+        # able to tell *checked, nothing wrong* from *nothing was checked*, and an empty list spells
+        # both. Branch on `session.checked`, never on the emptiness of `problems`.
+        _print_json({"slug": slug, "ok": ok, "session": session_probe,
+                     "problems": [p.to_dict() for p in problems], "context_cards": cards})
         if exit_code:
             raise SystemExit(exit_code)
         return
     if ok:
         print(f"✅ Session '{slug}' is internally consistent and its product context still loads.")
+    if not session_probe["checked"]:
+        print(f"🟡 Could not examine '{slug}': {display_token(session_probe['error'])}")
+        print("   Nothing about this session was checked — this is not a report that it is sound.")
+        raise SystemExit(exit_code)
     if problems:
         print(f"❌ Session '{slug}' has {len(problems)} problem(s):")
         for p in problems:
@@ -1090,6 +1122,31 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
     return store.validate_slug(slug)
 
 
+def _swap_in(extracted: Path, target: Path, slug: str) -> None:
+    """Replace an existing session directory with a freshly extracted one, reversibly.
+
+    A swap, not a delete-then-move. `rmtree` followed by a rename leaves nothing at all if the
+    rename fails — the archive is refused *and* the session the user already had is gone. The old
+    one steps aside first and only dies once the new one is in place; anything going wrong in
+    between puts it back.
+
+    **Only ever called for a session the caller has already been shown to own the right to replace**,
+    under `session_lock(slug)`, and never for a slug that was free at the guard — that arm claims by
+    rename instead, because a session that appeared during the extraction window has an owner who
+    never passed `--force` (#111)."""
+    backup = target.with_name(f".{target.name}.replaced-{os.getpid()}")
+    target.replace(backup)
+    try:
+        extracted.replace(target)
+    except OSError as e:
+        backup.replace(target)
+        raise ImportMoveFailedError(
+            f"could not move the imported session into place: {e}"
+            " — the session that was already here has been restored",
+            details={"slug": slug}) from e
+    shutil.rmtree(backup, ignore_errors=True)
+
+
 def _validate_extracted(d: Path, slug: str) -> None:
     """Confirm an extracted directory really is a *coherent* session before it is allowed in.
 
@@ -1129,9 +1186,16 @@ def _cmd_session_import(a, client) -> None:
         slug = _inspect_archive(z)
         # A conflict with the store's current state, not a malformed proposal: `session_exists`
         # exists for exactly this fact and answers 409 where `invalid_model` answered 400 (#101).
-        # It is a *check* rather than the atomic claim `create_session` makes — see the class
-        # docstring for the window that leaves open, which predates this and is not what #101 moved.
-        if store.session_exists(slug) and not a.force:
+        #
+        # **This answer is remembered, never asked twice** (#111). It used to be re-decided as
+        # `replaced = target.exists()` *after* the whole archive had been unzipped, and the two
+        # decisions disagreeing is a session created during that window being moved aside and then
+        # `rmtree`d — destroyed without `--force`, because at the moment the user would have been
+        # asked to force there was nothing to force past. That is invariant 9 ("a precondition is
+        # held across the writes it authorises") in the one verb that writes a whole session, and it
+        # is why the two arms below are two arms rather than one flag.
+        occupied = store.session_exists(slug)
+        if occupied and not a.force:
             raise SessionExistsError(
                 f"session '{slug}' already exists in this workspace — pass --force to replace it",
                 details={"slug": slug})
@@ -1144,25 +1208,30 @@ def _cmd_session_import(a, client) -> None:
             extracted = scratch / slug
             _validate_extracted(extracted, slug)
             target = store.canonical_dir(slug)
-            replaced = target.exists()
-            # Replacement is a swap, not a delete-then-move. `rmtree` followed by a rename leaves
-            # nothing at all if the rename fails — the archive is refused *and* the session the user
-            # already had is gone. The old one steps aside first and only dies once the new one is in
-            # place; anything going wrong in between puts it back.
-            backup = target.with_name(f".{target.name}.replaced-{os.getpid()}") if replaced else None
-            if backup is not None:
-                target.replace(backup)
-            try:
-                extracted.replace(target)
-            except OSError as e:
-                if backup is not None:
-                    backup.replace(target)
-                raise ImportMoveFailedError(
-                    f"could not move the imported session into place: {e}"
-                    + (" — the session that was already here has been restored" if backup else ""),
-                    details={"slug": slug}) from e
-            if backup is not None:
-                shutil.rmtree(backup, ignore_errors=True)
+            if not occupied:
+                # The slug was free when it was checked, so **the rename is the claim** and nothing
+                # steps aside — invariant 11's rule, and the only thing that makes the window above
+                # safe rather than merely narrow. `os.replace` refuses a non-empty destination
+                # directory, so a session that appeared while the archive was unzipping stops this
+                # import instead of being destroyed by it. The caller gets the refusal the guard
+                # would have given them, which is the answer they were entitled to either way.
+                try:
+                    extracted.replace(target)
+                except OSError as e:
+                    if store.session_exists(slug):
+                        raise SessionExistsError(
+                            f"session '{slug}' was created while this archive was being read — "
+                            "nothing was imported and nothing was replaced; pass --force to replace it",
+                            details={"slug": slug}) from e
+                    raise ImportMoveFailedError(
+                        f"could not move the imported session into place: {e}",
+                        details={"slug": slug}) from e
+            else:
+                # `--force` was given against a session that is really there, so the swap runs under
+                # that session's own lock: the check above and the four writes below are one unit,
+                # and no concurrent writer can be part-way through the directory being moved aside.
+                with store.session_lock(slug):
+                    _swap_in(extracted, target, slug)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1177,10 +1246,13 @@ def _cmd_session_import(a, client) -> None:
         # word and what the line below already prints. `into` carried the session *root*; renaming
         # the key over that value would give `path` two meanings across two verbs of one noun, which
         # is this defect back under the harmonised name and harder to see for it.
-        _print_json({"slug": slug, "path": str(target), "replaced": replaced})
+        # `replaced` keeps the meaning it always had — *did this import replace an existing session*
+        # — and is now the guard's own answer rather than a second observation taken after the
+        # extraction. Those two used to be able to disagree, and the disagreement was #111.
+        _print_json({"slug": slug, "path": str(target), "replaced": occupied})
         return
     print(f"Imported session '{slug}' → {store.canonical_dir(slug)}"
-          + (" (replaced an existing session)" if replaced else ""))
+          + (" (replaced an existing session)" if occupied else ""))
 
 
 # ── model ────────────────────────────────────────────────────────────────────────
