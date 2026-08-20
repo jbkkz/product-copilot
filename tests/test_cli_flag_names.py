@@ -21,6 +21,8 @@ import argparse
 import contextlib
 import io
 import json
+import re
+from pathlib import Path
 
 import anthropic
 import httpx
@@ -239,3 +241,63 @@ def test_the_context_verb_prints_the_same_cards_under_either_spelling():
     printed = run("--cards")
     assert printed.strip()                      # it really printed a card, not an empty selection
     assert printed == run("--context")
+
+
+# ── the `--json` perimeter (#102) ────────────────────────────────────────────
+#
+# `docs/compatibility.md` bounded this surface by naming six of fourteen outputs and justifying the
+# six as "what the Claude Code plugin drives". That was wrong in both directions by three entries
+# each, nothing tested it, and eight outputs sat in neither column — one of which #84 had already
+# made a breaking change to. The perimeter is now the whole set, which is what makes this guard
+# trivial: a subset would need the test to encode the boundary, and the boundary is what drifts.
+
+_PROMISE_SECTION = "## The `--json` outputs are public"
+
+
+def _json_verbs(parser: argparse.ArgumentParser, prefix: str = "") -> list[str]:
+    """Every verb path that accepts `--json`, read off the built parser.
+
+    From the parser and not from a grep of the source: a grep validates the reader's regex, and the
+    thing being promised is what the command actually accepts.
+    """
+    found = []
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, sub in action.choices.items():
+                path = f"{prefix} {name}".strip()
+                if any("--json" in (a.option_strings or []) for a in sub._actions):
+                    found.append(path)
+                found += _json_verbs(sub, path)
+    return found
+
+
+def test_every_json_verb_is_inside_the_promise():
+    """The page promises every `--json` output. This is what stops that being a sentence.
+
+    Both directions are checked. A new verb with `--json` and no row is the case #84 walked into —
+    a public output nobody promised, broken before anyone noticed there was no promise to break. A
+    row for a verb that no longer takes `--json` is the mirror: a promise about something that
+    cannot be observed, which reads as coverage this does not have.
+    """
+    verbs = sorted(_json_verbs(_build_parser()))
+    # must fire: the walk really found the surface. An empty list would make every assertion below
+    # vacuously true — `assert not []` is an all-clear nobody earned.
+    assert len(verbs) >= 10, f"the parser walk looks blind: {verbs}"
+    assert "doctor" in verbs and "session list" in verbs
+
+    page = Path(__file__).resolve().parents[1] / "docs" / "compatibility.md"
+    text = page.read_text(encoding="utf-8")
+    start = text.index(_PROMISE_SECTION)
+    section = text[start:text.index("\n## ", start + 1)]
+
+    named = set(re.findall(r"`requivo ([a-z]+(?: [a-z]+)?)`", section))
+
+    missing = sorted(v for v in verbs if v not in named)
+    assert not missing, (
+        "these verbs accept `--json` and are not named in the promise table, so their output is "
+        f"public by accident rather than by decision: {missing}")
+
+    # The other direction, and it is not symmetric hand-waving: a name in the table that the parser
+    # does not produce is a promise about an output that does not exist.
+    stale = sorted(n for n in named if n not in verbs)
+    assert not stale, f"the promise table names verbs that do not take `--json`: {stale}"

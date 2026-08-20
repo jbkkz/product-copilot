@@ -73,12 +73,40 @@ the user never typed. An older `schema_version` keeps loading.
 
 ## The `--json` outputs are public
 
-`requivo status --json`, `model apply --json`, `model diff --json`, `artifact list --json`, `session
-list --json`, `doctor --json` and the structured error envelope (`{code, message, path?, details?}`)
-are what the Claude Code plugin drives. They follow the same rule as the session format: fields get
+**Every `--json` output is public — all fourteen of them, and the structured error envelope
+(`{code, message, path?, details?}`).** They follow the same rule as the session format: fields get
 added, populated fields do not change meaning without a note in the changelog.
 
+| | | |
+|---|---|---|
+| `requivo status` | `requivo session show` | `requivo model validate` |
+| `requivo doctor` | `requivo session verify` | `requivo model apply` |
+| `requivo session init` | `requivo session export` | `requivo model diff` |
+| `requivo session list` | `requivo session import` | `requivo artifact save` |
+| `requivo session migrate` | | `requivo artifact list` |
+
+Written out in full rather than abbreviated, because the guard below compares this table against the
+parser literally, and an abbreviation is a fragment a test can match by accident.
+
 Error `code` values are stable identifiers — assert on the code, never on the message text.
+
+**This used to name six of the fourteen, and justify the six as "what the Claude Code plugin
+drives".** That sentence was wrong in both directions, by three entries each: the plugin drives
+`session init`, `model validate` and `artifact save`, which were not listed, and does not drive
+`model diff`, `artifact list` or `session list`, which were. Eight outputs were in neither column —
+and #84 made a breaking change to one of them before anyone noticed there was no promise to break.
+
+So the perimeter is now the whole set rather than a subset, for a reason worth stating because it is
+the reason a subset keeps failing: **a subset needs a boundary somebody can check, and the only one
+this page ever offered was a claim about another artifact's current contents.** Nothing tested it, it
+was false when written, and it would have gone on being false every time the plugin changed.
+`test_every_json_verb_is_inside_the_promise` is the guard, and it can only be trivial because the
+answer is *all of them* — a subset would need the guard to encode the boundary, and the boundary is
+what drifts.
+
+The promise is additive, not a freeze: nothing here says an output may never gain a field. What it
+says is that a populated field will not quietly change meaning, and that a change of shape is
+announced. That is cheap to keep for fourteen outputs and was never the expensive half.
 
 **A code carries one fact, and one `details` shape.** That is what makes the advice above safe to
 follow: matching a code and then reading a key out of `details` has to work for every payload
@@ -152,6 +180,35 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   previously produced `readable: false` with `total: null` for the **whole root**, which was broader
   than what had failed. A consumer branching on `sessions.readable` sees `true` where it used to see
   `false`, on a workspace where one entry is unexaminable and the root itself is fine.
+
+- **`session list --json` is an object, not an array** (#87). **Breaking**, and the one change on this
+  page that a parser cannot survive: the payload was a bare array of rows and is now
+  `{"sessions": [...], "degraded": <int>, "session_root": "<path>"}`. The rows are unchanged — the
+  same key set, in the same order — so the migration is one level of indirection:
+  `jq '.sessions[]'` where you had `jq '.[]'`.
+
+  It was the only array among the fourteen `--json` payloads, and an array has no top level, so no
+  field could ever be added to it. `degraded` recovers no fact — every row already carries `readable`
+  and `error`, so the count was always derivable — what it buys is that **exit 4 is readable on
+  stdout** rather than only signalled. `session_root` is new and is the absolute path the listing was
+  taken from.
+
+- **`session import --json` renames two keys** (#84). **Breaking.** It answered
+  `{"imported": ..., "into": ...}` where every sibling verb answers `slug` and `path`; it now answers
+  `{"slug": ..., "path": ..., "replaced": ...}`. A consumer looping over the session verbs and
+  reading `row["slug"]` got a `KeyError` from the one that imported it.
+
+  **`path` is not `into` renamed.** `into` was the sessions *root*; `path` is the session directory,
+  which is what `session init --json`'s `path` already means. Keeping the old value under the agreed
+  name would have preserved the defect — one key, two meanings — and made it harder to see, because
+  the spelling would finally match.
+
+- **`doctor --json` spells one enum value differently** (#88). **Breaking.**
+  `output.streams[].state` answers `will_crash` where it answered `will-crash`; `safe`, `lossy` and
+  `unknown` are unchanged. It was the only hyphenated value in any `--json` payload — every other
+  enum here is one word or underscore-joined — so a consumer mapping a state onto an identifier had
+  exactly one value to special-case. Shipped hyphenated in 0.11.0 and corrected in the release after,
+  which is why this is a break rather than a tidy-up.
 
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
