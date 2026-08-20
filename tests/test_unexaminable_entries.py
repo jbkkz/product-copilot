@@ -467,9 +467,18 @@ def test_no_error_string_reaches_a_printed_line_unwrapped():
     somebody adds later, and no runtime assertion can see a line nobody wrote yet. The same argument
     `tests/test_encoding.py` makes for its own walk.
 
-    It matches `['error']` and `["error"]` reads inside an f-string, which is the shape every one of
-    the six had. A value renamed out of that spelling escapes this guard — stated so the next person
-    knows what it does not cover rather than trusting it further than it goes."""
+    **The reach is the whole point, so it is stated exactly.** The first version of this guard matched
+    `{x['error']}` — a subscript read — and claimed that was "the shape every one of the six had". It
+    was the shape of four. `_non_session_detail` binds `error` to a bare local and interpolates
+    `{error}`, and the degraded-listing site wraps an `or` expression; both slipped through a guard
+    whose docstring said they were covered. A guard that reads broader than it is, is worse than
+    none — so this now matches any interpolation whose expression mentions `error`, and excludes the
+    ones already inside a `display_token(` call.
+
+    What it still does not cover, named rather than left to be discovered: a value that does not have
+    `error` in its expression, and any file other than `deterministic.py`. `cli.py:581` prints a whole
+    `RequivoError` to stderr and is deliberately out of scope — that text is guarded at the
+    interpretation site by `normalize_tokens`, which is where invariant 14 says the guard belongs."""
     src = (Path(__file__).resolve().parents[1] / "src" / "requivo" / "deterministic.py").read_text(
         encoding="utf-8")
     unwrapped = []
@@ -477,8 +486,30 @@ def test_no_error_string_reaches_a_printed_line_unwrapped():
         stripped = line.strip()
         if stripped.startswith("#") or "f\"" not in line and "f'" not in line:
             continue
-        for m in re.finditer(r"\{([A-Za-z_][\w\[\]'\"]*)\[['\"]error['\"]\]\}", line):
+        for m in re.finditer(r"\{([^{}]*\berror\b[^{}]*)\}", line):
+            if "display_token(" in m.group(1):
+                continue
             unwrapped.append(f"{lineno}: {m.group(0)}  |  {stripped[:90]}")
     assert not unwrapped, (
         "an error string is interpolated into a printed line without display_token:\n  "
         + "\n  ".join(unwrapped))
+
+
+def test_that_guard_really_fires(tmp_path):
+    """The positive control the guard above shipped without, which is this class's own tell.
+
+    A guard asserting `not []` over a scan that found nothing is an all-clear nobody earned — the
+    same argument `tests/test_boundaries.py` makes about an empty scan set. So both spellings that
+    escaped the first version are fed to the matcher here, and the wrapped forms beside them must
+    not fire."""
+    pattern = re.compile(r"\{([^{}]*\berror\b[^{}]*)\}")
+
+    def fires(line: str) -> bool:
+        return any("display_token(" not in m.group(1) for m in pattern.finditer(line))
+
+    assert fires("""    print(f"x {c['error']}")"""), "the subscript spelling"
+    assert fires('    print(f"x {error}")'), "the bare-local spelling, which v1 of this guard missed"
+    assert fires("""    print(f"x {entry['error'] or _NO_DETAIL}")"""), "the or-expression spelling"
+    assert not fires("""    print(f"x {display_token(c['error'])}")""")
+    assert not fires("""    print(f"x {display_token(entry['error'] or _NO_DETAIL)}")""")
+    assert not fires('    print(f"x {slug}")'), "an unrelated interpolation must stay quiet"
