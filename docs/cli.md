@@ -130,6 +130,35 @@ the offending value in escaped form, on one line. Two consequences worth knowing
 there; it renders each through the same one-line rule instead. A name that was already safe is
 printed byte-for-byte, so ordinary output is unchanged.
 
+That rule now covers **every string `session show` prints**, not just the card names (#70). The card
+selection was the field #40 happened to be about; `slug`, `session_id`, `created_at`,
+`updated_at`, `provider`, `model_name`, and each artifact's type and filename are read back out of
+the same file and were reaching the terminal bare. `session list` was fixed for three of them in #62
+and this is the same defect in the other verb — with a sharper edge, because every line `session
+show` prints is one Requivo writes itself at a fixed column, so a forged `  revision 0` under a
+session that is at revision 12 is indistinguishable from the real thing. `current_revision`, an
+artifact's `revision` and its `stale` flag need nothing: they are typed `int` and `bool`, so
+`read_meta` refuses a string there before the render runs.
+
+`artifact list` prints two of the same fields — the `artifact_status` key and the `filename` — and
+is escaped alongside it. Found by sweeping the class rather than the instance: escaping a stored
+value in one of the two verbs that render it leaves the rule meaning *wherever somebody looked*.
+
+`--json` is unaffected on all three verbs, and the reason is narrower than it looks. JSON's grammar
+forbids a literal control character below `U+0020` inside a string, so a newline is escaped
+regardless of any encoder option. `json.dumps`' `ensure_ascii=True` default is what covers the rest
+of the guarded range, `U+007F`–`U+009F` — `NEL`, a line terminator, and `CSI`, an escape introducer.
+Both halves are pinned by test, because a test probing only with a newline would be green with that
+default turned off.
+
+**What the terminal rule does not cover**, stated because the two are easy to assume identical. The
+one-line rule guards C0, DEL and C1 — the class that can move a terminal's cursor or end its line.
+`str.splitlines()` breaks on a wider set, including `U+2028` and `U+2029`, which are returned
+unchanged. On a terminal that is right: xterm and the VT sequences behind it answer to CR and LF, not
+to Unicode `Zl`/`Zp`. It matters if you parse this human-readable output line by line — don't; that
+is what `--json` is for, and `--json` escapes those two as well, which makes it the stricter of the
+two paths.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty

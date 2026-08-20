@@ -141,6 +141,41 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   byte-for-byte, so no session Requivo itself wrote is affected — such a value can only have arrived
   by import or by hand. `--json` is unchanged and was never affected: `json.dumps` escapes it.
 
+- **`session show`'s terminal output escapes the same way, in eight fields** (#70). The identical
+  defect, in the other verb. #62 found it while fixing the listing and reported it rather than riding
+  it in on that diff, which is why the two land as separate changes. `slug`, `session_id`, `created_at`,
+  `updated_at`, `provider`, `model_name`, each key of `artifact_status` and each artifact's
+  `filename` are all bare strings in `session.json`'s body, and all eight reached the terminal
+  unescaped. `current_revision`, an artifact's `revision` and its `stale` flag are untouched and need
+  nothing — `read_meta` refuses a string in an `int` or a `bool` before the render runs.
+
+  It is **eight** rather than the five the issue names: #62 listed the five that are `SessionMeta`
+  scalars, which left out `slug` and the two fields that live on `ArtifactStatus` and its dict key.
+  Recorded here because a count in a compatibility note is the thing a later reader checks their own
+  work against.
+
+  **`artifact list` renders two of the same fields and is fixed alongside it** (#70). It prints the
+  `artifact_status` key and the `filename` at the same fixed column, off the same file, through
+  `ArtifactService.list`. It is outside the issue's own footprint and is named here for that reason:
+  fixing one verb's copy of a two-field render turns the rule from *a persisted value is escaped
+  where it is shown* into *it is escaped where somebody looked*.
+
+  Same rule as above, so the same guarantees: a value that is already one safe line comes back
+  byte-for-byte and no session Requivo itself wrote changes, and `--json` is unaffected on all three
+  verbs.
+
+  **The reason `--json` is unaffected is narrower than #62 stated it**, and is corrected here rather
+  than left standing. `_session_list_line`'s docstring, and #70's own issue text, both said
+  `json.dumps` defaults to `ensure_ascii=True` and therefore escapes a control character — the bullet
+  above says only that `json.dumps` escapes it, which is true and is why it needs no correction of its
+  own. Measured, the flag is not
+  what protects a newline: JSON's grammar forbids a literal control character below `U+0020` inside a
+  string, so `\n` is escaped whether the flag is on or off. What the flag decides is the *non-ASCII*
+  half of the guarded range, `U+007F`–`U+009F` — which carries `NEL` (`U+0085`), a line terminator
+  `str.splitlines()` and some terminals honour, and `CSI` (`U+009B`), an escape introducer. So the
+  default **is** load-bearing, for a different set of characters than was written down, and a test
+  now probes both halves; one probing only with a newline is green either way and pins nothing.
+
 - **`artifact save` without `--revision` is refused, and carries `unstated_source_revision`** (#6,
   #57). It used to succeed, filling the omission in with the session's current revision and recording
   `stale: false` — an answer that could not come out any other way, about a revision the caller never
