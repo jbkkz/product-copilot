@@ -363,7 +363,7 @@ def _cmd_doctor(a, client) -> None:
     # is something to say: on a UTF-8 terminal — every developer's, which is why this shipped — the
     # answer is uninteresting and a clean report should not grow a row per non-finding.
     for stream in r["output"]["streams"]:
-        if stream["state"] == "will-crash":
+        if stream["state"] == "will_crash":
             print(f"  ❌ {stream['stream']:<15} {stream['detail']}")
             print("     └─ Requivo could not configure this stream; set PYTHONIOENCODING=utf-8.")
         elif stream["state"] == "lossy":
