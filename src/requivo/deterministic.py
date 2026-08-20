@@ -1130,10 +1130,13 @@ def _swap_in(extracted: Path, target: Path, slug: str) -> None:
     one steps aside first and only dies once the new one is in place; anything going wrong in
     between puts it back.
 
-    **Only ever called for a session the caller has already been shown to own the right to replace**,
-    under `session_lock(slug)`, and never for a slug that was free at the guard — that arm claims by
-    rename instead, because a session that appeared during the extraction window has an owner who
-    never passed `--force` (#111)."""
+    **Only ever called for a session the caller passed `--force` for**, and never for a slug that was
+    free at the guard — that arm claims by rename instead, because a session that appeared during the
+    extraction window has an owner who never asked for it to be replaced (#111).
+
+    It does not run under `session_lock`, and cannot: the lock is an open handle on `.lock` inside
+    the very directory being renamed, which Windows refuses. See the call site for what that costs
+    and what it does not."""
     backup = target.with_name(f".{target.name}.replaced-{os.getpid()}")
     target.replace(backup)
     try:
@@ -1227,11 +1230,22 @@ def _cmd_session_import(a, client) -> None:
                         f"could not move the imported session into place: {e}",
                         details={"slug": slug}) from e
             else:
-                # `--force` was given against a session that is really there, so the swap runs under
-                # that session's own lock: the check above and the four writes below are one unit,
-                # and no concurrent writer can be part-way through the directory being moved aside.
-                with store.session_lock(slug):
-                    _swap_in(extracted, target, slug)
+                # `--force` was given against a session that is really there.
+                #
+                # **This swap deliberately does not hold `session_lock`, and the reason is
+                # structural rather than a preference.** The lock is an open handle on `.lock`
+                # *inside* the session directory, and Windows refuses to rename a directory that
+                # contains an open handle — `os.replace` returns `WinError 5`, on all four legs,
+                # every time. Taking the lock here does not serialise the swap; it makes the swap
+                # impossible on half the supported platforms. Holding it somewhere else instead
+                # would be a lock no other writer takes, which serialises nothing.
+                #
+                # So what closes #111 is the arm above and the single decision it rests on, not a
+                # lock. The residue is narrow and is what `--force` already means: a concurrent
+                # writer part-way through this session loses that work, because the caller asked for
+                # the session to be replaced. What is no longer possible is losing a session the
+                # caller was never asked about.
+                _swap_in(extracted, target, slug)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
