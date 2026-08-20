@@ -368,7 +368,7 @@ consumers to *assert on the code, never on the message text*, and then promised 
 only handle separating them was the one handle this page forbids.
 
 `InvalidSessionError` is now a **family that nothing raises directly**, so `except InvalidSessionError`
-is unaffected and no caller has to enumerate nine names. Each arm carries its own code, its own
+is unaffected and no caller has to enumerate ten names. Each arm carries its own code, its own
 `details` shape, and its own HTTP status:
 
 | Code | Condition | `details` | Status |
@@ -381,9 +381,10 @@ is unaffected and no caller has to enumerate nine names. Each arm carries its ow
 | `unreadable_source_revision` | the stated source revision cannot be read | the same five keys | 500 |
 | `inconsistent_archive` | an imported archive fails the integrity check | `{slug, problems}` | 400 |
 | `unreadable_archive` | the file is not a readable `.zip` | `{archive}` | 400 |
+| `invalid_archive` | an imported archive opens but is not shaped like an export | `{problem, …}` | 400 |
 | `import_move_failed` | the validated session could not be moved into place | `{slug}` | 500 |
 
-**The arms deliberately do not share a `details` shape.** Padding nine payloads to one key set would
+**The arms deliberately do not share a `details` shape.** Padding ten payloads to one key set would
 answer the `KeyError` by stating facts nobody measured: three of them identify no session at all,
 because none has been identified yet when a zip will not open, and a `slug: null` there is the
 plausible-wrong-answer form of the bug the split removes. Branch on the code, then read the shape
@@ -399,8 +400,8 @@ about the store.
 
 A client that branched on 4xx should now expect **409** for the two version frontiers and **500** for
 the four store-state arms (`session_unreadable`, `artifact_revision_out_of_range`,
-`unreadable_source_revision`, `import_move_failed`). Three conditions keep 400 and are the ones that
-really are about the request: the two archive arms, because the caller did hand us the archive, and
+`unreadable_source_revision`, `import_move_failed`). Four conditions keep 400 and are the ones that
+really are about the request: the three archive arms, because the caller did hand us the archive, and
 `unstated_source_revision`, which never moved. The family base keeps a row at **500** — nothing raises
 it, but a nominal number is still one a reader sees, and 400 was the wrong one to leave there.
 
@@ -520,6 +521,42 @@ as *"generated views (PRD, assessment, …)"* without naming the files.
 Note that the type and the filename deliberately differ for `brief`, which is stored as
 `solution-assessment.md`. The type is the stable identifier; the filename is stable too, and they are
 two facts rather than one spelling.
+
+### The import path names the archive, not the model (#101)
+
+`session import` refused **eight** conditions under `invalid_model` — documented as *"a proposed model
+is structurally or semantically invalid"*, and answering 400. None of them is about a model.
+
+| Condition | Was | Now | Status |
+|---|---|---|---|
+| the archive contains no files | `invalid_model` | `invalid_archive` (`problem: empty`) | 400 |
+| more files than `MAX_ARCHIVE_FILES` | `invalid_model` | `invalid_archive` (`problem: too_many_files`) | 400 |
+| expands past `MAX_ARCHIVE_BYTES` | `invalid_model` | `invalid_archive` (`problem: too_large`) | 400 |
+| an entry with a Windows separator | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
+| an entry that is absolute or has a `.`/`..` segment | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
+| an entry not inside a session directory | `invalid_model` | `invalid_archive` (`problem: entry_outside_session_directory`) | 400 |
+| more than one session directory | `invalid_model` | `invalid_archive` (`problem: multiple_sessions`) | 400 |
+| the slug is taken and `--force` was not passed | `invalid_model` | `session_exists` | **400 → 409** |
+
+**One code for the seven, and what that code owes.** They share a remedy — *give me a different
+archive* — and the rule stated in the section above refuses a candidate code that sends a reader where
+an existing one already sends them. What a single code owes in exchange is exactly the thing #82 was
+about: `details["problem"]` is present on **every** `invalid_archive` arm, with a closed vocabulary —
+`empty`, `too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory`,
+`multiple_sessions`. Each arm then adds only the numbers its own sentence quotes (`{files, max_files}`,
+`{bytes, max_bytes}`, `{entry}`, `{slugs}`). Seven conditions under one code with varying keys would
+have rebuilt the `KeyError` that #82 removed.
+
+**Only one status moves.** `session_exists` was already in the vocabulary, already 409, already
+documented for exactly this fact — *"a session already occupies that slug"*. The seven archive arms
+stay 400, because the caller did hand us the archive.
+
+**One behavioural note, not a code change.** In `create_session` and `migrate_legacy`,
+`SessionExistsError` is the *atomic claim* on a slug — the rename either wins it or raises. In
+`session import` it is a **check**, with the TOCTOU window a check implies: a session created between
+the check and the move is refused by the move instead. That window predates this change and is
+unchanged by it; it is written down here because the same code now reaches a reader from two places
+that mean subtly different things by it.
 
 ### CLI exit codes — **stable**, under the same rule as an error code
 
