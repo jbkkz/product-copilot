@@ -1151,7 +1151,12 @@ def register(sub) -> None:
 
     cx = sub.add_parser("context", help="list or print the product context cards")
     cx.add_argument("--list", action="store_true", help="list available card stems instead of content")
-    cx.add_argument("--cards", metavar="CARDS", help="comma-separated subset to print (default: all)")
+    # `--context` is the documented primary spelling of this selector across the CLI (#85) and
+    # `--cards` is a permanent alias. Here the dest stays `cards` — the option strings are what the
+    # user types, the dest is what `_cmd_context` already reads, and moving it would be a rename
+    # dressed up as an alias.
+    cx.add_argument("--context", "--cards", metavar="CARDS", dest="cards",
+                    help="comma-separated subset to print (default: all). Alias: --cards.")
     cx.add_argument("--session", metavar="SESSION",
                     help="print exactly the cards this session was created with")
     cx.set_defaults(func=_cmd_context)
@@ -1163,7 +1168,8 @@ def register(sub) -> None:
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
     si.add_argument("request", help="the request, a path to a file containing it, or '-' for stdin")
     si.add_argument("--slug", help="explicit session slug (default: derived from the request)")
-    si.add_argument("--context", metavar="CARDS", help="comma-separated context cards to record")
+    si.add_argument("--context", "--cards", metavar="CARDS", dest="context",
+                    help="comma-separated context cards to record. Alias: --cards.")
     si.add_argument("--provider", default=None, help="informational provider tag (e.g. claude-code)")
     si.add_argument("--json", action="store_true")
     si.set_defaults(func=_cmd_session_init)

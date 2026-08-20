@@ -35,7 +35,7 @@ in `out/leave-approval/` (it doesn't overwrite the files you're reading here):
 requivo brief    examples/leave-approval/model.json                          # the decision brief
 requivo prd      examples/leave-approval/model.json                          # the PRD
 requivo criteria examples/leave-approval/model.json                          # the acceptance criteria
-requivo epic     examples/leave-approval/model.json --json --github --gitlab # epic.md + neutral export + tracker plans
+requivo epic     examples/leave-approval/model.json --export-json --github --gitlab # epic.md + neutral export + tracker plans
 requivo release  examples/leave-approval/model.json v1.0                     # the release notes
 requivo stories  examples/leave-approval/model.json                          # user stories (also: requivo estimate)
 ```

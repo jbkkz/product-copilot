@@ -935,7 +935,8 @@ def test_pc_criteria_writes_artifact():
 
 def test_pc_epic_writes_all_views():
     with _model_in_out("clitest-epic") as p:
-        _run_app(["epic", str(p), "--json", "--github", "--gitlab"], client=FakeClient(json.dumps(_EPIC)))
+        _run_app(["epic", str(p), "--export-json", "--github", "--gitlab"],
+                 client=FakeClient(json.dumps(_EPIC)))
         for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
             assert (p.parent / "artifacts" / name).exists()
 

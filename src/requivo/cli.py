@@ -421,7 +421,7 @@ def _cmd_epic(a, client) -> None:
     epic = result.artifact
     print(epic_markdown(epic))
     _wrote(slug, result, "epic")
-    if a.json:
+    if a.export_json:
         print(f"Wrote neutral epic export → {store.write_artifact_file(slug, 'epic.json', epic_export_json(epic))}")
     if a.github:
         print(f"Wrote GitHub issue-creation plan → "
@@ -490,10 +490,14 @@ def _build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("discover", help="analyse a request (a string or a file path) and start a session")
     d.add_argument("request", help="the client request, or a path to a file containing it")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
-    d.add_argument("--context", metavar="CARDS",
+    # `--cards` is a permanent alias of `--context` (#85): the same selector was spelled two ways
+    # across three verbs. One action with two option strings, never two arguments — two arguments
+    # would let whichever came last on the command line silently discard the other. `--context` is
+    # the documented primary and owns the dest, so no handler moved.
+    d.add_argument("--context", "--cards", metavar="CARDS", dest="context",
                    help="comma-separated context cards to load instead of all "
                         "(e.g. b2b-platform,financial-reporting); sharpens discovery by dropping "
-                        "irrelevant cards. Applies to this discovery only.")
+                        "irrelevant cards. Applies to this discovery only. Alias: --cards.")
     d.set_defaults(func=_cmd_discover)
 
     demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
@@ -530,7 +534,16 @@ def _build_parser() -> argparse.ArgumentParser:
     model_cmd("criteria", "generate Given/When/Then acceptance criteria", _cmd_criteria)
 
     def epic_flags(sp):
-        sp.add_argument("--json", action="store_true", help="also write the neutral epic.json export")
+        # Three sibling flags of one kind: each writes an export file. `--export-json` was spelled
+        # `--json` until #83, where it was the odd one out twice over — on every other verb `--json`
+        # means "emit the payload on stdout", and `app()` reads `getattr(args, "json", False)`
+        # generically to switch failures to a structured envelope. So the flag that documented
+        # itself as writing a file also, silently, changed how failures were reported, while
+        # `--github` and `--gitlab` did not. With no `json` dest on this verb that getattr falls
+        # through to False and all three report a failure the same way. Do NOT add a stdout
+        # `--json` here: it would restore the divergence under a new name.
+        sp.add_argument("--export-json", action="store_true",
+                        help="also write the neutral epic.json export")
         sp.add_argument("--github", action="store_true", help="also write a GitHub issue-creation plan")
         sp.add_argument("--gitlab", action="store_true", help="also write a GitLab issue-creation plan")
 
