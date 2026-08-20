@@ -159,7 +159,7 @@ def describe_stream(stream, name: str) -> dict:
         reader cannot tell a substituted character from one that was never there, which is the
         failure this module's docstring rejects, and `doctor` reporting it as clean would be this
         project endorsing it;
-      - `will-crash` — a strict handler, so a character it cannot encode kills the process at the
+      - `will_crash` — a strict handler, so a character it cannot encode kills the process at the
         print, after the work that print was reporting has landed (the #29 shape);
       - `unknown` — the stream does not expose a codec at all, so this cannot answer and must not
         pretend to.
@@ -179,7 +179,7 @@ def describe_stream(stream, name: str) -> dict:
                       f"blanked with no mark, so a reader cannot tell it from one that was never there",
         }
     return {
-        "stream": name, "state": "will-crash", "encoding": encoding, "errors": errors,
+        "stream": name, "state": "will_crash", "encoding": encoding, "errors": errors,
         "detail": f"{encoding} with errors={errors!r}: a character it cannot encode raises "
                   f"UnicodeEncodeError and kills the process at the print",
     }

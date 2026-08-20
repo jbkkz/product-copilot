@@ -62,6 +62,7 @@ import ast
 import contextlib
 import io
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -707,14 +708,14 @@ def _wrapper(encoding: str, errors: str):
 
 
 def test_describe_stream_separates_safe_from_will_crash_from_unknown():
-    """Three answers, not two. `will-crash` and `unknown` are different findings with different
+    """Three answers, not two. `will_crash` and `unknown` are different findings with different
     remedies, and both differ from `safe` — a check that returned the same value for *I looked and it
     is fine* and *I could not look* would put an absence into `doctor`'s own report."""
     safe = streams.describe_stream(_wrapper("ascii", "backslashreplace"), "stdout")
     assert safe["state"] == "safe" and safe["detail"] is None
 
     crashy = streams.describe_stream(_wrapper("ascii", "strict"), "stdout")
-    assert crashy["state"] == "will-crash"
+    assert crashy["state"] == "will_crash"
     assert "UnicodeEncodeError" in crashy["detail"], crashy
 
     blind = streams.describe_stream(io.BytesIO(), "stdout")  # no .encoding at all
@@ -722,6 +723,24 @@ def test_describe_stream_separates_safe_from_will_crash_from_unknown():
     assert "cannot look" in blind["detail"], blind
 
     assert streams.describe_stream(None, "stdout")["state"] == "unknown"
+
+
+def test_the_published_stream_states_are_all_underscore_spelled():
+    """`output.streams[].state` is a published `--json` enum, and every other enum in a `--json`
+    payload — `context.status`, `NonSessionEntry.kind`, `UpdateResult.status` — is one word or
+    underscore-joined. `will-crash` was the one hyphen, and a consumer that splits on `-` or maps a
+    state onto an identifier had one value it had to special-case (#88). This drives all four arms,
+    which is also the first coverage `lossy` has had: a state produced only by an environment no
+    test reaches is a state nobody has checked."""
+    observed = {
+        streams.describe_stream(_wrapper("ascii", "backslashreplace"), "stdout")["state"],
+        streams.describe_stream(_wrapper("ascii", "replace"), "stdout")["state"],
+        streams.describe_stream(_wrapper("ascii", "ignore"), "stdout")["state"],
+        streams.describe_stream(_wrapper("ascii", "strict"), "stdout")["state"],
+        streams.describe_stream(io.BytesIO(), "stdout")["state"],
+    }
+    assert observed == {"safe", "lossy", "will_crash", "unknown"}, observed
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", s) for s in observed), observed
 
 
 def test_configure_stream_reports_a_stream_it_could_not_reach():
@@ -798,7 +817,7 @@ def test_configure_streams_reports_a_stream_it_could_not_fix(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stream)
     report = {r["stream"]: r for r in streams.configure_streams()}["stdout"]
     assert report["state"] == "could-not", report
-    assert streams.describe_stream(stream, "stdout")["state"] == "will-crash"
+    assert streams.describe_stream(stream, "stdout")["state"] == "will_crash"
     with pytest.raises(UnicodeEncodeError):
         stream.write(_CHECK_MARK)          # the failure is the encoder's, not the test's
 
