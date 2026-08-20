@@ -692,9 +692,12 @@ def _session_list_line(entry) -> str:
     is the defect. An entry the partition could not *examine* is the other, and it is the one worth
     knowing about: `session_exists` probes `session.json` with the same unguarded `.exists()` this
     file's own listing had to stop using in #80, so `verify` raises a bare `PermissionError` on the
-    very row this footer sent the reader to. Filed rather than fixed alongside #80 — what `verify`
-    should *answer* there is a verdict-class decision (`unsound` and 1, or `unchecked` and 4), and
-    `session_exists` has callers on the write path where answering `False` would be the worse bug.
+    very row this footer sent the reader to. Filed as **#97** rather than fixed alongside #80 — what
+    `verify` should *answer* there is a verdict-class decision (`unsound` and 1, or `unchecked` and
+    4), and `session_exists` has callers on the write path where answering `False` would be the worse
+    bug. Both are settled on that issue: `unchecked` and **4**, and `session_exists` raises
+    `SessionUnreadableError` rather than widening a bool that has two states for a question with
+    three.
     """
     if not entry.readable:
         return (f"  {display_token(entry.slug):<40} could not be read — "
