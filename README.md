@@ -172,9 +172,11 @@ refused by name rather than silently decoded into something that reads like pros
 
 ## Status
 
-Actively developed, pre-1.0. The Core, CLI, Claude Code plugin and local Web interface are usable
-today. The **session format is a published contract** — versioned, forward-compatible, and shared by
-every interface; what is guaranteed and what is deprecated is written down in
+Actively developed, and stable at the interface. The Core, CLI, Claude Code plugin and local Web
+interface are usable today. **1.0 is a promise about the interface, not a claim that the product is
+finished**: from 1.0.0 onward a breaking change to the session format, the `--json` outputs, the
+error-code vocabulary or the CLI surface costs a major version and is announced before it lands. What
+is covered, what is deliberately *not*, and what is deprecated are all written down in
 [compatibility](docs/compatibility.md). Output is non-deterministic — treat the assessment as a senior
 colleague's read, not an oracle, and get expert review for any legal/tax/compliance flag it raises.
 See the [roadmap](docs/roadmap.md).

@@ -2,8 +2,49 @@
 
 > What Requivo promises not to break, what it may change, and what is on the way out.
 
-Requivo is pre-1.0 and versioned with [SemVer](https://semver.org/). Until 1.0, minor versions may
-change interfaces — but not silently, and not the session format. This page is the specific list.
+Requivo is versioned with [SemVer](https://semver.org/). This page is the specific list of what that
+covers.
+
+## What 1.0 means, and what it does not
+
+**1.0 is a statement about the interface, not about the code.** It does not claim the product is
+finished, mature, or feature-complete. It says one thing:
+
+> From 1.0.0 onward, a breaking change to the public surface costs a **major** version, and is
+> announced here and in the changelog before it lands.
+
+That is a *weaker* promise than the ones already on this page — "nothing is removed in a patch",
+"anything deprecated keeps working for at least one minor version and names its replacement" — which
+Requivo held throughout 0.x and continues to hold. Nothing on this page gets looser at 1.0. What
+changes is the price of breaking it.
+
+**The public surface is exactly four things**, each with its own section below:
+
+| Surface | What is promised |
+|---|---|
+| The session format (`.requivo/sessions/`, `format_version` 1) | layout, forward and backward compatibility, an explicit migration frontier |
+| `--json` outputs | key sets, and `null` meaning *could not read* rather than a value |
+| The error-code vocabulary | one code, one fact, one `details` shape |
+| CLI verbs, flags and exit codes | spelling, meaning, and a help text that describes what happens |
+
+**Everything else is not covered, and the boundary is the point.** A promise that absorbs everything
+is one nobody can keep, so [What is explicitly *not* stable](#what-is-explicitly-not-stable) is as
+load-bearing as this section: Python internals (`requivo.core`, `requivo.services`,
+`requivo.providers` are importable and documented, and are the engine's own structure, not an API),
+prompt and context-card content, and terminal output layout. Those are tuned continuously and a
+consumer that depends on them is deliberately tracking the repo.
+
+**What a 2.0 would have to contain.** Renaming or repurposing a populated session field beyond what
+`migrate_session()` can carry; moving a condition from one error code to another; removing a CLI verb
+or flag, or changing what one already means; changing an exit code's meaning; removing a `--json` key
+or changing its type. Adding to any of those is not breaking and does not wait for a major — the
+whole design of the four contracts above is that they grow additively.
+
+**1.0 arrived after the interface stopped moving, not after the features did.** The error-code
+vocabulary moved twice in the release that carries this note — `cross_site_request` split into six
+codes, and the `artifact save` refusal took a code of its own — and both were deliberate cleanups
+taken *before* the freeze precisely because they cost nothing here and a major version afterwards.
+That is what a 1.0 release is for.
 
 ## The session format is public
 
