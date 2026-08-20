@@ -1612,6 +1612,48 @@ def test_cache_breakpoint_rides_a_reused_prefix_and_not_a_single_call():
     assert "cache_control" not in _system_block(fake, 1)                     # must not fire
 
 
+def test_the_provider_seam_is_single_call_on_both_analyze_branches():
+    """#58: `AnthropicProvider.analyze` is one call per service operation, so it must not write a
+    cache entry nothing reads — on *either* branch.
+
+    Driven through the real object rather than by reading a signature, because the defect this
+    replaces was a function that took `reuse_system` and dropped it on the floor: `analyze` could
+    declare False, pass nothing down, and inherit `run()`'s True. Both branches are exercised, since
+    the first fix of this shape reached one of them and the other kept paying.
+
+    The control is in the same fixture and it is the point: `run()` called directly — which is what
+    `converse()` and the golden harness do — must still carry the directive. A change that strips
+    the breakpoint everywhere fails here rather than looking like this fix."""
+    from requivo.providers.anthropic import AnthropicProvider
+
+    model = out({"problem": slot(80, "explicit", "high")})
+    fake = FakeClient(_ENGINE_REPLY, _ENGINE_REPLY, _ENGINE_REPLY)
+    provider = AnthropicProvider(fake)
+
+    provider.analyze("leave approval")                                     # first discovery
+    provider.analyze("leave approval", current_model=model, answers="A")   # a refinement turn
+    run(fake, [{"role": "user", "content": "leave approval"}])             # the multi-call caller
+
+    assert "cache_control" not in _system_block(fake, 0), "a first discovery pays for a cache nothing reads"
+    assert "cache_control" not in _system_block(fake, 1), "a refinement turn pays for a cache nothing reads"
+    assert _system_block(fake, 2)["cache_control"] == {"type": "ephemeral"}, "converse() lost its breakpoint"
+    # MUST FIRE: all three sent the same engine prompt, so the assertions above are about the
+    # directive and not about three different system blocks.
+    assert _system_block(fake, 0)["text"] == _system_block(fake, 1)["text"] == _system_block(fake, 2)["text"]
+
+
+def test_a_looping_caller_can_still_ask_for_the_breakpoint_back():
+    """The escape hatch, kept honest. `reuse_system` is a per-call-site decision, not a per-function
+    one — the same `run()` is single-call under the provider seam and multi-call under `converse()`.
+    A future surface that genuinely loops `answer_turn` passes True and gets the directive."""
+    model = out({"problem": slot(80, "explicit", "high")})
+    fake = FakeClient(_ENGINE_REPLY, _ENGINE_REPLY)
+    answer_turn(fake, model, "leave approval", "A")
+    answer_turn(fake, model, "leave approval", "A", reuse_system=True)
+    assert "cache_control" not in _system_block(fake, 0)                     # must not fire
+    assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}  # must fire
+
+
 # A minimal contract-valid reply per generator, so the assertions below can drive the *real* call
 # rather than reading a signature. An earlier version of this test checked
 # `inspect.signature(fn).parameters["reuse_system"].default is False` and nothing else, which both
