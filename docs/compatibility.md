@@ -2,8 +2,11 @@
 
 > What Requivo promises not to break, what it may change, and what is on the way out.
 
-Requivo is pre-1.0 and versioned with [SemVer](https://semver.org/). Until 1.0, minor versions may
-change interfaces — but not silently, and not the session format. This page is the specific list.
+Requivo is versioned with [SemVer](https://semver.org/). From **1.0.0**, a break to anything on
+this page costs a **major** version — not a minor, and never silently. Below 1.0 a minor was
+permitted to change an interface, and the entries below dated 0.x were taken under that licence;
+it is spent. The session format was outside it either way: it carries its own `format_version` and
+a migration, and neither is a function of the release number. This page is the specific list.
 
 ## The session format is public
 
@@ -435,8 +438,9 @@ archive, and `unstated_source_revision`, which never moved. The family base keep
 it, but a nominal number is still one a reader sees, and 400 was the wrong one to leave there.
 
 **This is breaking under the rule at the foot of this section** — moving a condition from one error
-code to another, and changing an HTTP status. It is taken before 1.0 deliberately: afterwards the
-same change costs a major version, or a sentence on this page that nobody can keep.
+code to another, and changing an HTTP status. It is taken **in** 1.0.0 deliberately: that is the
+release which draws the boundary, and after it the same change costs a major version, or a sentence
+on this page that nobody can keep.
 
 No status in that table moves for #41, but one **condition** crosses it. `POST /sessions` naming a
 context card on an install that has none used to answer **400** — the reader was told their request
@@ -656,9 +660,9 @@ the same change that renamed it, with no grace version. The policy above is what
 you, and a grace version buys nothing here: the flag did not do what its name said on any release it
 shipped in — it wrote a file where every other verb's `--json` emits a payload — so a version of
 *keeping it working* would have been a version of keeping it wrong, in the one window where removing
-it costs a minor rather than a major. Pre-1.0, `docs/compatibility.md` permits an interface change in
-a minor; after 1.0 this would not have been available and the flag would have been frozen into the
-tag.
+it costs the tag itself rather than a major after it. Below 1.0 this page permitted an interface
+change in a minor, and 1.0.0 is the last release under that reading; from the release after, the
+flag would have been frozen into the tag.
 
 **The 0.9.8 removals.** These three were the last of the pre-store architecture, all deprecated for
 several versions and none of them with a known user. They were carried on a "removal in 1.1.0" plan,

@@ -1319,7 +1319,7 @@ service layer becoming the integrity boundary it has to be before anything exter
 
 ## [0.9.6] - 2026-08-02
 
-The 0.9.5 review, and the last release before 1.0. Two correctness bugs sat where the product's own
+The 0.9.5 review. Two correctness bugs sat where the product's own
 promise lives — one erased the reasoning layer during an ordinary turn, the other replaced a whole
 model with a fragment of it — plus the preconditions and the session identity that a second writer
 makes matter.
