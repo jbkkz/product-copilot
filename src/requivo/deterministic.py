@@ -400,10 +400,10 @@ def _cmd_doctor(a, client) -> None:
     print(f"  {ok if r['assets']['present'] else '❌'} assets          {r['assets']['root']}")
     s = r["schema"]
     print(f"  {ok if s['ok'] else '❌'} schema          {s['slots']} slots"
-          + (f"  (error: {s['error']})" if not s["ok"] else ""))
+          + (f"  (error: {display_token(s['error'])})" if not s["ok"] else ""))
     c = r["context"]
     if c["status"] == "unreadable":
-        print(f"  ❌ context cards   unreadable — {c['error']}")
+        print(f"  ❌ context cards   unreadable — {display_token(c['error'])}")
     elif c["status"] == "empty":
         print("  ❌ context cards   0 available — none found under "
               f"{' or '.join(c['roots'])}")
@@ -424,7 +424,7 @@ def _cmd_doctor(a, client) -> None:
     if not h["readable"]:
         # Not "0 sessions". We could not look, and saying nothing found is the failure this verb
         # exists to prevent: a user told they have no sessions concludes they were deleted.
-        print(f"  ❌ sessions        unreadable — {h['error']}")
+        print(f"  ❌ sessions        unreadable — {display_token(h['error'])}")
         print(f"     └─ {r['workspace']['sessions']} could not be listed. This is not the same "
               "thing as having no sessions.")
         return
@@ -1047,7 +1047,7 @@ def _cmd_session_verify(a, client) -> None:
         print(f"  · [{code}] {cards['problem']['message']}")
         print(f"    {_RESTORE_HINT if restorable else _REPAIR_HINT}")
     elif not cards["checked"]:
-        print(f"🟡 Could not check '{slug}'s product context: {cards['error']}")
+        print(f"🟡 Could not check '{slug}'s product context: {display_token(cards['error'])}")
     if exit_code:
         raise SystemExit(exit_code)
 
@@ -1241,10 +1241,19 @@ def _cmd_session_import(a, client) -> None:
                 # would be a lock no other writer takes, which serialises nothing.
                 #
                 # So what closes #111 is the arm above and the single decision it rests on, not a
-                # lock. The residue is narrow and is what `--force` already means: a concurrent
-                # writer part-way through this session loses that work, because the caller asked for
-                # the session to be replaced. What is no longer possible is losing a session the
-                # caller was never asked about.
+                # lock. What is no longer possible is losing a session the caller was never asked
+                # about.
+                #
+                # **The residue is wider than "the concurrent writer loses its work", which is what
+                # this comment claimed for one release** (#113). `save_revision` resolves the session
+                # directory once and then writes by *pathname*, while `session_lock` holds an fd on
+                # an *inode*. So a writer sitting inside `save_revision` while the swap happens goes
+                # on writing into the newly imported directory — the import silently inherits another
+                # session's revision files and identity — and a third process then locks
+                # `target/.lock`, a different inode from the one that writer holds, and acquires it.
+                # Two writers hold the lock for one slug, which is invariant 9's own failure mode.
+                # Pre-existing, byte-identical at 1.0.0 and 0.11.0, and filed rather than fixed here
+                # because the fix is a change to the swap mechanism and not to this decision.
                 _swap_in(extracted, target, slug)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
