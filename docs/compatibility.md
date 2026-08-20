@@ -118,6 +118,22 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   printing it. No name Requivo itself writes is affected — `resolve_cards` has always resolved a
   selection against the installed cards, so such a value can only have arrived by import or by hand.
 
+- **`doctor --json` gained `sessions.non_sessions`** (#67). Additive: a consumer reading only the
+  existing `sessions` keys is unaffected, and on a workspace Requivo alone has written it is always
+  `[]`. It carries what is under the session root and is *not* a session — one object per entry with
+  `name`, `kind`, `entries`, `entry_count`, `error` and `slug_shaped`. See
+  [Something here that is not a session](cli.md#something-here-that-is-not-a-session).
+
+  **`null` and `[]` mean different things**, at both levels. The key itself is `null` when the session
+  root could not be listed at all, matching `sessions.total`; `[]` means it was listed and holds
+  nothing but sessions. Within an entry, `entries: null` with an `error` is a directory that could not
+  be listed, and `entries: null` with no error is a `file` or an `other` — there is nothing to look
+  inside. Branch on `error`, never on emptiness.
+
+  Nothing is deleted, moved or rewritten as a result, and no field states a conclusion: there is no
+  `is_lock_ghost`. `slug_shaped` is the one derived value and it is a property of the name — whether
+  `create_session` can be asked for it — not a claim about where the entry came from.
+
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
   and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on
@@ -141,18 +157,67 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   byte-for-byte, so no session Requivo itself wrote is affected — such a value can only have arrived
   by import or by hand. `--json` is unchanged and was never affected: `json.dumps` escapes it.
 
-- **`artifact save` without `--revision` is now `invalid_session`** (#6). It used to succeed, filling
-  the omission in with the session's current revision and recording `stale: false` — an answer that
-  could not come out any other way, about a revision the caller never claimed to have read. Every
-  documented invocation already passes the flag, so this only reaches a caller relying on the
-  undocumented default, which was being handed a fabricated provenance. `details` carries
-  `{slug, type, source_revision, current_revision, cause}` — the same five keys as the refusal for a
-  source revision that cannot be *read*, which shares the code. Both are always present: here
-  `source_revision` is `null` because none was stated and `cause` is `null` because no underlying
-  failure occurred, and on the unreadable side `cause` names the exception type and its text. One
-  code, one shape, per the rule above; `tests/test_artifact_provenance.py` asserts the two key sets
-  against each other rather than each on its own. The condition is new rather than moved — nothing
-  previously carried a code here, because nothing previously failed.
+- **`session show`'s terminal output escapes the same way, in eight fields** (#70). The identical
+  defect, in the other verb. #62 found it while fixing the listing and reported it rather than riding
+  it in on that diff, which is why the two land as separate changes. `slug`, `session_id`, `created_at`,
+  `updated_at`, `provider`, `model_name`, each key of `artifact_status` and each artifact's
+  `filename` are all bare strings in `session.json`'s body, and all eight reached the terminal
+  unescaped. `current_revision`, an artifact's `revision` and its `stale` flag are untouched and need
+  nothing — `read_meta` refuses a string in an `int` or a `bool` before the render runs.
+
+  It is **eight** rather than the five the issue names: #62 listed the five that are `SessionMeta`
+  scalars, which left out `slug` and the two fields that live on `ArtifactStatus` and its dict key.
+  Recorded here because a count in a compatibility note is the thing a later reader checks their own
+  work against.
+
+  **`artifact list` renders two of the same fields and is fixed alongside it** (#70). It prints the
+  `artifact_status` key and the `filename` at the same fixed column, off the same file, through
+  `ArtifactService.list`. It is outside the issue's own footprint and is named here for that reason:
+  fixing one verb's copy of a two-field render turns the rule from *a persisted value is escaped
+  where it is shown* into *it is escaped where somebody looked*.
+
+  Same rule as above, so the same guarantees: a value that is already one safe line comes back
+  byte-for-byte and no session Requivo itself wrote changes, and `--json` is unaffected on all three
+  verbs.
+
+  **The reason `--json` is unaffected is narrower than #62 stated it**, and is corrected here rather
+  than left standing. `_session_list_line`'s docstring, and #70's own issue text, both said
+  `json.dumps` defaults to `ensure_ascii=True` and therefore escapes a control character — the bullet
+  above says only that `json.dumps` escapes it, which is true and is why it needs no correction of its
+  own. Measured, the flag is not
+  what protects a newline: JSON's grammar forbids a literal control character below `U+0020` inside a
+  string, so `\n` is escaped whether the flag is on or off. What the flag decides is the *non-ASCII*
+  half of the guarded range, `U+007F`–`U+009F` — which carries `NEL` (`U+0085`), a line terminator
+  `str.splitlines()` and some terminals honour, and `CSI` (`U+009B`), an escape introducer. So the
+  default **is** load-bearing, for a different set of characters than was written down, and a test
+  now probes both halves; one probing only with a newline is green either way and pins nothing.
+
+- **`artifact save` without `--revision` is refused, and carries `unstated_source_revision`** (#6,
+  #57). It used to succeed, filling the omission in with the session's current revision and recording
+  `stale: false` — an answer that could not come out any other way, about a revision the caller never
+  claimed to have read. Every documented invocation already passes the flag, so this only reaches a
+  caller relying on the undocumented default, which was being handed a fabricated provenance. The
+  condition itself is new rather than moved: nothing previously carried a code here, because nothing
+  previously failed.
+
+  **The code moved once before it shipped.** #6 raised the refusal under `invalid_session`; #57 gave
+  it one of its own. Moving a condition to a new code is breaking under the rule at the foot of this
+  section, and it is recorded as such — but no released version ever answered `invalid_session` here,
+  because #6 and #57 land in the same release, so there is no consumer to break. What forced the
+  inheritance was that a new code needs a row in the Web's status table and that file was held by
+  another change in the same round; the precision sat in the exception *type* meanwhile, which a
+  caller reading a serialized envelope cannot see. `UnstatedSourceRevisionError` is still an
+  `InvalidSessionError` subclass, so catching the class is unaffected either way.
+
+  `details` carries `{slug, type, source_revision, current_revision, cause}` — the same five keys as
+  the refusal for a source revision that cannot be *read*, which kept `invalid_session`. Both are
+  always present: here `source_revision` is `null` because none was stated and `cause` is `null`
+  because no underlying failure occurred, and on the unreadable side `cause` names the exception type
+  and its text. The shared shape **survives the split as a choice**, not an obligation: one code, one
+  shape no longer binds two codes together, and narrowing this payload would break a consumer reading
+  `details["cause"]` across both arms for no gain. `opaque_origin` and `origin_mismatch` below are the
+  same answer to the same question. `tests/test_artifact_provenance.py` asserts that the two codes
+  differ and that the two key sets still agree.
 
 - **`cross_site_request` split into six codes** (#52). Requivo Web's cross-site guard raised one code
   for six distinct facts, and their `details` payloads had five different shapes between them — the
@@ -200,6 +265,12 @@ default in 0.10.0, and the one that is new:
 
 An unrecognised code is now a 500 rather than a 400, for the same reason: "we could not classify
 this" is not evidence that the caller erred.
+
+`unstated_source_revision` is new in the Web's status map and is a **400** (#57). The request is
+incomplete — the one fact only the caller holds was not stated — and nothing about the session is
+wrong, so it sits with the other 4xx rows rather than with the 409 conflicts, which are about the
+store's state. **No status moves for it**: the condition answered 400 under `invalid_session` before
+the split, so what changed is the code the payload carries, not the number a client branches on.
 
 No status in that table moves for #41, but one **condition** crosses it. `POST /sessions` naming a
 context card on an install that has none used to answer **400** — the reader was told their request

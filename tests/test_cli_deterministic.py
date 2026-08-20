@@ -19,6 +19,7 @@ import pytest
 from requivo.cli import _build_parser, app
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
+from requivo.core.errors import InvalidSlugError
 from requivo.services.sessions import SessionService
 
 
@@ -143,14 +144,22 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
 
     empty = _run_json(["doctor", "--json"])["sessions"]
     assert empty["total"] == 0 and empty["readable"] is True and empty["error"] is None
+    assert empty["non_sessions"] == [], "we looked and there was nothing else here"
     empty_text = _run(["doctor"])
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(det.store, "list_session_slugs", _unreadable)
+        # `scan_session_root`, because that is the one listing `_session_health` makes since #67.
+        # Patching `list_session_slugs` — which it no longer calls — left this simulating nothing
+        # while still asserting; the failure is what said so, which is the point of asserting that
+        # the two renderings *differ* rather than that the broken one says something.
+        mp.setattr(det.store, "scan_session_root", _unreadable)
         unreadable = _run_json(["doctor", "--json"])["sessions"]
         unreadable_text = _run(["doctor"])
     assert unreadable["readable"] is False
     assert unreadable["total"] is None, "0 is a claim about the workspace; we could not look"
+    assert unreadable["non_sessions"] is None, (
+        "an empty list here reads as `we looked and found nothing else` — the same conflation one "
+        "key along, in the arm where the root could not be listed at all (#67)")
     assert "Permission denied" in (unreadable["error"] or "")
 
     assert "✅" in _check_line(empty_text, "sessions")
@@ -228,6 +237,279 @@ def test_a_card_directory_that_cannot_be_read_is_unreadable_not_empty(workspace,
     assert "✅" not in _check_line(broken_text, "sessions"), (
         "the sessions line ticked while nobody had checked their product context")
     assert "not checked" in _check_line(broken_text, "sessions")
+
+
+# ── something under the session root that is not a session (#67) ────────────────
+#
+# The state under test cannot be produced by the current code: #22 stopped `session_lock` creating
+# the session directory it opened `.lock` inside, which is exactly why these are only ever found on
+# disk and never in a fresh run. So the fixture builds one by hand. Going through `session_lock`
+# instead would assert against a state this version cannot reach, and would go green on the day the
+# report stopped working.
+
+
+def _lock_ghost(name: str = "leave-approval") -> Path:
+    """A session directory as an older Requivo left one: the name taken, holding only `.lock`."""
+    d = store.session_root() / name
+    d.mkdir(parents=True)
+    (d / ".lock").touch()
+    return d
+
+
+def test_doctor_names_what_is_under_the_session_root_and_is_not_a_session(workspace):
+    """Nothing could see one of these. `list_session_slugs` filters on `session.json`, and `doctor`
+    and `session verify` both reason over the slugs it returns, so a directory holding only `.lock`
+    reached no verb at all — `doctor` printed a green `0 in this workspace` straight over the top of
+    it.
+
+    Both halves are on the same workspace with only the directory appearing, so the finding cannot
+    become a line that everybody sees.
+    """
+    clean = _run_json(["doctor", "--json"])["sessions"]
+    assert clean["non_sessions"] == [], "the control: an untouched workspace must produce no finding"
+    assert "other entries" not in _run(["doctor"])
+
+    _lock_ghost()
+    found = _run_json(["doctor", "--json"])["sessions"]
+
+    # What was found, never what it was taken to mean: there is no `is_lock_ghost` key anywhere. A
+    # half-extracted archive is this shape too, and the directory is the only evidence there is.
+    assert [e["name"] for e in found["non_sessions"]] == ["leave-approval"]
+    entry = found["non_sessions"][0]
+    assert entry["kind"] == "directory"
+    assert entry["entries"] == [".lock"] and entry["entry_count"] == 1
+    assert entry["error"] is None
+    assert entry["slug_shaped"] is True, "the name is one `create_session` can be asked for"
+
+    # It is still not a session, and the session count must not quietly absorb it.
+    assert found["total"] == 0 and found["readable"] is True
+    assert found["inconsistent"] == {}
+
+    text = _run(["doctor"])
+    assert "leave-approval" in text and ".lock" in text
+    assert "✅" in _check_line(text, "sessions"), "0 sessions is still the honest count"
+    assert "🟡" in _check_line(text, "other entries")
+
+
+def test_the_silent_slug_substitution_the_report_names_is_the_one_that_happens(workspace):
+    """The finding is only worth a line because of what it costs, so the cost is pinned rather than
+    described. `create_session`'s rename is the only claim on a slug (invariant 11) and it loses to a
+    non-empty directory, after which `SessionService` falls through to its hash-suffixed candidate:
+    the user gets a session under a name they did not ask for, with nothing saying why."""
+    _lock_ghost()
+    assert "will not get it" in _run(["doctor"]), "the report names the finding but not its cost"
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    assert meta.slug != "leave-approval"
+    assert meta.slug.startswith("leave-approval-")
+
+
+def test_a_file_where_a_session_name_would_go_costs_the_same_and_is_named_as_a_file(workspace):
+    """Swept rather than assumed: the rename onto an existing *file* fails too, `d.exists()` is true,
+    and the caller gets the identical substitution. Reporting only directories would have left an
+    identical symptom with an identical remedy invisible, so each entry says what it is instead of
+    the report assuming they are all directories."""
+    store.session_root().mkdir(parents=True)
+    (store.session_root() / "leave-approval").write_text("half a download\n", encoding="utf-8")
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "file"
+    assert entry["entries"] is None and entry["entry_count"] is None
+    assert entry["error"] is None, "nothing failed here; there is simply nothing to look inside"
+    assert entry["slug_shaped"] is True
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    assert meta.slug.startswith("leave-approval-")
+
+
+def _deny_listing(directory: Path) -> None:
+    """Make `directory` traversable but not listable — `--x`, the mode under which `stat` on a child
+    succeeds and `iterdir` does not — or skip loudly naming what went untested.
+
+    Deliberately not `_deny_read`'s `chmod 000`. That denies the `session.json` probe in
+    `_scan_session_root` as well, and `Path.exists()` re-raises EACCES rather than swallowing it, so
+    the *whole root* reads as unlistable and this entry never gets a row of its own to be honest in.
+    That behaviour predates this change — `list_session_slugs` has always raised there — and is
+    reported separately rather than fixed on this branch."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny listing on Windows — the entry-level "
+                    "could-not-look arm is untested on this platform")
+    directory.chmod(0o111)
+    try:
+        list(directory.iterdir())
+    except OSError:
+        return                                  # the denial took: the assertion below is real
+    directory.chmod(0o755)
+    pytest.skip("chmod --x did not deny listing here (running as root?) — the entry-level "
+                "could-not-look arm is untested on this run")
+
+
+def test_a_symlink_is_reported_as_one_and_its_target_is_not_read(workspace, tmp_path):
+    """`Path.is_dir()` follows a symlink. So a link at a slug name pointing anywhere else reported
+    `kind: "directory"`, and the `iterdir` beneath it listed the **target's** filenames into a report
+    about this workspace — an answer about something that is not a directory here, carrying names
+    from somewhere the user did not ask about. Found by review; a symlink is a third shape, and this
+    module already treats one as the single case a containment guard has to answer for (invariant
+    17)."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret-project.md").touch()
+    store.session_root().mkdir(parents=True)
+    try:
+        (store.session_root() / "leave-approval").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:                            # pragma: no cover - Windows without developer mode
+        pytest.skip("this platform refuses an unprivileged symlink — the symlink arm is untested "
+                    "on this run")
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "symlink", "is_dir() follows the link; this answer must not"
+    assert entry["entries"] is None and entry["entry_count"] is None
+    assert entry["error"] is None, "nothing failed — we declined to follow it"
+    assert entry["slug_shaped"] is True, "the name is still taken, whatever it points at"
+    assert "secret-project.md" not in _run(["doctor"]), (
+        "the target's contents were listed into a report about this workspace")
+
+
+def test_a_name_too_long_to_be_a_slug_is_not_marked_as_taken(workspace):
+    """`slug_shaped` asked `_SLUG_RE` alone, and validity is the pattern **and** the length: an
+    81-character kebab-case directory matched the pattern and was marked `[name taken]`, under a
+    sentence promising a silent hash-suffixed substitution. `canonical_dir` refuses that name outright
+    and loudly instead, so the promise was false in the one direction that matters — it told a reader
+    to expect silence from a call that raises. Found by review.
+
+    The 80-character sibling beside it is the must-fire control: same shape, one character shorter,
+    and it *is* reachable."""
+    over = "a" * (store.MAX_SLUG_LENGTH + 1)
+    at_limit = "b" * store.MAX_SLUG_LENGTH
+    for name in (over, at_limit):
+        (store.session_root() / name).mkdir(parents=True)
+        (store.session_root() / name / ".lock").touch()
+
+    by_name = {e["name"]: e for e in _run_json(["doctor", "--json"])["sessions"]["non_sessions"]}
+    assert by_name[at_limit]["slug_shaped"] is True, "the control: this one really is reachable"
+    assert by_name[over]["slug_shaped"] is False
+
+    # And the claim the flag stands for is the one the code makes: a refusal, not a substitution.
+    with pytest.raises(InvalidSlugError):
+        store.canonical_dir(over)
+
+
+def test_an_empty_directory_is_still_reported_and_still_marked(workspace):
+    """The one shape whose cost is platform-dependent, and the report deliberately does not try to be
+    clever about it. POSIX `rename(2)` replaces an empty destination, so `create_session` still wins
+    the name here; on Windows `os.rename` is `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING` and
+    refuses any existing destination, so it does not. `slug_shaped` therefore does not exempt an empty
+    directory — a marker that is right on one platform and silently absent on another is a worse
+    answer than one that is occasionally conservative.
+
+    Both arms below assert a real outcome. Neither is the vacuous kind of platform branch that
+    reports coverage it does not have."""
+    store.session_root().mkdir(parents=True)
+    (store.session_root() / "leave-approval").mkdir()
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "directory"
+    assert entry["entries"] == [] and entry["entry_count"] == 0
+    assert entry["error"] is None, "we looked, and it is empty — not the same as could not look"
+    assert entry["slug_shaped"] is True
+    assert "an empty directory" in _run(["doctor"])
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    if os.name == "nt":                                     # pragma: no cover - platform-dependent
+        assert meta.slug.startswith("leave-approval-"), "os.rename refuses any existing destination"
+    else:
+        assert meta.slug == "leave-approval", "rename(2) replaces an empty destination directory"
+
+
+def test_an_entry_that_could_not_be_looked_inside_is_not_reported_as_empty(workspace):
+    """The third state one level below the one `_session_health` already has: the root listed fine,
+    this directory did not. `entries: []` would say we looked and it holds nothing — the one reading
+    that makes the finding worthless, since on POSIX a directory holding nothing is the single shape
+    that does not cost the caller its slug at all (`rename(2)` replaces an empty destination)."""
+    d = _lock_ghost()
+
+    # The must-fire control, on the same directory, with only its mode changing.
+    readable = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert readable["entries"] == [".lock"] and readable["error"] is None
+
+    _deny_listing(d)
+    try:
+        denied = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+        denied_text = _run(["doctor"])
+    finally:
+        d.chmod(0o755)
+
+    assert denied["kind"] == "directory", "we can stat it; we cannot list it"
+    assert denied["entries"] is None and denied["entry_count"] is None
+    assert "Permission denied" in (denied["error"] or "")
+    assert "empty directory" not in denied_text
+    assert "Permission denied" in denied_text
+
+
+def test_a_name_read_off_disk_cannot_forge_a_line_of_the_report_that_names_it(workspace):
+    """#40 in a new render site. The entry's own name and the names it holds are both read off disk,
+    untrusted exactly as a stored context-card name is. Printed bare, one carrying a newline does not
+    merely look odd: it ends the line and starts another at whatever column it chooses, immediately
+    under a row of `doctor`'s own output."""
+    d = _lock_ghost()
+    try:
+        (d / "x\n  ✅ forged          all clear").touch()
+    except OSError:                            # pragma: no cover - filesystem-dependent
+        pytest.skip("this filesystem refuses a newline in a filename (Windows, notably) — the "
+                    "escaping of an entry name is untested on this run")
+
+    text = _run(["doctor"])
+    assert "\\n" in text, "the newline reached the terminal unescaped"
+    assert "  ✅ forged          all clear" not in text.splitlines()
+
+    # `--json` was never affected and must stay that way: json.dumps escapes a control character
+    # before it can reach a line of its own, so the finding keeps its bytes verbatim.
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert any("\n" in n for n in entry["entries"])
+
+    # The other permutation, on the entry's *own* name rather than a name it holds. The two reach
+    # the report through different f-strings, so one covering the other is an assumption.
+    (store.session_root() / "y\n  ✅ forged          all clear").mkdir()
+    both = _run(["doctor"])
+    assert both.count("\\n") >= 2, "the directory's own name reached the terminal unescaped"
+    assert "  ✅ forged          all clear" not in both.splitlines()
+
+
+def test_session_list_does_not_call_one_of_these_a_session(workspace):
+    """The other half of the partition, and why this is not `session list`'s finding to report: a
+    listing of sessions must not grow a row for something that is not one. The real session beside it
+    is the must-fire control — without it this passes against a listing that lists nothing at all."""
+    _run(["session", "init", "A real one.", "--slug", "real", "--json"])
+    _lock_ghost()
+
+    rows = _run_json(["session", "list", "--json"])
+    assert [r["slug"] for r in rows] == ["real"]
+    assert store.list_session_slugs() == ["real"]
+
+    text = _run(["session", "list"])
+    assert "real" in text and "leave-approval" not in text
+
+
+def test_the_two_halves_of_the_session_root_are_one_partition(workspace):
+    """`list_session_slugs` and `list_non_session_entries` are complements over one predicate, and
+    are only worth having as a pair while nothing can fall between them — a name in neither is
+    precisely the state #67 is about. Staging directories are in neither on purpose: they are
+    `create_session` in flight rather than something left behind, and reporting one is a race the
+    reader cannot act on."""
+    _run(["session", "init", "A real one.", "--slug", "real", "--json"])
+    _lock_ghost()
+    (store.session_root() / ".real.new-1-abcdef12").mkdir()
+
+    slugs = set(store.list_session_slugs())
+    others = {e.name for e in store.list_non_session_entries()}
+    on_disk = {p.name for p in store.session_root().iterdir()}
+
+    assert slugs == {"real"} and others == {"leave-approval"}
+    assert slugs & others == set()
+    assert on_disk - (slugs | others) == {".real.new-1-abcdef12"}
 
 
 def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, tmp_path):
@@ -462,6 +744,257 @@ def test_session_show_renders_a_card_name_as_one_line(forged_workspace):
     assert len(context) == 1 and "ok-card" in context[0], forged
 
 
+def _forge_meta(slug: str, fields: dict) -> None:
+    """Write arbitrary values into a session's persisted metadata, the way an imported archive or a
+    hand-edited `session.json` can. Deliberately not through the services, which would never produce
+    these values — that is the point. `read_meta` validates the slug it is *called with*, the
+    directory name; every `str` in the body arrives unexamined.
+
+    `fields` is a dict rather than `**kwargs` because one of the keys being forged is `slug` itself,
+    which is the whole shape of this defect and would collide with the parameter."""
+    p = store.canonical_dir(slug) / "session.json"
+    meta = json.loads(p.read_text(encoding="utf-8"))
+    meta.update(fields)
+    p.write_text(json.dumps(meta), encoding="utf-8")
+
+
+# One forgery per untrusted `str` on `session show`'s text path (#70). Each value is a plausible one
+# followed by a newline and a line shaped exactly like a line `session show` itself prints, so the
+# assertion below — that the render is still eight lines — is a statement about forged *rows*, not
+# about stray text turning up somewhere.
+_SHOW_FORGERIES = {
+    "slug": "s\nSession 'trusted'  (id 000000000000…)",
+    # Sliced to 12 before it is shown, so the newline has to fall inside the first 12 characters or
+    # the forgery is neutralised by the slice rather than by the escaping and proves nothing.
+    "session_id": "ab\nFORGED SESSION ID",
+    "created_at": "2026-01-01T00:00:00Z\n  revision 999",
+    "updated_at": "2026-01-01T00:00:00Z\n  provider trusted   model trusted",
+    "provider": "anthropic\n  revision 999",
+    "model_name": "claude\n  context  all cards",
+    "artifact_status": {
+        # The dict *key* is a `str` off disk too, and is printed as the artifact type.
+        "prd\n    brief        trusted.md                 rev 9  fresh": {
+            "revision": 1,
+            "filename": "prd.md\n    stories      trusted.md                 rev 9  fresh",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "stale": False,
+        },
+    },
+}
+
+
+def test_session_show_cannot_be_made_to_print_a_line_a_session_wrote(workspace):
+    """#70 — the same defect as #62, in a different verb, and in more fields than the issue counted.
+
+    `_session_list_line`'s docstring carries the whole argument and it is not restated here. What is
+    different is only the surface: `session show` prints **eight** untrusted strings out of
+    `session.json`'s body where `session list` printed three, and two of them are not fields of
+    `SessionMeta` at all — an `artifact_status` *key*, and `ArtifactStatus.filename`. The issue says
+    five; that is the set #62 happened to name in passing.
+
+    Every line here is one Requivo writes itself, so a forged one is indistinguishable from a real
+    one to a reader. That is why the assertion is the *shape* of the render — how many lines, and
+    which fact each carries — rather than the absence of a substring.
+    """
+    _run(["session", "init", "Something.", "--slug", "victim"])
+    _forge_meta("victim", _SHOW_FORGERIES)
+
+    out = _run(["session", "show", "victim"])          # must not raise: exit 0, still readable
+    lines = out.splitlines()
+
+    # ── must not fire: nothing the session wrote became a line of the render ──
+    #
+    # Six labelled lines, an `artifacts:` header and exactly one artifact row. Counting is the
+    # decisive form: any escape produces a ninth line, wherever it lands and whatever it says.
+    assert len(lines) == 8, out
+    assert len([ln for ln in lines if ln.startswith("Session '")]) == 1, out
+    for label in ("  created  ", "  updated  ", "  revision ", "  provider ", "  context  "):
+        assert len([ln for ln in lines if ln.startswith(label)]) == 1, (label, out)
+    assert lines[6] == "  artifacts:", out
+    assert len([ln for ln in lines if ln.startswith("    ")]) == 1, out
+    # The facts stay the session's own. `revision 999` was forged three separate ways above.
+    assert lines[3] == "  revision 0", out
+
+    # ── must fire: every forged value is still shown, escaped, on the line that owns it ──
+    #
+    # Neutralising must not become dropping: a reader has to be able to see exactly what is stored,
+    # which is the same treatment `core/integrity.py` gives the recorded artifact filename. Asserted
+    # per field, against the line each belongs to, so a fix that dropped one — or moved it onto a
+    # neighbour's line — is a failure and not a smaller pass. `session_id` is the exception and is
+    # taken separately below, because it is the one value the render truncates.
+    st = _SHOW_FORGERIES["artifact_status"]
+    ((artifact_type, artifact), ) = st.items()
+    for i, value in ((0, _SHOW_FORGERIES["slug"]),
+                     (1, _SHOW_FORGERIES["created_at"]),
+                     (2, _SHOW_FORGERIES["updated_at"]),
+                     (4, _SHOW_FORGERIES["provider"]),
+                     (4, _SHOW_FORGERIES["model_name"]),
+                     (7, artifact_type),
+                     (7, artifact["filename"])):
+        assert repr(value) in lines[i], (i, value, lines[i])
+
+    # **Slice first, then escape.** `session_id` is shown truncated; escaping first and slicing after
+    # would cut the repr mid-sequence and emit an unterminated quote. The whole repr of the *sliced*
+    # value is what must appear — 21 characters, where a truncated escape would be 12.
+    assert repr(_SHOW_FORGERIES["session_id"][:12]) in lines[0], lines[0]
+
+
+def test_session_show_leaves_an_ordinary_session_byte_for_byte(workspace, tmp_path):
+    """The other half of #70, and the half that says the fix cost nothing: a value that is already
+    one safe line comes back unquoted and unchanged, so no real session's output moves. Without
+    this, `display_token` could have been a plain `repr()` on every field, the forgery test above
+    would still be green, and every user's terminal would have gained quotes around six values."""
+    _run(["session", "init", "Reconcile event check-ins.", "--slug", "plain"])
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", "plain", str(proposal)])
+    prd = tmp_path / "prd.md"
+    prd.write_text("# PRD\n", encoding="utf-8")
+    _run(["artifact", "save", "plain", "--type", "prd", "--file", str(prd), "--revision", "1"])
+
+    m = store.read_meta("plain")
+    st = m.artifact_status["prd"]
+    assert _run(["session", "show", "plain"]).splitlines() == [
+        f"Session '{m.slug}'  (id {m.session_id[:12]}…)",
+        f"  created  {m.created_at}",
+        f"  updated  {m.updated_at}",
+        f"  revision {m.current_revision}",
+        f"  provider {m.provider or '—'}   model {m.model_name or '—'}",
+        "  context  all cards",
+        "  artifacts:",
+        f"    {'prd':<12} {st.filename:<26} rev {st.revision}  fresh",
+    ]
+
+
+def test_session_show_json_escapes_a_control_character_before_it_reaches_a_line(workspace):
+    """`--json` needs no `display_token`. This is the confirmation, and it **corrects the reason**
+    #62 and #70 both give for it.
+
+    The stated reason is that `json.dumps` defaults to `ensure_ascii=True`, so the encoder escapes a
+    control character before it can reach a line of its own. Written as one sentence that is not
+    true, and it is not true about the exact character both issues reproduced with. Measured:
+
+    | character | `ensure_ascii=True` | `ensure_ascii=False` |
+    |---|---|---|
+    | LF `U+000A` | escaped | **escaped** |
+    | DEL `U+007F` | escaped | raw |
+    | NEL `U+0085` | escaped | **raw, and `splitlines()` breaks on it** |
+    | CSI `U+009B` | escaped | raw |
+
+    A newline is escaped by **JSON's own grammar** — the format forbids a literal control character
+    below `U+0020` inside a string — and `ensure_ascii` has no say in it. What `ensure_ascii` decides
+    is the *non-ASCII* half of `core/selectors.py`'s `_CONTROL_CHARS`, `\\x7f-\\x9f`: NEL, which is a
+    line terminator `str.splitlines()` and some terminals honour, and CSI, which that module already
+    calls "an escape introducer in its own right on terminals that decode it".
+
+    So the default **is** load-bearing, for a different set of characters than anyone wrote down. A
+    test probing with a newline is green either way and pins nothing; this one probes with both and
+    says which mechanism covers which, so turning the default off fails here rather than in somebody's
+    terminal. The bytes survive intact in the *parsed* payload: escaping is a property of rendering,
+    not of the data (#40, #62, #70).
+    """
+    _run(["session", "init", "Something.", "--slug", "j"])
+    _forge_meta("j", dict(_SHOW_FORGERIES, model_name="claude\x85FORGED BY A NEL"))
+
+    raw = _run(["session", "show", "j", "--json"])
+
+    # The newline half — safe by the grammar, and asserted so the guarantee is pinned even though
+    # this half would survive `ensure_ascii=False`.
+    assert "\nSession 'trusted'" not in raw, raw
+    assert "\\nSession 'trusted'" in raw, raw
+
+    # The half `ensure_ascii` actually decides. `\x85` is a line terminator: under
+    # `ensure_ascii=False` it reaches the payload raw, `splitlines()` breaks on it, and a reader
+    # piping `--json` through anything line-oriented sees a fabricated line.
+    assert "\x85" not in raw, raw
+    assert "\\u0085FORGED BY A NEL" in raw, raw
+    assert len(raw.splitlines()) == raw.count("\n"), "a value split a line of the payload"
+
+    # Neither escape is a change to the data.
+    parsed = json.loads(raw)
+    assert parsed["slug"] == _SHOW_FORGERIES["slug"]
+    assert parsed["model_name"] == "claude\x85FORGED BY A NEL"
+
+
+def test_the_two_output_paths_guard_different_ranges_and_json_is_the_stricter(workspace):
+    """Where the terminal guard stops, stated as a test so the claim cannot drift (#70).
+
+    Found by the audit on this branch. `core/selectors.py`'s `_CONTROL_CHARS` is C0, DEL and C1 —
+    *the class that can move a terminal's cursor or end its line*, which is what that module says it
+    is for. `str.splitlines()` breaks on a wider set: it also breaks on U+2028 and U+2029, and those
+    two come back from `display_token` byte-for-byte.
+
+    On a terminal that is the right answer — xterm and the VT sequences behind it answer to CR and
+    LF, not to Unicode `Zl`/`Zp` — so nothing here is a forgery on the surface `display_token`
+    guards. It matters for two things and both are worth pinning. Anything that reads this
+    human-readable output line by line sees a line the render did not write, which is why `--json`
+    exists and is asserted to cover it. And **this test suite is such a reader**: every assertion
+    about `session show` above counts `splitlines()`, so the boundary between what the guard catches
+    and what the harness would notice has to be stated somewhere rather than assumed to coincide.
+
+    Widening `_CONTROL_CHARS` is deliberately *not* done here. It would change what
+    `normalize_tokens` refuses — the public `unsafe_selector_token` code — and that module scopes
+    itself on purpose, so it is a decision for its owner and is reported rather than taken.
+    """
+    from requivo.core.selectors import display_token
+
+    # Written as an escape, never as the character. A raw U+2028 in a source file is invisible in
+    # every diff and every editor that will ever show this line — which is the property that makes it
+    # worth a test, and the property that makes pasting one a bad idea.
+    sep = "\u2028"
+    assert len(f"a{sep}b".splitlines()) == 2      # must fire: it really does split
+    assert display_token(f"a{sep}b") == f"a{sep}b", \
+        "the terminal guard is documented as not covering U+2028; if it now does, fix the prose too"
+
+    # …and the machine path is the stricter of the two, which is the half a consumer relies on.
+    _run(["session", "init", "Something.", "--slug", "lsep"])
+    _forge_meta("lsep", {"provider": f"anthropic{sep}FORGED BY A LINE SEPARATOR"})
+    raw = _run(["session", "show", "lsep", "--json"])
+    assert sep not in raw, raw
+    assert "\\u2028FORGED BY A LINE SEPARATOR" in raw, raw
+    assert len(raw.splitlines()) == raw.count("\n"), "a value split a line of the payload"
+
+
+def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
+    """The sibling verb, found by sweeping the class rather than the instance (#70).
+
+    `artifact list` renders the *same two untrusted strings* `session show`'s artifact block does —
+    an `artifact_status` key and `ArtifactStatus.filename`, both read straight out of `session.json`
+    by `ArtifactService.list` — at the same fixed column, and had the identical defect. Fixing one
+    verb's copy of a two-field render and leaving the other's is the shape that makes a guard
+    unreliable: the rule stops being *a persisted value is escaped where it is shown* and becomes *it
+    is escaped in the places somebody happened to look*.
+
+    Not a separate issue on purpose. It is one line, in the same file, over the same two fields as
+    the change it rides in on, with the same fixture — but it *is* outside #70's own footprint and is
+    called out as such rather than left to read as scope creep.
+    """
+    _run(["session", "init", "Something.", "--slug", "al"])
+    _forge_meta("al", {"artifact_status": _SHOW_FORGERIES["artifact_status"]})
+
+    lines = _run(["artifact", "list", "al"]).splitlines()
+
+    # must not fire: two rows where one artifact is recorded
+    assert len(lines) == 2, lines
+    assert lines[0] == "Artifacts for 'al':", lines
+    assert len([ln for ln in lines if ln.startswith("  ")]) == 1, lines
+
+    # must fire: the one real row is still rendered, and still names what is stored
+    ((artifact_type, artifact), ) = _SHOW_FORGERIES["artifact_status"].items()
+    assert repr(artifact_type) in lines[1] and repr(artifact["filename"]) in lines[1], lines[1]
+    assert lines[1].endswith("rev 1  fresh"), lines[1]
+
+    # and an ordinary artifact row is byte-for-byte what it was
+    _run(["session", "init", "Other.", "--slug", "al2"])
+    _forge_meta("al2", {"artifact_status": {"prd": {"revision": 1, "filename": "prd.md",
+                                                    "updated_at": "2026-01-01T00:00:00Z",
+                                                    "stale": False}}})
+    assert _run(["artifact", "list", "al2"]).splitlines() == [
+        "Artifacts for 'al2':",
+        f"  {'prd':<12} {'prd.md':<26} rev 1  fresh",
+    ]
+
+
 # ── the acceptance scenario ─────────────────────────────────────────────────────
 
 
@@ -687,8 +1220,44 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
     envelope = json.loads(buf.getvalue())
     assert envelope["details"]["source_revision"] is None
     assert "--revision" in envelope["message"]
+    # The code names the omission rather than the session since #57. `invalid_session` was inherited
+    # while `web/app.py` was held by another lane, and a caller across this boundary sees the code,
+    # never the type — so the one handle it had could not tell "you left a flag off" from "this
+    # session is broken".
+    assert envelope["code"] == "unstated_source_revision"
     # and nothing was recorded against the guess: the PRD on disk is still the one saved above.
     assert _run_json(["artifact", "list", "s", "--json"])["prd"]["revision"] == 2
+
+
+def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
+    """The help text is read *while deciding whether to pass the flag*, and it went on describing the
+    behaviour #6 was filed to remove: `(default: the session's current revision)`. There is no default
+    — an omitted `--revision` is refused — so the text was telling a user to rely on exactly the
+    fabricated provenance the refusal exists to stop. Two reviewers found it independently on the #6
+    branch, which is how it reached #57 instead of being fixed there.
+
+    Both halves are asserted. That the flag says it is required is the weaker claim; that no option on
+    this subcommand *advertises* a default is the one that catches the next instance, because
+    `argparse` renders every option's `help` into that one string. The two forms this repository
+    writes a default in are checked — `(default: …)` and "defaults to" — rather than the bare word,
+    which the corrected text itself uses to deny having one.
+    """
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as ei:
+        _build_parser().parse_args(["artifact", "save", "--help"])
+    assert ei.value.code == 0
+    help_text = buf.getvalue()
+
+    assert "--revision" in help_text, "must fire: this is not the help text that owns the flag"
+    # Sliced between the two option names rather than read off a wrapped line: argparse wraps to the
+    # terminal width, so a line-based assertion passes or fails on how wide the console happens to be.
+    # `rsplit` because the usage line names `--revision` first; the options block is the last mention.
+    chunk = help_text.rsplit("--revision", 1)[1].split("--json", 1)[0].lower()
+    assert "required" in chunk, f"`--revision` does not say it is required: {chunk!r}"
+    for form in ("default:", "defaults to"):
+        assert form not in help_text.lower(), (
+            f"an `artifact save` option advertises a default ({form!r}); `--revision` has had none "
+            f"since #6 and no other option on this subcommand has one either:\n{help_text}")
 
 
 # ── documents on stdin ──────────────────────────────────────────────────────────

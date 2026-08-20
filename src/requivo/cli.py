@@ -118,7 +118,10 @@ def converse(client, request: str, only: list[str] | None = None) -> EngineOutpu
         print(f"\n──────────── TURN {turn} ────────────")
         # `carry_from` is the previous turn's model: a later turn answers questions rather than
         # re-deriving the reasoning, so anything it leaves unstated is carried, not dropped.
-        out = run(client, messages, only=only, carry_from=out)
+        # `reuse_system=True` is stated rather than inherited: this loop is the reason `run()` has
+        # that default at all, and since #58 the provider seam next door declares the opposite. A
+        # per-call-site decision belongs at the call site (#9).
+        out = run(client, messages, only=only, carry_from=out, reuse_system=True)
         render_turn(out)
 
         if not out.questions:

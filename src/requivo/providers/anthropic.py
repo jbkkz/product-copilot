@@ -383,24 +383,30 @@ def _require_complete_model(out: ModelProposal) -> None:
 
 
 def run(client, messages: list[dict], retries: int = 2, only: list[str] | None = None,
-        carry_from: EngineOutput | None = None) -> EngineOutput:
+        carry_from: EngineOutput | None = None, *, reuse_system: bool = True) -> EngineOutput:
     """Engine turn: request/answers → filled model. `only` restricts which context cards inform the
     turn (defaults to all); keep it constant across a session's turns so the prompt cache holds.
 
     The reply is parsed as a `ModelProposal`, not an `EngineOutput`, because `engine.md` asks for
     `model`/`questions`/`summary` and nothing else: a turn that says nothing about decisions or
     challenges is *quiet*, not deleting them. `carry_from` is the model being refined — the established
-    reasoning is carried onto the reply, so what leaves this function is a complete model again."""
-    # Keeps the cache breakpoint (`_complete`'s default): this is the one prompt genuinely re-sent
-    # byte-identically — `converse()` runs up to 8 turns off it, a golden capture runs K, and the
-    # completeness `validate` hook above makes a corrective retry more likely here than anywhere else.
+    reasoning is carried onto the reply, so what leaves this function is a complete model again.
+
+    `reuse_system` is the one thing this function cannot decide, so it is the caller's (#58). The
+    engine prompt is the one genuinely re-sent byte-identically — `converse()` runs up to 8 turns off
+    it and a golden capture runs K — and the completeness `validate` hook below makes a corrective
+    retry likelier here than anywhere else, so the breakpoint earns its 1.25x write on those paths.
+    It does not on the single-call ones: `AnthropicProvider.analyze` is one call per service
+    operation whichever branch it takes, and it now says so rather than inheriting a default written
+    for a loop. The default stays True because that is the safe answer to an unknown — mistakenly
+    caching costs 25% once, mistakenly not caching costs full price on every repeat (`_complete`)."""
     proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
-                         validate=_require_complete_model)
+                         validate=_require_complete_model, reuse_system=reuse_system)
     return proposal.resolve(carry_from)
 
 
 def answer_turn(client, out: EngineOutput, request: str, answers: str,
-                only: list[str] | None = None) -> EngineOutput:
+                only: list[str] | None = None, *, reuse_system: bool = False) -> EngineOutput:
     """One stateless discovery turn: refine the model with new answers.
 
     The model IS the accumulated state, so a turn needs only the original request (for context),
@@ -408,13 +414,22 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
     interface (Claude Code, an API, an MCP) drive discovery turn by turn instead of a blocking TTY.
 
     `only` is the context-card selection the original discovery used (from its session.json) — passing
-    it keeps a refinement turn reasoning over the same cards, not silently the full set."""
+    it keeps a refinement turn reasoning over the same cards, not silently the full set.
+
+    **Single-call by construction, hence `reuse_system=False`** (#58). This function *is* the whole
+    turn: it assembles a fresh message list, makes one call and returns — there is no loop here for a
+    cached system block to be read back by, so the breakpoint was a flat ~25% surcharge on the write
+    (#9). Checked rather than assumed, because the argument is about callers, not about this body:
+    every surface that reaches it makes one call per operation — `requivo answer` per invocation,
+    `POST /sessions/{slug}/answer` per request, one Claude Code turn — and the multi-turn caller,
+    `converse()`, does not come through here at all. It calls `run()` directly and keeps the
+    breakpoint. A caller that genuinely loops passes True and gets it back."""
     messages = [
         {"role": "user", "content": request},
         {"role": "assistant", "content": out.model_dump_json()},
         {"role": "user", "content": "Client answers:\n" + answers},
     ]
-    return run(client, messages, only=only, carry_from=out)
+    return run(client, messages, only=only, carry_from=out, reuse_system=reuse_system)
 
 
 # ── Generators (model → artifact) ───────────────────────────────────────────────
@@ -550,9 +565,24 @@ class AnthropicProvider:
 
     def analyze(self, request: str, *, current_model: EngineOutput | None = None,
                 answers: str | None = None, only: list[str] | None = None) -> EngineOutput:
+        """One reasoning turn, on either branch — and **one call**, which is why both say
+        `reuse_system=False` (#58).
+
+        This is where the caching question is actually decidable. `DiscoveryService` reaches this
+        once per operation on every path it has — `start`, `run_discovery`, `answer` — so the system
+        block was being written to cache at 1.25x and never read back. The free functions below
+        cannot know that: `run()` is *also* called directly by `converse()`, which sends the
+        identical prompt for up to 8 turns, and by the golden harness, which sends it K times. Both
+        keep the breakpoint by keeping `run()`'s default.
+
+        The issue that filed this named `converse()`'s `--once` branch as one of the two sites. That
+        branch no longer calls `run()` — since the DiscoveryService seam it goes through `start()`
+        and lands here — so the site moved while the fact about it did not."""
         if current_model is not None and answers is not None:
-            return answer_turn(self.client, current_model, request, answers, only=only)
-        return run(self.client, [{"role": "user", "content": request}], only=only)
+            return answer_turn(self.client, current_model, request, answers, only=only,
+                               reuse_system=False)
+        return run(self.client, [{"role": "user", "content": request}], only=only,
+                   reuse_system=False)
 
     def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None,
                  **kwargs):

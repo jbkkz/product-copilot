@@ -48,7 +48,10 @@ load_dotenv()
 def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
     models, briefs = [], ([] if with_brief else None)
     for i in range(K):
-        out = run(client, [{"role": "user", "content": req["request"]}])
+        # `reuse_system=True` explicitly: this loop sends engine.md's system prompt K times, so the
+        # breakpoint is genuinely re-read here — the same declaration the `advise` call below makes,
+        # now stated rather than left to `run()`'s default (#58).
+        out = run(client, [{"role": "user", "content": req["request"]}], reuse_system=True)
         models.append(out)
         if with_brief:
             # `reuse_system=True`: unlike the CLI, this loop sends brief.md's system prompt K times, so

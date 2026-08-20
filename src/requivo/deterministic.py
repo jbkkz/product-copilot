@@ -48,6 +48,15 @@ EXIT_DEGRADED_LISTING = 4
 
 
 def _print_json(obj) -> None:
+    # `ensure_ascii` is left at its default and that is load-bearing (#70) — for a narrower set of
+    # characters than `session list` and `session show` claim between them. JSON's own grammar
+    # forbids a literal control character below U+0020 inside a string, so a newline is escaped
+    # whatever this flag says. What the flag decides is everything *non-ASCII*: U+007F–U+009F, where
+    # NEL and CSI live, and also U+2028/U+2029, which the terminal-side guard deliberately does not
+    # cover. So this path is the *stricter* of the two and stays that way only while the default
+    # does; turning it off to make accented output readable would reopen the forgery by that route,
+    # and `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what
+    # objects.
     print(json.dumps(obj, indent=2))
 
 
@@ -259,14 +268,27 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       longer loads (see `_card_health` for why that is not an integrity code). `cards_checked` is
       false when the card layer itself was unreadable — then nobody looked, and an empty map here
       means nothing at all.
+    - `non_sessions` — what is under the session root and is *not* a session: the name, what kind of
+      thing it is and what it holds, from `list_non_session_entries`. Nothing could see one of these
+      at all (#67), and the symptom is not in this report — it is the next `create_session` on that
+      name quietly landing under `<slug>-<hash>` instead. `None`, never `[]`, in the arm where the
+      root could not be listed: an empty list there reads as *we looked and there is nothing else*,
+      which is this function's own defect class one key along.
     """
     inconsistent: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
     try:
-        slugs = store.list_session_slugs()
+        # One listing for both halves. Calling `list_session_slugs` and `list_non_session_entries`
+        # separately reads the directory at two instants, and a `session.json` landing between them
+        # puts a name in *neither* answer — the invisible state this key exists to end, reintroduced
+        # by the key itself. `_describe_non_session` never raises, so what this `except` catches is
+        # the listing, which is genuinely the whole root.
+        slugs, entries = store.scan_session_root()
+        non_sessions = [e.to_dict() for e in entries]
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
-                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False}
+                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False,
+                "non_sessions": None}
     for slug in slugs:
         try:
             problems = check_session(slug)
@@ -283,7 +305,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
             inconsistent[slug] = codes
     return {"total": len(slugs), "readable": True, "error": None,
             "inconsistent": inconsistent, "unresolved_cards": unresolved,
-            "cards_checked": cards_readable}
+            "cards_checked": cards_readable, "non_sessions": non_sessions}
 
 
 def _cmd_schema(a, client) -> None:
@@ -405,6 +427,82 @@ def _cmd_doctor(a, client) -> None:
     if unchecked:
         print("     └─ the card directory could not be read (see above), so nothing is known about "
               "whether these sessions' product context still loads.")
+    _print_non_sessions(h["non_sessions"])
+
+
+def _non_session_detail(entry: dict) -> str:
+    """One entry of `sessions.non_sessions`, as a clause naming what is there and nothing else.
+
+    Every branch is an observation. There is no arm that says *a leftover lock directory*, because
+    that is a conclusion the directory cannot support — `.lock` and nothing else is what an older
+    `session_lock` left (#22) and also what an interrupted unzip leaves, and this verb's evidence is
+    the directory and only the directory (invariant 14).
+
+    The names come off disk, so each goes through `display_token`: one carrying a newline would
+    otherwise end this line and start another at column 0 of `doctor`'s own report, which is exactly
+    what a stored context-card name could do before #40."""
+    kind, error = entry["kind"], entry["error"]
+    if kind == "unknown":
+        return f"could not be examined — {error}"
+    if kind == "file":
+        return "a file, not a directory"
+    if kind == "symlink":
+        # Not followed, and not described as whatever it points at. Reporting a symlink's target
+        # contents would list another directory's filenames into a report about this workspace,
+        # and would answer `directory` about something that is not one.
+        return "a symbolic link, not followed; nothing here is read from its target"
+    if kind == "other":
+        return "neither a file nor a directory"
+    if error:
+        # Not "an empty directory". We could not look inside, and an empty directory is the one
+        # shape that costs nothing on POSIX (`rename(2)` replaces an empty destination) — so the two
+        # answers must not be spelled the same way.
+        return f"a directory whose contents could not be listed — {error}"
+    total, shown = entry["entry_count"], entry["entries"] or []
+    if not total:
+        return "an empty directory"
+    names = ", ".join(display_token(n) for n in shown)
+    more = f", … ({total} in total)" if total > len(shown) else ""
+    return f"a directory holding {total} entr{'y' if total == 1 else 'ies'}: {names}{more}"
+
+
+def _print_non_sessions(entries: list[dict] | None) -> None:
+    """Things under the session root that are not sessions, named with what they cost.
+
+    `doctor` owns this rather than `session verify` for the reason the state exists: `verify` is
+    per-session and takes a slug, and the defining property of one of these is that no listing
+    produces its name, so there is no slug for anybody to type. `doctor` already answers about the
+    workspace as a whole and already carries the three-state discipline this needs (#67).
+
+    Its own row rather than a note on the sessions row, because `0 in this workspace` stays true —
+    none of this is a session — and folding it in would trade a correct count for a vague one.
+
+    The consequence is printed and not left to be inferred. A finding with no remedy is a line
+    people learn to scroll past, and this one is invisible until it strikes: the rename that claims
+    a slug (invariant 11) loses to anything already occupying the name, and `SessionService` then
+    falls through to its hash-suffixed candidate without a word. It is printed only for a name
+    `create_session` can actually be asked for — `canonical_dir` refuses anything else long before a
+    rename — because a consequence that cannot happen is noise on a report that is already a
+    judgement call."""
+    if not entries:
+        # `None` here is the unreadable-root arm, which has already returned above with its own
+        # line; `[]` is a clean workspace, and a clean check earns no row on this report.
+        return
+    n = len(entries)
+    print(f"  🟡 other entries   {n} entr{'y' if n == 1 else 'ies'} under this directory that "
+          "Requivo does not read")
+    for entry in entries:
+        taken = "  [name taken]" if entry["slug_shaped"] else ""
+        print(f"     └─ {display_token(entry['name'])} — {_non_session_detail(entry)}{taken}")
+    # Marked per row and explained once. Repeating the mechanism under every row buried the rows
+    # themselves the moment there was more than one, and the rows are the finding.
+    if any(e["slug_shaped"] for e in entries):
+        print("     [name taken]: a new session asked for that name will not get it. The rename "
+              "that claims a slug loses to anything already occupying it, so the session is "
+              "created under that name plus a hash — which is the only symptom any of this has.")
+    print("     Requivo has not read, moved or deleted any of these, and does not say what they "
+          "are: an interrupted copy and a directory an older version left behind look the same "
+          "from here. Check before removing anything.")
 
 
 # ── session ──────────────────────────────────────────────────────────────────────
@@ -498,10 +596,20 @@ def _session_list_line(entry) -> str:
     A value that is already one safe line comes back byte-for-byte, so every real session's row is
     unchanged and no reader learns a new shape for the normal case.
 
-    **`session show` has the same defect in five fields and is deliberately not fixed here** — it is
-    a different verb needing its own tests, and is reported for filing rather than ridden in on this
-    diff. The `--json` path needs none of this: `json.dumps` defaults to `ensure_ascii=True`, so the
-    encoder escapes a control character before it can reach a line of its own.
+    **`session show` had the same defect and is fixed in #70** — this paragraph used to say it was
+    deliberately left for its own change, which it was, and the pointer is kept rather than deleted
+    because the count it gave was wrong: five, where the verb turned out to print **eight** untrusted
+    strings. #62 counted the `SessionMeta` scalars and missed `slug` plus the two fields that live on
+    `ArtifactStatus` and its dict key. Read `_cmd_session_show`'s docstring for the surface-specific
+    half; the argument is this one.
+
+    The `--json` path needs none of this, **for a narrower reason than this file used to give**.
+    `json.dumps` defaults to `ensure_ascii=True`, and that default is load-bearing — but not for the
+    newline both issues reproduced with. A control character below U+0020 is escaped by JSON's own
+    grammar whatever the flag says; what the flag decides is the *non-ASCII* half of `_CONTROL_CHARS`,
+    U+007F–U+009F, which carries NEL and CSI. Measured, and pinned by
+    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line`, which probes both
+    halves because a newline probe is green either way and pins nothing (#70).
 
     The reason rides the row rather than being replaced by a pointer, because for the commonest break
     mode the reason *is* the remedy. `requivo session verify <slug>` is the acting surface the footer
@@ -557,6 +665,68 @@ def _cmd_session_list(a, client) -> None:
 
 
 def _cmd_session_show(a, client) -> None:
+    """One session's metadata. **Every string on this path comes out of `session.json`'s body and is
+    untrusted**, so all eight of them go through `display_token` (#70).
+
+    The argument is `_session_list_line`'s, in full, and is not repeated here — read that docstring.
+    Only two things differ, and both make this verb the worse of the pair rather than the safer one:
+
+    * **It is eight fields, not the five the issue counted.** #62 named the five that happen to be
+      `SessionMeta` scalars. The other three are `meta.slug` — which #62's own fix caught on the
+      listing and which is the same bare `str` here — plus two that are not `SessionMeta` fields at
+      all: the **keys** of `artifact_status`, a `dict[str, …]` whose keys are whatever the file says,
+      and `ArtifactStatus.filename`. `core/integrity.py` already treats that recorded filename as
+      untrusted input; a render site that does not is the exception that makes the rule unreliable.
+    * **Every line here is one Requivo writes itself**, in a fixed shape, at a fixed column. On the
+      listing a forged row at least has to imitate a row; here a stored value can print
+      `  revision 0` under a session that is at revision 12, and nothing in the render distinguishes
+      the two. Reproduced on this branch: a `session.json` forged in all eight fields printed sixteen
+      lines instead of eight, including its own `revision 999` and `provider trusted`, and the
+      command exited 0.
+
+    `meta.current_revision`, `st.revision` and `st.stale` are deliberately **not** wrapped, and that
+    is stated rather than hedged: they are `int`/`int`/`bool`, so `read_meta` refuses a string there
+    before this function runs. Wrapping them defensively would say the type gave us nothing, which is
+    the reading that makes the next person wrap something that genuinely does not need it.
+
+    `session_id` is **sliced before it is escaped**, and the order is load-bearing: escaping first
+    would produce a quoted, backslash-escaped string, and truncating *that* to twelve characters can
+    cut an escape sequence in half and leave the quote unclosed — a neutralised value rendered as
+    garbage, which is a second defect bought with the fix for the first.
+
+    The `--json` path needs none of this and is left alone — but **not for the reason #62 and #70
+    both give**, which is worth stating here because that reason is what a later reader will act on.
+    It is not that `json.dumps` defaults to `ensure_ascii=True`: a control character below U+0020 is
+    escaped by JSON's own grammar whatever that flag says, so a *newline* — the character both issues
+    reproduced with — is safe either way. The default is still load-bearing, for the non-ASCII half of
+    `_CONTROL_CHARS` (U+007F–U+009F), which carries NEL, a line terminator `str.splitlines()` honours,
+    and CSI. Measured rather than argued, and pinned by
+    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line`, which probes both
+    halves precisely because a newline probe is green under either setting and pins nothing.
+
+    A value that is already one safe line comes back byte-for-byte, so no real session's output
+    changes — `test_session_show_leaves_an_ordinary_session_byte_for_byte` pins every line of it.
+
+    **What this does not cover, said here rather than left to be discovered.** `display_token`'s
+    `_CONTROL_CHARS` is C0, DEL and C1 — the class that can move a terminal's cursor or end its line.
+    `str.splitlines()` also breaks on U+2028 and U+2029, which are *not* in that class and come back
+    from `display_token` byte-for-byte. On a terminal that is correct: xterm and the VT sequences it
+    descends from answer to CR and LF, not to Unicode `Zl`/`Zp`. It is not correct for anything that
+    parses this human-readable output line by line — which is what `--json` is for, and which is
+    covered there, since `ensure_ascii=True` escapes those two as well. Widening `_CONTROL_CHARS`
+    would also change what `normalize_tokens` *refuses*, i.e. the public `unsafe_selector_token`
+    surface, and that module's own comment scopes it deliberately — so it is a decision for its
+    owner, reported rather than taken here (#70).
+
+    **One cosmetic cost, accepted rather than overlooked.** The first line wraps the slug in literal
+    quotes of its own, so a slug that has to be escaped renders nested — an apostrophe in the stored
+    value puts a `repr` in double quotes inside this line's single ones. Ugly, still one line, still
+    incapable of forging anything. Both available fixes are worse: dropping the literal quotes changes
+    the output of every clean session, which is the guarantee above and worth more than the nesting;
+    and quoting conditionally on whether `display_token` escaped puts a branch on that function's
+    *return shape* rather than on its contract, which is the coupling that survives until somebody
+    changes the escaper.
+    """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
@@ -565,11 +735,12 @@ def _cmd_session_show(a, client) -> None:
     if a.json:
         _print_json(meta.model_dump())
         return
-    print(f"Session '{meta.slug}'  (id {meta.session_id[:12]}…)")
-    print(f"  created  {meta.created_at}")
-    print(f"  updated  {meta.updated_at}")
+    print(f"Session '{display_token(meta.slug)}'  (id {display_token(meta.session_id[:12])}…)")
+    print(f"  created  {display_token(meta.created_at)}")
+    print(f"  updated  {display_token(meta.updated_at)}")
     print(f"  revision {meta.current_revision}")
-    print(f"  provider {meta.provider or '—'}   model {meta.model_name or '—'}")
+    print(f"  provider {display_token(meta.provider or '—')}   "
+          f"model {display_token(meta.model_name or '—')}")
     # `display_token`, not a bare join (#40). This is the one card-name render site the selector
     # guard cannot reach: nothing here is *selecting*, so `normalize_tokens` never runs and a name
     # persisted by `session import` arrives unexamined. A clean name is returned byte-for-byte, so
@@ -583,7 +754,12 @@ def _cmd_session_show(a, client) -> None:
             # invalidation signal (see ArtifactService.list). An artifact produced two revisions ago
             # whose inputs never moved is still fresh, and saying otherwise here contradicted both
             # `artifact list` and the status JSON every other surface reads.
-            print(f"    {t:<12} {st.filename:<26} rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
+            #
+            # Padded *after* escaping, which is the only order that works: the column widths exist so
+            # a reader can scan the block, and padding a value that is about to grow quotes lines the
+            # block up against a length the render does not have.
+            print(f"    {display_token(t):<12} {display_token(st.filename):<26} "
+                  f"rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
 
 
 def _cmd_session_migrate(a, client) -> None:
@@ -942,7 +1118,15 @@ def _cmd_artifact_list(a, client) -> None:
         return
     print(f"Artifacts for '{slug}':")
     for t, info in items.items():
-        print(f"  {t:<12} {info['filename']:<26} rev {info['revision']}  {'STALE' if info['stale'] else 'fresh'}")
+        # The same two untrusted strings `session show`'s artifact block renders, in the other verb
+        # that renders them (#70). `ArtifactService.list` passes `session.json`'s `artifact_status`
+        # through, so the key and the filename are whatever the file says; `core/integrity.py`
+        # already treats that filename as untrusted input. `slug` above is the resolved directory
+        # name, not the body's, and `revision`/`stale` are `int`/`bool` — none of the three needs it.
+        # Escape before padding: the widths exist so the block can be scanned, and padding a value
+        # that is about to grow quotes aligns it to a length the render does not have.
+        print(f"  {display_token(t):<12} {display_token(info['filename']):<26} "
+              f"rev {info['revision']}  {'STALE' if info['stale'] else 'fresh'}")
 
 
 def _cmd_artifact_show(a, client) -> None:
@@ -1057,8 +1241,14 @@ def register(sub) -> None:
     asv.add_argument("--type", required=True, choices=sorted(ARTIFACT_FILENAMES),
                      help="artifact type")
     asv.add_argument("--file", required=True, help="path to the artifact content, or '-' to read it from stdin")
+    # No `required=True`: the omission has to arrive as a structured `UnstatedSourceRevisionError` the
+    # `--json` envelope can carry, not as argparse's usage error and exit 2 (see `ArtifactService.save`).
+    # The help string is what has to say it, and until #57 it said the opposite — it still advertised
+    # the default #6 removed, which is the text a user reads while deciding whether to pass the flag.
     asv.add_argument("--revision", type=int, default=None,
-                     help="source model revision (default: the session's current revision)")
+                     help="required: the model revision this content was reasoned from. There is no "
+                          "default — the session's current revision is a different fact, and only you "
+                          "know what you read")
     asv.add_argument("--json", action="store_true")
     asv.set_defaults(func=_cmd_artifact_save)
 
