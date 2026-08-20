@@ -1,6 +1,6 @@
 {
   "name": "requivo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Find what could change the solution before you commit to the scope — using your existing Claude Code session for the reasoning, over the same Requivo sessions the Web app and CLI read. No Anthropic API key required.",
   "author": {
     "name": "jbkkz"

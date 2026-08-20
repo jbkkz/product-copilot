@@ -6,6 +6,120 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-20
+
+### Fixed
+
+- **Every error string `deterministic.py` prints goes through `display_token`** (#90). Six sites,
+  not the two the issue named: the two on a `doctor` non-session line, `doctor`'s own `schema`,
+  `context cards` and `sessions` rows, and `session verify`'s product-context line. Sweeping the
+  class rather than the two instances is what the first attempt at this fix did not do, and the
+  release audit said so — twice, since the guard added alongside claimed a reach two sites wider
+  than it had.
+- **The error text on a `doctor` non-session line goes through `display_token`** (#90). Every other
+  value interpolated into that line already did — the entry name, each sampled child name — and the
+  function's own docstring, three lines above, stated the rule for the *names* on a line that
+  carries two classes of value. `error` is `str(e)` from a deliberately wide `except Exception` in
+  the store, whose docstring says the set of ways a member can be broken is open, so an open set of
+  causes was feeding an unescaped interpolation. That is the shape #40 was.
+- Compatibility: compatible - five more printed values are escaped, across `doctor` and `session
+  verify`; no payload, code or exit code changes, and ordinary error text is unchanged by the wrap,
+  since `display_token` returns its argument byte-for-byte unless it holds a control character
+  (#90).
+- **Two messages this release does not wrap, and deliberately.** `session verify`'s integrity-problem
+  and card-problem lines reach the terminal unwrapped because their values are guarded where they
+  are *interpreted* — `normalize_tokens` refuses a control-carrying token before any message text
+  exists — which is where invariant 14 says the guard belongs. Wrapping them would add a second
+  guard and imply the first is not trusted (#90).
+- No reaching instance was constructed and the wrap is not conditional on that. Today the arms are
+  effectively the `OSError` family and CPython's `OSError.__str__` already `repr()`s the filename,
+  so it misreported rather than forged — but that is a fact about today's exception space, not a
+  property of the line. The docstring now states the rule for every value on it rather than for
+  half of them, which is why the omission recurred (#90).
+
+- **`requivo session verify` no longer crashes on the row `session list` just told you to look at**
+  (#97). `session_exists` used a bare `Path.exists()`, which swallows `ENOENT` into `False` and
+  **re-raises everything else** — the same unguarded probe #80 had to remove from the session-root
+  scan. #80 made `session list` render a degraded row for an entry it could not examine and print a
+  footer pointing at `session verify <slug>`; that verb opened with `session_exists` and answered
+  with a bare `PermissionError` traceback.
+- Compatibility: compatible - `session verify --json` gains a `session` object and no field is
+  renamed or removed. A consumer reading only `slug`, `ok`, `problems` and `context_cards` is
+  unaffected on a workspace where every session can be examined (#97).
+- **`session verify` exits 4, not 1, when it could not look.** 1 says *I checked and it is broken*;
+  nothing checked anything. 4 already means *the work was done and part of the answer was
+  unreachable* (#86), which is exactly this. The precedence rule is unchanged: a session with real
+  `problems` **and** an unexaminable path exits 1, because a firm negative outranks a partial one.
+- **`session verify --json` gains `session: {checked, error}`**, a sibling of `context_cards`
+  carrying the same two keys for the same reason: `problems: []` spells both *checked, nothing
+  wrong* and *nothing was checked*, and a consumer cannot tell those apart from an empty list.
+  **Branch on `session.checked`**, never on the emptiness of `problems`. It is present on every
+  payload, reading `{"checked": true, "error": null}` on a session that was examined (#97).
+- **`session_exists` raises rather than widening its bool.** A `bool` has two states and the
+  question has three, so the third leaves through the error channel as `SessionUnreadableError` —
+  #82's code for a fact about the store rather than about the request, already 500 over HTTP.
+  Answering `False` was never available: `cli.py` and `session import --force` read this to decide
+  whether to create or overwrite, so *I could not tell* becoming *there is nothing here* is a write
+  proceeding on an unknown. `ENOENT` still returns `False`, because absent is a real answer and the
+  commonest one. `legacy_exists` had the identical shape and is fixed with it (#97).
+
+- **`session import` can no longer destroy a session that was created while it was reading the
+  archive** (#111). It decided the collision question twice — `session_exists(slug) and not
+  --force` before the extraction, and `replaced = target.exists()` after it — with the whole unzip
+  in between. A session that appeared in that window was moved aside and then deleted, by an import
+  whose user was never asked for `--force`, because at the moment they would have been asked there
+  was nothing to force past.
+- Compatibility: compatible - no payload, flag or exit code changes. `replaced` in `session import
+  --json` keeps the meaning it always had and is now the guard's own answer rather than a second
+  observation; the two could previously disagree, and the disagreement was the bug (#111).
+- The answer is asked once and the two outcomes are two code paths, not one flag. A slug that was
+  **free** at the guard is claimed by the rename itself — nothing steps aside, and `os.replace`
+  refuses a non-empty destination directory, so the concurrent creator's session stops the import
+  instead of being destroyed by it. The caller gets `session_exists` / 409 and the same remedy the
+  guard would have given them: pass `--force`.
+- A slug that was **occupied**, so `--force` was passed for it, swaps as before — reversibly, the
+  old directory stepping aside and dying only once the new one is in place. It deliberately does
+  **not** take `session_lock`, and the reason is structural: the lock is an open handle on `.lock`
+  inside the very directory being renamed, and Windows refuses to rename a directory holding one.
+  Taking it there does not serialise the swap, it makes the swap impossible on four of the thirteen
+  CI legs. What closes this defect is the single decision above, not a lock (#111).
+- The residue is narrow and is what `--force` already means: a concurrent writer part-way through
+  the session being replaced loses that work, because the caller asked for the session to be
+  replaced. What is no longer possible is losing a session the caller was never asked about (#111).
+- Held out of the 1.0.0 tag deliberately rather than missed. The release audit found it, ranked it
+  `destroys`, and it was byte-identical in 0.11.0 — outside that release's delta, so holding the tag
+  would have removed it from nobody's machine (#111).
+
+- A comment added in 1.0.1's own `session import` fix claimed a narrower residue than actually holds,
+  and now states the real one (#113). It said a concurrent writer part-way through a session being
+  replaced by `--force` merely *loses that work*. It does worse than that, and the underlying defect
+  is filed rather than fixed here because the fix is a change to the swap mechanism.
+- Compatibility: compatible - one comment and one changelog sentence. No behaviour, payload, flag or
+  exit code changes (#113).
+- What actually happens: `save_revision` resolves the session directory once and then writes by
+  **pathname**, while `session_lock` holds an fd on an **inode**. A writer inside `save_revision`
+  during the swap goes on writing into the newly imported directory, so the import silently inherits
+  another session's revision files and identity — and a third process then locks `target/.lock`,
+  a different inode from the one that writer holds, and acquires it. Two writers hold the lock for
+  one slug, which is invariant 9's own failure mode wearing the shape invariant 9 exists to remove.
+- Pre-existing and byte-identical at 1.0.0 and 0.11.0, so nothing in 1.0.1 introduced it. What 1.0.1
+  introduced was a sentence asserting it away, which is the part corrected here (#113).
+
+- A changelog fragment and two commit messages shut an issue they were written to keep open (#114).
+  GitHub's closing-reference parser matches a `close`/`fix`/`resolve` verb sitting next to a
+  hash-number, and it sees **neither negation nor code formatting**: `Also filed, not <verb>: <num>`
+  fired, and so did the same pair inside backticks in a sentence explaining that it had.
+- Compatibility: compatible - a tracker state and this note. No code (#114).
+- The rule that follows is blunt, because two attempts at stating it more carefully both fired:
+  **never put those verbs adjacent to a hash-number for an issue you are not closing.** Not in a
+  heading, not after a negation, not inside a code span, and not while quoting the mistake. Where a
+  number must appear next to such a word, spell one of the two some other way — which is what this
+  entry does (#114).
+- The subject is a POSIX/Windows divergence in `session import`'s free-slug arm, and nothing in
+  `v1.0.0..v1.0.1` touches it. Caught both times by the release audit's composition pass, which
+  reads the tracker's *state* rather than the issue text — the tag would otherwise have published a
+  tracker asserting a repair that does not exist (#114).
+
 ## [1.0.0] - 2026-08-20
 
 ### Added
@@ -2372,7 +2486,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jbkkz/requivo/releases/tag/v1.0.1
 [1.0.0]: https://github.com/jbkkz/requivo/releases/tag/v1.0.0
 [0.11.0]: https://github.com/jbkkz/requivo/releases/tag/v0.11.0
 [0.10.0]: https://github.com/jbkkz/requivo/releases/tag/v0.10.0
