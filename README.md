@@ -2,8 +2,8 @@
 
 [![PyPI](https://img.shields.io/pypi/v/requivo)](https://pypi.org/project/requivo/)
 [![Python](https://img.shields.io/pypi/pyversions/requivo)](https://pypi.org/project/requivo/)
+[![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml)
 
 > Find what could change the solution before you commit to the scope.
 
