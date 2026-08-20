@@ -1277,7 +1277,18 @@ def _cmd_artifact_list(a, client) -> None:
     slug = svc.resolve_slug(a.session)
     items = ArtifactService().list(slug)
     if a.json:
-        _print_json(items)
+        # `items` is keyed by artifact type, so printing it bare gave the payload a top level made
+        # of data — #87's defect on `session list`, one shape along (#107). Its argument was that
+        # an array has no top level, so no field could ever be added to it; a map keyed by data has
+        # that property in practice, because the consumer read is `for t, info in payload.items()`
+        # and a metadata key added later is both ambiguous with a future artifact type and breaks
+        # that loop.
+        #
+        # Wrap, do not restructure: the rows are untouched, so the migration is one level of
+        # indirection. `slug` is the only key the new top level carries — every sibling verb
+        # answers it and this one had nowhere to put it — and deliberately the only one, because a
+        # top level nobody needs yet is still worth having, and filling it speculatively is not.
+        _print_json({"slug": slug, "artifacts": items})
         return
     if not items:
         print(f"No artifacts saved for '{slug}'.")

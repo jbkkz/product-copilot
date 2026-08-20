@@ -254,6 +254,26 @@ to Unicode `Zl`/`Zp`. It matters if you parse this human-readable output line by
 is what `--json` is for, and `--json` escapes those two as well, which makes it the stricter of the
 two paths.
 
+### What `artifact list --json` answers
+
+```json
+{"slug": "leave-approval",
+ "artifacts": {"prd": {"revision": 3, "filename": "prd.md",
+                       "updated_at": "2026-08-20T14:25:28Z", "stale": false}}}
+```
+
+The rows live under `artifacts`, keyed by type, and `stale` is the dependency graph's verdict — not
+a comparison of `revision` against the session's current one, which is provenance (see
+[the model is the product](architecture.md)). A session with nothing saved answers
+`{"slug": …, "artifacts": {}}`, which states which session was asked about; it used to answer `{}`,
+which a consumer could not tell from a payload that failed to serialise.
+
+**This payload used to be the bare inner map** (#107) — `{"prd": {…}}`, top level keyed by artifact
+type. **Breaking**, same class as #87 and #84: `jq '.artifacts'` where you had `jq '.'`. The rows
+are untouched. The reason is #87's, one shape along — a top level made of data cannot gain a field,
+because the consumer read is `for t, info in payload.items()` and any key added later is both
+ambiguous with a future artifact type and breaks that loop.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty
