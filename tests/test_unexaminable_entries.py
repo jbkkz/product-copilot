@@ -164,6 +164,13 @@ def test_one_unexaminable_entry_no_longer_takes_the_whole_listing_down(blocked):
     assert "could not be read" in out.lower()
     assert code == EXIT_DEGRADED
 
+    # The footer counts the entry without calling it a session. Every degraded row used to come from
+    # `list_session_slugs`, so `1 session could not be read` was true of all of them; it is not true
+    # of this one, and the footer is the last line a reader takes away. Both halves asserted, because
+    # `"session" not in footer` alone would pass on a footer that stopped being printed.
+    footer = next(ln for ln in out.splitlines() if "could not be read." in ln)
+    assert footer.startswith("1 entry could not be read."), footer
+
 
 def test_the_row_carries_the_reason_because_the_reason_is_the_remedy(blocked):
     """*Permission denied on this path* is something a user can act on; a flattened `unreadable` is

@@ -685,9 +685,16 @@ def _session_list_line(entry) -> str:
     mode the reason *is* the remedy. `requivo session verify <slug>` is the acting surface the footer
     points at for the cases where one line is not enough: measured against each way `read_meta` can
     refuse — a newer `format_version`, an unparseable `session.json`, a field of the wrong type — it
-    reports an integrity code and exits 1 rather than raising. The **one** case it does not report on
-    is a slug that is not a slug, where it refuses the name instead; there the row's own text is
-    already the whole story, because the name is the defect.
+    reports an integrity code and exits 1 rather than raising.
+
+    **Two** cases it does not report on, and they fail in opposite directions. A slug that is not a
+    slug is refused by name, and there the row's own text is already the whole story because the name
+    is the defect. An entry the partition could not *examine* is the other, and it is the one worth
+    knowing about: `session_exists` probes `session.json` with the same unguarded `.exists()` this
+    file's own listing had to stop using in #80, so `verify` raises a bare `PermissionError` on the
+    very row this footer sent the reader to. Filed rather than fixed alongside #80 — what `verify`
+    should *answer* there is a verdict-class decision (`unsound` and 1, or `unchecked` and 4), and
+    `session_exists` has callers on the write path where answering `False` would be the worse bug.
     """
     if not entry.readable:
         return (f"  {display_token(entry.slug):<40} could not be read — "
@@ -735,7 +742,14 @@ def _cmd_session_list(a, client) -> None:
         if degraded:
             n = len(degraded)
             print()
-            print(f"{n} session{'' if n == 1 else 's'} could not be read. "
+            # `entr{y,ies}` and not `session{,s}` since #80. A degraded row used to be a name that
+            # certainly had a `session.json` behind it, because every row came from
+            # `list_session_slugs`; one of them can now be an entry nobody could examine, and calling
+            # that a session is the single claim this whole change exists to refuse. The word also
+            # matches what `doctor` says about the same entry, so the two surfaces stop describing
+            # one thing two ways. `session verify <slug>` stays the remedy: it is right for every
+            # mode it was written for, and where it is not, the fix belongs in that verb.
+            print(f"{n} entr{'y' if n == 1 else 'ies'} could not be read. "
                   f"`requivo session verify <slug>` reports what is wrong in full.")
     # Raised after the listing is printed, never instead of it: the rows are the answer, and the exit
     # code is the third state in the one channel a script that does not parse stdout can read.

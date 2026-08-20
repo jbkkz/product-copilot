@@ -308,17 +308,24 @@ Sessions under /work/.requivo/sessions:
   leave-approval                           rev 3  (anthropic, 2026-08-19T09:04:11Z)
   event-checkin                            could not be read — session format v2 is newer than this Requivo understands (v1) — upgrade requivo.
 
-1 session could not be read. `requivo session verify <slug>` reports what is wrong in full.
+1 entry could not be read. `requivo session verify <slug>` reports what is wrong in full.
 ```
+
+The footer counts **entries**, not sessions: since #80 one of these rows can be an entry nobody
+could examine, and calling that a session is the one claim the third state exists to refuse.
 
 The degraded row **names the session and states nothing it could not read** — no revision, no
 provider, no timestamp. A plausible `rev 0` on a session nobody managed to open is a worse answer
 than no answer. It keeps the underlying error text, because *written by a newer Requivo, upgrade* is
 a remedy where a flattened *unreadable* is not. `session verify <slug>` is where the full story lives:
 it reports an integrity code for each way a `session.json` can be refused — a newer `format_version`,
-an unparseable file, a field of the wrong type. The one thing it cannot report on is a session
-directory whose *name* is not a valid slug, since it has no slug to take; there the row's own line is
-already the whole answer.
+an unparseable file, a field of the wrong type.
+
+Two things it cannot report on. A session directory whose *name* is not a valid slug, since it has no
+slug to take; there the row's own line is already the whole answer. And an entry that could not be
+**examined** — `session_exists` probes `session.json` the way the listing itself used to, so `verify`
+still raises there rather than answering. That is a known gap with its own issue, not a state this
+verb reports: for such a row the line in the listing is the whole of what Requivo can say today.
 
 A session at **revision 0** is not this state. It has no model yet because nothing has analysed it,
 which is a normal row and reads as one — *we could not look* and *we have not looked yet* are two

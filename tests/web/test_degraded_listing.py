@@ -260,3 +260,46 @@ def test_the_metadata_failure_is_reported_as_the_error_it_was(mixed_workspace):
     assert "format" in entry.error.lower()
     with pytest.raises(InvalidSessionError):
         SessionService().meta(BROKEN_META)     # must fire: the strict read still refuses
+
+
+# ── the fourth break mode, one layer below the other three (#80) ──────────────
+
+
+def test_an_entry_that_could_not_be_examined_is_a_row_and_not_a_broken_page(client, request):
+    """The three modes above break a member the listing already *has*. This one breaks the scan that
+    decides what the members are, so it took the whole page down from below the guard (#80).
+
+    `_scan_session_root` probes `<name>/session.json` to decide whether a name is a session, and
+    `Path.exists()` re-raises EACCES — so one directory the process cannot stat into raised inside
+    `list_entries`' own `list_slugs()` call, above every per-row `try` in this module. The home page
+    was a 500 with no row to name anything.
+
+    Pinned here because the web reached this for free through `list_entries()` and nothing else in
+    the repo says so: the issue was filed against `session list` and `doctor`, and a surface that is
+    correct only incidentally is a surface the next change to `list_entries` can quietly break.
+    """
+    import os
+
+    _seed(HEALTHY_ANALYSED, analysed=True)
+    from requivo.core.persistence import session_root
+    d = session_root() / "blocked-entry"
+    d.mkdir()
+    request.addfinalizer(lambda: d.chmod(0o755))
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that the home "
+                    "page survives an entry whose examination raises. The CLI sibling of this case "
+                    "is tests/test_unexaminable_entries.py, skipped there for the same reason.")
+    d.chmod(0o000)
+    try:
+        (d / "session.json").exists()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("chmod 000 did not deny the probe on this run (running as root?). UNTESTED "
+                    "HERE: the home page's fourth break mode.")
+
+    r = client.get("/")
+    assert r.status_code == 200
+    assert f"A request about {HEALTHY_ANALYSED}" in r.text   # must fire: the healthy row is intact
+    assert "blocked-entry" in r.text                          # …and the entry names itself
+    assert "could not be read" in r.text.lower()
