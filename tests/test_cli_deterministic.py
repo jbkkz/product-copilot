@@ -19,6 +19,7 @@ import pytest
 from requivo.cli import _build_parser, app
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
+from requivo.core.errors import InvalidSlugError
 from requivo.services.sessions import SessionService
 
 
@@ -147,7 +148,11 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
     empty_text = _run(["doctor"])
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(det.store, "list_session_slugs", _unreadable)
+        # `scan_session_root`, because that is the one listing `_session_health` makes since #67.
+        # Patching `list_session_slugs` — which it no longer calls — left this simulating nothing
+        # while still asserting; the failure is what said so, which is the point of asserting that
+        # the two renderings *differ* rather than that the broken one says something.
+        mp.setattr(det.store, "scan_session_root", _unreadable)
         unreadable = _run_json(["doctor", "--json"])["sessions"]
         unreadable_text = _run(["doctor"])
     assert unreadable["readable"] is False
@@ -341,6 +346,56 @@ def _deny_listing(directory: Path) -> None:
                 "could-not-look arm is untested on this run")
 
 
+def test_a_symlink_is_reported_as_one_and_its_target_is_not_read(workspace, tmp_path):
+    """`Path.is_dir()` follows a symlink. So a link at a slug name pointing anywhere else reported
+    `kind: "directory"`, and the `iterdir` beneath it listed the **target's** filenames into a report
+    about this workspace — an answer about something that is not a directory here, carrying names
+    from somewhere the user did not ask about. Found by review; a symlink is a third shape, and this
+    module already treats one as the single case a containment guard has to answer for (invariant
+    17)."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret-project.md").touch()
+    store.session_root().mkdir(parents=True)
+    try:
+        (store.session_root() / "leave-approval").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:                            # pragma: no cover - Windows without developer mode
+        pytest.skip("this platform refuses an unprivileged symlink — the symlink arm is untested "
+                    "on this run")
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "symlink", "is_dir() follows the link; this answer must not"
+    assert entry["entries"] is None and entry["entry_count"] is None
+    assert entry["error"] is None, "nothing failed — we declined to follow it"
+    assert entry["slug_shaped"] is True, "the name is still taken, whatever it points at"
+    assert "secret-project.md" not in _run(["doctor"]), (
+        "the target's contents were listed into a report about this workspace")
+
+
+def test_a_name_too_long_to_be_a_slug_is_not_marked_as_taken(workspace):
+    """`slug_shaped` asked `_SLUG_RE` alone, and validity is the pattern **and** the length: an
+    81-character kebab-case directory matched the pattern and was marked `[name taken]`, under a
+    sentence promising a silent hash-suffixed substitution. `canonical_dir` refuses that name outright
+    and loudly instead, so the promise was false in the one direction that matters — it told a reader
+    to expect silence from a call that raises. Found by review.
+
+    The 80-character sibling beside it is the must-fire control: same shape, one character shorter,
+    and it *is* reachable."""
+    over = "a" * (store.MAX_SLUG_LENGTH + 1)
+    at_limit = "b" * store.MAX_SLUG_LENGTH
+    for name in (over, at_limit):
+        (store.session_root() / name).mkdir(parents=True)
+        (store.session_root() / name / ".lock").touch()
+
+    by_name = {e["name"]: e for e in _run_json(["doctor", "--json"])["sessions"]["non_sessions"]}
+    assert by_name[at_limit]["slug_shaped"] is True, "the control: this one really is reachable"
+    assert by_name[over]["slug_shaped"] is False
+
+    # And the claim the flag stands for is the one the code makes: a refusal, not a substitution.
+    with pytest.raises(InvalidSlugError):
+        store.canonical_dir(over)
+
+
 def test_an_empty_directory_is_still_reported_and_still_marked(workspace):
     """The one shape whose cost is platform-dependent, and the report deliberately does not try to be
     clever about it. POSIX `rename(2)` replaces an empty destination, so `create_session` still wins
@@ -414,6 +469,13 @@ def test_a_name_read_off_disk_cannot_forge_a_line_of_the_report_that_names_it(wo
     # before it can reach a line of its own, so the finding keeps its bytes verbatim.
     entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
     assert any("\n" in n for n in entry["entries"])
+
+    # The other permutation, on the entry's *own* name rather than a name it holds. The two reach
+    # the report through different f-strings, so one covering the other is an assumption.
+    (store.session_root() / "y\n  ✅ forged          all clear").mkdir()
+    both = _run(["doctor"])
+    assert both.count("\\n") >= 2, "the directory's own name reached the terminal unescaped"
+    assert "  ✅ forged          all clear" not in both.splitlines()
 
 
 def test_session_list_does_not_call_one_of_these_a_session(workspace):

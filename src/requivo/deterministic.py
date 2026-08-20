@@ -269,11 +269,13 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     inconsistent: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
     try:
-        slugs = store.list_session_slugs()
-        # In the same `try`, because it is the same listing failing: a root that cannot be read
-        # answers neither question, and reporting one of the two as clean would be worse than
-        # reporting neither.
-        non_sessions = [e.to_dict() for e in store.list_non_session_entries()]
+        # One listing for both halves. Calling `list_session_slugs` and `list_non_session_entries`
+        # separately reads the directory at two instants, and a `session.json` landing between them
+        # puts a name in *neither* answer — the invisible state this key exists to end, reintroduced
+        # by the key itself. `_describe_non_session` never raises, so what this `except` catches is
+        # the listing, which is genuinely the whole root.
+        slugs, entries = store.scan_session_root()
+        non_sessions = [e.to_dict() for e in entries]
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
                 "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False,
@@ -435,6 +437,11 @@ def _non_session_detail(entry: dict) -> str:
         return f"could not be examined — {error}"
     if kind == "file":
         return "a file, not a directory"
+    if kind == "symlink":
+        # Not followed, and not described as whatever it points at. Reporting a symlink's target
+        # contents would list another directory's filenames into a report about this workspace,
+        # and would answer `directory` about something that is not one.
+        return "a symbolic link, not followed; nothing here is read from its target"
     if kind == "other":
         return "neither a file nor a directory"
     if error:

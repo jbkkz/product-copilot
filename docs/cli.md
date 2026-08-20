@@ -116,10 +116,15 @@ for something that is not one.
 not say what these are. A directory holding only `.lock` is almost certainly a leftover lock, and
 almost certainly is not enough: a half-extracted archive and an interrupted copy are the same shape
 from the outside, and this project's rule is that the evidence is the directory and only the
-directory. So each entry carries what was found — `name`, `kind` (`directory` / `file` / `other` /
-`unknown`), `entries` (up to five names) and `entry_count` — and one derived flag, `slug_shaped`,
-which is a property of the *name*: whether `create_session` can be asked for it at all, and so
-whether the entry costs anybody anything. There is no field spelling a conclusion.
+directory. So each entry carries what was found — `name`, `kind` (`directory` / `file` / `symlink` /
+`other` / `unknown`), `entries` (up to five names) and `entry_count` — and one derived flag,
+`slug_shaped`, which is a property of the *name*: whether `create_session` can be asked for it at
+all, and so whether the entry costs anybody anything. A name too long to be a slug is `false` there,
+because `canonical_dir` refuses such a name outright and loudly rather than substituting silently.
+There is no field spelling a conclusion.
+
+A **symlink is not followed**. It would otherwise be reported as whatever it points at, and the
+listing beneath it would carry that target's filenames into a report about your workspace.
 
 Three states here too. `entries: null` with an `error` means that directory could not be listed —
 never `[]`. On Linux and macOS an empty directory is the one shape that costs nothing at all, because
