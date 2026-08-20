@@ -141,6 +141,25 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   byte-for-byte, so no session Requivo itself wrote is affected — such a value can only have arrived
   by import or by hand. `--json` is unchanged and was never affected: `json.dumps` escapes it.
 
+- **`session show`'s terminal output escapes the same way, in eight fields** (#70). The identical
+  defect, in the other verb. #62 found it while fixing the listing and reported it rather than riding
+  it in on that diff, which is why the two land as separate changes. `slug`, `session_id`, `created_at`,
+  `updated_at`, `provider`, `model_name`, each key of `artifact_status` and each artifact's
+  `filename` are all bare strings in `session.json`'s body, and all eight reached the terminal
+  unescaped. `current_revision`, an artifact's `revision` and its `stale` flag are untouched and need
+  nothing — `read_meta` refuses a string in an `int` or a `bool` before the render runs.
+
+  It is **eight** rather than the five the issue names: #62 listed the five that are `SessionMeta`
+  scalars, which left out `slug` and the two fields that live on `ArtifactStatus` and its dict key.
+  Recorded here because a count in a compatibility note is the thing a later reader checks their own
+  work against.
+
+  Same rule as above, so the same guarantees: a value that is already one safe line comes back
+  byte-for-byte and no session Requivo itself wrote changes, and `--json` is unaffected because
+  `json.dumps` defaults to `ensure_ascii=True` and escapes a control character before it can reach a
+  line of its own. That default is load-bearing on this path rather than incidental, and there is now
+  a test that fails if it is turned off.
+
 - **`artifact save` without `--revision` is now `invalid_session`** (#6). It used to succeed, filling
   the omission in with the session's current revision and recording `stale: false` — an answer that
   could not come out any other way, about a revision the caller never claimed to have read. Every

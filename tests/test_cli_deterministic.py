@@ -462,6 +462,147 @@ def test_session_show_renders_a_card_name_as_one_line(forged_workspace):
     assert len(context) == 1 and "ok-card" in context[0], forged
 
 
+def _forge_meta(slug: str, fields: dict) -> None:
+    """Write arbitrary values into a session's persisted metadata, the way an imported archive or a
+    hand-edited `session.json` can. Deliberately not through the services, which would never produce
+    these values — that is the point. `read_meta` validates the slug it is *called with*, the
+    directory name; every `str` in the body arrives unexamined.
+
+    `fields` is a dict rather than `**kwargs` because one of the keys being forged is `slug` itself,
+    which is the whole shape of this defect and would collide with the parameter."""
+    p = store.canonical_dir(slug) / "session.json"
+    meta = json.loads(p.read_text(encoding="utf-8"))
+    meta.update(fields)
+    p.write_text(json.dumps(meta), encoding="utf-8")
+
+
+# One forgery per untrusted `str` on `session show`'s text path (#70). Each value is a plausible one
+# followed by a newline and a line shaped exactly like a line `session show` itself prints, so the
+# assertion below — that the render is still eight lines — is a statement about forged *rows*, not
+# about stray text turning up somewhere.
+_SHOW_FORGERIES = {
+    "slug": "s\nSession 'trusted'  (id 000000000000…)",
+    # Sliced to 12 before it is shown, so the newline has to fall inside the first 12 characters or
+    # the forgery is neutralised by the slice rather than by the escaping and proves nothing.
+    "session_id": "ab\nFORGED SESSION ID",
+    "created_at": "2026-01-01T00:00:00Z\n  revision 999",
+    "updated_at": "2026-01-01T00:00:00Z\n  provider trusted   model trusted",
+    "provider": "anthropic\n  revision 999",
+    "model_name": "claude\n  context  all cards",
+    "artifact_status": {
+        # The dict *key* is a `str` off disk too, and is printed as the artifact type.
+        "prd\n    brief        trusted.md                 rev 9  fresh": {
+            "revision": 1,
+            "filename": "prd.md\n    stories      trusted.md                 rev 9  fresh",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "stale": False,
+        },
+    },
+}
+
+
+def test_session_show_cannot_be_made_to_print_a_line_a_session_wrote(workspace):
+    """#70 — the same defect as #62, in a different verb, and in more fields than the issue counted.
+
+    `_session_list_line`'s docstring carries the whole argument and it is not restated here. What is
+    different is only the surface: `session show` prints **eight** untrusted strings out of
+    `session.json`'s body where `session list` printed three, and two of them are not fields of
+    `SessionMeta` at all — an `artifact_status` *key*, and `ArtifactStatus.filename`. The issue says
+    five; that is the set #62 happened to name in passing.
+
+    Every line here is one Requivo writes itself, so a forged one is indistinguishable from a real
+    one to a reader. That is why the assertion is the *shape* of the render — how many lines, and
+    which fact each carries — rather than the absence of a substring.
+    """
+    _run(["session", "init", "Something.", "--slug", "victim"])
+    _forge_meta("victim", _SHOW_FORGERIES)
+
+    out = _run(["session", "show", "victim"])          # must not raise: exit 0, still readable
+    lines = out.splitlines()
+
+    # ── must not fire: nothing the session wrote became a line of the render ──
+    #
+    # Six labelled lines, an `artifacts:` header and exactly one artifact row. Counting is the
+    # decisive form: any escape produces a ninth line, wherever it lands and whatever it says.
+    assert len(lines) == 8, out
+    assert len([ln for ln in lines if ln.startswith("Session '")]) == 1, out
+    for label in ("  created  ", "  updated  ", "  revision ", "  provider ", "  context  "):
+        assert len([ln for ln in lines if ln.startswith(label)]) == 1, (label, out)
+    assert lines[6] == "  artifacts:", out
+    assert len([ln for ln in lines if ln.startswith("    ")]) == 1, out
+    # The facts stay the session's own. `revision 999` was forged three separate ways above.
+    assert lines[3] == "  revision 0", out
+
+    # ── must fire: every forged value is still shown, escaped, on the line that owns it ──
+    #
+    # Neutralising must not become dropping: a reader has to be able to see exactly what is stored,
+    # which is the same treatment `core/integrity.py` gives the recorded artifact filename. Asserted
+    # per field, against the line each belongs to, so a fix that dropped one — or moved it onto a
+    # neighbour's line — is a failure and not a smaller pass. `session_id` is the exception and is
+    # taken separately below, because it is the one value the render truncates.
+    st = _SHOW_FORGERIES["artifact_status"]
+    ((artifact_type, artifact), ) = st.items()
+    for i, value in ((0, _SHOW_FORGERIES["slug"]),
+                     (1, _SHOW_FORGERIES["created_at"]),
+                     (2, _SHOW_FORGERIES["updated_at"]),
+                     (4, _SHOW_FORGERIES["provider"]),
+                     (4, _SHOW_FORGERIES["model_name"]),
+                     (7, artifact_type),
+                     (7, artifact["filename"])):
+        assert repr(value) in lines[i], (i, value, lines[i])
+
+    # **Slice first, then escape.** `session_id` is shown truncated; escaping first and slicing after
+    # would cut the repr mid-sequence and emit an unterminated quote. The whole repr of the *sliced*
+    # value is what must appear — 21 characters, where a truncated escape would be 12.
+    assert repr(_SHOW_FORGERIES["session_id"][:12]) in lines[0], lines[0]
+
+
+def test_session_show_leaves_an_ordinary_session_byte_for_byte(workspace, tmp_path):
+    """The other half of #70, and the half that says the fix cost nothing: a value that is already
+    one safe line comes back unquoted and unchanged, so no real session's output moves. Without
+    this, `display_token` could have been a plain `repr()` on every field, the forgery test above
+    would still be green, and every user's terminal would have gained quotes around six values."""
+    _run(["session", "init", "Reconcile event check-ins.", "--slug", "plain"])
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", "plain", str(proposal)])
+    prd = tmp_path / "prd.md"
+    prd.write_text("# PRD\n", encoding="utf-8")
+    _run(["artifact", "save", "plain", "--type", "prd", "--file", str(prd), "--revision", "1"])
+
+    m = store.read_meta("plain")
+    st = m.artifact_status["prd"]
+    assert _run(["session", "show", "plain"]).splitlines() == [
+        f"Session '{m.slug}'  (id {m.session_id[:12]}…)",
+        f"  created  {m.created_at}",
+        f"  updated  {m.updated_at}",
+        f"  revision {m.current_revision}",
+        f"  provider {m.provider or '—'}   model {m.model_name or '—'}",
+        "  context  all cards",
+        "  artifacts:",
+        f"    {'prd':<12} {st.filename:<26} rev {st.revision}  fresh",
+    ]
+
+
+def test_session_show_json_escapes_a_control_character_before_it_reaches_a_line(workspace):
+    """`--json` needs no `display_token`, and this is the confirmation rather than the prose claim.
+
+    `_print_json` calls `json.dumps` without passing `ensure_ascii`, and the default is `True`, so a
+    newline inside a value is emitted as an escape sequence and can never reach a line of its own.
+    That default is therefore **load-bearing** — which is exactly the kind of fact somebody tidies
+    away while making non-ASCII output readable, and this is what will object. The bytes survive
+    intact in the *parsed* payload: escaping is a property of rendering to a terminal, not of the
+    data (#40, #62, #70).
+    """
+    _run(["session", "init", "Something.", "--slug", "j"])
+    _forge_meta("j", _SHOW_FORGERIES)
+
+    raw = _run(["session", "show", "j", "--json"])
+    assert "\nSession 'trusted'" not in raw, raw        # no forged line at column 0
+    assert "\\nSession 'trusted'" in raw, raw           # …because the encoder escaped it
+    assert json.loads(raw)["slug"] == _SHOW_FORGERIES["slug"]   # and the value survives intact
+
+
 # ── the acceptance scenario ─────────────────────────────────────────────────────
 
 

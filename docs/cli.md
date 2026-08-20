@@ -130,6 +130,16 @@ the offending value in escaped form, on one line. Two consequences worth knowing
 there; it renders each through the same one-line rule instead. A name that was already safe is
 printed byte-for-byte, so ordinary output is unchanged.
 
+That rule now covers **every string `session show` prints**, not just the card names (#70). The card
+selection was the field #40 happened to be about; `slug`, `session_id`, `created_at`,
+`updated_at`, `provider`, `model_name`, and each artifact's type and filename are read back out of
+the same file and were reaching the terminal bare. `session list` was fixed for three of them in #62
+and this is the same defect in the other verb — with a sharper edge, because every line `session
+show` prints is one Requivo writes itself at a fixed column, so a forged `  revision 0` under a
+session that is at revision 12 is indistinguishable from the real thing. `current_revision`, an
+artifact's `revision` and its `stale` flag need nothing: they are typed `int` and `bool`, so
+`read_meta` refuses a string there before the render runs.
+
 ### What `model apply` takes
 
 A proposal replaces the model, so it carries the **complete** slot set and a non-empty

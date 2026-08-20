@@ -557,6 +557,43 @@ def _cmd_session_list(a, client) -> None:
 
 
 def _cmd_session_show(a, client) -> None:
+    """One session's metadata. **Every string on this path comes out of `session.json`'s body and is
+    untrusted**, so all eight of them go through `display_token` (#70).
+
+    The argument is `_session_list_line`'s, in full, and is not repeated here — read that docstring.
+    Only two things differ, and both make this verb the worse of the pair rather than the safer one:
+
+    * **It is eight fields, not the five the issue counted.** #62 named the five that happen to be
+      `SessionMeta` scalars. The other three are `meta.slug` — which #62's own fix caught on the
+      listing and which is the same bare `str` here — plus two that are not `SessionMeta` fields at
+      all: the **keys** of `artifact_status`, a `dict[str, …]` whose keys are whatever the file says,
+      and `ArtifactStatus.filename`. `core/integrity.py` already treats that recorded filename as
+      untrusted input; a render site that does not is the exception that makes the rule unreliable.
+    * **Every line here is one Requivo writes itself**, in a fixed shape, at a fixed column. On the
+      listing a forged row at least has to imitate a row; here a stored value can print
+      `  revision 0` under a session that is at revision 12, and nothing in the render distinguishes
+      the two. Reproduced on this branch: a `session.json` forged in all eight fields printed sixteen
+      lines instead of eight, including its own `revision 999` and `provider trusted`, and the
+      command exited 0.
+
+    `meta.current_revision`, `st.revision` and `st.stale` are deliberately **not** wrapped, and that
+    is stated rather than hedged: they are `int`/`int`/`bool`, so `read_meta` refuses a string there
+    before this function runs. Wrapping them defensively would say the type gave us nothing, which is
+    the reading that makes the next person wrap something that genuinely does not need it.
+
+    `session_id` is **sliced before it is escaped**, and the order is load-bearing: escaping first
+    would produce a quoted, backslash-escaped string, and truncating *that* to twelve characters can
+    cut an escape sequence in half and leave the quote unclosed — a neutralised value rendered as
+    garbage, which is a second defect bought with the fix for the first.
+
+    The `--json` path needs none of this and is left alone: `json.dumps` defaults to
+    `ensure_ascii=True`, so the encoder escapes a control character before it can reach a line of its
+    own. That default is load-bearing rather than incidental, and
+    `test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` is what says so.
+
+    A value that is already one safe line comes back byte-for-byte, so no real session's output
+    changes — `test_session_show_leaves_an_ordinary_session_byte_for_byte` pins every line of it.
+    """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not store.session_exists(slug):
@@ -565,11 +602,12 @@ def _cmd_session_show(a, client) -> None:
     if a.json:
         _print_json(meta.model_dump())
         return
-    print(f"Session '{meta.slug}'  (id {meta.session_id[:12]}…)")
-    print(f"  created  {meta.created_at}")
-    print(f"  updated  {meta.updated_at}")
+    print(f"Session '{display_token(meta.slug)}'  (id {display_token(meta.session_id[:12])}…)")
+    print(f"  created  {display_token(meta.created_at)}")
+    print(f"  updated  {display_token(meta.updated_at)}")
     print(f"  revision {meta.current_revision}")
-    print(f"  provider {meta.provider or '—'}   model {meta.model_name or '—'}")
+    print(f"  provider {display_token(meta.provider or '—')}   "
+          f"model {display_token(meta.model_name or '—')}")
     # `display_token`, not a bare join (#40). This is the one card-name render site the selector
     # guard cannot reach: nothing here is *selecting*, so `normalize_tokens` never runs and a name
     # persisted by `session import` arrives unexamined. A clean name is returned byte-for-byte, so
@@ -583,7 +621,12 @@ def _cmd_session_show(a, client) -> None:
             # invalidation signal (see ArtifactService.list). An artifact produced two revisions ago
             # whose inputs never moved is still fresh, and saying otherwise here contradicted both
             # `artifact list` and the status JSON every other surface reads.
-            print(f"    {t:<12} {st.filename:<26} rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
+            #
+            # Padded *after* escaping, which is the only order that works: the column widths exist so
+            # a reader can scan the block, and padding a value that is about to grow quotes lines the
+            # block up against a length the render does not have.
+            print(f"    {display_token(t):<12} {display_token(st.filename):<26} "
+                  f"rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
 
 
 def _cmd_session_migrate(a, client) -> None:
