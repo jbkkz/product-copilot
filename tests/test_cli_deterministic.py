@@ -687,8 +687,44 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
     envelope = json.loads(buf.getvalue())
     assert envelope["details"]["source_revision"] is None
     assert "--revision" in envelope["message"]
+    # The code names the omission rather than the session since #57. `invalid_session` was inherited
+    # while `web/app.py` was held by another lane, and a caller across this boundary sees the code,
+    # never the type — so the one handle it had could not tell "you left a flag off" from "this
+    # session is broken".
+    assert envelope["code"] == "unstated_source_revision"
     # and nothing was recorded against the guess: the PRD on disk is still the one saved above.
     assert _run_json(["artifact", "list", "s", "--json"])["prd"]["revision"] == 2
+
+
+def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
+    """The help text is read *while deciding whether to pass the flag*, and it went on describing the
+    behaviour #6 was filed to remove: `(default: the session's current revision)`. There is no default
+    — an omitted `--revision` is refused — so the text was telling a user to rely on exactly the
+    fabricated provenance the refusal exists to stop. Two reviewers found it independently on the #6
+    branch, which is how it reached #57 instead of being fixed there.
+
+    Both halves are asserted. That the flag says it is required is the weaker claim; that no option on
+    this subcommand *advertises* a default is the one that catches the next instance, because
+    `argparse` renders every option's `help` into that one string. The two forms this repository
+    writes a default in are checked — `(default: …)` and "defaults to" — rather than the bare word,
+    which the corrected text itself uses to deny having one.
+    """
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as ei:
+        _build_parser().parse_args(["artifact", "save", "--help"])
+    assert ei.value.code == 0
+    help_text = buf.getvalue()
+
+    assert "--revision" in help_text, "must fire: this is not the help text that owns the flag"
+    # Sliced between the two option names rather than read off a wrapped line: argparse wraps to the
+    # terminal width, so a line-based assertion passes or fails on how wide the console happens to be.
+    # `rsplit` because the usage line names `--revision` first; the options block is the last mention.
+    chunk = help_text.rsplit("--revision", 1)[1].split("--json", 1)[0].lower()
+    assert "required" in chunk, f"`--revision` does not say it is required: {chunk!r}"
+    for form in ("default:", "defaults to"):
+        assert form not in help_text.lower(), (
+            f"an `artifact save` option advertises a default ({form!r}); `--revision` has had none "
+            f"since #6 and no other option on this subcommand has one either:\n{help_text}")
 
 
 # ── documents on stdin ──────────────────────────────────────────────────────────

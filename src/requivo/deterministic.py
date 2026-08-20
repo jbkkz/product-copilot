@@ -1057,8 +1057,14 @@ def register(sub) -> None:
     asv.add_argument("--type", required=True, choices=sorted(ARTIFACT_FILENAMES),
                      help="artifact type")
     asv.add_argument("--file", required=True, help="path to the artifact content, or '-' to read it from stdin")
+    # No `required=True`: the omission has to arrive as a structured `UnstatedSourceRevisionError` the
+    # `--json` envelope can carry, not as argparse's usage error and exit 2 (see `ArtifactService.save`).
+    # The help string is what has to say it, and until #57 it said the opposite — it still advertised
+    # the default #6 removed, which is the text a user reads while deciding whether to pass the flag.
     asv.add_argument("--revision", type=int, default=None,
-                     help="source model revision (default: the session's current revision)")
+                     help="required: the model revision this content was reasoned from. There is no "
+                          "default — the session's current revision is a different fact, and only you "
+                          "know what you read")
     asv.add_argument("--json", action="store_true")
     asv.set_defaults(func=_cmd_artifact_save)
 

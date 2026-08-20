@@ -37,22 +37,29 @@ class UnstatedSourceRevisionError(InvalidSessionError):
     The third state is neither flag — it is that the record does not get written, which is the answer
     `_stale_since` already gives for the sibling case where the history cannot be read.
 
-    **The code is inherited on purpose, and it is not the one this deserves.** `invalid_session`
-    names the session rather than the omission, and the honest code is a new one —
-    `unstated_source_revision`. Adding it means a row in `web/app.py::_STATUS_BY_CODE` (400), which
+    **The code is its own since #57.** `invalid_session` names the session rather than the omission,
+    and it was inherited only because a new code needs a row in `web/app.py::_STATUS_BY_CODE`, which
     `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status` requires of every code
-    in the vocabulary, and that file is held by another lane in this round. Inheriting keeps the
-    precision in the *type*, where a caller can still catch exactly this.
+    in the vocabulary — and that file was held by another lane in the round #6 landed. The precision
+    sat in the *type* meanwhile, which a caller reading a serialized envelope cannot see: the one
+    handle it had could not tell *you left a flag off* from *this session is broken*. The subclassing
+    stays, so `except InvalidSessionError` still catches both arms.
 
-    **Sharing a code means sharing a `details` shape**, which is a debt this class takes on rather
-    than a property it gets for free: both raise sites carry all five of
-    `{slug, type, source_revision, current_revision, cause}`, two of them `null` here, because a key
-    present on one payload and absent on the other is precisely what #35 cost — a consumer matches
-    the code, reads the key, and gets a `KeyError` from a payload that correctly carried the code it
-    matched. `tests/test_artifact_provenance.py` asserts the two key sets against each other, so the
-    debt is checked rather than remembered. Giving the class its own `code` and adding the status row
-    is a two-line follow-up that also retires it.
+    **The `details` shape is still shared, and that is now a decision rather than an obligation.**
+    Both raise sites carry all five of `{slug, type, source_revision, current_revision, cause}`, two
+    of them `null` here. While the code was shared the sharing was owed — a key present on one payload
+    and absent on the other is precisely what #35 cost, a consumer matching the code, reading the key,
+    and getting a `KeyError` from a payload that correctly carried the code it matched. With the codes
+    split that debt is discharged — and narrowing this payload to the four keys it strictly needs
+    would still break that consumer, for nothing, in the same release that finally told it the two
+    arms are distinguishable. #52 answered the same question the same way in `docs/compatibility.md`:
+    `opaque_origin` and `origin_mismatch` share a `details` shape and are still two codes, because a
+    shared shape is not a shared meaning.
+    `tests/test_artifact_provenance.py` asserts the two key sets against each other, so the kept shape
+    is checked rather than remembered.
     """
+
+    code = "unstated_source_revision"
 
 
 class ArtifactService:
@@ -105,13 +112,15 @@ class ArtifactService:
                     f"1..{meta.current_revision or 0}.",
                     details={"slug": slug, "type": artifact_type, "source_revision": None,
                              "current_revision": meta.current_revision,
-                             # `cause` is present and null rather than absent. `invalid_session` now
-                             # carries two conditions, and `docs/compatibility.md` states the rule
-                             # they are both held to: one code, one `details` shape. A key that
-                             # appears on one payload and not the other is exactly the shape #35 cost
-                             # — a consumer matches the code, reads the key, and gets a `KeyError`
-                             # from a payload that correctly carried the code it matched. There is no
-                             # underlying failure to name here, and `null` says that.
+                             # `cause` is present and null rather than absent, and since #57 that is
+                             # a kept shape rather than a required one. This arm has its own code now,
+                             # so `docs/compatibility.md`'s rule — one code, one `details` shape — no
+                             # longer forces it to match `_stale_since`'s payload key for key. It
+                             # matches anyway: dropping the key buys nothing, and a consumer reading
+                             # `details["cause"]` across both arms would get the `KeyError` that #35
+                             # cost us — in the very release that told it the two arms are finally
+                             # distinguishable. There is no underlying failure to name here, and
+                             # `null` says that.
                              "cause": None})
             stale = self._stale_since(slug, artifact_type, source_revision, meta.current_revision)
             return self.repo.save_artifact(slug, artifact_type, filename, content,
