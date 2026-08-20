@@ -6,6 +6,854 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-20
+
+### Added
+
+- Contributing guide now explains the tracked `.claude/` directory, and `tests/test_agent_layer.py` guards what makes it harmless (#2). Issue #2 reported that the `mode: block` jit-context rule over `Read`/`Edit`/`Write`/`Glob`/`Grep` blocks every file operation for a contributor without the maintainer's plugins. Measured, it does not: a jit-context rule is data, the only thing that reads it is a `PreToolUse` hook shipped inside the `claude-jit-context` plugin, and this repository registers no hooks. The barrier existed in the reading of the directory, not in its behaviour — so the fix is the explanation plus a guard that fails if a tracked hook, or a committed hook script, ever makes the barrier real.
+- `.gitignore` now excludes `.claude/settings.local.json` (#2). It was never excluded, and only looked excluded on the maintainer's machine, which carries a global ignore entry no contributor has. That file is where a personal hook would be written, and a hook committed by accident would run for everyone who clones — the barrier above, made real.
+
+- CI now runs the test suite on macOS and Windows as well as Linux. Every job in every workflow was
+  `ubuntu-latest` and the only matrix axis anywhere was `python-version`, so no leg had ever executed
+  this code on the platform most of its users install it on (#3).
+- The shape is 9 legs rather than 15, and deliberately so: all five Pythons on Linux, because that is
+  where a language-level difference between 3.9 and 3.13 shows, plus the ends of the supported range
+  on macOS and Windows, because a path separator, a console codepage or a rename-over-existing does
+  not care which minor version it meets (#3).
+- The platform legs are a separate `test-platforms` job rather than an `os` axis on the existing one,
+  for a reason worth knowing before anyone tidies it: `main`'s branch protection requires the five
+  `Test (py3.N)` checks by their exact names, and adding an axis renames all five, so none of the
+  required checks would ever report again and no pull request could merge. The four new checks are
+  not required yet — the one command that adds them is in a comment at the top of the job (#3).
+- README now states which platforms are supported and which are tested, because from outside an
+  untested platform and a supported one look identical (#3).
+
+- The first run of the new matrix found three things on Windows that no existing leg could have —
+  two product defects and one test-harness bug, listed next. That is the leg paying for itself on
+  day one (#3).
+- **A concurrent session creation could be rejected as an invalid slug.** `canonical_dir()` checked
+  containment by comparing two independently resolved paths, so its verdict depended on what the
+  filesystem happened to look like between the two calls — create a directory in that window and they
+  disagree. `requivo discover` then failed with *invalid session slug* about a slug that was perfectly
+  valid, because something else was creating a session at that moment. Four of twelve concurrent
+  creators died this way on the Windows leg. The containment check now resolves only a path that is
+  actually there, which is the only case that can fail it (#3).
+- The same shape turned up twice more when the class was swept rather than the instance: in the
+  artifact path builder, and in `session verify`'s own artifact check, where it would report
+  *unsafe artifact filename* about a perfectly ordinary name — the verb whose job is answering
+  whether a session is intact, accusing you again. All three are fixed together (#3).
+- **And a fourth instance of it, in those same three places, for a different reason.** The check
+  decided containment with `Path.resolve()`, which on Windows under Python 3.9 — and only there —
+  cannot follow a symlink whose target does not exist, and hands back the link's own location
+  instead. A dangling symlink therefore read as living inside the session root however far out it
+  pointed: `discover` would accept it as a session directory, and `session verify` reported it as a
+  *missing* file rather than an unsafe one, which is the wrong answer from the verb whose job is
+  telling you whether a session is intact. All three sites now share one containment function. It
+  resolves with `os.path.realpath`, which does read the link itself — and, so that the guarantee does
+  not rest on a platform being able to look at all, it refuses any symlink whose resolution comes
+  back equal to the link's own location, because that equality is the resolver saying it could not
+  follow. Pinned by a test that gives every platform the 3.9 resolver's semantics, rather than by the
+  one leg in thirteen that has them natively — and that leg is not a required check, so it was never
+  the gate it looked like (#3, #11).
+- One more 3.9-only hole closed on the way past, found while checking what else the two resolvers
+  disagree about: a **symlink loop** under a session made `Path.resolve()` raise `RuntimeError`,
+  which nothing on the path caught, so `session verify` died with a traceback instead of reporting a
+  problem. `os.path.realpath` collapses it and returns an answer the check can act on, and the loop
+  is then refused like any other path that does not resolve inside the session (#3, #11).
+- The refusal messages now say *does not resolve to a path inside …* rather than *resolves outside*.
+  There are two ways to fail that check — it points somewhere else, or the platform could not tell us
+  where it points — and the old wording asserted the first about both (#3, #11).
+- **A write could be lost to an antivirus scanner.** On Windows a rename over an existing file fails
+  with *Access is denied* whenever anything holds a handle to the destination — a scanner or the
+  Search Indexer, opening the file microseconds after it is written, neither of which Requivo can
+  serialise against. `model.json` is the durable product, so it now retries that specific failure a
+  few times over a few hundred milliseconds at most. A genuinely unwritable destination still fails at once
+  (#3).
+- **And one harness bug, fixed as a harness bug rather than as a product one**: the test comparing the
+  bundled demo payload with the browsable copy read both files with the platform's codec, so it failed
+  on Windows about files the product itself reads correctly. Every read in the suite now names its
+  codec, and the guard added for #11 was extended to `tests/` to catch the next one — it had walked
+  `src/` and `scripts/` only, so the one directory it did not walk is exactly where the next instance
+  turned up (#3, #11).
+- One harness bug found and fixed on the way in, before the new legs could report it as a product
+  bug: a test fixture wrote a context card containing an em dash with the locale's codec and read it
+  back through a product that decodes UTF-8, which disagree on Windows. A narrow guard now catches
+  that class — a test writing non-ASCII without naming a codec — because it is the trap this issue
+  warned about, a harness rendering an environment limit as a product verdict, and "add more tests
+  for that platform" is the wrong lever on it (#3).
+
+### Changed
+
+- Requivo Web's cross-site guard raises **six codes instead of one**. `cross_site_request` carried six
+  distinct facts whose `details` payloads had five different shapes between them, against the rule
+  `docs/compatibility.md` states in this repository for exactly this reason: a code carries one fact
+  and one `details` shape. A consumer matching the code and reading `details["origin"]` got a
+  `KeyError` from a payload that correctly carried the code it matched (#52).
+- The arms are `undetermined_host`, `host_not_allowed`, `cross_site_fetch`, `opaque_origin`,
+  `origin_mismatch` and `missing_request_token`. Each carries one fact and one shape, and the table is
+  in `docs/compatibility.md` (#52).
+- Compatibility: breaking for anyone matching the string `cross_site_request` on the Web surface —
+  nothing raises it any more. It survives as the family base and keeps its 403 status row, and all six
+  arms remain `CrossSiteRequestError` subclasses, so catching the class or matching on the 403 is
+  unaffected. Only a match on that exact code string needs changing, to the six above.
+- **The decision, since the issue asked for one and either answer was defensible.** The alternative was
+  an argued exception in the policy for a surface that does not serialize `details` — which is true:
+  Requivo Web renders a refusal as HTML, so no consumer could observe the inconsistency today. What
+  decided it against the exception is that the cost was already being paid rather than deferred: both
+  #43 and #45 had to distinguish their new arm **by message**, and the same policy says never to match
+  on the message. The only handle a caller had for the distinction was the one it is told not to use.
+  `empty_selector_token` was split for the identical shape one release earlier (#52).
+- Read against #57, which asks the same question about `unstated_source_revision` and notes the two may
+  want one answer: they do not, and the difference is the point. That code carries **one** fact with a
+  `details` shape byte-identical to its sibling raise — the policy is satisfied and the wish there is
+  for a more precise *type*. This one violated the policy. #57 is untouched here (#52).
+- `opaque_origin` and `origin_mismatch` deliberately share a `details` shape and are still two codes: a
+  shared shape is not a shared meaning (#52).
+
+- Requivo Web has a deliberate visual direction. Colour now encodes **state and nothing else** —
+  emerald for what is known, amber for what is being assumed, slate for what is open — and the
+  primary action carries a blue the triad never uses, so an action can no longer be mistaken for a
+  grade. The previous stylesheet spent one indigo accent on buttons, links, focus, the coverage bar
+  and the "what changed" panel at once, which left the one distinction this interface exists to make
+  as the one its colour system said least about (#64).
+- Evidence grade is legible without colour. Each of the three states now has its own mark **shape** in
+  the per-topic list — a filled square, a rotated diamond, a hollow circle — in addition to its hue.
+  Three coloured dots of identical shape were one state on a monochrome print and to a reader with a
+  colour vision deficiency (#64).
+- Every foreground/background pair is measured against WCAG AA in both light and dark, and UI
+  boundaries against the 3:1 required of a control. Three values were wrong and are corrected: the
+  token carrying every label, hint and section caption sat at 3.80:1 on the page, links at 4.48:1, and
+  an input border at 1.52:1 against its own field — with a white field on a tinted page, that border
+  is the only thing saying where the field is. Control edges now have their own token, held apart from
+  the decorative rules they were sharing (#64).
+- A session screen states where it is before it is scrolled: readiness, the count of open questions and
+  whether a saved document needs updating now sit beside the title. Every value there is already
+  computed and already stated in full further down — it is a summary of the page, never a second
+  source for it (#64).
+- The keyboard focus ring is no longer suppressed on form fields. `outline: none` on `:focus`
+  out-specified the global `:focus-visible` rule, which removed the indicator from every input,
+  textarea and select on the surface (#64).
+- Two rules that had been silently dead since before this change: `ul.clean > li` was declared after
+  `.session-list > li` and `ul.tight > li` at equal specificity and overrode both, so neither list ever
+  got the spacing it declared. Scoped rather than reordered, so a later addition cannot re-break them
+  (#64).
+- Nothing persisted, generated or emitted by `--json` changes, and no user-facing term changes:
+  `web/viewmodels/labels.py` remains the single definition of what a reader calls things (#64).
+
+### Fixed
+
+- `requivo artifact save` without `--revision` is now refused instead of being recorded as fresh.
+  Omitting it used to mean *the session's current revision*, so freshness was computed against a
+  revision nobody had claimed to read and the answer was `stale: false` every time — a source
+  revision that *is* the current one cannot have moved. The number recorded was a real revision of a
+  real session, so no reader downstream could tell the guess from a stated fact: `artifact list`,
+  `session show`, `status --json` and the Web's *needs updating* panel all reported a superseded
+  document current. Invariant 2 states the prohibition in those words — "never record `stale=False`
+  because the caller didn't say otherwise" — and the default was the one thing violating it (#6).
+- The refusal names what to pass and the revisions that exist, so the remedy is one flag. It is
+  raised before anything is written, so a refused save leaves neither a file under `artifacts/` nor a
+  status row in `session.json`.
+- Compatibility: breaking - an `artifact save` that omitted `--revision` used to succeed and now
+  exits 1 with a structured `unstated_source_revision` envelope (the refusal shipped here under
+  `invalid_session`; #57 gave it its own code before either reached a release). Every documented
+  invocation already passes it (`plugins/claude-code/REASONING.md`, the `prd` and `brief` skills,
+  `docs/cli.md`), and both provider-backed paths in `DiscoveryService` always did, so nothing that
+  follows the documentation changes behaviour. Only a caller relying on the undocumented default is
+  affected, and that caller was being given a fabricated provenance. No session on disk changes shape
+  and `format_version` stays 1.
+- An artifact saved against a revision whose file is *present but unreadable* is refused cleanly
+  rather than crashing. The guard that turns "I cannot establish freshness" into a refusal caught
+  `RequivoError` only, which covers a *missing* revision file and nothing else — a truncated
+  `revisions/NNNN-model.json` from an interrupted sync raised pydantic's `ValidationError`, a
+  mis-encoded one raised `UnicodeDecodeError`, and a permissions or device fault raised `OSError`.
+  None is a `RequivoError`, so the block never ran and a raw traceback came out of the service from
+  inside the session lock, past the CLI's own handler. All three are caught now, and the failure's
+  type and text are recorded in the error's `details.cause` (#6).
+- Both refusals carry the same five `details` keys — `slug`, `type`, `source_revision`,
+  `current_revision`, `cause`. They shared a code when this was written, which made the shape
+  obligatory; #57 split the codes and the shape was kept anyway, because a key present on one payload
+  and absent on the other is what a consumer following the documented advice (match the code, read
+  the key) trips over. A test asserts the two key sets against each other rather than each on its own.
+
+- One unreadable session no longer takes the whole listing down in Requivo Web. Invariant 15 — *a
+  listing survives its own members* — was enforced one line below where it broke: `session_list`
+  guarded `status()` per row, but the rows themselves came from a single-shot comprehension over
+  `read_meta`, so a `session.json` this build cannot read raised before any row existed to degrade.
+  The source of the rows is now guarded per member (#7).
+- Two further ways the same page went down, both outside the old guard. `request_text` was outside the
+  `try` entirely; and the `try` named `SessionNotFoundError` alone, so a `model.json` left truncated by
+  a crash mid-write raised a pydantic `ValidationError` — not a `RequivoError`, so it missed that catch
+  *and* the app's `RequivoError` handler and rendered as a 500 over the whole page. Measured per break
+  mode against the unfixed code: a newer `format_version` gave 400, a truncated model 500, an
+  unreadable `request.md` 500 — each on a page whose other sessions were all fine (#7).
+- **The degraded row names the session.** Neither surface did before, so a user with one bad session
+  could see that something was wrong and had no way to learn which — which is most of the cost. The row
+  carries the underlying error text too, because *this session was written by a newer Requivo, upgrade*
+  is a remedy and a flattened `unreadable` code is not (#7).
+- The row states no fact it does not have: no timestamp, no question count, no freshness verdict. A
+  plausible `0 open questions` on a session nobody managed to open is the quiet-wrong-answer form of
+  the same bug. *Could not be read* and *not analysed yet* are two states and render differently (#7).
+- The guard catches bare `Exception`, deliberately and with the reason recorded next to it. An
+  aggregate's contract is that one member cannot take the view down, and the set of ways a member can
+  be broken is open — naming a family is how a guard ends up nominally on and effectively off for the
+  next failure mode, which is what #7 is. `doctor`'s `_session_health` had already made this call for
+  the same question; this adopts it rather than re-litigating it (#7).
+- Still outstanding, and reported rather than fixed: **`requivo session list` has the same duty and
+  still has no guard.** It lives in `deterministic.py`, which was held by another change in the same
+  round. The fix is one call — `SessionService.list_entries()` in place of `list_sessions()`, plus a
+  degraded line naming the slug — and the service half it needs has shipped here (#7).
+
+- Prompt caching no longer costs money on the verbs that could never benefit from it. The system
+  prompt was sent with a `cache_control: ephemeral` breakpoint on every call, and a breakpoint bills
+  the block at 1.25x input to write against 0.1x to read — so it only pays from the *second* send of a
+  byte-identical prefix. `prd`, `criteria`, `epic`, `release`, `stories` and `estimate` each make one
+  call, so each wrote a cache entry that nothing ever read: a flat ~25% surcharge on the largest part
+  of the input, on every one of them (#9).
+- The comment that justified it claimed the prompt was byte-identical "across the calls of a session".
+  That is true across the calls of one *operation* — a golden capture's K runs, `converse()`'s turns,
+  each JSON retry — and false across operations, because `build_prompt()` substitutes the shared
+  schema and context cards into a **per-operation** template. Nothing failed and nothing warned; the
+  rendered cost was correct throughout and simply read as normal, which is why it survived (#9).
+- Moving the breakpoint or spending more of the API's four on it would not have helped, and this is
+  worth writing down so it is not re-attempted: all eight templates place `{{SCHEMA}}`/`{{CONTEXT}}`
+  near their end with an *Output format* section after them, so the shared bulk is a **suffix**.
+  Caching is a prefix match, and a suffix has no prefix boundary to cache at (#9).
+- Which calls get a breakpoint is now the caller's declaration (`reuse_system`) rather than a constant,
+  because the same function is single-call in one caller and multi-call in another: `requivo brief`
+  calls `advise()` once, and `scripts/golden_run.py --brief` calls it K times off one prompt. The
+  harness passes `reuse_system=True` and keeps its saving; discovery keeps the breakpoint unconditionally,
+  since `converse()` re-sends that prompt for up to 8 turns. `_complete` still defaults to caching, so
+  a caller that has not thought about it pays the safe answer rather than silently losing a real cache (#9).
+- The accepted cost, stated rather than glossed: a one-call verb *can* send twice, when the model
+  returns malformed JSON and the retry loop re-sends the identical prompt. Those retries are no longer
+  cached, so a generator that retries pays 2.0x the system block where it used to pay 1.35x. Not
+  caching is the better bet while a retry is rarer than about one call in four, and it is; caching only
+  from the second attempt was considered and rejected, because it costs 2.25x on two attempts — worse
+  than 2.0x — and only wins past the same threshold at which caching everywhere would have been right
+  to begin with (#9).
+- No prompt asset changed, so no engine behaviour changed and no golden-harness cycle was spent: the
+  system prompt sent is byte-for-byte what it was, and a test pins that. Making the cache pay *across*
+  operations means moving the shared bulk to the front of all eight templates, which is a real change
+  to what the model reads and is deliberately left for its own measured pull request (#9).
+
+- Requivo now reads and writes text as UTF-8 everywhere, so a session written on one machine reads
+  back byte-identically on another whatever the locale. 29 call sites — 28 reads, plus one write in
+  the golden harness — took the platform default instead: UTF-8 on macOS and Linux, cp1252 on
+  Windows. A French request round-tripped into mojibake that was still valid JSON, so nothing failed
+  and the PRD shipped it (#11).
+- `requivo session verify` no longer accuses you of editing a file nobody touched. It recomputed the
+  hash from a mis-decoded string, so on Windows every session containing an accent or an em dash
+  reported `revision_hash_mismatch` and `session import` refused a perfectly good archive on the same
+  evidence (#11).
+- `requivo discover`, `demo`, `schema` and `context` no longer die with a raw `UnicodeDecodeError`
+  before doing anything. 20 of the bundled assets are not pure ASCII, so on an ASCII locale the
+  primary verb could not start at all — observed, not reasoned:
+  `LC_ALL=C LANG=C PYTHONUTF8=0 requivo schema` reproduced it on macOS (#11).
+- Worth stating precisely, because the issue's own inventory had it the other way round: only 2 of
+  those 20 are undecodable as cp1252. The other 18 decode *successfully* into mojibake, so on Windows
+  the usual outcome was never a crash — it was a prompt quietly assembled from corrupted product
+  context and shipped to the model, billed, looking like it had worked (#11).
+- A file *you* name (`requivo discover ./brief.md`) is now refused by name if it is not UTF-8 —
+  naming the offending byte and its position — instead of being decoded with the locale's codec into
+  text that reads like prose and is wrong. Refusing is the point: mojibake validates (#11).
+- A path or slug you supply can no longer forge a line of Requivo's own output. Six error messages
+  in `deterministic.py` interpolated one raw — `no such file:`, `archive not found:`, the unreadable
+  `.zip` message and three `no canonical session` messages — so a name carrying a newline and an ANSI
+  escape could write what reads as a second, authoritative line at column 0. That is #40's class,
+  found again by this branch's own guard test after the fix for #11 reintroduced it in a message it
+  had just added. All six now go through `display_token`, the helper #40 produced, which is a no-op
+  for any ordinary value (#11).
+- `tests/test_encoding.py` is the guard that keeps it fixed. Passing `encoding=` at 29 call sites
+  leaves the 30th written next week, and this repo has already watched that happen twice, so the
+  check is a walk over `src/` and `scripts/` that fails on a bare `read_text()` — and refuses to
+  answer at all when its scan set comes back empty (#11).
+
+- A `model.json` written by a **newer** Requivo now loads, and keeps the field it added. Only
+  `session.json` was forward-compatible; `model.json` and every `revisions/NNNN-model.json` were read
+  through `EngineOutput`, which inherits `extra="forbid"` from the LLM boundary contract — so a key
+  added by a later version (which `docs/compatibility.md` explicitly permits without a
+  `format_version` bump) made the session unopenable, as a raw Pydantic `ValidationError` rather than
+  as anything the surface could phrase. The documented promise and the code disagreed, and the
+  document was the half that was right (#14).
+- The two rules that collided are now two contracts. `StrictModel` and everything an LLM fills stays
+  `extra="forbid"`: a field the model invented must still fail loudly and ride the JSON retry loop,
+  because a dropped key makes a drifted prompt read as a clean success. The read path goes through
+  `PersistedEngineOutput` instead — a subclass of `EngineOutput`, permissive at every level of the
+  model tree, so nothing downstream changes type and every validator the strict tree carries still
+  runs. What differs is what an unknown key is evidence *of*: from a provider something is wrong now
+  and there is a retry that can fix it; from disk something is newer, there is no retry, and refusing
+  costs a session that reads perfectly well (#14).
+- `requivo doctor` and `requivo session verify` agree with the loader about the same file. They
+  validated `model.json` through the strict contract too, so once the loader carried a newer version's
+  field the checker would have reported `invalid_model` on a session that opens fine — a health
+  verdict measured against a rule the code no longer follows. Both model checks are permissive now,
+  and a model that is actually malformed still reports `invalid_model` / `invalid_revision_model` (#14).
+- Reading permissively was only half of it, and the half on its own would have been worse than the
+  bug. `ModelProposal.resolve` carries an unstated reasoning collection forward from the model being
+  refined (invariant 10), so a decision loaded from a newer Requivo ended up under the *strict*
+  tree's annotation — and pydantic serializes by the annotated type, so the unknown key stayed alive
+  in memory and disappeared on the very next write. A key at the top level went the same way, since
+  a proposal is `extra="forbid"` and cannot speak to a field it has never heard of. Either would
+  have converted a refusal you could see into a silent loss on the first ordinary turn. Both are
+  fixed in `resolve`, and a test drives a real refinement turn through `SessionService.update_model`
+  rather than a re-save, because a re-save never reaches the code that dropped it (#14).
+- The question cap is one number again. `ModelProposal` and its persisted mirror each carried a
+  hand-written `max_length=6`, and nothing made them agree — a duplication introduced by the mirror
+  itself, and the same defect class this change exists to remove, one field along. It fails
+  asymmetrically and needs no version skew at all: raise the strict cap, miss the mirror, and a
+  session *this build just wrote* with seven questions no longer loads. Both now read
+  `MAX_QUESTIONS`, and a second field-graph guard compares the *constraints* of every field the
+  mirror restates against the strict tree's, because the existing walk compares `extra` policy and
+  cannot see this. The mirror cannot inherit its way out: pydantic drops the parent's `FieldInfo`
+  when a subclass re-annotates, so leaving `Field(...)` off would lose the cap and the default and
+  quietly make `questions` required — which is why the property is pinned rather than tidied (#14).
+- Compatibility: compatible. Nothing that loaded before stops loading, no stored key changes meaning,
+  and `format_version` stays 1 — this only widens what a reader accepts and what a writer keeps.
+  Two limits are stated rather than left to be found: an apply **replaces** the slots, the summary
+  and the questions, so an unknown key inside one of those is superseded by a value this version
+  built; and an unknown **slot id** is still refused, because that is `schema_version`'s frontier and
+  it already refuses a newer slot schema with a message naming the upgrade.
+
+- Taking the session lock on a slug that has no session no longer creates one. `session_lock` called
+  `mkdir(parents=True, exist_ok=True)` on the session directory before opening `.lock` inside it, so a
+  lock taken on a name nothing had created left a directory behind holding only that lock file. It is
+  invisible to `session list` (no `session.json`) and it is not empty, so `create_session`'s atomic
+  rename — the one claim on a slug — lost to a session nobody had made, and reported **session already
+  exists** about one neither the reader nor the tool could see or list (#22).
+- Which callers reached the lock without a session, stated narrowly because it is narrower than it
+  looks. `save_revision` and `save_session_artifact` in `requivo.core.persistence` take the lock
+  before the metadata read that raises `session_not_found`, and so does `ArtifactService.mark_stale`,
+  which has no preceding existence check. The CLI verbs are **not** among them: `model apply`,
+  `artifact save` and `session export` each establish the session exists before the lock is taken.
+  What was exposed is the layer underneath them — the one an external consumer calls directly (#22).
+- What a leftover directory then did to the CLI is quieter than a refusal, and worth knowing if you
+  have one on disk from a previous version. `requivo session init --slug later` does not report the
+  clash: `SessionService.create_session` falls back to a hash-suffixed candidate when a slug is taken,
+  so it silently creates `later-<hash>` instead. The name you asked for is simply gone, with nothing
+  said. The `session_exists` refusal is what a direct `create_session` and `session migrate` see (#22).
+- **A guard that creates the thing it guards is a second producer.** Creating a session is one atomic
+  claim on its slug — a staging directory renamed into place, which either wins the name or reports
+  it taken — and that claim is only decidable while nothing else can make a directory of the same
+  name. The lock now refuses a slug with no session rather than materialising one, so a failed or
+  released lock leaves the store exactly as it found it (#22).
+- Deleting the directory again on the way out was the other repair and is worse: unlinking a `.lock`
+  another process is holding is legal on POSIX and silently breaks mutual exclusion, leaving the
+  waiter holding a lock on an inode with no name. That trades a misreported refusal for a corrupted
+  one, which is the wrong direction (#22).
+- `requivo session migrate` was the case where this stopped being cosmetic. It claims its slug through
+  the same rename, and the bulk sweep reports a refusal as `skipped_already_present` — so a legacy
+  session that had never been migrated was reported as one that was already there. A skip reads as a
+  decision, which is worse than an error (#22).
+- Compatibility: compatible in what a caller is told, and one step earlier in when. Every path that
+  locks before reading the metadata still raises `session_not_found` with the same message and the
+  same HTTP status; it is now raised by the lock rather than by the `read_meta` immediately inside it.
+  The one message that changes is `ArtifactService.mark_stale` on a session that does not exist, which
+  said *has no model yet* and now says there is no such session — the accurate of the two. A session
+  that exists is untouched: the lock is still taken, still re-entrant within a thread, still exclusive
+  across processes, and `.lock` still lives inside the session it locks (#22).
+
+- A character your console cannot display no longer kills the command that was printing it. Requivo
+  configures stdout and stderr once at startup so an unrepresentable glyph is escaped rather than
+  raising `UnicodeEncodeError` — and escaped rather than dropped, because a reader cannot tell a
+  substituted character from one that was never there (#29).
+- The ordering is what made this worth fixing rather than a cosmetic complaint: the crash happened at
+  the `print`, *after* the work that print was reporting had already landed. `requivo brief <slug>`
+  completed its paid provider call, applied the revision and wrote the artifact, then died in the
+  renderer — so the exit code described a crash, and re-running paid for a second call and stacked a
+  second revision on the first (#29).
+- `requivo doctor` was the worst of them: it died on the check mark of its very first line, having
+  already computed the whole diagnosis it exists to report. It now also *reports* your console's
+  encoding, with `lossy`, `will-crash` and `unknown` as distinct answers from `safe`, so a stream
+  Requivo could not configure is a line you can read rather than an absence (#29).
+- `lossy` is a separate verdict from `safe` on purpose. A console set to `errors=replace` or `ignore`
+  cannot crash, but it drops the character with no mark — and reporting that as safe would have
+  `doctor` endorse the exact quiet hole this fix exists to avoid (#29).
+- The API usage line no longer kills a run that already paid for its call. `render_usage` prints a
+  middle dot and an em dash, and two of its three call sites sat outside the guard — including the
+  one that runs after a *wholly successful* command — so on an unreachable stream a successful
+  `requivo brief` still died there, after the provider call was billed and the revision applied.
+  It now degrades to a stated absence, which is deliberately not silence: a usage line nobody can
+  read is a different thing from a run that made no calls (#29).
+- The message printed in that case reads the run's usage ledger instead of asserting. It says a call
+  **has** been billed only when one actually was — several verbs never call the provider at all, and
+  telling you not to re-run a command that cost nothing would be the same misreport one layer up
+  (#29).
+- Where a stream cannot be made safe at all, the command exits **3** — a new code meaning *the work
+  succeeded and you cannot see the output* — instead of a traceback. Exit 1 would have been a lie in
+  the one case that costs money (#29).
+- Exercised on every CI platform rather than only where the bug bites: the tests spawn subprocesses
+  under `PYTHONIOENCODING=ascii`, which reaches a real console encoder. The previous suite captured to
+  `io.StringIO` and so could never have caught this even with a Windows leg (#29).
+
+- A refused submission in Requivo Web no longer costs you what you typed. Refusing an over-long
+  request is correct and is unchanged — half a request folded into the model reads exactly like a whole
+  one — but the refusal was a full-page error whose only affordance was *Back to sessions*, so a
+  26,000-character client email that arrived through the clipboard had to be fetched again from
+  wherever it came from. Every refusal on the request form now re-renders the page with the submission
+  still in it (#30).
+- The answers box was the worse of the two, and for a reason the issue names: it posts as an HTMX swap
+  over `#session-body`, the region that *contains* the textarea, so the error fragment did not merely
+  fail to preserve the text — it deleted the field the text was typed into, with no Back to return to.
+  The whole region now comes back with the answers still in it and the refusal stated on the form
+  (#30).
+- Four refusals on that page round-trip, not one: the request textarea, both of the session-name
+  field's refusals (too long, and not a usable slug), and the answers textarea. Leaving one of a single
+  field's two refusals keeping your work and the other throwing it away is a worse state than either,
+  because which one you hit is not something you can predict (#30).
+- The context-card selection and the *On submit* choice survive a refusal too. A session's identity is
+  its request **and** its card selection — the impact estimates are read against them — so handing back
+  the textarea while silently clearing the checkboxes would return a form that no longer says what you
+  told it (#30).
+- Compatibility: compatible. These refusals keep their HTTP status (413 for a length, 400 for an
+  unusable name) and their error code, which now rides the banner on the re-rendered form instead of a
+  full error page. An unknown context card is deliberately **not** in this set and still raises: those
+  boxes are checkboxes over a set the page itself rendered, so an unknown value did not come from a
+  reader mistyping something they could correct on a re-render (#30).
+- Narrowed from the issue as filed, on the issue's own second comment: the refusal already named the
+  limit, and adding the submitted length was judged not to be what this issue is for. What was lost was
+  the text, and that is what this restores (#30).
+- **Follow-up on the above.** A refused submission no longer fills in a session name the reader never
+  typed. `create_session` used one variable for two meanings — the string the reader put in the box,
+  and the argument the service takes, where `None` means *derive a slug from the request*. An empty box
+  collapsed to `None` before the empty-request arm was reached, and the re-render stringified it, so
+  the reader got `value="None"` in a field they had not touched. It also fails that field's own
+  `pattern`, so it had to be noticed and cleared before the form could be resubmitted: the refusal path
+  built to stop costing the reader work had started adding some. The two meanings now have two names
+  (#30).
+- Found by review rather than by the tests, and the gap is worth naming: every case covering the
+  preserved-input path submitted a session name, so none of them could see a refusal that invents one.
+  The regression test is a matrix over each refusal paired with a **blank** name field (#30).
+
+- The two places that still built an artifact path by hand now go through the chokepoint the rest of
+  the store goes through (#36). `requivo artifact save` and the line every generator verb prints to say
+  where its document went each re-joined `canonical_dir(slug) / "artifacts" / <recorded filename>`
+  inline, so the guard #5 put on the writes and #23 extended to the read was closed in three places and
+  open in two.
+- Neither of the two was exploitable, and that is stated rather than assumed: both only *print* the
+  path, and in both the filename reached them from the fixed `ARTIFACT_FILENAMES` table by way of a call
+  that had already validated it. What is fixed is the inconsistency — the next person reading
+  `deterministic.py` learned the wrong pattern from a file that is otherwise correct (#36).
+- Display-only is not the same as harmless, and the reasoning now lives at `artifact_path()` rather
+  than being rediscovered a fourth time. A read traversal answers what this code may *disclose* rather
+  than what it may create, and a printed path is the plainest disclosure there is; the filename on both
+  lines is a plain string off `session.json` that nothing re-validates when it is read back (#36).
+- Which door is open is now stated rather than borrowed, because the obvious sentence is wrong.
+  Invariant 14 argues that a persisted value is untrusted every time it is read, and it argues it about
+  the context cards, which `session import` deliberately cannot resolve. That does not carry over to the
+  artifact filename: import pins each one to its known value and to containment and refuses the whole
+  archive otherwise — reproduced, for a traversal and for a merely wrong name. The route that is open is
+  invariant 14's own, a consumer holding the services over a store that is not this one, which is what
+  the tests drive (#36).
+- Absence and refusal stay the two different answers #23 made them. A session with nothing generated is
+  not newly an error — a name that is not a filename raises `invalid_filename`, and every legitimate one
+  prints exactly the path it printed before (#36).
+- Compatibility: compatible. No output changed for any name the store can actually write, and both
+  lines are covered by a test that pins the legitimate path as well as the refusal — a guard that
+  refused everything would satisfy the refusal half on its own (#36).
+
+- Creating a session on an install with **no context cards at all** now says so, instead of blaming
+  the name you typed. `resolve_cards` — the validator the CLI, the deterministic verbs, Requivo Web
+  and `SessionService.create_session` all run on the way in — was the one card selector the
+  empty-install guard was never wired into, so with nothing installed it answered *unknown context
+  card(s): pricing. Available:* (an empty list) while the very next call answered *no context cards
+  are installed … this install is incomplete*. One condition, two verdicts, and the one sending you
+  to check spelling you had got right arrived first — at session creation, which is the first thing
+  a fresh install does (#41).
+- The three selectors that resolve a card name against the installed vocabulary — `resolve_cards`,
+  `load_context` and `check_selection` — now share one guarded read of the card table rather than
+  each remembering to call the guard. The original miss had a mechanism: the other two reach the
+  table directly and this one reached it through `available_cards()`, so a sweep over the callers of
+  the guarded function found two of three and looked complete. `available_cards()` stays deliberately
+  outside the guard, because `doctor` reports an empty install as one of its three states and can
+  only do that by observing the emptiness rather than raising on it (#41).
+- Compatibility: breaking - one condition moves to a different code and across the 4xx/5xx line in
+  Requivo Web. `POST /sessions`
+  naming a card on a card-less install used to answer `400 unknown_context_card` and now answers
+  `500 no_context_cards`. That is the correct side: nothing the caller sent caused an install to
+  ship without cards, and the old 400 was the misattribution #34 fixed, one call earlier. Nothing
+  changes on an install that has cards, where an unknown name is still `unknown_context_card` and a
+  400; and passing no selection at all is untouched, since that is not a selection to validate.
+- The unknown-card refusal now lists the available cards from the same read its lookup used. The
+  vocabulary you were told to choose from was enumerated by a second `available_cards()` call, so it
+  was not guaranteed to be the one your name had just been matched against (#41).
+
+- Requivo Web accepts a form posted from `localhost` to `127.0.0.1` (and every other pairing of the
+  three loopback spellings). The cross-site guard compared the two hostnames as strings while its own
+  host allowlist treated them as one machine, so the request form returned *this request came from
+  another origin* and could not be submitted at all — and switching the address bar to the other
+  spelling resubmitted the stale `Origin` and reproduced the identical error, leaving no way forward
+  (#43).
+- A host you listed in `REQUIVO_WEB_ALLOWED_HOSTS` is deliberately **not** part of that equivalence:
+  two real hostnames there must still match each other exactly, because whether they are one trust
+  domain is the operator's call rather than something inferred from one comma-separated list.
+- Two hostnames that could not be determined at all no longer read as a match. `""` is what the
+  parser returns for an absent or unparseable `Host`, or for an origin such as `http:///` that names
+  nobody, and two of those compared equal — so the one input where neither side was known produced the
+  same verdict as a verified match. No browser can produce it and the request token gated it either
+  way, but a check that could not look must say so rather than answer. Found by the audit on the #43
+  fix, in the helper that fix introduces.
+- `Origin: null` stays refused, now on purpose and with the reason in the code rather than as a
+  side effect of parsing the literal string `"null"` into a hostname. An absent origin header stays
+  accepted — a browser attaches `Origin` to every POST, so silence means a scripted client, which the
+  request token gates. That token remains the load-bearing check for both, and `evil.example` posting
+  to a loopback host is still refused (#43).
+
+- Requivo Web refuses a request that does not say which host it was addressed to, instead of skipping
+  its host check for that request. The check read `if host and host not in allowed_hosts()`, and the
+  parser returns an empty string when it cannot determine a host at all — so an absent or empty `Host`
+  header was treated as *no host check needed* rather than as a refusal. That check is the
+  DNS-rebinding guard and the only one that also runs on reads, so it was nominally on, effectively
+  off, and silent about it. Observed at the socket, not reasoned: `GET / HTTP/1.0` with no `Host`, and
+  `GET / HTTP/1.1` with an empty one, both answered 200 (#45).
+- Compatibility: breaking - an HTTP/1.0 client that sends no `Host` header now gets a 403 where it
+  previously got a response. This is deliberate. HTTP/1.1 requires a `Host`, every browser and every ordinary client
+  (`curl`, httpx, requests) sends one, and nothing in Requivo has ever documented HTTP/1.0 support.
+  The browser path is unaffected (#45).
+- The refusal names its own arm — *this request did not state which host it was addressed to* — rather
+  than reusing the wording of a genuine host mismatch. A guard that could not read its input must not
+  print what a guard that read it and refused prints; the same correction the opaque-origin arm got in
+  #43, one seam over (#45).
+
+- The origin check's stated rationale in `web/security.py` was false, and is corrected. It claimed a
+  page at `http://localhost:8765` *"can only have been served by this process — nothing else is
+  listening there"*, while the code it justifies discards the port on both sides: the set actually
+  accepted is any page served by any process on any loopback port, which on a developer machine is a
+  populated one. No behaviour changed — this is a prose fix, and the port-blindness it describes
+  predates the loopback-spelling fix in #43 rather than following from it (#46).
+- That port-blindness is now written down as a decision rather than left implicit, with its reason:
+  the per-process request token is what gates a write, and a page on another loopback port cannot
+  obtain one, because the browser's own same-origin policy counts the port and Requivo Web sends no
+  CORS headers. Comparing ports in this check would add nothing and would reintroduce exactly the
+  false positive #43 fixed, since a default port is elided in an `Origin` but spelled out in a `Host`.
+  A test pins the behaviour, so tightening it later has to argue with the rationale instead of
+  slipping past it (#46).
+
+- Requivo Web's `Referrer-Policy` is `same-origin` rather than `no-referrer`, which is what made the
+  product's entry path unusable in a browser. Under `no-referrer` a browser attaches `Origin: null` —
+  the opaque origin — to an ordinary form post, and the cross-site guard refuses that deliberately
+  (#43), so creating a session and running discovery answered 403 to a same-origin request carrying a
+  valid request token. Both halves were individually correct and individually green; the defect existed
+  only in their composition, which is why no per-file test could see it and none did (#47).
+- Scope of the failure, narrowed from the report: only the two **plain** form posts were affected —
+  *create a session* on the home page and *Analyse request* on a pending session. The HTMX posts
+  (answers, generation) travel as XHR, which is CORS-mode, and Fetch consults the referrer policy for
+  the `Origin` header only on requests that are *not* CORS-mode. So what broke was precisely the way
+  into the product, while everything downstream of it kept working — which is why it read as one broken
+  form rather than a broken app (#47).
+- Why `same-origin` and not the alternatives, since this replaces a privacy decision with another one:
+  it is the strictest value that still leaves the guard an origin to read. Cross-origin destinations
+  get nothing at all, exactly as under `no-referrer`, so the whole privacy intent is kept for the only
+  case where it ever did anything — navigating away. `strict-origin-when-cross-origin`, the browser
+  default, also fixes the bug and hands a third party `http://localhost:8765` on an outbound
+  navigation; for a local tool that is a gratuitous disclosure buying nothing. Dropping the header
+  entirely would defer to whatever the browser defaults to, and this app states its headers. The cost
+  of `same-origin` is that a same-origin `Referer` now carries the full URL, session slug included —
+  the reader's own request name, travelling to the server that already holds it (#47).
+- Worth recording because it inverts the intuition: a `Referrer-Policy` governs the requests *this
+  app's own pages* make. A request some other page sends here is governed by that page's policy, not
+  by ours. So this header was never part of the cross-site guard's defence — it could only ever
+  constrain us, and it did (#47).
+- The guard's refusal of `null` is unchanged and is still the right call. Accepting the opaque origin
+  would have made this defect invisible rather than fixing it: the header was the thing that was wrong,
+  and a guard loosened to tolerate it would have swallowed the evidence (#43, #47).
+- A test now asserts the **composition** rather than either half — the policy the app really emits, fed
+  through the Fetch rule for a same-origin form post, and then through the real guard. It carries its
+  own limits in writing: neither `TestClient` nor `curl` implements a referrer policy, so the browser's
+  half is modelled from the specification rather than executed. An end-to-end check in a real browser
+  engine remains the missing coverage, and is the reason this shipped (#47).
+
+- A session that has converged can still be refined. The answer form used to live inside the
+  `{% if s.questions %}` arm of the session template, so when the engine returned no question — the
+  state the home page presents as *Ready for a first decision brief* — the form disappeared along with
+  the question list, and there was no way left to send the model a correction, a constraint that
+  arrived late, or scope the client added afterwards. The form is now unconditional and the question
+  list is what varies (#49).
+- Nothing downstream ever required a question: `DiscoveryService.answer()` takes free text and folds it
+  in through the same validated path as any other turn, and has never read the question list. The
+  coupling was entirely presentational, which is what made it easy to ship and hard to notice (#49).
+- With no questions the section reframes to *Anything to add?* and keeps the notice, so the reader is
+  told the engine has nothing further to ask **and** given the box. The engine converging is an answer
+  about which questions are worth asking; it is never an answer about what the reader still has to say,
+  and collapsing the two presented the product's success state as the end of the conversation (#49).
+
+- One provider call at a time in Requivo Web, enforced page-wide. Every generator under *More
+  documents* is its own form posting to the same `#artifacts-region`, and all of them stayed clickable
+  while a generation was already running, so a reader could start five. Each is a paid call; at most one
+  result ever reached the page, and which one was not the reader's choice. While any request is in
+  flight every submit button on the page is now muted, and the count is a counter rather than a flag, so
+  the first response finishing does not hand back live buttons while a second call is still running
+  (#50).
+- The previous behaviour disabled only the submitting form's own button, which left every sibling live.
+  That is now reproduced mechanically rather than described: a small DOM harness executes the real
+  `static/js/app.js` and the shipped asset fails it with `disabled=[True, False, False]` — the clicked
+  button muted, its two siblings ready to buy another call (#50).
+- The busy state is re-asserted after each swap, because markup HTMX swaps in carries no `disabled`
+  attribute of its own. A bfcache restore now clears the count too; previously a page returned to with
+  Back kept a button disabled permanently, which the original report did not mention and the harness
+  found (#50).
+- **Correction to the mechanism recorded in the issue, which was reasoned rather than measured.** The
+  issue states that HTMX 1.9 resolves `hx-target` through the issuing element's root node, so a form
+  detached by an earlier swap drops its response silently. Read against the vendored HTMX 1.9.12, that
+  is wrong twice. `hx-target` is resolved **once, at request-issue time**, and cached on the request
+  context; `getRootNode` appears in that build only inside a shadow-DOM containment helper and is never
+  consulted for targeting. And the element whose detachment matters is the **target**, not the form —
+  the second response's cached target node is the `#artifacts-region` the first swap replaced, so the
+  `outerHTML` swap reads `parentElement` on a detached node, gets `null`, and throws. It fires
+  `htmx:swapError` and rethrows, so it is loud in the console and silent only on the page. The
+  distinction is not pedantic: under the issue's mechanism, moving the forms outside the swapped region
+  would have fixed this, and it would not have (#50).
+- Adjacent, folded in because it is the same toolbar and the same symptom: the *Generating…* label was
+  dead markup. It is a sibling of the generator forms, and HTMX's default indicator is the requesting
+  element, so `.htmx-request .spinner` never matched it. `hx-indicator="closest .toolbar"` puts the
+  class on the toolbar that contains both. Verified against the vendored build rather than assumed —
+  when `hx-indicator` is present HTMX marks those elements *instead of* the requesting one, which
+  nothing here depended on (#50).
+
+- `_hostname` in Requivo Web's cross-site guard now refuses an authority it cannot determine a host
+  from, instead of answering about it. `Host: evil.com@127.0.0.1` resolved to `127.0.0.1` and passed
+  the allowlist, because `urlsplit` is a URL parser and correctly discards userinfo; `Origin:
+  http://evil.com@127.0.0.1` came out same-trust-domain the same way (#51).
+- The same fix refuses `Host: 127.0.0.1 evil.com`, which previously came back as that entire string —
+  not a hostname, and refused only by happening to miss the allowlist. A parser that returns a non-host
+  and leaves a later equality test to reject it is answering where it should be declining (#51).
+- Not reachable from a browser, and fixed anyway. No browser serializes userinfo into a `Host`, an
+  `Origin` or a `Referer`, and RFC 7231 requires a `Referer` to have it removed — so this closes a hole
+  with no attacker who benefits. What earns the fix is that it is the **third** time this module's
+  parser answered confidently about an input it should have refused: #43 was the opaque origin parsing
+  to the plausible hostname `"null"`, #45 was an undetermined host read as *no host check needed*, and
+  this is the same shape again (#51).
+- **The refusal is the parser's, not each caller's.** The first two instances were closed with
+  caller-side checks, which is a guarantee the next caller inherits without re-checking — and
+  `_hostname` already has two callers, on two different headers (#51).
+- Known residue, stated rather than implied: an **unbracketed** IPv6 literal (`Host: fe80::1`) still
+  parses to `fe80` with the rest read as a port. It is malformed as an authority, no browser emits it,
+  and it fails the allowlist — but the parser does answer, so the docstring does not claim the class is
+  empty (#51).
+- Compatibility: compatible for any caller that sends a hostname. A `Host` or `Origin` carrying
+  userinfo, or whitespace inside the authority, now gets a 403 where it previously got a response —
+  which is the fix.
+
+- `requivo artifact save` without `--revision` now reports **`unstated_source_revision`** instead of
+  `invalid_session` (#57). The refusal added in #6 inherited its sibling's code, because a new code
+  needs a row in `web/app.py::_STATUS_BY_CODE` — which
+  `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status` requires of every code in
+  the vocabulary — and that file was held by another change in the same round. So the precision lived
+  in the exception *type*, which a caller reading a serialized envelope never sees: the one handle it
+  had could not tell *you left a flag off* from *this session is broken*. It is a **400**, the same
+  status the condition already answered.
+- The `details` shape is unchanged and deliberately so (#57). Both refusals still carry all five of
+  `{slug, type, source_revision, current_revision, cause}`, with `cause: null` on the unstated arm.
+  Sharing it was owed while the code was shared; with the codes split it is a decision, and narrowing
+  a payload for nothing would hand a `KeyError` to a consumer reading `details["cause"]` across both
+  arms — the failure #35 measured. #52 settled the same question the same way: `opaque_origin` and
+  `origin_mismatch` share a shape and are still two codes, because a shared shape is not a shared
+  meaning.
+- Compatibility: compatible - `invalid_session` never named this condition in a released version. #6
+  is still unreleased, so #6 and #57 reach users in the same release and no consumer ever saw the old
+  code here. Moving a condition to a new code *is* breaking under `docs/compatibility.md`'s own policy
+  and is recorded there as such anyway, because the policy is about the condition rather than about
+  who happened to be watching. `UnstatedSourceRevisionError` remains an `InvalidSessionError`
+  subclass, so catching the class is unaffected in either direction. This is filed under Fixed rather
+  than Changed, which is where #52 filed its code split, for that one reason: `cross_site_request` had
+  shipped and this code had not.
+- **`artifact save --revision`'s help text no longer advertises a default it does not have** (#57). It
+  still read `(default: the session's current revision)` after #6 removed exactly that behaviour — so
+  the text a user reads *while deciding whether to pass the flag* was recommending the fabricated
+  provenance the refusal exists to stop. Two reviewers on the #6 branch found it independently. It now
+  says the flag is required and why: the session's current revision is a different fact, and only the
+  caller knows what they read. The flag stays optional to `argparse` on purpose — the omission has to
+  arrive as a structured envelope a `--json` caller can parse, not as a usage error and exit 2.
+- The rest of the surface was swept rather than assumed (#57). On the help-text half nothing else was
+  wrong: `docs/cli.md`, `docs/session-format.md` and `plugins/claude-code/REASONING.md` already state
+  that `--revision` is required, and no other option on `artifact save` claims a default. A test now
+  reads the rendered help and fails on either form this repository writes a default in.
+- The same sweep for the code found two places that named `invalid_session` for this condition and are
+  corrected here (#57): `docs/session-format.md`, which now names both codes and says which fact each
+  one carries, and the unreleased `changelog.d/6.fixed.md`, which would otherwise have folded the old
+  code into `CHANGELOG.md` in the release that removes it. A stale code name in a changelog is worse
+  than none — it is the string a consumer would have written their match against.
+
+- `discover`, `answer` and the Web's discovery routes no longer pay a ~25% surcharge on the largest
+  part of their input. Every reasoning turn through the provider seam was writing a prompt-cache
+  entry — 1.25x input to write, 0.1x to read — that nothing ever read back, because each of those
+  operations makes exactly one call. #9 removed this from the six generators and `estimate`; these
+  were the two call sites it could not reach that round (#58).
+- The breakpoint stays where it is genuinely re-read: `converse()`'s interactive loop sends the same
+  engine prompt for up to 8 turns, and the golden harness sends it K times. Both now declare that at
+  the call site rather than inheriting it, because it is a per-call-site fact — the same `run()` is
+  single-call under the provider seam and multi-call under `converse()` (#58).
+
+- One unreadable session no longer takes `requivo session list` down. Invariant 15 — *a listing
+  survives its own members* — was fixed for Requivo Web in #7 and left undone on the CLI, whose
+  `deterministic.py` was held by another change that round. A `session.json` written by a newer
+  Requivo made the command exit 1 with a single message, **every other session invisible and nothing
+  naming which one was the problem** — the exact failure the invariant is about, on the surface that
+  did not get the fix. The listing now comes from `list_entries()`, which degrades per member (#62).
+- The degraded row names the session and carries the reason, because for the commonest break mode the
+  reason *is* the remedy: *this session was written by a newer Requivo, upgrade* is actionable where a
+  flattened `unreadable` is not. `requivo session verify <slug>` remains where the full story lives,
+  and a footer line points at it (#62).
+- It states no fact it could not read — no revision, no provider, no timestamp. A plausible `rev 0` on
+  a session nobody managed to open is the quiet-wrong-answer form of the same bug. A session genuinely
+  at revision 0 is a normal row and still reads as one: *we could not look* and *we have not looked
+  yet* are two answers (#62).
+- **A new exit code, 4.** A listing that degraded a row is neither of its neighbours: `0` says nothing
+  is wrong and `1` says nothing was listed. It is safe to make non-zero precisely because nothing is
+  withheld — the complete listing is still on stdout, so a caller that only wants the rows gets all of
+  them. Documented in the exit-code table in `docs/cli.md` (#62).
+- Compatibility: compatible. `session list --json` gained `readable` and `error` on every row, which is
+  additive; a consumer reading only `slug`, `revision`, `provider` and `updated_at` is unaffected on a
+  workspace where every session loads. A **degraded** row keeps the same key set with `null` in the
+  three facts it could not read, rather than a shortened dict that would turn `row["revision"]` into a
+  `KeyError` on a payload handed over deliberately. Branch on `readable`. The previous behaviour on
+  such a workspace was no payload at all and exit 1, so nothing that worked stops working (#62).
+- **The issue's own table is corrected, measured rather than assumed.** #62 carried #7's three break
+  modes and said all three applied unchanged. They do not: the web row calls `request_text` and
+  `status()`, while the CLI row reads nothing but the metadata, so only the `read_meta` mode ever
+  reached this command. The other two are pinned as controls asserting they *stay* out of this path —
+  a future row that reads the request or the status needs the per-row guard the web viewmodel carries,
+  and the control is what will say so (#62).
+- The degraded row is a new render site for two pieces of untrusted text, and both go through
+  `display_token` (#40). The slug there is the raw directory name — `read_meta` would have refused a
+  non-kebab one, but that refusal is why the row is degraded, so it never ran. The error text can be a
+  four-line pydantic `ValidationError`, which printed raw turns one session into four rows of listing
+  with no way to tell where the row ends (#62).
+- **A `session.json` could forge a row of `session list`'s own output, and no longer can.** Found by
+  the audit on this branch, and outside the issue as filed. The readable row printed `slug`, `provider`
+  and `updated_at` unescaped, and all three are read straight out of the file's body — `read_meta`
+  validates the slug it is *called with*, the directory name, and then returns `SessionMeta.slug`, a
+  bare `str` with no pattern, from the JSON. Nothing checks the two agree outside `session import`.
+  A hand-edited or imported `session.json` whose `slug` carried a newline printed a second, entirely
+  fabricated row — `rev 999 (trusted, …)` — into the listing, and the command exited 0. This is
+  invariant 14's second door, the same shape as the stored context-card name in #40. All three fields
+  now go through `display_token`; a clean value is returned byte-for-byte, so no real session's row
+  changes (#62).
+- Reported rather than fixed, deliberately: **`requivo session show` has the identical defect in five
+  fields** — `session_id`, `created_at`, `updated_at`, `provider` and `model_name` all reach column 0
+  unescaped, measured the same way. It is a different verb needing its own tests and its own review,
+  so it wants its own change rather than a rider on this one. `--json` is unaffected on both verbs:
+  `json.dumps` defaults to `ensure_ascii=True`, which escapes a control character before it can reach
+  a line of its own, and there is now a test pinning that this default is load-bearing (#62).
+
+- `requivo doctor` now names what is under `.requivo/sessions/` and is **not** a session. Nothing
+  could see one: `list_session_slugs` filters on `session.json`, `doctor` and `session verify` both
+  reason over the slugs it returns, and `check_session` answers about a directory it is handed, which
+  nobody could hand it a name for. #22 stopped `session_lock` producing these; it could not find the
+  ones already on disk from before that fix (#67).
+- **The consequence is printed, because it is the only symptom any of this ever had.** The name is
+  taken, and `create_session`'s rename is the only claim on a slug (invariant 11) — it loses to
+  anything already occupying the name, after which `SessionService` falls through to its
+  hash-suffixed candidate. Ask for `leave-approval`, get `leave-approval-a1b2c3`, silently. A finding
+  with no remedy is a line people learn to scroll past, so the row carries `[name taken]` and the
+  mechanism is stated once beneath it (#67).
+- **A report, not a repair.** Nothing is deleted, moved or rewritten, and no field states a
+  conclusion — there is no `is_lock_ghost` anywhere. A directory holding only `.lock` is almost
+  certainly a leftover lock and *almost certainly* is not a licence to act: a half-extracted archive
+  and an interrupted copy are the same shape from outside, and this project's rule is that the
+  evidence is the directory and only the directory (invariant 14). Each entry reports `name`, `kind`,
+  the first five `entries` it holds and the true `entry_count`. The one derived value, `slug_shaped`,
+  is a property of the *name* — whether `create_session` can be asked for it, and so whether the
+  entry costs anybody anything — not a guess at where it came from (#67).
+- Three things the review on this branch found and are fixed here. **A symlink is no longer reported
+  as whatever it points at**: `Path.is_dir()` follows one, so a link at a slug name answered
+  `directory` and then listed the *target's* filenames into a report about your workspace. It is
+  `kind: "symlink"` now and is not followed. **`slug_shaped` asked the slug pattern alone**, and
+  validity is the pattern *and* the length — an 81-character kebab-case name was marked as one a
+  session would silently lose, when `canonical_dir` refuses it outright and loudly; it goes through
+  `is_slug`, which calls `validate_slug`, so there is one rule rather than two. And **`doctor` takes
+  one listing for both halves** (`scan_session_root`) rather than scanning twice: two scans are two
+  instants, and a `session.json` landing between them put a name in *neither* answer — the invisible
+  state this key exists to end, reintroduced by the key itself (#67).
+- `_describe_non_session` never raises, and that is load-bearing rather than defensive. It runs inside
+  the one `try` that also holds the session listing, so an exception escaping it discarded a session
+  report that had already succeeded and told the reader the whole root was unlistable — a claim
+  broader than what failed, invariant 15's shape one layer down. Both arms land in a state the entry
+  already has (*could not stat* / *could not list*), so this is not a guard that cannot fire: on Linux
+  a filename that is not valid UTF-8 arrives carrying surrogates, and APFS refuses such a name, so it
+  could not be constructed here to be ruled out either way (#67).
+- **A stray file at a slug name costs exactly the same**, found by sweeping the class rather than
+  taking the issue's word for the instance: `rename` onto an existing file fails too, `d.exists()` is
+  true, and the caller gets the identical substitution. Reporting only directories would have left an
+  identical symptom with an identical remedy invisible, so each entry says what kind of thing it is
+  instead of the report assuming they are all directories (#67).
+- Three states, at both levels. `sessions.non_sessions` is `null` — never `[]` — when the session
+  root could not be listed at all, matching what `sessions.total` already does, because an empty list
+  there reads as *we looked and there is nothing else*. Within an entry, `entries: null` with an
+  `error` is a directory we could not look inside, which must not render like an empty one — on POSIX
+  an empty directory is the single shape that costs nothing at all, because `rename(2)` replaces an
+  empty destination. Windows differs (`os.rename` refuses any existing destination), which is why an
+  empty directory is still reported and still marked `[name taken]` (#67).
+- `doctor` owns this rather than `session verify`, which is per-session and takes a slug — and the
+  defining property of one of these is that no listing produces its name, so there is no slug for
+  anybody to type. It gets a row of its own rather than a note on the sessions row, because
+  `0 in this workspace` stays true: none of this is a session, and folding it in would trade a
+  correct count for a vague one. `requivo session list` is unchanged and still lists only sessions
+  (#67).
+- The listing lives in `core/persistence.py` beside `list_session_slugs`, which owns the store
+  layout, and both halves now come out of one predicate over one `iterdir` — a name in neither is
+  precisely the state this issue is about, so stating the rule twice is how it comes back. Core
+  reading a directory crosses no boundary: invariant 7 forbids importing a provider and touching
+  argv, the streams, the environment and process exit, not IO (#67).
+- The entry name and the names it holds are read off disk and go through `display_token` (#40).
+  Printed bare, one carrying a newline does not merely look odd — it ends the line and starts another
+  at column 0 of `doctor`'s own report. `--json` is unaffected and keeps the bytes verbatim (#67).
+- Compatibility: compatible. `doctor --json` gains `sessions.non_sessions`, which is additive and is
+  `[]` on any workspace Requivo alone has written. No existing field changes meaning, nothing on disk
+  is touched, and no new exit code is introduced — the finding is a row, not a failure (#67).
+
+- **A `session.json` could forge a line of `requivo session show`'s own output, and no longer can.**
+  The same defect #62 fixed in `session list`, in the other verb: `read_meta` validates the slug it
+  is *called with* — the directory name — and then returns every other value straight out of the
+  file's body, where they are bare `str` fields with no pattern. A hand-edited or imported
+  `session.json` carrying a newline printed **sixteen** lines where eight were real, including its
+  own `revision 999` and `provider trusted`, and the command exited 0 (#70).
+- **It is eight fields, not the five the issue counted**, and the count is reported rather than made
+  to come out right. #62 named the five that are `SessionMeta` scalars — `session_id`, `created_at`,
+  `updated_at`, `provider`, `model_name`. It left out `slug`, which is the same bare string here that
+  it was on the listing, and the two that are not `SessionMeta` fields at all: the **keys** of
+  `artifact_status`, a `dict[str, …]` whose keys are whatever the file says, and each artifact's
+  `filename`. `core/integrity.py` already treats that recorded filename as untrusted input, so a
+  render site that did not was the exception making the rule unreliable (#70).
+- This verb is the sharper of the pair. Every line it prints is one Requivo writes itself, at a fixed
+  column, in a fixed shape — so a stored value can print `  revision 0` beneath a session that is at
+  revision 12, and nothing in the render tells the two apart. On a listing a forged row at least has
+  to imitate a row (#70).
+- `current_revision`, an artifact's `revision` and its `stale` flag are deliberately **not** wrapped
+  and are named here as such: they are typed `int`, `int` and `bool`, so `read_meta` refuses a string
+  in them before the render runs. Wrapping them defensively would say the type bought nothing (#70).
+- `session_id` is **sliced before it is escaped**. The other order truncates the escaped form, which
+  can cut an escape sequence in half and leave the quote unclosed — a second defect bought with the
+  fix for the first (#70).
+- **`requivo artifact list` had the same defect and is fixed alongside it, outside the issue's own
+  footprint.** Found by sweeping the class rather than the instance: it renders two of the same
+  strings — the `artifact_status` key and the `filename` — off the same file at the same fixed
+  column, and a forged entry printed a fabricated second artifact row while the command exited 0.
+  One line, in the same file, over the same two fields, with the same test fixture. It is called out
+  here rather than left to read as scope creep: escaping a stored value in one of the two verbs that
+  render it leaves the rule meaning *wherever somebody happened to look* (#70).
+- **The reason `--json` is safe is corrected, having been measured rather than repeated.** #62, this
+  issue's own text and this repository's docs all said `json.dumps` defaults to `ensure_ascii=True`
+  and therefore escapes a control character. That is not what protects a newline — JSON's grammar
+  forbids a literal control character below `U+0020` inside a string, so `\n` is escaped whether the
+  flag is on or off, and a test probing with a newline is green either way and pins nothing. The
+  default **is** load-bearing, for the *non-ASCII* half of the guarded range, `U+007F`–`U+009F`:
+  `NEL` (`U+0085`), a line terminator `str.splitlines()` and some terminals honour, and `CSI`
+  (`U+009B`), an escape introducer `core/selectors.py` already names. The test now probes both
+  halves and fails if the default is turned off to make accented output readable (#70).
+- **Where the terminal guard stops is now written down and pinned, rather than assumed to coincide
+  with `str.splitlines()`.** Found by the audit on this branch. `core/selectors.py`'s
+  `_CONTROL_CHARS` is C0, DEL and C1 — *the class that can move a terminal's cursor or end its line*
+  — while `str.splitlines()` also breaks on `U+2028` and `U+2029`, which `display_token` returns
+  byte-for-byte. On a terminal that is the right answer (xterm and the VT sequences behind it answer
+  to CR and LF, not to Unicode `Zl`/`Zp`), so this is not a forgery on the surface the guard covers;
+  it matters to anything reading the human-readable output line by line, and `--json` covers those
+  two as well and is therefore the stricter of the two paths. Widening `_CONTROL_CHARS` is
+  deliberately **not** done here — it would also change what `normalize_tokens` refuses, i.e. the
+  public `unsafe_selector_token` behaviour, which is a decision for that module's owner (#70).
+- Compatibility: compatible. A value that is already one safe line comes back byte-for-byte, so no
+  session Requivo itself wrote renders differently on any of the three verbs; such a value can only
+  have arrived by `session import` or by hand. `--json` is unchanged and was never affected (#70).
+
 ## [0.10.0] - 2026-08-18
 
 ### Added
@@ -1181,7 +2029,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jbkkz/requivo/releases/tag/v0.11.0
 [0.10.0]: https://github.com/jbkkz/requivo/releases/tag/v0.10.0
 [0.9.10]: https://github.com/jbkkz/requivo/releases/tag/v0.9.10
 [0.9.9]: https://github.com/jbkkz/requivo/releases/tag/v0.9.9
