@@ -553,12 +553,38 @@ def artifact_path(slug: str, filename: str) -> Path:
     return p
 
 
+def _probe(marker: Path, slug: str) -> bool:
+    """Is `marker` there? — with the third answer routed out through the error channel.
+
+    `Path.exists()` has two returns and three outcomes: it swallows `ENOENT`/`ENOTDIR` into `False`,
+    which is right, and **re-raises everything else**, which used to escape these two functions as a
+    bare `PermissionError` traceback. That is the identical unguarded probe #80 had to remove from
+    `_scan_session_root`, and it mattered more after #80 than before: `session list` now renders a
+    degraded row for an entry it could not examine and prints a footer pointing the reader at
+    `session verify <slug>` — which opened with `session_exists` and crashed on the one slug it had
+    just been told to look at (#97).
+
+    **The bool is not widened, because a bool cannot hold three states.** Answering `False` here
+    would be the collapse: `cli.py` and `session import --force` read these to decide whether to
+    *create or overwrite*, so turning *I could not tell* into *there is nothing here* is a write
+    proceeding on an unknown. The third state leaves as `SessionUnreadableError` — #82's code for a
+    fact about the store rather than about the request, already 500 over HTTP and already what
+    `read_meta` raises when its read fails. `ENOENT` still returns `False`: absent is a real answer
+    and the commonest one."""
+    try:
+        return marker.exists()
+    except OSError as e:
+        raise SessionUnreadableError(
+            f"could not determine whether session '{slug}' exists: {e}",
+            details={"slug": slug}) from e
+
+
 def session_exists(slug: str) -> bool:
-    return (canonical_dir(slug) / "session.json").exists()
+    return _probe(canonical_dir(slug) / "session.json", slug)
 
 
 def legacy_exists(slug: str) -> bool:
-    return (legacy_dir(slug) / "model.json").exists()
+    return _probe(legacy_dir(slug) / "model.json", slug)
 
 
 def write_meta(slug: str, meta: SessionMeta) -> Path:

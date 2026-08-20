@@ -340,3 +340,115 @@ def test_an_unexaminable_name_carrying_a_control_character_cannot_forge_a_line(w
         out, _ = _run(argv)
         assert not any(ln.startswith("TOTAL:") for ln in out.splitlines()), (argv, out)
         assert "evil" in out, (argv, out)          # must fire: the name did reach the output
+
+
+# -- #97: the same unguarded probe, one function along -------------------------
+
+
+def test_session_exists_answers_could_not_tell_through_the_error_channel(blocked):
+    """`session_exists` raises rather than answering `False` on a probe it could not make.
+
+    Same defect as the partition above, in the function every other verb opens with. The bool is
+    deliberately *not* widened: `cli.py` and `session import --force` read this to decide whether to
+    create or overwrite, so `False` on a permissions fault is *there is nothing here* followed by a
+    write. Three states, two returns, so the third leaves as an error.
+
+    `SessionUnreadableError` and not a new code: #82 made it mean *a fact about the store, not about
+    the request*, which is exactly this, and it already answers 500 over HTTP."""
+    from requivo.core.errors import SessionUnreadableError
+
+    with pytest.raises(SessionUnreadableError) as caught:
+        store.session_exists(BLOCKED)
+    assert caught.value.details["slug"] == BLOCKED
+    # The positive control: the healthy session in the same workspace still answers normally, so a
+    # blanket `raise` would fail here rather than pass this file.
+    assert store.session_exists(HEALTHY) is True
+    assert store.session_exists("no-such-session-anywhere") is False
+
+
+def test_absent_is_still_false_because_absent_is_a_real_answer(workspace):
+    """`ENOENT` must keep returning `False`. It is the commonest answer, `Path.exists()` already
+    swallows it, and turning it into an exception would make every `session init` raise."""
+    _seed_healthy()
+    assert store.session_exists("nothing-here") is False
+    assert store.legacy_exists("nothing-here") is False
+
+
+def test_verify_says_it_could_not_look_and_exits_4_not_1(blocked):
+    """The pairing #80 created and #97 closes.
+
+    `session list` renders a degraded row for an entry it could not examine and prints a footer
+    telling the reader to run `session verify <slug>`. That verb opened with `session_exists` and
+    crashed with a bare `PermissionError` on the one slug it had just been pointed at.
+
+    **4, not 1.** Exit 1 says *I checked and it is broken*; nothing checked anything here. That is
+    the collapse #86 removed from this verb and it must not return through the probe."""
+    text, code = _run(["session", "verify", BLOCKED])
+    assert code == EXIT_DEGRADED, text
+    assert "could not examine" in text.lower(), text
+    # The sentence that stops a reader taking silence for a clean bill of health.
+    assert "not a report that it is sound" in text, text
+    assert "Traceback" not in text
+
+
+def test_verify_json_carries_the_third_state_as_a_field_not_as_an_empty_list(blocked):
+    """`problems: []` spells both *checked, nothing wrong* and *nothing was checked*.
+
+    So the payload gains `session: {checked, error}`, a sibling of `context_cards` carrying the same
+    two keys for the same reason. A consumer must branch on `session.checked`, never on the
+    emptiness of `problems` — this asserts the field is there and that the empty list alone would
+    have misled."""
+    text, code = _run(["session", "verify", BLOCKED, "--json"])
+    assert code == EXIT_DEGRADED, text
+    payload = json.loads(text)
+    assert payload["session"]["checked"] is False
+    assert payload["session"]["error"]
+    assert payload["ok"] is False
+    assert payload["problems"] == []   # <- exactly why `session.checked` has to exist
+
+
+def test_a_healthy_session_reports_checked_true_so_the_field_is_not_a_constant(blocked):
+    """The positive control for the field above: on a session that *was* examined it reads `True`
+    with a `null` error, and the verb still exits 0. A payload hard-coding `False` would pass every
+    assertion in the test above and fail here."""
+    text, code = _run(["session", "verify", HEALTHY, "--json"])
+    assert code == 0, text
+    payload = json.loads(text)
+    assert payload["session"] == {"checked": True, "error": None}
+    assert payload["ok"] is True
+
+
+# -- #90: the *error* on that line is untrusted text too -------------------------
+
+
+def test_the_error_text_on_a_non_session_line_cannot_forge_a_line_either():
+    """`_non_session_detail` interpolates `error` beside names that all go through `display_token`.
+
+    The names were wrapped and the error was not, for a release. `error` is `str(e)` from a
+    deliberately wide `except Exception` in the store — the docstring beside it says the set of ways
+    a member can be broken is open — so an open set of causes was feeding an unescaped
+    interpolation, which is the shape #40 was.
+
+    A platform-free unit test on purpose: this asserts the *render*, and the render must hold
+    whatever the exception space happens to look like on the leg it runs on. Whether a reachable
+    exception can carry a newline today is a separate question, and the answer being *probably not*
+    is not a property of this line."""
+    from requivo.deterministic import _non_session_detail
+
+    forged = "boom\nTOTAL: 0 sessions, all clear"
+    for entry in ({"kind": "unknown", "error": forged},
+                  {"kind": "directory", "error": forged, "entry_count": 0, "entries": []}):
+        detail = _non_session_detail(entry)
+        assert "\n" not in detail, (entry["kind"], detail)
+        assert "TOTAL: 0 sessions, all clear" not in detail.splitlines()[0].split(" — ")[0]
+        assert "boom" in detail, "the escaped text still has to be readable"
+
+
+def test_a_plain_error_is_not_mangled_by_the_wrap():
+    """The positive control. `display_token` on ordinary text must leave it alone, or the fix trades
+    a forgeable line for an unreadable one — and every operator-facing message on this surface would
+    pay for a case nobody has reached."""
+    from requivo.deterministic import _non_session_detail
+
+    detail = _non_session_detail({"kind": "unknown", "error": "[Errno 13] Permission denied"})
+    assert "[Errno 13] Permission denied" in detail
