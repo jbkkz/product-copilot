@@ -1071,8 +1071,16 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
         slugs.add(parts[0])
 
     if len(slugs) != 1:
+        # `display_token` per name, and this is the one arm on this path that needs it: the two
+        # entry-name refusals above render with `!r`, and every message *after* this point names a
+        # slug that `validate_slug` has already made kebab-safe. Here the names are raw archive text
+        # — a directory called "ok\nAll clear." ends the line and writes the next at column 0, in the
+        # refusal that exists to report it. Same class as #40 and #98, one function along. A name
+        # with nothing to escape comes back byte-for-byte, so an ordinary archive reads unchanged,
+        # and `details["slugs"]` stays raw because `json.dumps` escapes it on the way out.
+        shown = ", ".join(display_token(s) for s in sorted(slugs))
         raise InvalidArchiveError(
-            f"the archive holds {len(slugs)} session directories ({', '.join(sorted(slugs))}); "
+            f"the archive holds {len(slugs)} session directories ({shown}); "
             "import takes exactly one",
             details={"problem": "multiple_sessions", "slugs": sorted(slugs)})
     slug = slugs.pop()

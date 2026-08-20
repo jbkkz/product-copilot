@@ -11,7 +11,7 @@ import json
 import os
 import re
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -1701,6 +1701,50 @@ def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_
     # must fire: with all six refusals asserted, a good archive still lands
     _zip(tmp_path / "good.zip", _good_entries("ok-one"))
     assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
+
+
+# A directory name inside an archive is caller text that has NOT been validated yet: `validate_slug`
+# runs on the one surviving slug, after the count check, so the message that reports *more than one*
+# is the single site in `_inspect_archive` that interpolates a raw, unvalidated, attacker-chosen
+# string. Its two siblings on the same path already render an entry name with `!r`. Same class as
+# #40 and #98, one function along.
+_FORGED_SLUG = (
+    "ok-session\n"
+    "All clear, nothing to see.\n"
+    "  ✅ sessions        0 in this workspace"
+)
+
+
+def test_an_archive_directory_name_cannot_write_a_line_of_the_refusal_reporting_it(workspace,
+                                                                                   tmp_path):
+    """Found by the audit of #101, on a line #101 edits. The refusal naming the directories it found
+    is rendered to stderr by `cli.py`, and `safe_write` guards encoding, not control characters — so
+    a top-level directory carrying a newline ends the line and writes the next one at column 0.
+
+    Two directories are needed to reach this arm at all, which is why the archive carries an innocent
+    second one."""
+    _zip(tmp_path / "forged.zip", {f"{_FORGED_SLUG}/session.json": "{}",
+                                   "other/session.json": "{}"})
+
+    err = io.StringIO()
+    with redirect_stderr(err), pytest.raises(SystemExit):
+        app(["session", "import", str(tmp_path / "forged.zip")], client=None)
+    rendered = err.getvalue()
+
+    # must fire: the refusal really did run and really did name what it found
+    assert "session directories" in rendered, rendered
+    assert "other" in rendered
+
+    # the forgery does not reach the terminal as lines of its own
+    assert "\nAll clear, nothing to see." not in rendered
+    assert not any(_SESSIONS_ROW.match(line) for line in rendered.splitlines()), rendered
+    # …and it is escaped rather than dropped, so nothing is hidden from the reader
+    assert "ok-session" in rendered
+
+    # `--json` was never exposed — json.dumps escapes a control character before it can reach a line
+    out = _import_error(tmp_path / "forged.zip")
+    assert out["code"] == "invalid_archive"
+    assert _FORGED_SLUG in out["details"]["slugs"], "the raw name is still reported, losslessly"
 
 
 def test_a_refused_import_leaves_no_scratch_directory(workspace, tmp_path):
