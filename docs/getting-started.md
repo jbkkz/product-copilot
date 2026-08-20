@@ -121,7 +121,7 @@ takes the session **slug** (or a `model.json` path); regenerate any artifact wit
 
 ```bash
 requivo prd    <slug>                      # also: stories · estimate · criteria · release · brief
-requivo epic   <slug> --github --gitlab    # + a tool-neutral epic.json and tracker issue plans
+requivo epic   <slug> --export-json --github --gitlab   # + a tool-neutral epic.json and tracker plans
 requivo impact <slug> permissions          # what rests on a slot
 ```
 

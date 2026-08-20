@@ -17,6 +17,10 @@ Most verbs take a session **slug** or a path to a saved `model.json`.
 | `requivo status <slug>` | Understanding checklist + readiness (`--json` for a machine snapshot). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
 
+The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init` and
+on `context`. `--cards` is a permanent alias of it on all three, kept because `context` spelled it that
+way first (#85); the two are one option, so they can never mean different things.
+
 A selector — `--context a,b`, or the slot names given to `impact` — is checked rather than best-guessed.
 An **empty** name is refused: `requivo impact <slug> ""`, which is what an unset shell variable expands
 to, used to match every label and report the whole model as changed with nothing in the output to say
@@ -36,7 +40,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo stories <slug>` | User stories |
 | `requivo criteria <slug>` | Given/When/Then acceptance criteria |
 | `requivo estimate <slug>` | Uncertainty-aware estimate (derives stories first) |
-| `requivo epic <slug> [--github] [--gitlab] [--json]` | Delivery epic + optional tracker issue plans and a tool-neutral `epic.json` |
+| `requivo epic <slug> [--export-json] [--github] [--gitlab]` | Delivery epic + optional tracker issue plans and a tool-neutral `epic.json` |
 | `requivo release <slug> [version]` | Client-facing release notes |
 
 ## Local browser interface

@@ -33,7 +33,8 @@ pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
 
 `requivo` is the command. Verbs: `discover`,
 `answer`, `demo`, `status`, `impact`, `brief`, `prd`, `stories`, `estimate`, `criteria`,
-`epic` (`--json/--github/--gitlab`), `release`, `web`, plus the offline ones in `deterministic.py`
+`epic` (`--export-json/--github/--gitlab` — three flags of one kind, each writing an export file;
+`epic` deliberately has no stdout `--json`, see #83), `release`, `web`, plus the offline ones in `deterministic.py`
 (`doctor`, `schema`, `context`, `session` incl. `verify`, `model`, `artifact`). `impact` is a pure query over the
 dependency DAG — no API call. Without an install, `python scripts/requivo_cli.py <cmd>` is equivalent
 (the launcher lives under `scripts/`, not at the repo root, where it would shadow the package).
