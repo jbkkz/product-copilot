@@ -876,6 +876,13 @@ def test_every_error_code_has_an_explicit_http_status():
     ("empty_selector_token", 400, "a stray comma in what the caller typed"),
     ("empty_selection", 400, "a selection the caller supplied that selects nothing"),
     ("invalid_filename", 400, "a path target the caller supplied"),
+    # #101. The archive-shape refusals sit between `unreadable_archive` and `inconsistent_archive` on
+    # one code path, and all three answer the same question the same way: the caller handed us this
+    # archive. A 5xx here would say the store is broken when the store has not been touched — nothing
+    # is written until the archive has passed. 409 would be wrong for the opposite reason: nothing in
+    # the store conflicts with anything, and re-sending the same zip unchanged can never succeed.
+    ("invalid_archive", 400, "the caller handed us this archive — the same answer its two siblings "
+                             "on the import path already give"),
 ])
 def test_a_server_side_fault_is_not_reported_as_the_users_bad_request(code, status, why):
     """The five decisions this change makes, each pinned with its reason, plus the three the issue

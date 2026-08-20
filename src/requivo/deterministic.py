@@ -28,6 +28,7 @@ from requivo.core.context import available_cards, check_selection, resolve_cards
 from requivo.core.errors import (
     ImportMoveFailedError,
     InconsistentArchiveError,
+    InvalidArchiveError,
     InvalidModelError,
     SessionExistsError,
     SessionNotFoundError,
@@ -1028,7 +1029,10 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 
 def _inspect_archive(z: zipfile.ZipFile) -> str:
     """Validate an export archive *before* anything is written, and return the single session slug it
-    contains. Raises `InvalidModelError` on anything unexpected.
+    contains. Raises `InvalidArchiveError` on anything unexpected, with `details["problem"]` naming
+    which shape check refused it — see that class for the vocabulary and for why the seven conditions
+    are one code (#101). It answered `invalid_model` until then, on a path where nobody had proposed
+    a model and where the arm on either side of it already named the archive.
 
     Checking names by string prefix (the previous guard: `str(target).startswith(str(root))`) is not a
     containment test — `/…/sessions-evil` starts with `/…/sessions`. Here every entry is decomposed
@@ -1036,35 +1040,41 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
     unrepresentable rather than merely unlikely."""
     infos = [i for i in z.infolist() if not i.is_dir()]
     if not infos:
-        raise InvalidModelError("the archive contains no files")
+        raise InvalidArchiveError("the archive contains no files", details={"problem": "empty"})
     if len(infos) > MAX_ARCHIVE_FILES:
-        raise InvalidModelError(
+        raise InvalidArchiveError(
             f"the archive holds {len(infos)} files; the maximum is {MAX_ARCHIVE_FILES}",
-            details={"files": len(infos), "max_files": MAX_ARCHIVE_FILES})
+            details={"problem": "too_many_files",
+                     "files": len(infos), "max_files": MAX_ARCHIVE_FILES})
     total = sum(i.file_size for i in infos)
     if total > MAX_ARCHIVE_BYTES:
-        raise InvalidModelError(
+        raise InvalidArchiveError(
             f"the archive expands to {total} bytes; the maximum is {MAX_ARCHIVE_BYTES}",
-            details={"bytes": total, "max_bytes": MAX_ARCHIVE_BYTES})
+            details={"problem": "too_large",
+                     "bytes": total, "max_bytes": MAX_ARCHIVE_BYTES})
 
     slugs = set()
     for i in infos:
         name = i.filename
         if "\\" in name:  # a Windows-style separator is not a component boundary to zipfile
-            raise InvalidModelError(f"unsafe path in archive: {name!r}", details={"entry": name})
+            raise InvalidArchiveError(f"unsafe path in archive: {name!r}",
+                                      details={"problem": "unsafe_entry", "entry": name})
         parts = PurePosixPath(name).parts
         if len(parts) < 2:
-            raise InvalidModelError(
+            raise InvalidArchiveError(
                 f"archive entry {name!r} is not inside a session directory; an export contains "
-                "<slug>/session.json and friends", details={"entry": name})
+                "<slug>/session.json and friends",
+                details={"problem": "entry_outside_session_directory", "entry": name})
         if any(p in ("", ".", "..") for p in parts) or PurePosixPath(name).is_absolute():
-            raise InvalidModelError(f"unsafe path in archive: {name!r}", details={"entry": name})
+            raise InvalidArchiveError(f"unsafe path in archive: {name!r}",
+                                      details={"problem": "unsafe_entry", "entry": name})
         slugs.add(parts[0])
 
     if len(slugs) != 1:
-        raise InvalidModelError(
+        raise InvalidArchiveError(
             f"the archive holds {len(slugs)} session directories ({', '.join(sorted(slugs))}); "
-            "import takes exactly one", details={"slugs": sorted(slugs)})
+            "import takes exactly one",
+            details={"problem": "multiple_sessions", "slugs": sorted(slugs)})
     slug = slugs.pop()
     # The directory name becomes a session slug, so it faces the same validation as any other — this is
     # what stopped an archive whose folder was called `bad slug` from being unpacked into the store and
@@ -1109,8 +1119,12 @@ def _cmd_session_import(a, client) -> None:
                                      details={"archive": str(archive)}) from e
     with z:
         slug = _inspect_archive(z)
+        # A conflict with the store's current state, not a malformed proposal: `session_exists`
+        # exists for exactly this fact and answers 409 where `invalid_model` answered 400 (#101).
+        # It is a *check* rather than the atomic claim `create_session` makes — see the class
+        # docstring for the window that leaves open, which predates this and is not what #101 moved.
         if store.session_exists(slug) and not a.force:
-            raise InvalidModelError(
+            raise SessionExistsError(
                 f"session '{slug}' already exists in this workspace — pass --force to replace it",
                 details={"slug": slug})
         # Scratch space beside the store, not inside it: same filesystem, so the final move is a

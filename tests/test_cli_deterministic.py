@@ -20,6 +20,7 @@ from requivo.cli import _build_parser, app
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError
+from requivo.deterministic import MAX_ARCHIVE_FILES
 from requivo.services.sessions import SessionService
 
 
@@ -1537,6 +1538,169 @@ def test_import_refuses_a_collision_unless_forced(workspace, tmp_path, monkeypat
     assert r["replaced"] is True
     assert store.read_meta("dup").current_revision == 0        # genuinely replaced, not merged
     assert "A request." in store.session_request("dup")
+
+
+# ── the archive-shape refusals name the archive, not the model (#101) ───────────
+#
+# #82 split `invalid_session` into a nine-arm family on the principle that a code must name its fact,
+# and gave `unreadable_archive` and `inconsistent_archive` codes of their own. The seven shape
+# refusals *between* those two arms — same function, same code path — kept `InvalidModelError`, whose
+# docstring reads "a proposed model is structurally or semantically invalid". `cli.py` serializes
+# `to_dict()` on every `--json` verb, so a consumer scripting `session import --json` read one handle
+# for *my zip is too big*, *that slug is taken* and *your proposal is malformed*: three remedies
+# behind one code, on the page that tells them to assert on the code and never on the message.
+#
+# One code and not seven, because the seven share a remedy — *give me a different archive*. What a
+# single code owes in exchange is the thing #82 was actually about: `details` must not vary silently
+# under it. `details["problem"]` is on every arm, so a consumer that needs the distinction branches
+# on a key that is always there rather than on a `KeyError`.
+
+
+def _import_error(archive) -> dict:
+    """Drive the real CLI and return the structured envelope a `--json` consumer sees."""
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "import", str(archive), "--json"], client=None)
+    assert e.value.code == 1
+    return json.loads(buf.getvalue())
+
+
+def _lower_the_byte_ceiling(mp):
+    """The real 64 MiB ceiling is driven end-to-end by
+    `test_import_refuses_an_archive_that_is_too_large_or_too_many_files`, which asserts this same
+    code. Paying 64 MiB of allocation a second time to re-read the same branch buys nothing, so the
+    ceiling moves instead of the archive — `_inspect_archive` reads the module global at call time."""
+    import requivo.deterministic as det
+    mp.setattr(det, "MAX_ARCHIVE_BYTES", 32)
+
+
+@pytest.mark.parametrize("label, problem, build", [
+    ("no entries at all", "empty",
+     lambda p, mp: _zip(p, {})),
+    ("more entries than the ceiling", "too_many_files",
+     lambda p, mp: _zip(p, {f"s/artifacts/f{i}.md": "x"
+                            for i in range(MAX_ARCHIVE_FILES + 1)})),
+    ("expands past the byte ceiling", "too_large",
+     lambda p, mp: (_lower_the_byte_ceiling(mp), _zip(p, {"s/session.json": "0" * 64}))),
+    ("a parent segment", "unsafe_entry",
+     lambda p, mp: _zip(p, {"../escape/session.json": "{}"})),
+    ("an absolute path", "unsafe_entry",
+     lambda p, mp: _zip(p, {"/absolute/session.json": "{}"})),
+    ("a Windows separator zipfile does not treat as a boundary", "unsafe_entry",
+     lambda p, mp: _zip(p, {"..\\windows\\session.json": "{}"})),
+    ("an entry loose at the root", "entry_outside_session_directory",
+     lambda p, mp: _zip(p, {"loose.json": "{}"})),
+    ("two session directories", "multiple_sessions",
+     lambda p, mp: _zip(p, {**_good_entries("one"), **_good_entries("two")})),
+])
+def test_an_archive_shaped_wrong_is_refused_as_an_archive(workspace, tmp_path, monkeypatch,
+                                                          label, problem, build):
+    """#101. Every one of the seven shape refusals, driven through the CLI a consumer actually calls."""
+    archive = tmp_path / "case.zip"
+    build(archive, monkeypatch)
+
+    err = _import_error(archive)
+    assert err["code"] == "invalid_archive", f"{label} still answers {err['code']}"
+    assert err["details"]["problem"] == problem, label
+    assert store.list_session_slugs() == []
+
+
+def test_the_shape_refusals_are_visible_to_a_consumer_that_did_not_enumerate_them(workspace, tmp_path):
+    """The must-fire half of the case above: the harness can see a *good* archive land, so the seven
+    reds are the refusal firing and not the fixture failing to build anything at all.
+
+    Also the family question. `InvalidArchiveError` is an `InvalidSessionError`, so the arm on either
+    side of it on this code path — `unreadable_archive` and `inconsistent_archive` — is caught by the
+    same `except`, which is the asymmetry #101 is about. It is deliberately *not* an
+    `InvalidModelError` any more; that is the breaking half, recorded in `changelog.d/101`."""
+    from requivo.core.errors import InvalidArchiveError, InvalidModelError, InvalidSessionError
+
+    assert issubclass(InvalidArchiveError, InvalidSessionError)
+    assert not issubclass(InvalidArchiveError, InvalidModelError)
+    assert InvalidArchiveError.code == "invalid_archive"
+
+    # must fire: a well-formed archive still imports, so the seven refusals above mean something
+    _zip(tmp_path / "good.zip", _good_entries("fine"))
+    r = _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])
+    assert r["slug"] == "fine"
+    assert store.list_session_slugs() == ["fine"]
+
+
+def test_an_occupied_slug_is_a_conflict_with_the_store_not_an_invalid_model(workspace, tmp_path,
+                                                                           monkeypatch):
+    """#101, the sharpest row: the vocabulary already had the right code. `session_exists` answers
+    409 and its docstring is written for exactly this fact; the import path raised `invalid_model`
+    and 400 instead — a *conflict with the store's current state* reported as a malformed proposal.
+
+    The `--force` half is asserted in the same test on purpose: a refusal that cannot be lifted is a
+    different product, and a code change must not turn the escape hatch off."""
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    err = _import_error(tmp_path / "dup.zip")
+    assert err["code"] == "session_exists"
+    assert err["details"] == {"slug": "dup"}
+    assert "The original." in store.session_request("dup")   # and nothing was replaced
+
+    # must fire: --force still lands, so the code above is the refusal and not a broken archive
+    assert _run_json(["session", "import", str(tmp_path / "dup.zip"), "--force",
+                      "--json"])["replaced"] is True
+
+
+def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_path):
+    """The table in `docs/cli.md` under *Importing a session*, asserted rather than described.
+
+    Seven codes reach this verb and each answers a different question. They are checked together
+    because the defect #101 fixes was not any one of them being wrong — it was two of them being the
+    *same* code while their neighbours on the identical code path had names of their own. A table
+    that drifts back into a single handle fails here before a consumer discovers it.
+    """
+    from requivo.core.errors import (
+        InconsistentArchiveError,
+        InvalidArchiveError,
+        InvalidSessionError,
+        SessionExistsError,
+        UnreadableArchiveError,
+    )
+
+    # not a file at all — before anything is opened
+    assert _import_error(tmp_path / "nowhere.zip")["code"] == "session_not_found"
+
+    # a file that is not a zip
+    (tmp_path / "text.zip").write_text("not a zip at all", encoding="utf-8")
+    assert _import_error(tmp_path / "text.zip")["code"] == "unreadable_archive"
+
+    # a zip whose shape is not an export
+    _zip(tmp_path / "loose.zip", {"loose.json": "{}"})
+    assert _import_error(tmp_path / "loose.zip")["code"] == "invalid_archive"
+
+    # a zip whose one directory could not be a session
+    _zip(tmp_path / "badname.zip", _good_entries("bad slug"))
+    assert _import_error(tmp_path / "badname.zip")["code"] == "invalid_slug"
+
+    # a zip whose session does not tell the truth about itself
+    broken = _good_entries("claimed")
+    broken["claimed/session.json"] = json.dumps(
+        {**json.loads(broken["claimed/session.json"]), "slug": "something-else"})
+    _zip(tmp_path / "lying.zip", broken)
+    assert _import_error(tmp_path / "lying.zip")["code"] == "inconsistent_archive"
+
+    # a zip that is fine, onto a slug that is taken
+    _run(["session", "init", "The original.", "--slug", "taken", "--json"])
+    _zip(tmp_path / "taken.zip", _good_entries("taken"))
+    assert _import_error(tmp_path / "taken.zip")["code"] == "session_exists"
+
+    # the three archive codes are one family, so `except InvalidSessionError` still catches every
+    # archive refusal without enumerating them; the other two deliberately are not in it
+    for cls in (UnreadableArchiveError, InvalidArchiveError, InconsistentArchiveError):
+        assert issubclass(cls, InvalidSessionError), cls.__name__
+    assert not issubclass(InvalidSlugError, InvalidSessionError)
+    assert not issubclass(SessionExistsError, InvalidSessionError), (
+        "an occupied slug is a conflict with the store, not a malformed session")
+
+    # must fire: with all six refusals asserted, a good archive still lands
+    _zip(tmp_path / "good.zip", _good_entries("ok-one"))
+    assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
 
 
 def test_a_refused_import_leaves_no_scratch_directory(workspace, tmp_path):
