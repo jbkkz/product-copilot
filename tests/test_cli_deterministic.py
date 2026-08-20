@@ -1690,6 +1690,35 @@ def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_
     _zip(tmp_path / "taken.zip", _good_entries("taken"))
     assert _import_error(tmp_path / "taken.zip")["code"] == "session_exists"
 
+    # a zip that passed every check and could not be moved into place. The seventh code, and the one
+    # this test claimed to cover while asserting six — found by the pre-1.0 release audit reading the
+    # docstring against the body.
+    #
+    # Driven by patching `Path.replace` rather than by arranging a filesystem that refuses a rename:
+    # the conditions that produce one differ per platform (ENOTEMPTY on POSIX, a held handle on
+    # Windows), so a fixture would test the platform on some legs and nothing on others. The patch is
+    # narrowed to the one destination under test, so the backup/restore path — which uses the same
+    # call — is untouched and a failure here cannot come from the harness.
+    _zip(tmp_path / "movefail.zip", _good_entries("move-fails"))
+    doomed = store.canonical_dir("move-fails")
+    real_replace = Path.replace
+
+    def _refuse_only_the_target(self, dest):
+        if Path(dest) == doomed:
+            raise OSError(39, "Directory not empty")
+        return real_replace(self, dest)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(Path, "replace", _refuse_only_the_target)
+        assert _import_error(tmp_path / "movefail.zip")["code"] == "import_move_failed"
+    finally:
+        monkeypatch.undo()
+
+    # must fire: the patch really was the cause, so the same archive lands once it is lifted. Without
+    # this the assertion above would pass just as well against an import broken some other way.
+    assert _run_json(["session", "import", str(tmp_path / "movefail.zip"), "--json"])["slug"] == "move-fails"
+
     # the three archive codes are one family, so `except InvalidSessionError` still catches every
     # archive refusal without enumerating them; the other two deliberately are not in it
     for cls in (UnreadableArchiveError, InvalidArchiveError, InconsistentArchiveError):
@@ -1698,7 +1727,7 @@ def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_
     assert not issubclass(SessionExistsError, InvalidSessionError), (
         "an occupied slug is a conflict with the store, not a malformed session")
 
-    # must fire: with all six refusals asserted, a good archive still lands
+    # must fire: with all seven refusals asserted, a good archive still lands
     _zip(tmp_path / "good.zip", _good_entries("ok-one"))
     assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
 

@@ -297,7 +297,8 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   `InvalidSessionError` subclass, so catching the class is unaffected either way.
 
   `details` carries `{slug, type, source_revision, current_revision, cause}` — the same five keys as
-  the refusal for a source revision that cannot be *read*, which kept `invalid_session`. Both are
+  the refusal for a source revision that cannot be *read*, which carries `unreadable_source_revision`
+  since #82 and kept `invalid_session` until then. Both are
   always present: here `source_revision` is `null` because none was stated and `cause` is `null`
   because no underlying failure occurred, and on the unreadable side `cause` names the exception type
   and its text. The shared shape **survives the split as a choice**, not an obligation: one code, one
@@ -392,17 +393,27 @@ documented for that code. `unstated_source_revision` and `unreadable_source_revi
 keys, and that is a decision rather than an obligation — the same answer #52 gave for `opaque_origin`
 and `origin_mismatch`: a shared shape is not a shared meaning.
 
-**Six of the nine conditions change status**, and each is the misattribution #34 fixed for
-`context_unreadable`, one condition further along. Everything under `invalid_session` answered 400, so
-a reader opening a session written by a newer Requivo was told *your request was bad* — as was one
-whose `session.json` would not parse, and one whose artifact history was incomplete. Those are facts
-about the store.
+**When #82 split the family it had nine arms, and six of the nine changed status.** Each was the
+misattribution #34 fixed for `context_unreadable`, one condition further along: everything under
+`invalid_session` answered 400, so a reader opening a session written by a newer Requivo was told
+*your request was bad* — as was one whose `session.json` would not parse, and one whose artifact
+history was incomplete. Those are facts about the store.
 
-A client that branched on 4xx should now expect **409** for the two version frontiers and **500** for
-the four store-state arms (`session_unreadable`, `artifact_revision_out_of_range`,
-`unreadable_source_revision`, `import_move_failed`). Four conditions keep 400 and are the ones that
-really are about the request: the three archive arms, because the caller did hand us the archive, and
-`unstated_source_revision`, which never moved. The family base keeps a row at **500** — nothing raises
+That sentence is **history and stays at nine**. #101 later added a tenth arm (`invalid_archive`),
+which changed no status — it was already 400 under `invalid_model` and is 400 now — so restating the
+split as "six of the ten" would claim something #82 did not do. The two numbers in this section count
+different things on purpose, and the arithmetic only closes if you read which:
+
+| | Count | What it counts |
+|---|---|---|
+| six of **nine** | historical | what #82 moved, on the family as it stood then |
+| four keep 400 | **present** | the family as it stands now, including #101's tenth arm |
+
+So, present tense: a client that branched on 4xx should expect **409** for the two version frontiers
+and **500** for the four store-state arms (`session_unreadable`, `artifact_revision_out_of_range`,
+`unreadable_source_revision`, `import_move_failed`). **Four** conditions keep 400 and are the ones
+that really are about the request: the three archive arms, because the caller did hand us the
+archive, and `unstated_source_revision`, which never moved. The family base keeps a row at **500** — nothing raises
 it, but a nominal number is still one a reader sees, and 400 was the wrong one to leave there.
 
 **This is breaking under the rule at the foot of this section** — moving a condition from one error
@@ -422,6 +433,42 @@ One populated field has changed meaning under that rule, and the changelog carri
 at all. It reported `0` before, which was indistinguishable from an empty workspace — a reader
 gating on `total == 0` was being told "you have no sessions" by a check that had not managed to look.
 The sibling `sessions.readable` says which case you are in.
+
+### The import path names the archive, not the model (#101)
+
+`session import` refused **eight** conditions under `invalid_model` — documented as *"a proposed model
+is structurally or semantically invalid"*, and answering 400. None of them is about a model.
+
+| Condition | Was | Now | Status |
+|---|---|---|---|
+| the archive contains no files | `invalid_model` | `invalid_archive` (`problem: empty`) | 400 |
+| more files than `MAX_ARCHIVE_FILES` | `invalid_model` | `invalid_archive` (`problem: too_many_files`) | 400 |
+| expands past `MAX_ARCHIVE_BYTES` | `invalid_model` | `invalid_archive` (`problem: too_large`) | 400 |
+| an entry with a Windows separator | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
+| an entry that is absolute or has a `.`/`..` segment | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
+| an entry not inside a session directory | `invalid_model` | `invalid_archive` (`problem: entry_outside_session_directory`) | 400 |
+| more than one session directory | `invalid_model` | `invalid_archive` (`problem: multiple_sessions`) | 400 |
+| the slug is taken and `--force` was not passed | `invalid_model` | `session_exists` | **400 → 409** |
+
+**One code for the seven, and what that code owes.** They share a remedy — *give me a different
+archive* — and the rule stated in the section above refuses a candidate code that sends a reader where
+an existing one already sends them. What a single code owes in exchange is exactly the thing #82 was
+about: `details["problem"]` is present on **every** `invalid_archive` arm, with a closed vocabulary —
+`empty`, `too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory`,
+`multiple_sessions`. Each arm then adds only the numbers its own sentence quotes (`{files, max_files}`,
+`{bytes, max_bytes}`, `{entry}`, `{slugs}`). Seven conditions under one code with varying keys would
+have rebuilt the `KeyError` that #82 removed.
+
+**Only one status moves.** `session_exists` was already in the vocabulary, already 409, already
+documented for exactly this fact — *"a session already occupies that slug"*. The seven archive arms
+stay 400, because the caller did hand us the archive.
+
+**One behavioural note, not a code change.** In `create_session` and `migrate_legacy`,
+`SessionExistsError` is the *atomic claim* on a slug — the rename either wins it or raises. In
+`session import` it is a **check**, with the TOCTOU window a check implies: a session created between
+the check and the move is refused by the move instead. That window predates this change and is
+unchanged by it; it is written down here because the same code now reaches a reader from two places
+that mean subtly different things by it.
 
 ## What a proposal means
 
@@ -448,9 +495,19 @@ everybody may assume, so each gets a verdict here.
 
 The count is worth keeping honest: this began as four surfaces, gained a fifth when a release audit
 found the web error banner's codes, and gained a sixth when #86 cited an exit-code policy that did not
-exist. Two of the six were found *after* the section claiming to be exhaustive was written, which is
-the argument for the closing sentence of [what is explicitly not stable](#what-is-explicitly-not-stable):
-a surface in neither column is a bug in this page, not a licence to assume.
+exist. **Six, and there are six subsections below** — if those two numbers ever disagree, the count is
+the one that is wrong. Two of the six were found *after* the section claiming to be exhaustive was
+written, which is the argument for the closing sentence of
+[what is explicitly not stable](#what-is-explicitly-not-stable): a surface in neither column is a bug
+in this page, not a licence to assume.
+
+**What belongs here, and what does not.** A subsection here answers *is this stable* about a surface,
+and its heading carries the verdict. A **change note** — what moved, from what, to what — belongs with
+the change it describes: `### invalid_session is a family (#82)` and
+`### The import path names the archive (#101)` sit under the `--json` section for that reason. The
+distinction is worth stating because it has already been got wrong once: #101's note was filed here,
+which made the count above read as stale when the note was simply in the wrong section, and made this
+section appear to contain a surface with no verdict in a section that says each gets one.
 
 ### The epic export envelope — **stable**, and versioned
 
@@ -521,42 +578,6 @@ as *"generated views (PRD, assessment, …)"* without naming the files.
 Note that the type and the filename deliberately differ for `brief`, which is stored as
 `solution-assessment.md`. The type is the stable identifier; the filename is stable too, and they are
 two facts rather than one spelling.
-
-### The import path names the archive, not the model (#101)
-
-`session import` refused **eight** conditions under `invalid_model` — documented as *"a proposed model
-is structurally or semantically invalid"*, and answering 400. None of them is about a model.
-
-| Condition | Was | Now | Status |
-|---|---|---|---|
-| the archive contains no files | `invalid_model` | `invalid_archive` (`problem: empty`) | 400 |
-| more files than `MAX_ARCHIVE_FILES` | `invalid_model` | `invalid_archive` (`problem: too_many_files`) | 400 |
-| expands past `MAX_ARCHIVE_BYTES` | `invalid_model` | `invalid_archive` (`problem: too_large`) | 400 |
-| an entry with a Windows separator | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
-| an entry that is absolute or has a `.`/`..` segment | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
-| an entry not inside a session directory | `invalid_model` | `invalid_archive` (`problem: entry_outside_session_directory`) | 400 |
-| more than one session directory | `invalid_model` | `invalid_archive` (`problem: multiple_sessions`) | 400 |
-| the slug is taken and `--force` was not passed | `invalid_model` | `session_exists` | **400 → 409** |
-
-**One code for the seven, and what that code owes.** They share a remedy — *give me a different
-archive* — and the rule stated in the section above refuses a candidate code that sends a reader where
-an existing one already sends them. What a single code owes in exchange is exactly the thing #82 was
-about: `details["problem"]` is present on **every** `invalid_archive` arm, with a closed vocabulary —
-`empty`, `too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory`,
-`multiple_sessions`. Each arm then adds only the numbers its own sentence quotes (`{files, max_files}`,
-`{bytes, max_bytes}`, `{entry}`, `{slugs}`). Seven conditions under one code with varying keys would
-have rebuilt the `KeyError` that #82 removed.
-
-**Only one status moves.** `session_exists` was already in the vocabulary, already 409, already
-documented for exactly this fact — *"a session already occupies that slug"*. The seven archive arms
-stay 400, because the caller did hand us the archive.
-
-**One behavioural note, not a code change.** In `create_session` and `migrate_legacy`,
-`SessionExistsError` is the *atomic claim* on a slug — the rename either wins it or raises. In
-`session import` it is a **check**, with the TOCTOU window a check implies: a session created between
-the check and the move is refused by the move instead. That window predates this change and is
-unchanged by it; it is written down here because the same code now reaches a reader from two places
-that mean subtly different things by it.
 
 ### CLI exit codes — **stable**, under the same rule as an error code
 
