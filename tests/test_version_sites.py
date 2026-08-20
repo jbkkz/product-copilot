@@ -84,6 +84,24 @@ _PRUNED = frozenset({
     "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".eggs",
 })
 
+
+def _is_nested_checkout(directory: Path) -> bool:
+    """Is this directory a git worktree or clone of its own, sitting inside the tree?
+
+    The set above prunes by *name*, which cannot see a copy of this project that is not called
+    `.venv` — and one shape of that is routine rather than exotic: `git worktree add` under the repo
+    root, which is what the agent workflow in this project does by default. Each worktree holds its
+    own `pyproject.toml`, `__init__.py` and plugin manifests, and the derived scan read all of them as
+    *unregistered version sites*. Six strays, every one a copy of a file already registered, and the
+    guard could not tell the two apart.
+
+    So this prunes by what a directory **is**. A git worktree carries a `.git` *file* pointing at the
+    parent's gitdir; a nested clone carries a `.git` *directory*. Either answers the same question —
+    everything below here belongs to another checkout and declares nothing on this project's behalf.
+    `exists()` rather than `is_dir()` for exactly that reason: the worktree case is the file.
+    """
+    return (directory / ".git").exists()
+
 # Anchored at the start of a line and at a key name, so a dependency pin (`"anthropic>=0.40.0,<1"`)
 # and a `requires-python` can never be read as this project's own version.
 # `[ \t]*` rather than `\s*`, which includes a newline and would let `^` match on one line while
@@ -203,6 +221,11 @@ def survey(root: Path) -> Survey:
         for path in sorted(root.glob(pattern)):
             relative = path.relative_to(root)
             if _PRUNED.intersection(relative.parts):
+                continue
+            # …and by what a directory is, not only what it is called. `relative.parents` walks up to
+            # `.` inclusive, which is `root` itself — excluded deliberately, since root carries a
+            # `.git` too and pruning on it would empty the scan set and pass by not looking.
+            if any(_is_nested_checkout(root / parent) for parent in relative.parents if parent.parts):
                 continue
             site = relative.as_posix()
             try:
@@ -330,6 +353,42 @@ def test_a_drift_at_any_single_site_is_caught(tmp_path, site):
     found = survey(_tree(tmp_path, files))
     assert not found.problems, "a drifted file must still be READABLE -- otherwise this proves the wrong thing"
     assert found.versions == {"1.2.3", "9.9.9"}, f"{site}: drift went unnoticed"
+
+
+def test_a_nested_checkout_is_pruned_and_the_prune_is_what_did_it(tmp_path):
+    """A `git worktree` under the repo root is a copy of this project, not a second declaration.
+
+    `_PRUNED` prunes by name, so it could not see one: the agent workflow in this repository puts
+    worktrees under `.claude/worktrees/`, each carrying its own `pyproject.toml`, `__init__.py` and
+    two plugin manifests. The derived scan read all of them as unregistered version sites — six
+    strays, every one a copy of a file already registered, and the guard could not tell the two apart.
+
+    Both directions are asserted, because a prune that swallows everything also makes this test pass:
+    with the `.git` marker the nested tree is invisible, and with the marker removed the *identical*
+    tree is found. The second half is what proves the prune is doing the work rather than the scan
+    having gone blind.
+    """
+    root = _tree(tmp_path, _agreeing())
+    nested = root / ".claude" / "worktrees" / "agent-1"
+    for site, body in _agreeing().items():
+        p = nested / site
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body.replace("1.2.3", "9.9.9"), encoding="utf-8")
+
+    # A real worktree's `.git` is a FILE pointing at the parent's gitdir, not a directory. That is the
+    # case `is_dir()` would miss, so it is the one constructed here.
+    (nested / ".git").write_text("gitdir: /elsewhere/.git/worktrees/agent-1\n", encoding="utf-8")
+    found = survey(root)
+    assert found.versions == {"1.2.3"}, "the nested checkout's version leaked into the survey"
+    # Matched on the worktree path, not on ".claude" — two of the four legitimate sites are
+    # `.claude-plugin/…`, so the looser substring catches exactly what must survive.
+    assert not [d for d in found.declarations if d.site.startswith(".claude/worktrees/")]
+    assert len(found.declarations) == 4, "the four real sites must still be there"
+
+    # must fire: without the marker the same four files ARE found, so the prune is what removed them
+    # and not a scan that stopped looking.
+    (nested / ".git").unlink()
+    assert survey(root).versions == {"1.2.3", "9.9.9"}
 
 
 def test_an_unreadable_site_is_could_not_check_and_not_drift(tmp_path):

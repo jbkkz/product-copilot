@@ -354,6 +354,92 @@ The JSON you hand to `model validate`, `model diff` and `model apply` is a **pro
   omission was read as an empty list, so an ordinary refinement turn deleted the whole reasoning
   layer — and reported no change while doing it.
 
+## The other public surfaces (#89)
+
+The two sections above bound the session format and the `--json` outputs. Four more things are relied
+on by design and were in neither column — neither promised nor disclaimed. A promise that absorbs
+everything is one nobody can keep, and a surface in neither column is a promise nobody made and
+everybody may assume, so each gets a verdict here.
+
+### The epic export envelope — **stable**, and versioned
+
+`requivo epic <slug> --export-json` writes an envelope carrying its own `format` (`requivo-epic`) and
+`version` (**1**). It exists to be validated by something outside this repo — an importer, an n8n
+flow — so declaring it unstable would contradict the code that declares it stable. Changing the shape
+of `epic` inside it is breaking; the escape hatch is `version`, and bumping it is itself breaking and
+announced here.
+
+The **tracker plans** from `--github` and `--gitlab` are stable in the same way, with one asymmetry
+worth stating: they describe somebody else's API. A change we make to their shape is breaking. A
+change forced on us because GitHub or GitLab moved is not a promise we were ever able to make, and it
+will be documented as what it is rather than dressed as a choice.
+
+### Environment variables — **stable**, with one exception
+
+`REQUIVO_WORKSPACE`, `REQUIVO_CONTEXT_DIR` and `REQUIVO_WEB_ALLOWED_HOSTS` are documented user-facing
+knobs; a deployment sets them and removing or repurposing one breaks it. They are covered by the same
+rule as a CLI flag: removing one, or changing what one means, is breaking.
+
+`REQUIVO_OUTPUT_DIR` is **deprecated** (see the table below). It configures the retired `out/` layout,
+which nothing has written since 0.8.0 and only `requivo session migrate` still reads. A live knob for a
+dead path is worth retiring while retiring is still free.
+
+### Requivo Web's HTTP routes — **paths stable, bodies not**
+
+This page already contemplates a client scripting `POST /sessions` and branching on its status, so the
+paths are relied on by its own worked example. There are ten, and the whole set is small enough to
+name rather than gesture at:
+
+| Route | Method |
+|---|---|
+| `/` , `/sessions/new` | GET |
+| `/sessions` | POST |
+| `/sessions/{slug}` | GET |
+| `/sessions/{slug}/export` | GET |
+| `/sessions/{slug}/discover` , `/sessions/{slug}/answers` | POST |
+| `/sessions/{slug}/artifacts/{type}` | GET, POST |
+| `/health` | GET |
+
+**The path, the method and the HTTP status are stable.** Removing a route, moving one, or changing the
+status a condition answers with is breaking, and the status half is already governed by the table
+above.
+
+**The response bodies are not**, with two exceptions. Every route above renders HTML for the browser —
+several return HTMX fragments whose shape follows whatever the page needs that week, and parsing one is
+the web equivalent of parsing terminal output. `GET /health` and `GET /sessions/{slug}/export` are the
+two that return data rather than a view, and they are stable.
+
+### Artifact filenames — **stable**, and part of the session format
+
+`<session>/artifacts/` holds files whose names come from a fixed map:
+
+| Type | File |
+|---|---|
+| `brief` | `solution-assessment.md` |
+| `prd` | `prd.md` |
+| `stories` | `stories.md` |
+| `criteria` | `acceptance-criteria.md` |
+| `epic` | `epic.md` |
+| `release` | `release-notes.md` |
+
+They are inside the published session directory and are recorded in `session.json`, so **renaming one
+needs a `format_version` bump and a migration**, exactly as renaming a populated key does. That was
+unanswerable from this page before, and [session-format.md](session-format.md) described the directory
+as *"generated views (PRD, assessment, …)"* without naming the files.
+
+Note that the type and the filename deliberately differ for `brief`, which is stored as
+`solution-assessment.md`. The type is the stable identifier; the filename is stable too, and they are
+two facts rather than one spelling.
+
+### The web error banner's `code` — **not stable**
+
+Requivo Web renders a `(code: …)` line on a refusal. Four of those values —
+`empty_request`, `invalid_request`, `not_found`, `internal_error` — are bare string literals rather
+than `RequivoError` subclasses, so they are outside the vocabulary the `--json` outputs publish and
+invisible to the test that walks it. **They are presentational.** A caller scripting the Web branches
+on the HTTP status, which is stable; the code on the banner is for a human reading the page and may
+change without notice.
+
 ## Deprecations
 
 | What | Status | Since | Removal | Instead |
@@ -363,6 +449,7 @@ The JSON you hand to `model validate`, `model diff` and `model apply` is a **pro
 | **`pc` command alias** | **Removed** | deprecated 0.7.0 (rename) | 0.9.8 | `requivo` |
 | **Implicit `out/<slug>/` fallback** | **Removed** — migration is explicit | deprecated 0.8.0 | 0.9.8 | `requivo session migrate`, then `.requivo/sessions/` |
 | **`/requivo-<skill>` plugin skill names** | Renamed | 0.9.2 | gone | `/requivo:<skill>` — Claude Code namespaces plugin skills |
+| **`REQUIVO_OUTPUT_DIR`** | Deprecated | #89 | with `requivo session migrate` | nothing — it configures the retired `out/` layout that only the migrator reads. `REQUIVO_WORKSPACE` is the knob for where sessions live |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where
 that is possible, and names its replacement here. Nothing is removed in a patch release.
@@ -383,3 +470,12 @@ migrate` still converts them, and it is now the only thing that reads that layou
   [golden harness](evaluations.md). Two versions can reason differently about the same request; the
   provenance recorded on each revision (model + prompt hash) is what makes that traceable.
 - **Terminal output layout.** Parse `--json`, never the rendered view.
+- **Requivo Web's response bodies.** The route paths, methods and statuses are stable and are listed
+  under [the other public surfaces](#the-other-public-surfaces-89); what comes back is HTML rendered
+  for a browser, HTMX fragments included, and parsing it is the web equivalent of parsing terminal
+  output. `GET /health` and `GET /sessions/{slug}/export` are the two exceptions and return data.
+- **The `code` on Requivo Web's error banner.** Presentational, and outside the error vocabulary the
+  `--json` outputs publish. Branch on the HTTP status.
+
+Everything **not** on this list and not promised above is in neither column, which is the state #89
+was filed about. If you find one, that is a bug in this page rather than a licence to assume: file it.
