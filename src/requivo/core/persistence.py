@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -158,7 +159,14 @@ def session_lock(slug: str) -> Iterator[None]:
     concurrent process is holding is legal on POSIX and silently breaks mutual exclusion — the waiter
     proceeds holding a lock on an unlinked inode. Refusing costs an ordering change instead, and the
     error is the same `SessionNotFoundError` the `read_meta` immediately inside every one of these
-    blocks already raised, so what moves is when it is raised, not what the caller is told."""
+    blocks already raised, so what moves is when it is raised, not what the caller is told.
+
+    **The ones already on disk are still there, and are no longer invisible.** This stopped new ones;
+    it found none of the old, and neither could anything else, so the only symptom was the next
+    `create_session` on that name losing its rename. `list_non_session_entries` is the half of the
+    store's listing that sees them, and `doctor` reports it — describing what is there and never
+    concluding what it is, because deleting one on sight is the same mistake pointing the other way
+    (#67)."""
     depths: dict[str, int] = getattr(_held_locks, "depths", None) or {}
     _held_locks.depths = depths
     if depths.get(slug):
@@ -333,6 +341,22 @@ def validate_slug(slug: str) -> str:
             details={"slug": slug[:MAX_SLUG_LENGTH], "length": len(slug),
                      "max_length": MAX_SLUG_LENGTH})
     return slug
+
+
+def is_slug(name: str) -> bool:
+    """Whether `name` is a slug `create_session` can be asked for — the same question `validate_slug`
+    answers, as a predicate.
+
+    Deliberately implemented by *calling* it rather than by re-testing `_SLUG_RE`. Validity is the
+    pattern **and** the length, and a second statement of that drifts: `slug_shaped` was written
+    against the pattern alone and marked an 81-character kebab-case directory as a name a session
+    would silently lose, when `canonical_dir` refuses such a name outright and loudly. One rule, one
+    place, found by review."""
+    try:
+        validate_slug(name)
+    except InvalidSlugError:
+        return False
+    return True
 
 
 # A filename is the *other* half of an artifact write target, and it was unvalidated while its slug
@@ -766,15 +790,173 @@ def session_artifact_files(slug: str) -> set[str]:
     return {p.name for p in d.iterdir() if p.is_file()} if d.exists() else set()
 
 
-def list_session_slugs() -> list[str]:
-    """Slugs of all canonical sessions, sorted — the backbone of `session list`."""
+# How much of a non-session directory's contents is worth carrying into a report. A lock ghost holds
+# one entry; a half-extracted archive can hold thousands, and a diagnostic that prints all of them
+# stops being read at all. Five is enough to tell those two apart on sight, which is the whole job.
+# The true total travels beside the sample, so a truncated list can never be mistaken for the whole
+# of what is there.
+_NON_SESSION_SAMPLE = 5
+
+
+@dataclass(frozen=True)
+class NonSessionEntry:
+    """Something under the session root that is **not** a session, described and not interpreted.
+
+    A directory holding only `.lock` is almost certainly what `session_lock` left behind before #22,
+    and *almost certainly* is not a licence to say so: a half-extracted archive, an interrupted copy
+    and a directory a user made by hand are the same shape from here, and `integrity.py`'s rule is
+    that the evidence is the directory and only the directory. So every field is an observation —
+    the name, what kind of thing it is, what it holds. There is deliberately no field spelling a
+    conclusion, because a reader acts on the name of the field and not on the paragraph beside it.
+
+    `slug_shaped` is the one derived value, and it is a property of the *name* rather than a guess at
+    the entry's history: whether `create_session` can be asked for it, which is what decides whether
+    this entry costs anybody anything. A name that is not slug-shaped is unreachable — `canonical_dir`
+    refuses it before any rename is attempted, loudly — so it is reported and carries no consequence.
+    It is answered by `is_slug`, which calls `validate_slug`, because validity is the pattern *and*
+    the length and testing the pattern alone marked an 81-character name as one a session would
+    silently lose (found by review).
+
+    `entries` is capped at `_NON_SESSION_SAMPLE` and `entry_count` is the true total. Three states,
+    as everywhere:
+
+    - `entries` populated with `error` None — we looked inside;
+    - `entries` None with an `error` — we could not, which must not render like an empty directory.
+      On POSIX an empty directory is the one shape that costs nothing at all: `rename(2)` replaces an
+      empty destination, so `create_session` still wins the name. (Windows does not — `os.rename` is
+      `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING` and refuses any existing destination — which
+      is why `slug_shaped` does not exempt an empty one.) Telling *empty* from *could not look* is
+      therefore the difference between a finding and a non-finding, on at least one platform;
+    - `entries` None with no `error` on a `file` or `other` — there is nothing to look inside, which
+      is a third kind of absence again.
+    """
+    name: str
+    kind: str
+    entries: list[str] | None
+    entry_count: int | None
+    error: str | None
+    slug_shaped: bool
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "kind": self.kind, "entries": self.entries,
+                "entry_count": self.entry_count, "error": self.error,
+                "slug_shaped": self.slug_shaped}
+
+
+def _scan_session_root() -> tuple[list[str], list[Path]]:
+    """One listing of the session root, partitioned: the canonical sessions, and everything else.
+
+    Both halves come out of one predicate, stated once, because they are each other's complement and
+    a second statement of it drifts. A name that neither function returns is exactly the state #67 is
+    about — invisible to `session list`, and so to `doctor` and `session verify`, which reason over
+    the slugs `list_session_slugs` gives them.
+
+    Dot-prefixed entries are in neither, on purpose. A slug cannot start with a dot, so they are
+    `create_session`'s staging areas: a session in flight rather than something left behind, and
+    reporting one is a race the reader cannot act on.
+
+    A root that does not exist is an empty workspace and returns nothing. A root that cannot be
+    *listed* is not the same answer, and this raises rather than flattening the two — the caller is
+    the one that has to be able to say `we could not look`."""
     root = session_root()
     if not root.exists():
-        return []
-    # Dot-prefixed directories are never sessions (a slug cannot start with one) — they are the
-    # staging areas `create_session` assembles a session in before renaming it into place.
-    return sorted(p.name for p in root.iterdir()
-                  if not p.name.startswith(".") and (p / "session.json").exists())
+        return [], []
+    slugs: list[str] = []
+    others: list[Path] = []
+    for p in sorted(root.iterdir(), key=lambda p: p.name):
+        if p.name.startswith("."):
+            continue
+        if (p / "session.json").exists():
+            slugs.append(p.name)
+        else:
+            others.append(p)
+    return slugs, others
+
+
+def list_session_slugs() -> list[str]:
+    """Slugs of all canonical sessions, sorted — the backbone of `session list`."""
+    return _scan_session_root()[0]
+
+
+def _describe_non_session(p: Path) -> NonSessionEntry:
+    """Describe one entry, and **never raise**.
+
+    Totality is the point, not politeness. This runs inside the one `try` in `_session_health` that
+    also holds the session listing, so an exception escaping here discards a session report that had
+    already succeeded and tells the reader the whole root was unlistable — a claim broader than what
+    failed, which is invariant 15's shape one layer down. The two arms below are therefore `Exception`
+    rather than `OSError`, and each still lands in a state this entry already has: *we could not stat
+    it* and *we could not list it*. That is not the guard-that-provably-cannot-fire invariant 15 warns
+    against — it is the same third state reached from a wider set of causes, and the cause I could not
+    rule out is real: on Linux a filename that is not valid UTF-8 comes back from `iterdir` carrying
+    surrogates, and every consumer of `p.name` downstream is a candidate. APFS refuses such a name, so
+    it could not be constructed here to be ruled out either way."""
+    slug_shaped = is_slug(p.name)
+    try:
+        # `is_symlink` first, and it does not follow. `is_dir()` does: a symlink at a slug name
+        # pointing anywhere else reported as a plain `directory`, and then `iterdir` listed the
+        # **target's** filenames into a report about this workspace. A symlink is a third shape, not
+        # a directory, and this file already treats one as the single case a containment guard has to
+        # answer for (invariant 17). Found by review.
+        if p.is_symlink():
+            return NonSessionEntry(p.name, "symlink", None, None, None, slug_shaped)
+        kind = "directory" if p.is_dir() else ("file" if p.is_file() else "other")
+    except Exception as e:  # noqa: BLE001 - a describe that raises blanks a report that succeeded
+        # `Path.is_dir()` swallows only what `_ignore_error` covers — ENOENT, ENOTDIR, ELOOP — and
+        # re-raises the rest, EACCES among them. A stat we are not allowed to make lands here, and
+        # what this is is then genuinely unknown: answering `other` would be a claim we cannot make.
+        return NonSessionEntry(p.name, "unknown", None, None, str(e), slug_shaped)
+    if kind != "directory":
+        return NonSessionEntry(p.name, kind, None, None, None, slug_shaped)
+    try:
+        names = sorted(c.name for c in p.iterdir())
+    except Exception as e:  # noqa: BLE001 - same reason; the kind is known, the contents are not
+        return NonSessionEntry(p.name, kind, None, None, str(e), slug_shaped)
+    return NonSessionEntry(p.name, kind, names[:_NON_SESSION_SAMPLE], len(names), None, slug_shaped)
+
+
+def scan_session_root() -> tuple[list[str], list[NonSessionEntry]]:
+    """Both halves of the session root from **one** listing — for the caller that asks both.
+
+    `list_session_slugs` and `list_non_session_entries` each scan on their own, which is right when
+    only one question is being asked and wrong when both are. `doctor` asks both, and two scans are
+    two instants: a `session.json` appearing between them puts a name in *neither* answer, which is
+    the invisible state #67 is about, reintroduced by the report meant to close it; one disappearing
+    puts it in both. Transient and diagnostic-only, and still not something to leave in the one verb
+    whose job is to say whether anything is wrong. Found by review.
+
+    The describe step is here rather than in `_scan_session_root` so that `list_session_slugs` — on
+    every one of its call paths, `session list` included — keeps paying nothing for it: a stray
+    directory holding ten thousand files is one `iterdir` this function makes and that one does
+    not."""
+    slugs, others = _scan_session_root()
+    return slugs, [_describe_non_session(p) for p in others]
+
+
+def list_non_session_entries() -> list[NonSessionEntry]:
+    """Everything else under the session root, described — the other half of `_scan_session_root`.
+
+    Nothing could see these before #67. `list_session_slugs` skips them for want of a `session.json`,
+    so `doctor` and `session verify` never reach one; and `check_session` answers about a directory it
+    is handed, which nobody can hand it a name for. The only symptom was at the next `create_session`
+    on that name: the rename that *is* the claim on a slug (invariant 11) loses to a directory that is
+    already there, and `SessionService` falls through to its `<slug>-<identity hash>` candidate — so
+    the user gets a session under a name they did not ask for, with nothing anywhere explaining why
+    the one they asked for was unavailable.
+
+    **A report, not a repair.** This reads; it never deletes, moves or rewrites. #22 stopped
+    `session_lock` producing these, and clearing one on sight would be the same mistake pointing the
+    other way: unlinking a `.lock` a concurrent process is holding is legal on POSIX and silently
+    breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted archive.
+
+    It lives in Core beside `list_session_slugs` because that function owns the store layout and the
+    two answers are one predicate. Core reading a directory is not a boundary crossing: invariant 7
+    forbids importing a provider and touching argv, the streams, the environment and process exit —
+    not IO, which this module is made of.
+
+    A caller that wants the sessions too should take `scan_session_root()` instead: this one scans on
+    its own, and two scans are two instants."""
+    return scan_session_root()[1]
 
 
 def migrate_legacy(slug: str) -> SessionMeta:

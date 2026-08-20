@@ -75,12 +75,67 @@ at all.
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
+| `sessions.non_sessions` | What is under the session root and is **not** a session — see [Something here that is not a session](#something-here-that-is-not-a-session). `null`, not `[]`, when the root could not be listed |
 | `output.streams[].state` | `safe` (a character the console cannot encode is escaped visibly, never fatal), `lossy` (it cannot crash but drops or blanks the character with no mark — only reachable by setting `errors=replace`/`ignore` yourself), `will-crash` (a strict handler on a narrow codec, so a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
 
 An `empty` context is a broken install rather than a quiet inconvenience: the cards are what impact
 is estimated against, and impact is half of `information_value = uncertainty × impact`. Discovery
 would still run and still produce a model — it would just ask duller questions, for a reason nothing
 on screen would name.
+
+### Something here that is not a session
+
+A directory under `.requivo/sessions/` with no `session.json` is invisible to everything that lists
+sessions — which, until 0.10.0, was everything. `list_session_slugs` filters on `session.json`;
+`doctor` and `session verify` both reason over the slugs it returns; and `check_session` answers about
+a directory it is handed, which nobody could hand it a name for. The commonest source is an older
+Requivo: `session_lock` used to create the session directory in order to open `.lock` inside it, so
+locking a slug with no session left one behind (#22). Those are still on disk.
+
+The symptom is not where the cause is. **The name is taken**, and `create_session`'s rename is the
+only claim on a slug — it loses to anything already occupying the name, after which the CLI falls
+through to its hash-suffixed candidate. Ask for `leave-approval` and you get `leave-approval-a1b2c3`,
+silently, with nothing anywhere explaining why the name you asked for was unavailable. A stray *file*
+at a slug name costs exactly the same and is reported the same way.
+
+`doctor` names them, under `sessions.non_sessions` and on a row of its own (#67):
+
+```
+  ✅ sessions        0 in this workspace
+  🟡 other entries   1 entry under this directory that Requivo does not read
+     └─ leave-approval — a directory holding 1 entry: .lock  [name taken]
+     [name taken]: a new session asked for that name will not get it. …
+```
+
+`doctor` rather than `session verify`, because `verify` is per-session and takes a slug — and the
+defining property of one of these is that no listing produces its name, so there is no slug to type.
+`session list` is unchanged and still shows only sessions: a listing of sessions must not grow a row
+for something that is not one.
+
+**It is a report, not a repair.** Requivo does not delete, move or rewrite anything here, and it does
+not say what these are. A directory holding only `.lock` is almost certainly a leftover lock, and
+almost certainly is not enough: a half-extracted archive and an interrupted copy are the same shape
+from the outside, and this project's rule is that the evidence is the directory and only the
+directory. So each entry carries what was found — `name`, `kind` (`directory` / `file` / `symlink` /
+`other` / `unknown`), `entries` (up to five names) and `entry_count` — and one derived flag,
+`slug_shaped`, which is a property of the *name*: whether `create_session` can be asked for it at
+all, and so whether the entry costs anybody anything. A name too long to be a slug is `false` there,
+because `canonical_dir` refuses such a name outright and loudly rather than substituting silently.
+There is no field spelling a conclusion.
+
+A **symlink is not followed**. It would otherwise be reported as whatever it points at, and the
+listing beneath it would carry that target's filenames into a report about your workspace.
+
+Three states here too. `entries: null` with an `error` means that directory could not be listed —
+never `[]`. On Linux and macOS an empty directory is the one shape that costs nothing at all, because
+`rename(2)` replaces an empty destination and the session still gets the name it asked for; on Windows
+it does not, so an empty directory is still reported and still marked `[name taken]`. `entries: null`
+with no error is a `file` or an `other`: there is nothing to look inside. And the whole key is
+`null` when the session root itself could not be listed, where an empty list would read as *we looked
+and there is nothing else here*.
+
+Dot-prefixed entries are never reported: a slug cannot start with a dot, so they are `create_session`
+staging directories — a session in flight, not something left behind.
 
 ### Context cards a session can no longer find
 

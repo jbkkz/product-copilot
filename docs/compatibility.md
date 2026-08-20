@@ -159,6 +159,22 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   printing it. No name Requivo itself writes is affected — `resolve_cards` has always resolved a
   selection against the installed cards, so such a value can only have arrived by import or by hand.
 
+- **`doctor --json` gained `sessions.non_sessions`** (#67). Additive: a consumer reading only the
+  existing `sessions` keys is unaffected, and on a workspace Requivo alone has written it is always
+  `[]`. It carries what is under the session root and is *not* a session — one object per entry with
+  `name`, `kind`, `entries`, `entry_count`, `error` and `slug_shaped`. See
+  [Something here that is not a session](cli.md#something-here-that-is-not-a-session).
+
+  **`null` and `[]` mean different things**, at both levels. The key itself is `null` when the session
+  root could not be listed at all, matching `sessions.total`; `[]` means it was listed and holds
+  nothing but sessions. Within an entry, `entries: null` with an `error` is a directory that could not
+  be listed, and `entries: null` with no error is a `file` or an `other` — there is nothing to look
+  inside. Branch on `error`, never on emptiness.
+
+  Nothing is deleted, moved or rewritten as a result, and no field states a conclusion: there is no
+  `is_lock_ghost`. `slug_shaped` is the one derived value and it is a property of the name — whether
+  `create_session` can be asked for it — not a claim about where the entry came from.
+
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
   and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on
