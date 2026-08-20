@@ -653,7 +653,9 @@ change without notice.
 | **`epic --json`** | **Renamed** — it wrote a file, it never emitted JSON | #83 | gone in the same change | `epic --export-json`, beside `--github` and `--gitlab`. `epic` deliberately has no stdout `--json`; the flag also silently switched the error channel, which is the half the rename fixes |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where
-that is possible, and names its replacement here. Nothing is removed in a patch release.
+that is possible, and names its replacement here. **From 1.0.0 it is removed only in a major.** Below
+1.0 the floor was "not in a patch", which is what the entries above were deprecated under; the
+opening of this page raised it, and this sentence used to state the old one.
 
 **`epic --json` is the exception, and it is stated rather than left to be noticed.** It was removed in
 the same change that renamed it, with no grace version. The policy above is what a deprecation buys

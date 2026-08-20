@@ -6,6 +6,349 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-20
+
+### Added
+
+- **Both spellings of the context-card selector now work on every verb that takes one** (#85). The
+  same selector — same comma-separated grammar, same `resolve_cards` validator — was spelled
+  `--context` on `discover` and `session init` and `--cards` on `context`. Each verb now accepts both.
+- **`--context` is the documented primary; `--cards` is a permanent alias.** They are two option
+  strings on one argparse action rather than two arguments, so they cannot drift apart and neither can
+  silently discard the other when both appear on a command line. The destination is unchanged on each
+  verb, so no handler moved and nothing persisted changed.
+- One cost worth naming: on these three verbs the single-letter abbreviation `--c` now reports
+  `ambiguous option` where argparse used to resolve it. `--co` and `--ca` still resolve, as do both
+  full spellings; argparse prefix abbreviation is not a documented part of this CLI.
+- Compatibility: compatible - additive, with the single exception named in the bullet above: `--c`
+  on those three verbs now reports `ambiguous option` where argparse used to resolve it. Every other
+  command line that worked before works unchanged and produces the same output, and the new behaviour
+  is that the previously-rejected spelling is now accepted. Adding the aliases **in** 1.0.0 converts
+  what would have been a breaking removal into a documentation choice that can be made at any time.
+
+### Changed
+
+- `invalid_session` is now a **family that nothing raises directly** (#82), and each of its nine
+  conditions carries a code that names the fact: `unsupported_format_version`, `unsupported_schema_version`,
+  `session_unreadable`, `artifact_revision_out_of_range`, `unstated_source_revision`,
+  `unreadable_source_revision`, `inconsistent_archive`, `unreadable_archive` and `import_move_failed`.
+  It had carried seven facts across eight raise sites with four `details` shapes, and no key was
+  present on all eight -- `details["slug"]` raised `KeyError` on three of them. Unlike the
+  `cross_site_request` split, this one was never inert: `cli.py` serializes `to_dict()` on every
+  `--json` verb, so a consumer could observe the inconsistency, and `docs/compatibility.md` promised a
+  condition by code (`invalid_session`, "upgrade requivo") that the code could not tell from a corrupt
+  zip -- while the same page says to assert on the code and never on the message.
+- `except InvalidSessionError` is unchanged: the base is kept as the family, so nothing that catches
+  the class has to enumerate nine names.
+- Six of the nine conditions change HTTP status in Requivo Web. The two version frontiers answer
+  **409** and the four store-state arms answer **500**, where everything under `invalid_session`
+  previously answered 400 -- the misattribution #34 fixed for `context_unreadable`, one condition
+  along. **Both counts are history and stay as written**: #101, in this same release, adds a tenth
+  arm (`invalid_archive`) and a fourth 400 arm, and restating #82 against the family as it now stands
+  would claim something #82 did not do. `docs/compatibility.md` carries the reconciling table.
+  The three that keep 400 are the ones genuinely about the request: both archive arms and
+  `unstated_source_revision`.
+- `unsupported_format_version` carries `{format_version, supported_format_version}`; the second key is
+  new, because *newer than what* is half the fact and a reader had no other way to learn which build
+  they were holding.
+- The arms deliberately do **not** share one `details` shape. Three of them identify no session at
+  all -- none has been identified when a zip will not open -- and a `slug: null` there would state a
+  fact nobody measured. Branch on the code, then read the shape documented for it.
+- Compatibility: breaking - moving a condition from one error code to another, and changing an HTTP
+  status, are both listed as breaking in `docs/compatibility.md`. Taken **in** 1.0.0 deliberately:
+  this is the release that draws the boundary, so the move costs nothing beyond the tag itself. After
+  it, the same move costs a major version, or a promise on that page nobody can keep.
+
+- **`requivo epic --json` is now `requivo epic --export-json`** (#83). On every other verb `--json`
+  means *emit the payload on stdout*; on `epic` it meant *also write a second file into `artifacts/`*,
+  and nothing reached stdout. It now sits alongside `--github` and `--gitlab` as three flags of one
+  kind, each writing an export file. `epic` deliberately gains no stdout `--json`.
+- **The rename fixes a second thing the name was hiding: the error channel.** `cli.app()` reads
+  `getattr(args, "json", False)` generically and uses it to switch failures from a prose message on
+  stderr to a structured JSON envelope on stdout. Because `epic`'s file-writing flag was spelled
+  `--json`, passing it silently changed how a failure was reported — the same provider outage printed
+  prose under `--github` and a JSON envelope under `--json`. With no `json` attribute on `epic`, that
+  `getattr` falls through and all three export flags report a failure identically. Nothing documented
+  the old behaviour and nothing asked for it.
+- Compatibility: breaking - `requivo epic <slug> --json` is no longer accepted and exits 2 with an
+  argparse usage error; use `--export-json`, which writes the same `epic.json`. Breaking on both
+  halves named in `docs/compatibility.md`: a flag is removed, and the meaning of passing it changes.
+  The failure is loud rather than silent — `--json` is not a prefix of `--export-json`, so argparse
+  rejects it outright instead of quietly doing something new. Callers parsing `epic`'s failure output
+  as JSON must now read the prose on stderr, as `--github` and `--gitlab` callers already did.
+
+- `requivo session import --json` now prints `{"slug": ..., "path": ..., "replaced": ...}`. It was
+  `{"imported": ..., "into": ..., "replaced": ...}` — the one session verb that spelled the session
+  and its location differently from all of its siblings, so a consumer looping over the session verbs
+  and reading `row["slug"]` got a `KeyError` from the verb that had just put the session there (#84).
+- `path` is the **session directory**, not the session root. `into` carried the root; `session init
+  --json` has always meant the session directory by `path`, and `session import`'s own human-readable
+  line already printed it. Renaming the key over the old value would have given `path` two meanings
+  across two verbs of one noun, which is the defect this change closes, back under the harmonised
+  name (#84).
+- Compatibility: breaking - two keys are removed from a populated public `--json` output and the
+  value under the new location key changes. `imported` is `slug` and `into` is `path`, with `path`
+  now naming the session directory rather than the directory that holds it. They are not kept as
+  duplicates: removing a `--json` key is breaking, so the rename ships **in** the 1.0 tag or never
+  (#84).
+
+- `requivo session verify` now exits **4** when it could not read a session's product context at all.
+  It answers three different things — the session is inconsistent, its product context was read and
+  does not resolve, its product context could not be read — and had two exit codes, so *checked and
+  broken* and *could not check* were spelled the same way by the one verb whose whole job is to say
+  whether a session is sound. The third state already had a rendering of its own; only the exit code
+  collapsed (#86).
+- Where both happen at once the **firm negative wins**: a session that is inconsistent *and* whose
+  cards were unreadable exits 1. A script gating on *is this usable* wants the definite answer, and
+  there is one (#86).
+- Exit code 4 is now general. It was `EXIT_DEGRADED_LISTING` and is `EXIT_DEGRADED`: it describes a
+  shape of answer — the work was done and part of the answer was unreachable — not a verb. Minting a
+  code per verb would rebuild the collapse 4 was introduced to undo. The exit-code table in
+  `docs/cli.md` states the general sentence and lists the two commands that reach it (#86).
+- `requivo doctor` does **not** move and still exits 0 whatever it finds. `verify` is a gate whose
+  exit code is a decision; `doctor` is a report, and a report that exits non-zero is concluding — the
+  same directory can be a half-extracted archive or a leftover lock and nothing in it says which. The
+  reason is now written down in `docs/cli.md` beside the table, so harmonising the two is a decision
+  somebody has to argue with rather than a tidy-up (#86).
+- Compatibility: breaking - one condition moves to a different exit code. A session whose product
+  context could not be read answered 1 from `session verify` and now answers 4, which is a change a
+  script can observe and was never announced. Narrow in practice:
+  nothing that exited 0 now exits non-zero and nothing that exited non-zero now exits 0, so
+  `verify && deploy` is unaffected — only a script that discriminates on the number sees it. The
+  module constant `requivo.deterministic.EXIT_DEGRADED_LISTING` is renamed to `EXIT_DEGRADED` in the
+  same change (#86).
+
+- `requivo session list --json` now prints an **object**, not a bare array:
+  `{"sessions": [...], "degraded": n, "session_root": "..."}`. The rows are unchanged — the wrap is
+  the whole difference — and `degraded` is the count of rows that could not be read, the same
+  condition exit code 4 already signals (#87).
+- Compatibility: breaking - the top-level type of a populated public `--json` output changes from
+  array to object. A `jq '.[] | .slug'` one-liner becomes `jq '.sessions[] | .slug'`; nothing else
+  moves, and no row field is renamed or removed. This is deliberately not shimmed: it was the only
+  array among the CLI's JSON payloads and an array has no top level, so no field could ever be added
+  to it. It ships **in** the 1.0 tag, which is the boundary itself; the next break of this class is
+  a 2.0 (#87).
+- `degraded` recovers no fact that was missing. Every row has carried `readable` and `error` since
+  #62, so the count was always derivable. What it buys is that exit 4 is readable on stdout rather
+  than only signalled — the same argument that makes a degraded row name its session instead of
+  disappearing (#87).
+
+- `requivo doctor --json` spells the strict-handler stream state `will_crash` rather than
+  `will-crash` in `output.streams[].state`. It was the only hyphenated value in any `--json` enum —
+  `context.status`, `NonSessionEntry.kind` and `UpdateResult.status` are each one word or
+  underscore-joined — so a consumer mapping a state onto an identifier had exactly one value to
+  special-case, and one that a naive split on `-` would cut in half (#88).
+- The human `doctor` report is unchanged: the state is a wire value, never a printed word.
+- Compatibility: breaking - `will-crash` -> `will_crash` renames a value in an enum that v0.11.0
+  published to PyPI, so a consumer matching on the old string stops matching and must be updated.
+  It ships in 1.0.0, the release that draws the compatibility boundary, so this is the last window
+  in which the rename is cheap; after it the hyphen would stand until a 2.0 (#88).
+
+- `docs/compatibility.md` now bounds four surfaces that were in neither column -- neither promised nor
+  disclaimed (#89). A 1.0 is only as good as its boundary, and a surface listed nowhere is a promise
+  nobody made and everybody may assume.
+- **The epic export envelope is stable and versioned.** It carries its own `format` (`requivo-epic`)
+  and `version` (1) and exists to be validated outside this repo, so calling it unstable would have
+  contradicted the code declaring it stable. The `--github` / `--gitlab` tracker plans are stable in
+  the same way, with the asymmetry stated: a change we make is breaking, a change forced by GitHub or
+  GitLab moving was never a promise we could make.
+- **Environment variables are stable**, under the same rule as a CLI flag: `REQUIVO_WORKSPACE`,
+  `REQUIVO_CONTEXT_DIR` and `REQUIVO_WEB_ALLOWED_HOSTS`.
+- **Requivo Web's ten routes are stable in path, method and status; their response bodies are not.**
+  The bodies are HTML rendered for a browser, HTMX fragments included. `GET /health` and
+  `GET /sessions/{slug}/export` are the two that return data and are stable.
+- **Artifact filenames are stable and part of the session format**, so renaming one needs a
+  `format_version` bump and a migration. The map is written out, which also corrects a detail: `brief`
+  is stored as `solution-assessment.md`, not `brief.md`.
+- **The `code` on Requivo Web's error banner is presentational and not stable.** Four of its values
+  are bare string literals outside the `RequivoError` vocabulary, so the guard that walks that
+  vocabulary cannot see them; a caller scripting the Web branches on the HTTP status.
+- Compatibility: compatible - nothing in the product changed. This states what the existing behaviour
+  promises, in both directions, so a reader can tell which column a surface is in.
+
+- `docs/compatibility.md` now records three breaking `--json` changes that reached no line on the
+  contract page (#100): `session list --json` becoming an object and the `session import --json` key
+  rename, which both land in 1.0.0, and the `will-crash` -> `will_crash` respelling, which shipped in
+  0.11.0 and is corrected here. Each was
+  declared breaking in its own changelog fragment and named in `docs/cli.md`; none reached the page
+  that says what will not be taken away. `grep -cE '#84|#87|#88|session_root'` returned 0 before this
+  change.
+- The migrations are stated where a reader needs them: `jq '.sessions[]'` for the first, and the note
+  that `path` is the session directory rather than a rename of `into`, which was the sessions root.
+- Compatibility: compatible - this records changes already shipped. Nothing in the product moved.
+
+- `session import` refuses a malformed archive as an **archive** (#101). Seven shape conditions --
+  no entries, more than `MAX_ARCHIVE_FILES`, expanding past `MAX_ARCHIVE_BYTES`, an entry carrying a
+  Windows separator, an entry that is absolute or holds a `.`/`..` segment, an entry not inside a
+  session directory, and more than one session directory -- moved from
+  `invalid_model` to a new `invalid_archive`. `invalid_model` is documented as *"a proposed model is
+  structurally or semantically invalid"* and nobody proposes a model when they hand `session import`
+  a zip.
+- **An occupied slug is `session_exists` / 409**, not `invalid_model` / 400. The vocabulary already
+  had the right code and the right status; the import path was the one caller that did not use them.
+- The composition is why this shipped now rather than after 1.0. #82 split `invalid_session` into a
+  nine-arm family in the release just gone, on the principle that a code must name its fact, and gave
+  `unreadable_archive` and `inconsistent_archive` codes of their own. Those two arms sit *either
+  side* of these eight conditions, in the same function, on the same code path. `cli.py` serializes
+  `to_dict()` on every `--json` verb, so a consumer scripting `session import --json` read one handle
+  for *my zip is too big*, *that slug is taken* and *your proposal is malformed* -- three remedies,
+  one code, on the page that tells them to assert on the code and never on the message.
+- **One code for the seven, and a discriminator rather than an excuse.** They share a remedy -- give
+  me a different archive -- so seven codes would send a reader to one place seven ways, which #82's
+  own rule refuses. What a single code owes in exchange is the thing #82 was actually about:
+  `details["problem"]` is on **every** arm and is one of `empty`, `too_many_files`, `too_large`,
+  `unsafe_entry`, `entry_outside_session_directory`, `multiple_sessions`. Each arm still adds only
+  the numbers its own sentence quotes -- `{files, max_files}`, `{bytes, max_bytes}`, `{entry}`,
+  `{slugs}` -- because padding them to a common shape would state measurements nobody took.
+- `InvalidArchiveError` is a tenth arm of the `InvalidSessionError` family, so `except
+  InvalidSessionError` catches it alongside the two archive arms on either side of it. It is no
+  longer an `InvalidModelError`, which is the breaking half for anyone who caught the class.
+- No HTTP status moves. `invalid_archive` answers **400**, the same number `invalid_model` answered
+  and the same one its two siblings on this path already give: the caller handed us this archive,
+  nothing has been written to the store, and re-sending the same zip unchanged can never succeed.
+  `session_exists` moves 400 -> **409**, which is the correction rather than a side effect.
+- `SessionExistsError`'s docstring now names its second raiser. In `create_session` and
+  `migrate_legacy` it is raised by the atomic claim itself; in `session import` it is a check, with
+  the TOCTOU window that implies. That window predates this change and is not what moved -- it is
+  written down so the docstring stops promising a guarantee one of its three raisers does not make.
+- **A directory name inside an archive can no longer write a line of the refusal that reports it.**
+  Found by this change's own audit, on a line this change edits. `_inspect_archive` interpolated the
+  top-level directory names raw when refusing an archive holding more than one -- and those names are
+  the one piece of archive text `validate_slug` has not seen yet, because validation runs on the
+  single surviving slug after the count check. A directory whose name carried a newline ended the
+  line and wrote the next at column 0 of stderr, which `safe_write` does not prevent: it guards
+  encoding, not control characters. The two sibling refusals on the same path already rendered an
+  entry name with `!r`; this one now renders each name through `display_token`, so a name with
+  nothing to escape is unchanged and one that could break the line is quoted rather than dropped.
+  `details["slugs"]` stays raw -- `json.dumps` escapes it, so `--json` was never exposed. Same class
+  as #40 and #98, one function along.
+- Compatibility: breaking - moving a condition from one error code to another is listed as breaking
+  in `docs/compatibility.md`, and eight conditions move. Taken **in** 1.0.0 deliberately: this is the
+  release that draws the boundary. After it, the same move costs a major version, or a code that
+  permanently means eight things in the verb most likely to be scripted.
+
+- **Every `--json` output is public — all fourteen** (#102). The page previously named six and
+  justified them as "what the Claude Code plugin drives", which was wrong in both directions by three
+  entries each: the plugin drives `session init`, `model validate` and `artifact save`, which were not
+  listed, and does not drive `model diff`, `artifact list` or `session list`, which were. Eight
+  outputs were in neither column, and #84 made a breaking change to one of them before anyone noticed
+  there was no promise to break.
+- The promise itself is unchanged and additive: fields get added, a populated field does not change
+  meaning without a note. Widening it from six outputs to fourteen costs nothing, and the subset was
+  the expensive half -- a subset needs a boundary somebody can check, and the only one ever offered
+  was a claim about another artifact's current contents that nothing tested.
+- `test_every_json_verb_is_inside_the_promise` is the guard, and it reads the verbs off the built
+  argparse tree rather than grepping the source: a grep validates the reader's regex, and what is
+  promised is what the command actually accepts. It checks both directions -- a verb with `--json`
+  and no row, and a row for a verb that no longer takes one.
+- Compatibility: compatible - eight outputs gain a promise; none loses one.
+
+- `requivo artifact list --json` now prints an **envelope**, not the bare map of artifacts:
+  `{"slug": "...", "artifacts": {"<type>": {...}}}`. The rows are unchanged — same keys, same order,
+  keyed by artifact type as before — and the wrap is the whole difference (#107).
+- Compatibility: breaking - the top level of a populated public `--json` output stops being data. A
+  `jq '.prd.stale'` one-liner becomes `jq '.artifacts.prd.stale'`; nothing else moves, and no row
+  field is renamed or removed. It ships **in** the 1.0 tag, which is the boundary itself; the next
+  break of this class is a 2.0 (#107).
+- This is #87's argument one shape along, and it is the last of the fourteen `--json` payloads with
+  no real top level. #87 moved `session list` off a bare array because "an array has no top level,
+  so no field could ever be added to it"; a top-level map keyed by data has that property in
+  practice, because the natural consumer read is `for t, info in payload.items()` and any metadata
+  key added later is both ambiguous with a future artifact type and breaks that loop. Holding the
+  argument for an array and not for a map is not defensible (#107).
+- `slug` is the only key the new top level carries. Every sibling session verb answers it and this
+  one had nowhere to put it, which is the whole point of gaining a top level; a top level nobody
+  needs yet is still worth having, and filling it speculatively is not (#107).
+- A session with nothing saved now answers `{"slug": ..., "artifacts": {}}` where it answered `{}`.
+  That is the case the old shape served worst: `{}` named neither the session nor the fact that the
+  question had been answered, so a consumer could not tell it from a payload that failed to
+  serialise (#107).
+
+### Fixed
+
+- One directory under the session root that the process cannot stat into no longer hides every
+  healthy session. `requivo session list` exited **1** with an empty stdout and a raw
+  `PermissionError` traceback, and every other session in the workspace was invisible: the partition
+  that decides whether a name is a session probes `<name>/session.json`, and `Path.exists()` re-raises
+  EACCES rather than swallowing it, so one entry aborted the scan for all of them (#80).
+- The partition now answers in **three states, not two** — a session, not a session, and *could not
+  tell*. An entry whose examination raised belongs in neither of the other two: filed as a non-session
+  it would drop out of every listing, which is the invisible-entry defect #67 closed one function
+  along; filed as a session it would be claimed to be one, which is exactly what the failed probe did
+  not establish (#80).
+- `requivo session list` gives such an entry a degraded row and exits **4**. The row names the entry
+  and the error, states nothing it could not read — no revision, no provider, no timestamp — and every
+  healthy session is still listed in full beside it. Exit 4 already means *the work was done and part
+  of the answer was unreachable*, which is what this is (#80).
+- `requivo doctor` reports the entry instead of declaring the whole session root unreadable. It said
+  `sessions unreadable` with `<root> could not be listed` beneath it, which was a claim broader than
+  what had failed — the root *was* listed. The whole-root arm stays for the case that genuinely is the
+  whole root: `iterdir()` on the session root itself failing. `--json` gains
+  `sessions.unexaminable`, kept out of `non_sessions` because that key states a fact and here nobody
+  established one, and kept out of `total`, which stays the count that could be confirmed (#80).
+- `session list`'s footer counts **entries** rather than sessions — `1 entry could not be read.`
+  where it said `1 session could not be read.`. Every degraded row used to come from
+  `list_session_slugs`, so the old word was true of all of them; it is not true of an entry nobody
+  could examine, and the footer is the last line a reader takes away. It is also the word `doctor`
+  uses for the same entry, so the two surfaces stop describing one thing two ways (#80).
+- No traceback on **the three paths above** — `session list`, `doctor` and the web home page, which
+  reaches this through the same `list_entries`. A `PermissionError` under someone's workspace is an
+  ordinary condition, not a bug in Requivo, and Requivo does not change permissions in a workspace it
+  reads. Stated as three paths and not as *any path*, because it is not yet true of any path:
+  `session_exists` carries the identical unguarded probe, so `session verify <slug>` and
+  `session show <slug>` on such an entry still raise. That is filed separately rather than ridden in
+  here — the verdict class and exit code for a session `verify` cannot examine is a design decision,
+  and `session_exists` has 17 call sites including write-path guards where answering `False` on
+  EACCES would be a worse bug than this one (#80).
+- Compatibility: compatible - every observable change is confined to a case that previously produced
+  an unhandled traceback. The exit-code policy makes moving a condition from one code to another
+  breaking, and 1 → 4 looks like exactly that; it is not, because 1 is documented as `RequivoError`
+  and this condition never raised one. There was no working consumer to break: stdout was empty and
+  the payload did not exist. `doctor --json`'s `sessions.unexaminable` is additive; `sessions.readable`
+  and `total` do change value here, from `false`/`null` to `true`/`N`, and that is a correction rather
+  than a repurposing — the old pair asserted a failure of the whole root that the root had not had.
+  `session list --json` row keys are untouched; what widens is that a `readable: false` row can now
+  name an entry not known to be a session, so `slug` on a degraded row is still not a name to pass to
+  another verb. `SessionRepository` gains a required `list_unexaminable`, and `scan_session_root`
+  returns a 3-tuple: both fall under *Python internals* in `docs/compatibility.md`, which are
+  explicitly not stable, and are named here because that is not the same as nobody noticing (#80).
+
+- `requivo doctor` escapes the name of an inconsistent session before printing it (#98). A directory
+  whose name carried a newline and held a `session.json` wrote two further lines of `doctor`'s own
+  report at column 0, indented like real rows — the same forgery #40 closed on the card-name half of
+  this verb, on the one bucket that had no guard. `_print_non_sessions` and `_print_unexaminable`
+  already escaped; the *sessions* bucket did not.
+- Reachability was not assumed: the pre-1.0 release audit reasoned it from four code locations and
+  said it had not executed it, and the repro is what settled it. A clean session name still renders
+  byte-for-byte.
+- `doctor --json` was never affected — `json.dumps` escapes a control character before it can reach a
+  line of its own.
+- Compatibility: compatible - the only output that changes is a name that could previously forge a
+  line, which no honest session has.
+
+- `docs/compatibility.md` no longer contradicts itself in three places, all found by the round-2
+  release audit and all introduced or carried by this release cycle (#105).
+- The bullet on the two provenance refusals said the unreadable arm *"kept `invalid_session`"* and
+  then, six lines later, that a test asserts the two codes differ. It carries
+  `unreadable_source_revision` since #82; the sibling page `docs/session-format.md` was corrected in
+  the same delta and this one was not.
+- The `#82` section's arithmetic did not close: *"six of the nine conditions change status"* beside
+  *"four conditions keep 400"* sums to ten. Both sentences were true — one counts what #82 did on the
+  family as it stood then, the other counts the family as it stands now with #101's tenth arm. The
+  split is now visible in the prose rather than only in a commit message, because a reader adding two
+  numbers three sentences apart cannot see which tense each is in.
+- The `#101` change note was filed under *The other public surfaces*, among stability verdicts, which
+  made that section's count read as stale and made it appear to hold a surface with no verdict in a
+  section that says each gets one. Moved beside `#82`, its sibling, under the `--json` section. The
+  rule that decides which section a subsection belongs in is now written down, since it had already
+  been got wrong once.
+- `test_every_refusal_on_the_import_path_names_what_it_is_about` asserted six of the seven codes its
+  own docstring named as the pin for a table. The seventh, `import_move_failed`, is now driven — by
+  patching the one destination under test rather than by arranging a filesystem that refuses a
+  rename, because the conditions for that differ per platform and a fixture would test the platform
+  on some legs and nothing on others.
+- Compatibility: compatible - documentation and a test. Nothing in the product changed.
+
 ## [0.11.0] - 2026-08-20
 
 ### Added
@@ -2029,7 +2372,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jbkkz/requivo/releases/tag/v1.0.0
 [0.11.0]: https://github.com/jbkkz/requivo/releases/tag/v0.11.0
 [0.10.0]: https://github.com/jbkkz/requivo/releases/tag/v0.10.0
 [0.9.10]: https://github.com/jbkkz/requivo/releases/tag/v0.9.10
