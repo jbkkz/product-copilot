@@ -101,13 +101,16 @@ the one fact only the caller holds; the store can see the session's *current* re
 different thing. Omitting the flag used to be read as "the current one", and the freshness question
 was then answered against a revision nobody had claimed to read — necessarily `stale: false`, because
 a source revision that *is* the current one cannot have moved. The recorded number was real and
-plausible, so nothing downstream could detect it. Leaving it off is now refused (`invalid_session`),
-with the message naming the flag and the revisions the session has; nothing is written by a refused
-save. The third state here is not a flag value — it is that the record does not get made.
+plausible, so nothing downstream could detect it. Leaving it off is now refused
+(`unstated_source_revision`), with the message naming the flag and the revisions the session has;
+nothing is written by a refused save. The third state here is not a flag value — it is that the
+record does not get made.
 
-The same refusal covers a source revision that cannot be *read*: a `revisions/NNNN-model.json` that is
-missing, truncated, mis-encoded or unreadable. Provenance that cannot be verified is not recorded,
-because `stale: false` is a claim about the artifact rather than the absence of one.
+A source revision that cannot be *read* — a `revisions/NNNN-model.json` that is missing, truncated,
+mis-encoded or unreadable — is refused the same way, under `invalid_session`. Provenance that cannot
+be verified is not recorded, because `stale: false` is a claim about the artifact rather than the
+absence of one. Two codes for two facts, sharing one `details` shape by choice; `docs/compatibility.md`
+carries the reasoning.
 
 ## Stable identifiers
 

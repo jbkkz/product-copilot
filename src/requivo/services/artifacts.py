@@ -58,6 +58,7 @@ class UnstatedSourceRevisionError(InvalidSessionError):
     `tests/test_artifact_provenance.py` asserts the two key sets against each other, so the kept shape
     is checked rather than remembered.
     """
+
     code = "unstated_source_revision"
 
 
