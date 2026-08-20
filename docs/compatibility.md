@@ -356,10 +356,16 @@ The JSON you hand to `model validate`, `model diff` and `model apply` is a **pro
 
 ## The other public surfaces (#89)
 
-The two sections above bound the session format and the `--json` outputs. Four more things are relied
-on by design and were in neither column — neither promised nor disclaimed. A promise that absorbs
+The two sections above bound the session format and the `--json` outputs. Everything below was relied
+on by design and was in neither column — neither promised nor disclaimed. A promise that absorbs
 everything is one nobody can keep, and a surface in neither column is a promise nobody made and
 everybody may assume, so each gets a verdict here.
+
+The count is worth keeping honest: this began as four surfaces, gained a fifth when a release audit
+found the web error banner's codes, and gained a sixth when #86 cited an exit-code policy that did not
+exist. Two of the six were found *after* the section claiming to be exhaustive was written, which is
+the argument for the closing sentence of [what is explicitly not stable](#what-is-explicitly-not-stable):
+a surface in neither column is a bug in this page, not a licence to assume.
 
 ### The epic export envelope — **stable**, and versioned
 
@@ -430,6 +436,36 @@ as *"generated views (PRD, assessment, …)"* without naming the files.
 Note that the type and the filename deliberately differ for `brief`, which is stored as
 `solution-assessment.md`. The type is the stable identifier; the filename is stable too, and they are
 two facts rather than one spelling.
+
+### CLI exit codes — **stable**, under the same rule as an error code
+
+This section was written to bound four surfaces and missed a fifth, which #86 found by citing a
+policy for exit codes that this page did not contain. It does now.
+
+| Exit | Means |
+|---|---|
+| 0 | success |
+| 1 | a clean, expected failure — an invalid proposal, a missing session, a provider error |
+| 2 | bad arguments (argparse) |
+| 3 | the command's work finished and its output could not be encoded |
+| 4 | the work was done and part of the answer was unreachable |
+
+[cli.md](cli.md) carries what each means in full, and is the page to read; this one carries the
+promise. **The promise is the same one made for `RequivoError.code`, one paragraph up: adding a code
+is not breaking, and moving a condition from one code to another is.** So is changing what an
+existing code means. A script gating on an exit code is doing the documented thing, and it is the
+consumer with the least ability to notice a silent change — there is no payload to inspect, only a
+number that is still a number.
+
+**4 is deliberately general.** It was `EXIT_DEGRADED_LISTING` and named one verb; #86 generalised it,
+because an exit code describes a *shape of answer* — the work was done, part of it was unreachable —
+rather than the verb that produced it. Minting a code per verb would rebuild the problem 4 was
+introduced to solve. A new condition of that shape gets 4, not 5.
+
+**Where a firm negative and a partial one meet, the firm one wins.** `session verify` on a session
+that is both inconsistent *and* has cards it could not read exits **1**, not 4: a script asking *is
+this usable* wants the definite answer. That precedence is part of the contract, not an
+implementation detail.
 
 ### The web error banner's `code` — **not stable**
 
