@@ -210,6 +210,24 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   exactly one value to special-case. Shipped hyphenated in 0.11.0 and corrected in the release after,
   which is why this is a break rather than a tidy-up.
 
+- **`artifact list --json` is an envelope, not the bare map** (#107). **Breaking.** The payload was
+  the artifact map itself — `{"prd": {…}}`, its top level keyed by artifact type — and is now
+  `{"slug": "<slug>", "artifacts": {"<type>": {…}}}`. The rows are unchanged — the same key set, in
+  the same order — so the migration is one level of indirection: `jq '.artifacts'` where you had
+  `jq '.'`.
+
+  It was the last of the fourteen `--json` payloads with no real top level, and the argument is
+  #87's one shape along. A top level keyed by *data* has the same property an array has: every key
+  is a row, so there is nowhere to put a field that is not one. The natural consumer read is
+  `for t, info in payload.items()`, and a key added later is both ambiguous with a future artifact
+  type and breaks that loop. Holding the argument for an array and not for a map is not defensible.
+
+  `slug` recovers no fact the caller was missing — they named the session to ask the question — and
+  it is the **resolved** name rather than the body's, the reading `session verify` and `session
+  import` already give it. What the top level buys is that the payload can gain a field at all. A
+  session with nothing saved now answers `{"slug": …, "artifacts": {}}` where it answered `{}`,
+  which named neither the session nor the fact that the question had been answered.
+
 - **`session list --json` gained two fields, and a row can now be degraded** (#62). Every row carries
   `readable` (a boolean) and `error` (the reason, or `null`) alongside `slug`, `revision`, `provider`
   and `updated_at`. Both are additive, so a consumer reading only the original four is unaffected on

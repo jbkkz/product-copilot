@@ -1042,6 +1042,61 @@ def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
     ]
 
 
+def test_artifact_list_json_has_a_top_level_that_is_not_data(workspace):
+    """`artifact list --json` printed `ArtifactService.list` straight out, so its top level was a map
+    keyed by artifact *type* — every key in the payload a value the session happened to hold (#107).
+
+    This is #87's argument one shape along. That issue moved `session list --json` off a bare array
+    because "an array has no top level, so no field could ever be added to it"; a top-level map keyed
+    by data has the same property in practice: the consumer read is `for t, info in payload.items()`,
+    so any metadata key added later is both ambiguous with a future artifact type and breaks that
+    loop. Holding the argument for an array and not for a map is not defensible.
+
+    The envelope is `{"slug": ..., "artifacts": {...}}` and nothing else — a top level nobody needs
+    yet is worth having, filling it speculatively is not.
+    """
+    _run(["session", "init", "Something.", "--slug", "aj"])
+    _forge_meta("aj", {"artifact_status": {"prd": {"revision": 1, "filename": "prd.md",
+                                                   "updated_at": "2026-01-01T00:00:00Z",
+                                                   "stale": False}}})
+
+    payload = _run_json(["artifact", "list", "aj", "--json"])
+
+    # must not fire: an artifact type is not a top-level key
+    assert "prd" not in payload, payload
+    # must fire, in the same fixture: it is there, one level down. Without this the assertion above
+    # passes just as happily on an empty payload, a crash caught upstream, or a session that lost
+    # its artifacts — none of which is the thing being asserted.
+    assert "prd" in payload["artifacts"], payload
+
+    assert set(payload) == {"slug", "artifacts"}, payload
+    assert payload["slug"] == "aj"
+    # ...and it names what was asked for, never the value stored inside, which no reader may trust
+    # (invariant 14). This top level is the first place the verb states a slug at all, so it is the
+    # moment to take it from the right side. `session verify` and `session import` agree.
+    _forge_meta("aj", {"slug": "forged"})
+    assert _run_json(["artifact", "list", "aj", "--json"])["slug"] == "aj"
+
+    # Wrap, not restructure: the row is what `ArtifactService.list` already returned, same keys in
+    # the same order. #87 left its rows untouched too, and that is what keeps the migration to one
+    # level of indirection — `jq '.artifacts'` where you had `jq '.'`.
+    assert payload["artifacts"] == {"prd": {"revision": 1, "filename": "prd.md",
+                                            "updated_at": "2026-01-01T00:00:00Z", "stale": False}}
+    assert list(payload["artifacts"]["prd"]) == ["revision", "filename", "updated_at", "stale"]
+
+
+def test_artifact_list_json_still_names_the_session_when_it_has_no_artifacts(workspace):
+    """The empty case is the one the old shape answered worst: it printed `{}`, which states nothing
+    at all — not which session was asked about, and not that the question was even answered, so a
+    consumer could not tell it from a payload that failed to serialise. It is now a session that
+    reports zero artifacts, which is a fact (#107)."""
+    _run(["session", "init", "Nothing saved yet.", "--slug", "noart"])
+
+    payload = _run_json(["artifact", "list", "noart", "--json"])
+
+    assert payload == {"slug": "noart", "artifacts": {}}
+
+
 # ── the acceptance scenario ─────────────────────────────────────────────────────
 
 
@@ -1101,7 +1156,7 @@ def test_model_apply_and_status_and_artifact_flow(workspace, tmp_path):
     brief = tmp_path / "brief.md"
     brief.write_text("# Assessment\n")
     _run(["artifact", "save", "event", "--type", "brief", "--file", str(brief), "--revision", "1"])
-    listed = _run_json(["artifact", "list", "event", "--json"])
+    listed = _run_json(["artifact", "list", "event", "--json"])["artifacts"]
     assert listed["brief"]["revision"] == 1 and listed["brief"]["stale"] is False
 
 
@@ -1125,7 +1180,7 @@ def test_session_show_reads_freshness_from_the_dependency_graph_not_the_revision
     out = _run(["session", "show", "s"])
     assert "revision 2" in out and "rev 1" in out   # provenance still says where it came from…
     assert "STALE" not in out                       # …but it is not stale, and both views agree
-    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is False
+    assert _run_json(["artifact", "list", "s", "--json"])["artifacts"]["prd"]["stale"] is False
 
 
 def test_model_validate_has_no_flag_it_does_not_honour():
@@ -1247,7 +1302,7 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
     r = _run_json(["artifact", "save", "s", "--type", "prd", "--file", str(doc),
                    "--revision", "1", "--json"])
     assert r["revision"] == 1 and r["stale"] is True
-    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["stale"] is True
+    assert _run_json(["artifact", "list", "s", "--json"])["artifacts"]["prd"]["stale"] is True
 
     # This used to omit `--revision` and assert `revision: 2, stale: false` — the defect of #6 pinned
     # as a contract. The service filled the gap with the session's current revision and then answered
@@ -1274,7 +1329,7 @@ def test_artifact_save_reports_staleness_at_save_time(workspace, tmp_path):
     # session is broken".
     assert envelope["code"] == "unstated_source_revision"
     # and nothing was recorded against the guess: the PRD on disk is still the one saved above.
-    assert _run_json(["artifact", "list", "s", "--json"])["prd"]["revision"] == 2
+    assert _run_json(["artifact", "list", "s", "--json"])["artifacts"]["prd"]["revision"] == 2
 
 
 def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
