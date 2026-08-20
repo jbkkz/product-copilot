@@ -206,6 +206,15 @@ bug that looked like correct behaviour.
     directory that `list_session_slugs` cannot see and the rename cannot win — a refusal naming a
     session nobody had created. It refuses such a slug now rather than materialising one, which is
     also why a *failed* lock has to leave the store as it found it (#22).
+
+    **That stopped new ones and found none of the ones already on disk**, which nothing could see:
+    `list_session_slugs` filters on `session.json`, and `doctor` and `session verify` both reason
+    over the slugs it returns, so the only symptom was the next `create_session` on that name losing
+    its rename and landing under `<slug>-<hash>` with nothing saying why. `list_non_session_entries`
+    is the other half of that one predicate, beside `list_session_slugs` because both come out of the
+    same `iterdir`, and `doctor` reports it — a **report, not a repair**, describing what is there and
+    never concluding what it is, because a half-extracted archive and a leftover lock are the same
+    shape and invariant 14's rule is that the evidence is the directory and only the directory (#67).
 12. **A provider call reasons from one snapshot.** `SessionService.snapshot(slug)` reads the revision,
     the model, the request and the cards under the session lock; `run_discovery`, `answer`, `generate`
     and `reason` all take one. Reading the revision and the model separately yields revision N with the

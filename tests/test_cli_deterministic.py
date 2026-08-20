@@ -143,6 +143,7 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
 
     empty = _run_json(["doctor", "--json"])["sessions"]
     assert empty["total"] == 0 and empty["readable"] is True and empty["error"] is None
+    assert empty["non_sessions"] == [], "we looked and there was nothing else here"
     empty_text = _run(["doctor"])
 
     with pytest.MonkeyPatch.context() as mp:
@@ -151,6 +152,9 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
         unreadable_text = _run(["doctor"])
     assert unreadable["readable"] is False
     assert unreadable["total"] is None, "0 is a claim about the workspace; we could not look"
+    assert unreadable["non_sessions"] is None, (
+        "an empty list here reads as `we looked and found nothing else` — the same conflation one "
+        "key along, in the arm where the root could not be listed at all (#67)")
     assert "Permission denied" in (unreadable["error"] or "")
 
     assert "✅" in _check_line(empty_text, "sessions")
@@ -228,6 +232,222 @@ def test_a_card_directory_that_cannot_be_read_is_unreadable_not_empty(workspace,
     assert "✅" not in _check_line(broken_text, "sessions"), (
         "the sessions line ticked while nobody had checked their product context")
     assert "not checked" in _check_line(broken_text, "sessions")
+
+
+# ── something under the session root that is not a session (#67) ────────────────
+#
+# The state under test cannot be produced by the current code: #22 stopped `session_lock` creating
+# the session directory it opened `.lock` inside, which is exactly why these are only ever found on
+# disk and never in a fresh run. So the fixture builds one by hand. Going through `session_lock`
+# instead would assert against a state this version cannot reach, and would go green on the day the
+# report stopped working.
+
+
+def _lock_ghost(name: str = "leave-approval") -> Path:
+    """A session directory as an older Requivo left one: the name taken, holding only `.lock`."""
+    d = store.session_root() / name
+    d.mkdir(parents=True)
+    (d / ".lock").touch()
+    return d
+
+
+def test_doctor_names_what_is_under_the_session_root_and_is_not_a_session(workspace):
+    """Nothing could see one of these. `list_session_slugs` filters on `session.json`, and `doctor`
+    and `session verify` both reason over the slugs it returns, so a directory holding only `.lock`
+    reached no verb at all — `doctor` printed a green `0 in this workspace` straight over the top of
+    it.
+
+    Both halves are on the same workspace with only the directory appearing, so the finding cannot
+    become a line that everybody sees.
+    """
+    clean = _run_json(["doctor", "--json"])["sessions"]
+    assert clean["non_sessions"] == [], "the control: an untouched workspace must produce no finding"
+    assert "other entries" not in _run(["doctor"])
+
+    _lock_ghost()
+    found = _run_json(["doctor", "--json"])["sessions"]
+
+    # What was found, never what it was taken to mean: there is no `is_lock_ghost` key anywhere. A
+    # half-extracted archive is this shape too, and the directory is the only evidence there is.
+    assert [e["name"] for e in found["non_sessions"]] == ["leave-approval"]
+    entry = found["non_sessions"][0]
+    assert entry["kind"] == "directory"
+    assert entry["entries"] == [".lock"] and entry["entry_count"] == 1
+    assert entry["error"] is None
+    assert entry["slug_shaped"] is True, "the name is one `create_session` can be asked for"
+
+    # It is still not a session, and the session count must not quietly absorb it.
+    assert found["total"] == 0 and found["readable"] is True
+    assert found["inconsistent"] == {}
+
+    text = _run(["doctor"])
+    assert "leave-approval" in text and ".lock" in text
+    assert "✅" in _check_line(text, "sessions"), "0 sessions is still the honest count"
+    assert "🟡" in _check_line(text, "other entries")
+
+
+def test_the_silent_slug_substitution_the_report_names_is_the_one_that_happens(workspace):
+    """The finding is only worth a line because of what it costs, so the cost is pinned rather than
+    described. `create_session`'s rename is the only claim on a slug (invariant 11) and it loses to a
+    non-empty directory, after which `SessionService` falls through to its hash-suffixed candidate:
+    the user gets a session under a name they did not ask for, with nothing saying why."""
+    _lock_ghost()
+    assert "will not get it" in _run(["doctor"]), "the report names the finding but not its cost"
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    assert meta.slug != "leave-approval"
+    assert meta.slug.startswith("leave-approval-")
+
+
+def test_a_file_where_a_session_name_would_go_costs_the_same_and_is_named_as_a_file(workspace):
+    """Swept rather than assumed: the rename onto an existing *file* fails too, `d.exists()` is true,
+    and the caller gets the identical substitution. Reporting only directories would have left an
+    identical symptom with an identical remedy invisible, so each entry says what it is instead of
+    the report assuming they are all directories."""
+    store.session_root().mkdir(parents=True)
+    (store.session_root() / "leave-approval").write_text("half a download\n", encoding="utf-8")
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "file"
+    assert entry["entries"] is None and entry["entry_count"] is None
+    assert entry["error"] is None, "nothing failed here; there is simply nothing to look inside"
+    assert entry["slug_shaped"] is True
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    assert meta.slug.startswith("leave-approval-")
+
+
+def _deny_listing(directory: Path) -> None:
+    """Make `directory` traversable but not listable — `--x`, the mode under which `stat` on a child
+    succeeds and `iterdir` does not — or skip loudly naming what went untested.
+
+    Deliberately not `_deny_read`'s `chmod 000`. That denies the `session.json` probe in
+    `_scan_session_root` as well, and `Path.exists()` re-raises EACCES rather than swallowing it, so
+    the *whole root* reads as unlistable and this entry never gets a row of its own to be honest in.
+    That behaviour predates this change — `list_session_slugs` has always raised there — and is
+    reported separately rather than fixed on this branch."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny listing on Windows — the entry-level "
+                    "could-not-look arm is untested on this platform")
+    directory.chmod(0o111)
+    try:
+        list(directory.iterdir())
+    except OSError:
+        return                                  # the denial took: the assertion below is real
+    directory.chmod(0o755)
+    pytest.skip("chmod --x did not deny listing here (running as root?) — the entry-level "
+                "could-not-look arm is untested on this run")
+
+
+def test_an_empty_directory_is_still_reported_and_still_marked(workspace):
+    """The one shape whose cost is platform-dependent, and the report deliberately does not try to be
+    clever about it. POSIX `rename(2)` replaces an empty destination, so `create_session` still wins
+    the name here; on Windows `os.rename` is `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING` and
+    refuses any existing destination, so it does not. `slug_shaped` therefore does not exempt an empty
+    directory — a marker that is right on one platform and silently absent on another is a worse
+    answer than one that is occasionally conservative.
+
+    Both arms below assert a real outcome. Neither is the vacuous kind of platform branch that
+    reports coverage it does not have."""
+    store.session_root().mkdir(parents=True)
+    (store.session_root() / "leave-approval").mkdir()
+
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert entry["kind"] == "directory"
+    assert entry["entries"] == [] and entry["entry_count"] == 0
+    assert entry["error"] is None, "we looked, and it is empty — not the same as could not look"
+    assert entry["slug_shaped"] is True
+    assert "an empty directory" in _run(["doctor"])
+
+    meta = SessionService().create_session("We would like a leave approval system.",
+                                           slug="leave-approval")
+    if os.name == "nt":                                     # pragma: no cover - platform-dependent
+        assert meta.slug.startswith("leave-approval-"), "os.rename refuses any existing destination"
+    else:
+        assert meta.slug == "leave-approval", "rename(2) replaces an empty destination directory"
+
+
+def test_an_entry_that_could_not_be_looked_inside_is_not_reported_as_empty(workspace):
+    """The third state one level below the one `_session_health` already has: the root listed fine,
+    this directory did not. `entries: []` would say we looked and it holds nothing — the one reading
+    that makes the finding worthless, since on POSIX a directory holding nothing is the single shape
+    that does not cost the caller its slug at all (`rename(2)` replaces an empty destination)."""
+    d = _lock_ghost()
+
+    # The must-fire control, on the same directory, with only its mode changing.
+    readable = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert readable["entries"] == [".lock"] and readable["error"] is None
+
+    _deny_listing(d)
+    try:
+        denied = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+        denied_text = _run(["doctor"])
+    finally:
+        d.chmod(0o755)
+
+    assert denied["kind"] == "directory", "we can stat it; we cannot list it"
+    assert denied["entries"] is None and denied["entry_count"] is None
+    assert "Permission denied" in (denied["error"] or "")
+    assert "empty directory" not in denied_text
+    assert "Permission denied" in denied_text
+
+
+def test_a_name_read_off_disk_cannot_forge_a_line_of_the_report_that_names_it(workspace):
+    """#40 in a new render site. The entry's own name and the names it holds are both read off disk,
+    untrusted exactly as a stored context-card name is. Printed bare, one carrying a newline does not
+    merely look odd: it ends the line and starts another at whatever column it chooses, immediately
+    under a row of `doctor`'s own output."""
+    d = _lock_ghost()
+    try:
+        (d / "x\n  ✅ forged          all clear").touch()
+    except OSError:                            # pragma: no cover - filesystem-dependent
+        pytest.skip("this filesystem refuses a newline in a filename (Windows, notably) — the "
+                    "escaping of an entry name is untested on this run")
+
+    text = _run(["doctor"])
+    assert "\\n" in text, "the newline reached the terminal unescaped"
+    assert "  ✅ forged          all clear" not in text.splitlines()
+
+    # `--json` was never affected and must stay that way: json.dumps escapes a control character
+    # before it can reach a line of its own, so the finding keeps its bytes verbatim.
+    entry = _run_json(["doctor", "--json"])["sessions"]["non_sessions"][0]
+    assert any("\n" in n for n in entry["entries"])
+
+
+def test_session_list_does_not_call_one_of_these_a_session(workspace):
+    """The other half of the partition, and why this is not `session list`'s finding to report: a
+    listing of sessions must not grow a row for something that is not one. The real session beside it
+    is the must-fire control — without it this passes against a listing that lists nothing at all."""
+    _run(["session", "init", "A real one.", "--slug", "real", "--json"])
+    _lock_ghost()
+
+    rows = _run_json(["session", "list", "--json"])
+    assert [r["slug"] for r in rows] == ["real"]
+    assert store.list_session_slugs() == ["real"]
+
+    text = _run(["session", "list"])
+    assert "real" in text and "leave-approval" not in text
+
+
+def test_the_two_halves_of_the_session_root_are_one_partition(workspace):
+    """`list_session_slugs` and `list_non_session_entries` are complements over one predicate, and
+    are only worth having as a pair while nothing can fall between them — a name in neither is
+    precisely the state #67 is about. Staging directories are in neither on purpose: they are
+    `create_session` in flight rather than something left behind, and reporting one is a race the
+    reader cannot act on."""
+    _run(["session", "init", "A real one.", "--slug", "real", "--json"])
+    _lock_ghost()
+    (store.session_root() / ".real.new-1-abcdef12").mkdir()
+
+    slugs = set(store.list_session_slugs())
+    others = {e.name for e in store.list_non_session_entries()}
+    on_disk = {p.name for p in store.session_root().iterdir()}
+
+    assert slugs == {"real"} and others == {"leave-approval"}
+    assert slugs & others == set()
+    assert on_disk - (slugs | others) == {".real.new-1-abcdef12"}
 
 
 def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, tmp_path):

@@ -259,14 +259,25 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       longer loads (see `_card_health` for why that is not an integrity code). `cards_checked` is
       false when the card layer itself was unreadable — then nobody looked, and an empty map here
       means nothing at all.
+    - `non_sessions` — what is under the session root and is *not* a session: the name, what kind of
+      thing it is and what it holds, from `list_non_session_entries`. Nothing could see one of these
+      at all (#67), and the symptom is not in this report — it is the next `create_session` on that
+      name quietly landing under `<slug>-<hash>` instead. `None`, never `[]`, in the arm where the
+      root could not be listed: an empty list there reads as *we looked and there is nothing else*,
+      which is this function's own defect class one key along.
     """
     inconsistent: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
     try:
         slugs = store.list_session_slugs()
+        # In the same `try`, because it is the same listing failing: a root that cannot be read
+        # answers neither question, and reporting one of the two as clean would be worse than
+        # reporting neither.
+        non_sessions = [e.to_dict() for e in store.list_non_session_entries()]
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
-                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False}
+                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False,
+                "non_sessions": None}
     for slug in slugs:
         try:
             problems = check_session(slug)
@@ -283,7 +294,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
             inconsistent[slug] = codes
     return {"total": len(slugs), "readable": True, "error": None,
             "inconsistent": inconsistent, "unresolved_cards": unresolved,
-            "cards_checked": cards_readable}
+            "cards_checked": cards_readable, "non_sessions": non_sessions}
 
 
 def _cmd_schema(a, client) -> None:
@@ -405,6 +416,77 @@ def _cmd_doctor(a, client) -> None:
     if unchecked:
         print("     └─ the card directory could not be read (see above), so nothing is known about "
               "whether these sessions' product context still loads.")
+    _print_non_sessions(h["non_sessions"])
+
+
+def _non_session_detail(entry: dict) -> str:
+    """One entry of `sessions.non_sessions`, as a clause naming what is there and nothing else.
+
+    Every branch is an observation. There is no arm that says *a leftover lock directory*, because
+    that is a conclusion the directory cannot support — `.lock` and nothing else is what an older
+    `session_lock` left (#22) and also what an interrupted unzip leaves, and this verb's evidence is
+    the directory and only the directory (invariant 14).
+
+    The names come off disk, so each goes through `display_token`: one carrying a newline would
+    otherwise end this line and start another at column 0 of `doctor`'s own report, which is exactly
+    what a stored context-card name could do before #40."""
+    kind, error = entry["kind"], entry["error"]
+    if kind == "unknown":
+        return f"could not be examined — {error}"
+    if kind == "file":
+        return "a file, not a directory"
+    if kind == "other":
+        return "neither a file nor a directory"
+    if error:
+        # Not "an empty directory". We could not look inside, and an empty directory is the one
+        # shape that costs nothing on POSIX (`rename(2)` replaces an empty destination) — so the two
+        # answers must not be spelled the same way.
+        return f"a directory whose contents could not be listed — {error}"
+    total, shown = entry["entry_count"], entry["entries"] or []
+    if not total:
+        return "an empty directory"
+    names = ", ".join(display_token(n) for n in shown)
+    more = f", … ({total} in total)" if total > len(shown) else ""
+    return f"a directory holding {total} entr{'y' if total == 1 else 'ies'}: {names}{more}"
+
+
+def _print_non_sessions(entries: list[dict] | None) -> None:
+    """Things under the session root that are not sessions, named with what they cost.
+
+    `doctor` owns this rather than `session verify` for the reason the state exists: `verify` is
+    per-session and takes a slug, and the defining property of one of these is that no listing
+    produces its name, so there is no slug for anybody to type. `doctor` already answers about the
+    workspace as a whole and already carries the three-state discipline this needs (#67).
+
+    Its own row rather than a note on the sessions row, because `0 in this workspace` stays true —
+    none of this is a session — and folding it in would trade a correct count for a vague one.
+
+    The consequence is printed and not left to be inferred. A finding with no remedy is a line
+    people learn to scroll past, and this one is invisible until it strikes: the rename that claims
+    a slug (invariant 11) loses to anything already occupying the name, and `SessionService` then
+    falls through to its hash-suffixed candidate without a word. It is printed only for a name
+    `create_session` can actually be asked for — `canonical_dir` refuses anything else long before a
+    rename — because a consequence that cannot happen is noise on a report that is already a
+    judgement call."""
+    if not entries:
+        # `None` here is the unreadable-root arm, which has already returned above with its own
+        # line; `[]` is a clean workspace, and a clean check earns no row on this report.
+        return
+    n = len(entries)
+    print(f"  🟡 other entries   {n} entr{'y' if n == 1 else 'ies'} under this directory that "
+          "Requivo does not read")
+    for entry in entries:
+        taken = "  [name taken]" if entry["slug_shaped"] else ""
+        print(f"     └─ {display_token(entry['name'])} — {_non_session_detail(entry)}{taken}")
+    # Marked per row and explained once. Repeating the mechanism under every row buried the rows
+    # themselves the moment there was more than one, and the rows are the finding.
+    if any(e["slug_shaped"] for e in entries):
+        print("     [name taken]: a new session asked for that name will not get it. The rename "
+              "that claims a slug loses to anything already occupying it, so the session is "
+              "created under that name plus a hash — which is the only symptom any of this has.")
+    print("     Requivo has not read, moved or deleted any of these, and does not say what they "
+          "are: an interrupted copy and a directory an older version left behind look the same "
+          "from here. Check before removing anything.")
 
 
 # ── session ──────────────────────────────────────────────────────────────────────
