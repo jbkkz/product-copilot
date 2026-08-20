@@ -448,10 +448,23 @@ def _cmd_doctor(a, client) -> None:
     glyph = "❌" if (bad or lost) else (warn if (unchecked or blind) else ok)
     print(f"  {glyph} sessions        {h['total']} in this workspace"
           + (f" · {' · '.join(notes)}" if notes else ""))
+    # `display_token` on every slug, for the reason `_print_unexaminable` states two functions down
+    # and this loop did not: the name is a raw directory entry. `_scan_session_root` puts it in the
+    # *sessions* bucket on `(p/"session.json").exists()` alone, and the `except Exception` above turns
+    # a name `validate_slug` would refuse into an ordinary `unreadable` row — so a directory whose
+    # name carries a newline and holds a session.json wrote two further lines of this report at
+    # column 0, in the shape of real ones. Reproduced before it was fixed; #40 is the same defect on
+    # the card-name half of this verb, and `_print_non_sessions` already covers the sibling bucket.
+    #
+    # `problem['message']` needs no wrap and is left bare deliberately: the card names inside it have
+    # been through `normalize_tokens`, which refuses a control character outright
+    # (`unsafe_selector_token`) — invariant 14's second door. Wrapping it would say that guard gave us
+    # nothing, which is the reading that makes the next person wrap what does not need it.
     for slug, codes in bad.items():
-        print(f"     └─ {slug}: {', '.join(codes)} — run `requivo session verify {slug}`")
+        safe = display_token(slug)
+        print(f"     └─ {safe}: {', '.join(codes)} — run `requivo session verify {safe}`")
     for slug, problem in lost.items():
-        print(f"     └─ {slug}: {problem['message']}")
+        print(f"     └─ {display_token(slug)}: {problem['message']}")
     # One hint per remedy actually present, rather than one hint for whichever remedy came first.
     codes = {p["code"] for p in lost.values()}
     if codes & _RESTORABLE_CARD_CODES:

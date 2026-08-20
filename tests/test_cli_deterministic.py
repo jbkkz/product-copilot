@@ -478,6 +478,44 @@ def test_a_name_read_off_disk_cannot_forge_a_line_of_the_report_that_names_it(wo
     assert "  ✅ forged          all clear" not in both.splitlines()
 
 
+def test_a_forged_name_that_holds_a_session_json_cannot_forge_a_line_either(workspace):
+    """The permutation the tests either side of this one do not reach, and the gap was real.
+
+    The test above forges a **non-session** name — a bare file, and a directory with no
+    `session.json` — so it exercises `_print_non_sessions`, which escapes. The card-name tests further
+    down forge a *card* under a legitimate slug. Neither drives a control-charactered name that
+    **holds a `session.json`**, and that is the one landing in the *sessions* bucket:
+    `_scan_session_root` partitions on `(p / "session.json").exists()` alone, and `_session_health`'s
+    `except Exception` turns a name `validate_slug` would refuse into an ordinary `unreadable` row.
+
+    Reproduced against `main` before the fix — the name wrote two further lines of `doctor`'s own
+    report at column 0, indented exactly like real rows. Found by the pre-1.0 release audit, which
+    reasoned the reachability from four code locations and said it had not executed it; running the
+    repro is what settled it.
+    """
+    forged = "evil\n     └─ ok: all clear"
+    try:
+        d = store.session_root() / forged
+        d.mkdir(parents=True)
+    except OSError:                            # pragma: no cover - filesystem-dependent
+        pytest.skip("this filesystem refuses a newline in a filename (Windows, notably) — the "
+                    "escaping of a session name is untested on this run")
+    (d / "session.json").write_text('{"not": "valid session metadata"}', encoding="utf-8")
+
+    text = _run(["doctor"])
+    lines = text.splitlines()
+
+    # must fire: the entry really did reach the *sessions* bucket rather than the non-session one.
+    # Without this the assertions below would pass against a report that never mentioned it at all.
+    assert any("inconsistent" in ln for ln in lines), text
+
+    assert "\\n" in text, "the newline reached the terminal unescaped"
+    assert "     └─ ok: all clear`" not in lines, "a stored name wrote a line of doctor's report"
+    # One row for one entry. The forged text is built to look like a second, so counting the rows is
+    # what separates *escaped* from *merely reordered*.
+    assert len([ln for ln in lines if ln.startswith("     └─ ")]) == 1, text
+
+
 def test_session_list_does_not_call_one_of_these_a_session(workspace):
     """The other half of the partition, and why this is not `session list`'s finding to report: a
     listing of sessions must not grow a row for something that is not one. The real session beside it
