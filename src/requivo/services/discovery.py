@@ -174,6 +174,47 @@ class DiscoveryService:
         return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
                                        surface=surface)
 
+    # ── interactive drafting (before there is a session) ─────────────────────────
+    # An interactive surface reasons several turns against a request that has not been persisted
+    # yet, shows each one, collects answers and reasons again — and only then claims a session and
+    # applies the result. The two operations below are that loop's provider calls, so a surface can
+    # own the *loop* (prompting, rendering, when to stop) without owning a client (#77).
+    #
+    # Deliberately not a callback and not a generator: the service is handed the state and returns a
+    # result, exactly as every other operation here does. A seam that reached back into the caller to
+    # ask a question would have moved the coupling rather than removed it, and `DiscoveryService`
+    # would be the layer that knows a terminal exists.
+    #
+    # Nothing here writes, so there is no revision, no provenance and no lock to get wrong. What is
+    # drafted becomes real through `finalize_discovery`, which is where the revision-zero gate and the
+    # validated apply path live.
+
+    def draft_turn(self, request: str, *, current_model: EngineOutput | None = None,
+                   answers: str | None = None, cards: list[str] | None = None) -> EngineOutput:
+        """One un-persisted discovery turn: the request alone on the first call, then the model so far
+        plus the answers just given.
+
+        The model *is* the accumulated state — a turn needs the original request for context, the
+        current model, and the new answers, and nothing else — which is what lets the same operation
+        serve a blocking TTY loop, a web form and a Claude Code turn.
+
+        `reuse_system=True` because this is the one operation on this service that a caller repeats:
+        a drafting loop makes several calls off a byte-identical system prompt (the CLI's caps at
+        eight), so the cache breakpoint is genuinely read back and earns its 1.25x write. Every other
+        operation here is one call per invocation and says the opposite (#9, #58)."""
+        return self._need_provider().analyze(
+            request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
+
+    def draft_assessment(self, model: EngineOutput, *, cards: list[str] | None = None):
+        """The solution assessment for a model that is not a session yet — the last provider call of
+        an interactive discovery, before `finalize_discovery` absorbs its reasoning and writes.
+
+        Distinct from `generate(slug, "brief")`, which reads a persisted session, applies the absorbed
+        reasoning as a revision and saves a document. There is no session here to read or write, so
+        this reasons and returns; the write is one call later and goes through the same validated path
+        as every other surface's."""
+        return self._need_provider().generate("brief", model, only=cards)
+
     def run_discovery(self, slug: str, *, surface: str = "discover") -> UpdateResult:
         """Run the first discovery turn on an already-created session (the 'create session only' path
         run later): read its stored request + cards, reason, and apply the model as revision 1.
@@ -213,14 +254,20 @@ class DiscoveryService:
             provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface))
 
     # ── generation ───────────────────────────────────────────────────────────────
-    def reason(self, slug: str, artifact_type: str):
+    def reason(self, slug: str, artifact_type: str, **kwargs):
         """Produce an artifact's typed contract without saving anything — for the terminal-only views
         (`stories`, `estimate`) that are analyses rather than deliverables. Still goes through the
         provider seam, so no interface reaches past it to a vendor's functions. Nothing is written, so
         there is no provenance to get wrong — but the model and the cards it is read against still come
-        from one snapshot, so the analysis is of a session state that actually existed."""
+        from one snapshot, so the analysis is of a session state that actually existed.
+
+        `**kwargs` is what an analysis needs beyond the model: `estimate` is read against the
+        `stories` a previous call produced. Until #77 that one call was made by `cli.py` directly, on
+        a second client of its own, which is exactly the "no interface reaches past it" claim above
+        being false one line below where it was written."""
         snap = self.sessions.snapshot(slug)
-        return self._need_provider().generate(artifact_type, snap.model, only=snap.context_cards)
+        return self._need_provider().generate(artifact_type, snap.model, only=snap.context_cards,
+                                              **kwargs)
 
     def generate(self, slug: str, artifact_type: str, *, surface: str = "generate", **kwargs) -> Generated:
         """Generate an artifact through the provider and save it against the session with its source

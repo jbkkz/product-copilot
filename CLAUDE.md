@@ -57,7 +57,9 @@ Python — and that call lives in a **provider**, never in the core. The layers 
   applies.
 - **`services/`** — the application seam, and the only place the two meet. `SessionService.update_model`
   is the single validated apply path (validate → diff → propagate → revision → stale-flag);
-  `DiscoveryService` is the single provider-backed orchestration (reason → apply → save).
+  `DiscoveryService` is the single provider-backed orchestration (reason → apply → save), including
+  the un-persisted `draft_turn`/`draft_assessment` an interactive surface loops over — a surface owns
+  the loop, never a client.
   Both storage (`SessionRepository`) and reasoning (`ReasoningProvider`) are injected, so the
   orchestration is backing-agnostic — a Postgres repository reuses it verbatim.
 - **`render/`** turns data into strings; **`cli.py`**, **`deterministic.py`** and **`web/`** are the
@@ -65,6 +67,13 @@ Python — and that call lives in a **provider**, never in the core. The layers 
 
 Every interface — the terminal CLI, the Claude Code plugin, Requivo Web — is a thin layer over the same
 services. There is never a second implementation of an apply, a generation, or a staleness rule.
+
+That was stated in three places and enforced in none, which is how the CLI's interactive `discover`
+loop came to reason two provider calls of its own and use the service only for the write (#77).
+`tests/test_boundaries.py` guards it now, from both ends of the same arrow: `core/` may not import a
+provider, and `cli.py` may reach only the three provider names an allowlist there names as *surface*
+concerns, each with its reason. The storage half — a surface reaching past `SessionRepository` to
+`core.persistence` — is #76 and is not guarded yet.
 
 They are equal in capability and **not** equal in weight. **Web is the product experience, Claude Code
 is an integration, the CLI is infrastructure.** That ordering is a product decision, held in the
@@ -95,7 +104,7 @@ requivo/
     sessions.py      SessionService (create / update_model / diff / status)
     artifacts.py     ArtifactService (save with source revision / list / mark_stale)
     repository.py    SessionRepository protocol + FileSessionRepository (Postgres-swappable)
-    discovery.py     DiscoveryService — reason → apply → save, shared by CLI + Web
+    discovery.py     DiscoveryService — reason → apply → save (+ draft_turn), shared by CLI + Web
   render/          views (data → str/stdout, no side effects)
   cli.py           the `requivo` CLI: provider verbs (discover/answer/generators/web)
   deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact

@@ -42,6 +42,12 @@ write and only pays back on a second send of the identical prefix; a one-call ve
 surcharge on the largest part of its input. Callers declare which they are (`reuse_system`), because
 the same generator is one call in the CLI and K calls in the golden harness (#9).
 
+`reuse_system` is on `analyze` too, and it is the caller's answer to *will this exact system prompt be
+sent again* — not an instruction about caching. The one looping caller is
+`DiscoveryService.draft_turn`, the interactive `discover` loop, which repeats one prompt for up to
+eight turns; every other operation is one call and passes the default. An implementation with no
+prompt caching may ignore the flag entirely.
+
 One honest caveat: a one-call verb *can* send twice, when the model returns malformed JSON and the
 retry loop re-sends the identical prompt. Those retries are no longer cached, so a generator that
 retries now pays 2.0x the system block where it used to pay 1.35x. That trade is deliberate — it is
@@ -59,7 +65,7 @@ A provider implements the `ReasoningProvider` protocol in `providers/base.py`:
 | Member | Is |
 |---|---|
 | `name` | an attribute — short identity of the implementation (`"anthropic"`), stamped on the session |
-| `analyze(request, current_model=…, answers=…, only=…)` | a validated `EngineOutput` — one discovery turn |
+| `analyze(request, current_model=…, answers=…, only=…, reuse_system=…)` | a validated `EngineOutput` — one discovery turn |
 | `generate(artifact_type, model, only=…, **kwargs)` | the typed contract for that artifact |
 | `model_name()` | the reasoning model, recorded on the session |
 | `provenance(op, only=…)` | provider / model / prompt identity, recorded on each revision |
