@@ -152,8 +152,8 @@ def test_the_two_provenance_refusals_carry_two_codes_and_one_details_shape(moved
     This service refuses on two grounds: provenance the caller never stated, and provenance it stated
     that cannot be read. They rode one code, `invalid_session`, until #57 — not because they are one
     fact but because a new code needs a row in `web/app.py::_STATUS_BY_CODE`, which
-    `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status` requires of every code
-    in the vocabulary, and that file was held by another lane in the round #6 landed. The precision
+    `test_every_error_code_has_an_explicit_http_status` requires of every code in the vocabulary, and
+    the file it lives in was held by another lane in the round #6 landed. The precision
     lived in the *type* meanwhile, which is invisible to a caller reading a serialized envelope.
 
     The `details` shape stays shared anyway, and the reason changed with the code. It was owed while
