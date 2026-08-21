@@ -352,7 +352,7 @@ bug that looked like correct behaviour.
     unrepresentable, so the sole escape is a symlink at the target, and an absent path is not one —
     `exists() or is_symlink()`, never `exists()` alone, because `exists()` follows the link and a
     dangling symlink out of the root is precisely the case to catch. The three are now **one**
-    function, `core/persistence.py`'s `_is_contained`, because each had to be corrected separately
+    function, `core/persistence.py`'s `is_contained`, because each had to be corrected separately
     for this and then again for its sequel, below.
 
     **Nor may it depend on where it runs.** The sequel: the decision was made with `Path.resolve()`,
@@ -362,7 +362,7 @@ bug that looked like correct behaviour.
     location and reads as contained, so the guard was off on that one leg of thirteen while the other
     twelve were green. Two things hold it now, and the second is the one that matters: `_resolve` is
     `os.path.realpath`, never `Path.resolve()` — realpath reads the reparse point itself, and its
-    `strict=` keyword is 3.10+ and must not be reached for — and `_is_contained` **refuses a symlink
+    `strict=` keyword is 3.10+ and must not be reached for — and `is_contained` **refuses a symlink
     whose resolution comes back equal to its own location**, because a symlink never legitimately
     resolves to where it sits, so that equality is the resolver saying *I could not look*. Refusing
     there is the third state, and it is what takes the guarantee off the platform entirely.

@@ -208,12 +208,17 @@ def session_lock(slug: str) -> Iterator[None]:
 
 # A slug becomes a directory name, so it is bounded by what the filesystem accepts (~255 bytes on ext4
 # and APFS, and the whole *path* on Windows). 80 leaves generous room for the session subtree beneath
-# it. `_slug()` stays under the smaller base ceiling so a uniqueness suffix still fits inside the cap.
+# it. `derive_slug()` stays under the smaller base ceiling so a uniqueness suffix still fits inside the cap.
 MAX_SLUG_LENGTH = 80
 _SLUG_BASE_LENGTH = 64
 
 
-def _slug(text: str) -> str:
+def derive_slug(text: str) -> str:
+    """Derive a session directory name from arbitrary text — the one producer of the canonical shape.
+
+    Public because it is consumed outside this module: `SessionService.slug_hint` is the surface's
+    route to it, and `validate_slug` below is written against exactly what this emits.
+    """
     words = re.findall(r"[a-z0-9]+", text.lower())[:5]
     base = "-".join(words) or "discovery"
     if len(base) <= _SLUG_BASE_LENGTH:
@@ -310,11 +315,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _hash(text: str) -> str:
+def content_hash(text: str) -> str:
+    """The persisted hash format — `sha256:<hex>` — as `model_hash` and `request_hash` carry it on disk.
+
+    Public because `integrity.py` recomputes it to check a session against its own recorded hashes.
+    A second implementation of this line would drift, and a drifted rehash reports
+    `revision_hash_mismatch` against a file nobody touched.
+    """
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# A slug names a directory under the session root; it must never be able to escape it. `_slug()` and
+# A slug names a directory under the session root; it must never be able to escape it. `derive_slug()` and
 # `resolve_slug()` always emit this shape, but an *explicit* `--slug` (or a future API caller) is
 # untrusted input — so the two path constructors below validate before joining. The pattern forbids
 # every traversal vector at once: `/`, `\`, `.`, `..`, a leading root, and the empty string.
@@ -337,7 +348,7 @@ def validate_slug(slug: str) -> str:
             details={"slug": slug})
     # Length is part of validity, not a separate concern: an over-long slug is a directory name the
     # filesystem rejects, and it fails deep inside a write as an OSError instead of at the boundary.
-    # `_slug()` never emits one; an explicit --slug or an API caller can.
+    # `derive_slug()` never emits one; an explicit --slug or an API caller can.
     if len(slug) > MAX_SLUG_LENGTH:
         raise InvalidSlugError(
             f"session slug is {len(slug)} characters; the maximum is {MAX_SLUG_LENGTH}",
@@ -434,13 +445,16 @@ def _resolve(path: Path) -> Path:
     return Path(os.path.realpath(path))
 
 
-def _is_contained(child: Path, parent: Path) -> bool:
+def is_contained(child: Path, parent: Path) -> bool:
     """Is `child` genuinely inside `parent`? The one containment decision in the store.
 
     `_child_of`, `artifact_path` and `check_session_dir` each used to state this in their own words,
     and each then had to be corrected for the same two defects in turn — the race below, and the
     dangling link above. Three statements of one rule is three places for the next correction to miss,
     and this branch has already missed one of them once.
+
+    Public for that reason. `check_session_dir` is in `integrity.py` and imports this rather than
+    restating it, so the name is a cross-module contract and not a local helper.
 
     The resolution happens **only when `child` is there in some form**, which is load-bearing rather
     than an optimisation. Comparing two independently resolved paths, where one is derived from the
@@ -488,10 +502,10 @@ def _is_contained(child: Path, parent: Path) -> bool:
 
 def _child_of(root: Path, slug: str) -> Path:
     """`root / slug`, having validated the slug and confirmed the result is genuinely a child of
-    `root` — the defence-in-depth check the traversal guard is built around. `_is_contained` carries
+    `root` — the defence-in-depth check the traversal guard is built around. `is_contained` carries
     the reasoning for both halves of that confirmation, and for why it is one function."""
     d = root / validate_slug(slug)
-    if not _is_contained(d, root):
+    if not is_contained(d, root):
         raise InvalidSlugError(f"slug {slug!r} does not resolve to a path inside the session root",
                                details={"slug": slug})
     return d
@@ -516,7 +530,7 @@ def artifact_path(slug: str, filename: str) -> Path:
     a rule applied per-caller is a rule the next caller forgets. Belt-and-suspenders in the same
     shape too — the pattern already makes a separator or a dot segment unrepresentable, and the
     result is confirmed to be a genuine child of `artifacts/` anyway, through the same
-    `_is_contained` the slug half uses. `artifacts/` is created lazily, so the race that check is
+    `is_contained` the slug half uses. `artifacts/` is created lazily, so the race that check is
     written around is real here too.
 
     **Display-only callers come through here too, and that is not ceremony.** Two sites printed
@@ -540,13 +554,13 @@ def artifact_path(slug: str, filename: str) -> Path:
     Coming through here also means such a name cannot forge a line in the terminal it is printed to:
     `_FILENAME_RE` is anchored at end-of-string and admits no line break (#40).
 
-    A target that is not there is not an error here. `_is_contained` does stat it — `exists()` is a
+    A target that is not there is not an error here. `is_contained` does stat it — `exists()` is a
     stat — and answers True for what it cannot find rather than raising, so routing a display site
     through this does not turn a session with nothing generated into a refusal. Absence and refusal
     stay the two different answers `read_artifact_file` keeps them as."""
     d = canonical_dir(slug) / "artifacts"
     p = d / validate_filename(filename)
-    if not _is_contained(p, d):
+    if not is_contained(p, d):
         raise InvalidFilenameError(
             f"artifact filename {filename!r} does not resolve to a path inside {d}",
             details={"slug": slug, "filename": filename})
@@ -653,7 +667,7 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
     meta = SessionMeta(
         session_id=uuid.uuid4().hex, slug=slug, created_at=now, updated_at=now,
         provider=provider, model_name=model_name, context_cards=context_cards,
-        request_hash=_hash(request),
+        request_hash=content_hash(request),
     )
     d = canonical_dir(slug)
     d.parent.mkdir(parents=True, exist_ok=True)
@@ -710,7 +724,7 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
             revision=rev,
             created_at=_now(),
             previous_revision=meta.current_revision or None,
-            model_hash=_hash(payload),
+            model_hash=content_hash(payload),
             provider=prov.get("provider"),
             model_name=prov.get("model_name"),
             surface=prov.get("surface"),
@@ -1101,7 +1115,7 @@ def migrate_legacy(slug: str) -> SessionMeta:
     model = PersistedEngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
 
     if request:
-        req_hash = _hash(request)
+        req_hash = content_hash(request)
     else:
         # Fall back to the legacy session.json's hash, normalising a bare hex digest to "sha256:…".
         legacy_hash = str(old.get("request_sha256", ""))
