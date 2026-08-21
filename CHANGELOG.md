@@ -6,6 +6,143 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-21
+
+### Added
+
+- A CI leg runs `claude plugin validate --strict` over both manifests on every push and pull request
+  (#92). Nothing ran the validator before — in either mode, on either file — so the marketplace
+  manifest had been failing it for a whole release with nothing to say so.
+- The decision that leg forces is written down in `.github/workflows/plugin-validate.yml`, since #92
+  asked for it in writing: **`--strict` is the gate, against a pinned CLI version.** Plain
+  `validate` exits 0 on "passed with warnings", and *warning* is precisely the class this check
+  exists to catch, so a non-strict leg would have been green throughout the life of the bug it was
+  added to find.
+- The cost of `--strict` is that an unrecognised field is an error too, so a manifest written against
+  a newer plugin spec goes red against an older CLI — a failure on somebody else's release schedule,
+  on a pull request that touched no manifest. Pinning the CLI keeps the gate answering a question
+  about our files. A second run against the current CLI is advisory, cannot fail the build, and
+  annotates the run when it disagrees with the pin, so spec drift is found on an ordinary pull
+  request rather than during a marketplace submission.
+
+- Documentation: `docs/plugin-bundling.md` records why the Claude Code plugin does not bundle the `requivo` CLI (#94). It states what the plugin spec measurably supports today — a plugin-root `bin/` really is on the Bash tool's `PATH`, and the mechanisms a first-run bootstrap would need are all documented — and why none of it is shipped: the only hook that fires unattended cannot ask the user, and the one that can ask would turn an inert plugin into one that rewrites shell commands. Installing `requivo` stays a separate step, and the plugin is submitted for Claude Code only.
+
+- A CI leg that resolves the Claude Code plugin's `requivo` invocations against the **released**
+  CLI from PyPI, not against the copy in the same checkout (#96). The plugin's existing tests
+  compare `plugins/claude-code/` to `src/requivo/` in one working tree, which is green by
+  construction; a user installs the plugin from a marketplace pinned to a commit on `main` and the
+  CLI from PyPI, and those two artifacts had never been compared. The leg is advisory and never
+  fails a build, because this project's normal state between releases is a branch whose plugin uses
+  a verb the last release does not have yet.
+- The new check reports three states rather than two: every invocation resolves, an invocation does
+  not, or the released CLI could not be looked at (PyPI unreachable, nothing published, the install
+  failed). The third is annotated as its own outcome and is never rendered as a pass.
+
+- Documentation: the Claude Code plugin now states its native-Windows prerequisite (#121). Claude
+  Code's Bash tool is provided by Git Bash on native Windows, and every Requivo skill reaches the
+  `requivo` CLI through that tool, so Git for Windows is required there. If Git Bash is installed and
+  Claude Code cannot find it, `CLAUDE_CODE_GIT_BASH_PATH` in `settings.json` names the path; under
+  WSL nothing extra is needed. The plugin README, the repository README and
+  `docs/getting-started.md` all carry it, and the supported-platforms table now says out loud that
+  those CI legs test the `requivo` package and that nothing in CI exercises the plugin. What a skill
+  actually does on a native Windows machine with no Git Bash was not measured, and none of the three
+  pages claims to know. A new check in `tests/test_plugin.py` holds the property the prerequisite
+  rests on rather than its wording: every skill declares a `Bash(...)` grant, and none declares a
+  second shell tool alongside it, so a skill added later cannot make the sentence wrong in silence.
+
+### Changed
+
+- `src/requivo/deterministic.py` is now the package `src/requivo/deterministic/` (#73). One module of
+  1541 lines held six things that change independently: the shared input and output helpers, `doctor`
+  together with `schema` and `context`, the seven `session` verbs, `model`, `artifact`, and the
+  argparse registration. Each is now its own module, and every line of moved code is byte-identical to
+  what it replaced.
+- Nothing a user can see has changed. Every verb keeps its output, its `--json` shape and its exit
+  codes. That was checked rather than assumed: 21 `--help` screens and 11 verb renderings against a
+  fixture session, captured before and after, all byte-for-byte identical.
+- `register(sub)` is still the single entry point and still lives at `requivo.deterministic`. It now
+  calls four `register_*` functions by name instead of building the whole argparse tree in one place.
+  A registry that the modules populated as a side effect of being imported was the alternative, and
+  was rejected: dropping a module would then delete its verbs with no error at all and a `--help` one
+  group shorter, where naming them makes the same mistake an `ImportError` at startup.
+- Two names keep their import path because they are read from outside the package:
+  `requivo.deterministic.read_user_text` and `requivo.deterministic.EXIT_DEGRADED`. Internal names
+  moved with their modules and are deliberately not re-exported. A re-export is a second binding, so
+  rebinding one would not reach the module global the code reads, and a test that patched it would go
+  green having patched nothing.
+
+- The interactive `requivo discover` loop now reaches the provider through `DiscoveryService`, like every other surface, instead of calling the engine directly and using the service only for the final write (#77). Same model, same assessment, same session and same provenance; what changes is that a fix to the shared orchestration now reaches the terminal without being applied twice.
+- `requivo estimate` goes through the same seam and no longer opens a second API client of its own (#77).
+- From the third turn onward, an interactive discovery no longer re-sends the earlier rounds of question and answer: the model being refined already carries what they established, which is how `requivo answer` and the web form have always worked. Turns one and two are unchanged, and later turns send less.
+- Compatibility: compatible - no session, artifact or `--json` payload changes shape, and the `ReasoningProvider` protocol gains only a keyword argument with a default.
+
+- The Claude Code plugin README is now a landing page for someone who installed the plugin from a
+  marketplace and has no checkout, rather than repo documentation (#95). It states the arc
+  (`/requivo:discover` → `status` → `answer` → `brief` → `prd` → `impact`), that sessions are written
+  to `.requivo/sessions/<slug>/` under the directory Claude Code is running in — so the directory you
+  start a discovery from decides where the work lives — that the reasoning happens in your Claude Code
+  session and there is nothing to configure, and which two skills (`status`, `impact`) are pure local
+  reads. It also names what Requivo does not do: no automatic relevance routing over context cards,
+  and `stories`/`estimate` print rather than save. Every link is absolute, so it resolves without a
+  clone.
+
+- The plugin's catalog entry now says what Requivo *is*, not only what it is good for (#118). Both
+  manifest descriptions lead with the category — requirements discovery for Claude Code — and name the
+  things a reader would search a marketplace for: a requirements model, a decision brief, a PRD,
+  acceptance criteria, a tracker epic. The old line opened on a benefit and contained none of those
+  words; in a catalog of thousands of entries, `name` and `description` are the whole storefront.
+- `.claude-plugin/marketplace.json` gains the top-level `description` a marketplace browser reads —
+  what this catalog offers, which is a different sentence from what the plugin does — and a
+  `category` of `development` on the entry, the value SchemaStore's own marketplace schema gives as
+  an example and the one 104 of the 156 categorised community entries use.
+- Both manifests now declare a `$schema`, so an editor validates them as you type and a reader can
+  see they were written against the spec rather than copied. The plugin manifest also gains
+  `displayName` and `repository`. Giving the source tree a field of its own is what frees `homepage`
+  to be the documentation URL the reference describes, rather than a second pointer at the repository
+  root. The value `homepage` carries in this release is stated in the `homepage` bullet of this
+  section.
+- The marketplace `name` is deliberately untouched. It is an immutable slug once published — renaming
+  it breaks every existing install with `plugin-not-found` — so `displayName` is the field that
+  carries the label from here on.
+
+- The Claude Code plugin's `homepage` is `https://requivo.com` in both the plugin manifest and
+  the marketplace entry (#125). The last released value was the repository root. A
+  `blob/main/...` link to the plugin's own README was tried in between and ships in no release,
+  because a blob URL pinned to a branch breaks as soon as the file moves. A marketplace catalog
+  shows one homepage per entry, and the submission already carries the repository in a field of
+  its own, so this is the only slot that can point somewhere other than a source tree.
+  `repository` is unchanged. The plugin still ships its README, which is what a reader wants
+  *after* installing rather than before.
+
+- The plugin `description` in both manifests, the marketplace's own top-level description, and
+  `plugins/claude-code/README.md` no longer use the em dash (#127). These are the strings a
+  stranger reads in a catalog of 2 281 plugins before deciding whether to trust the project,
+  and a dense run of them now reads as machine-written to that audience. Each was rewritten
+  rather than substituted: an em dash joins two clauses that wanted a different relationship,
+  so swapping the glyph alone leaves worse prose than either version. The description gained a
+  claim on the way through, saying that the model *separates* known from assumed from open
+  rather than listing the three states in an aside. `docs/`, the root README and the skill
+  bodies are deliberately untouched.
+
+- `docs/compatibility.md` now names `requivo.deterministic` in its list of what is explicitly not
+  stable, beside `requivo.core`, `requivo.services` and `requivo.providers` (#140). #73 reorganised
+  that module into a package and moved most of the names that used to sit at its top level, and the
+  page was silent about it, which its own closing rule calls a bug in the page rather than a licence
+  to assume. The module's public job is the single `register(sub)` the CLI binds through, so it is
+  argparse wiring for the offline verbs. What those verbs promise was already on the page and is
+  unchanged: the CLI exit codes, the `--json` payloads and the session format.
+
+### Fixed
+
+- Every Claude Code skill now checks that the `requivo` CLI can be run before it runs anything, and says what to do when it cannot: that the CLI is a separate install rather than a broken plugin, one install command, that the skill can simply be run again — no reinstalling the plugin, no restarting Claude Code — and that nothing was left behind, because the check happens before any mutation. Five of the six skills said nothing at all, so a new user's first command failed with a bare shell error (#93). The statement lives once in the plugin's `REASONING.md` and every skill refers to it.
+- `uv tool install requivo` is the one command the skills name, rather than offering two with no guidance (#93). It puts `requivo` on the PATH by construction, in an environment of its own, whichever Python happens to be active in the shell — which is the failure being recovered from. `pipx` and a `pip install` inside an activated virtualenv are named only as fallbacks, and `pip install --user` is called out because it succeeds while leaving the command unfindable.
+- The probe is `requivo doctor --json`, read for whether it ran at all rather than for what it reported. `doctor` is also the binary that may be missing, so the question is who is speaking: a message from the shell means the CLI is absent, while anything from Requivo — the JSON report, a structured error envelope, even a traceback — means it is present and the install is not the problem. A healthy install reporting no API key is not a failure at all (#93).
+- The `status` and `impact` skills gained the `Read` tool. Without it they could not open the shared statement they point at, and they are the two read-only skills a new user is most likely to try first (#93).
+- `tests/test_plugin.py` holds the preflight structurally rather than by wording: every skill must reference it and be able to read it, and the install command must appear in `REASONING.md` and nowhere else — so the next skill added cannot drop it silently (#96, item 1).
+- `/requivo:discover` now reports the absolute directory the session was written to, not only its slug. Sessions land under the caller's workspace, so a discovery started from the wrong directory does not fail — it succeeds, produces a valid session, and puts it somewhere the user will not think to look. The path was already in `session init --json`; what was missing was saying it out loud at the one moment it is guaranteed to be on screen.
+- The `status`, `prd` and `brief` skills now close by naming the next step, which `discover`, `answer` and `impact` already did. `status` is what a returning user reaches for first, so it was the worst of the three places for the chain to break. A test holds the convention across all six.
+- `REASONING.md` no longer calls the skills `requivo-*`, a name that predates the directory rename; the invocations are `/requivo:<skill>`.
+
 ## [1.0.1] - 2026-08-20
 
 ### Fixed
@@ -2486,7 +2623,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jbkkz/requivo/releases/tag/v1.1.0
 [1.0.1]: https://github.com/jbkkz/requivo/releases/tag/v1.0.1
 [1.0.0]: https://github.com/jbkkz/requivo/releases/tag/v1.0.0
 [0.11.0]: https://github.com/jbkkz/requivo/releases/tag/v0.11.0
