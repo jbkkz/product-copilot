@@ -1,0 +1,599 @@
+"""End-to-end tests of `session export` and `session import` — the archive half of
+`requivo.deterministic.sessions`.
+
+Split out of `test_cli_deterministic.py` by #141, and split away from the rest of the `session` noun
+for a reason that is about the tests rather than about a line count: import is the one verb whose
+input comes from outside the workspace, so it is the only one with a threat model. It owns four
+fixtures nothing else reads, and twenty-one of the original file's seventy-three tests are refusals
+of an archive. The rest of the noun is in `test_cli_sessions.py`.
+
+The shared harness is `tests/_cli_harness.py`.
+"""
+from __future__ import annotations
+
+import io
+import json
+import zipfile
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+import pytest
+from _cli_harness import _SESSIONS_ROW, _full_model, _run, _run_json, _run_stdin
+
+from requivo.cli import app
+from requivo.core import persistence as store
+from requivo.core.errors import InvalidSlugError
+from requivo.deterministic.sessions import MAX_ARCHIVE_FILES
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("REQUIVO_OUTPUT_DIR", str(tmp_path / "out"))
+    return tmp_path
+
+
+# ── session import ──────────────────────────────────────────────────────────────
+# Import takes a file from outside the workspace and turns it into a session, so it is the one command
+# whose input is genuinely untrusted. Nothing may land in the store before the archive has been checked.
+
+
+def _zip(path, entries: dict) -> None:
+    with zipfile.ZipFile(path, "w") as z:
+        for name, content in entries.items():
+            z.writestr(name, content)
+
+
+def _good_entries(slug="imported", revision=0):
+    meta = {"format_version": 1, "session_id": "abc", "slug": slug, "created_at": "t",
+            "updated_at": "t", "current_revision": revision}
+    entries = {f"{slug}/session.json": json.dumps(meta), f"{slug}/request.md": "A request."}
+    if revision:
+        entries[f"{slug}/model.json"] = json.dumps(_full_model())
+    return entries
+
+
+def test_export_import_round_trip(workspace, tmp_path, monkeypatch):
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _run(["session", "export", "s", "-o", str(tmp_path / "s.zip"), "--json"])
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path / "elsewhere"))
+    r = _run_json(["session", "import", str(tmp_path / "s.zip"), "--json"])
+    assert r["slug"] == "s" and r["replaced"] is False
+    assert store.read_meta("s").current_revision == 1
+
+
+def test_import_json_names_the_session_and_its_directory_the_way_its_siblings_do(workspace, tmp_path,
+                                                                                 monkeypatch):
+    """#84. `session import --json` spelled the session `imported` and its location `into`; every
+    sibling verb spells them `slug` and (for the one that reports a directory) `path`. A consumer
+    looping over session verbs and reading `row["slug"]` got a `KeyError` from the one verb that had
+    just put the session there.
+
+    `imported` and `into` are **gone**, not kept as duplicates. Keeping both would leave the wrong
+    spelling in the payload a reader copies from, and the whole reason this ships in the 1.0 release
+    is that removing a `--json` key is breaking after it.
+
+    **`path` is the session's own directory, not the session root**, and that is a correction to the
+    issue as filed, which proposed `str(root)` — the value `into` carried. `session init --json`'s
+    `path` is `canonical_dir(slug)`, and `session import`'s own human-readable line already prints
+    `canonical_dir(slug)`. Renaming the key while leaving the container underneath it would give
+    `path` two meanings across two verbs of the same noun — the defect this issue exists to close,
+    reintroduced under the harmonised name and harder to see, because the key would then look right.
+    """
+    init = _run_json(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run(["session", "export", "s", "-o", str(tmp_path / "s.zip"), "--json"])
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path / "elsewhere"))
+    r = _run_json(["session", "import", str(tmp_path / "s.zip"), "--json"])
+
+    assert r.keys() == {"slug", "path", "replaced"}
+    assert "imported" not in r and "into" not in r
+    assert r["slug"] == "s"
+    assert r["path"] == str(store.canonical_dir("s"))
+    # the directory, not the root that holds it — and it is the same string the verb prints
+    assert Path(r["path"]).name == "s"
+    assert r["path"] != str(store.session_root())
+
+    # must fire: `path` means the same thing here as it does on the verb that creates a session
+    assert set(init) >= {"slug", "path"}
+    assert Path(init["path"]).name == "s"
+
+
+def test_import_refuses_a_directory_name_that_is_not_a_valid_slug(workspace, tmp_path):
+    """The reviewer's case: an archive whose folder is `bad slug` unpacked happily and then broke every
+    later `session list`. A directory name becomes a slug, so it faces the same validation as any."""
+    _zip(tmp_path / "bad.zip", _good_entries("bad slug"))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "bad.zip"), "--json"])
+    assert store.list_session_slugs() == []          # and nothing was written
+    assert _run_json(["session", "list", "--json"])["sessions"] == []
+
+
+@pytest.mark.parametrize("entry", [
+    "../escape/session.json",          # traversal via a parent segment
+    "/absolute/session.json",          # an absolute path
+    "..\\windows\\session.json",       # a Windows separator zipfile does not treat as a boundary
+    "loose.json",                      # not inside a session directory at all
+])
+def test_import_refuses_unsafe_entries(workspace, tmp_path, entry):
+    _zip(tmp_path / "evil.zip", {entry: "{}"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "evil.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_holding_more_than_one_session(workspace, tmp_path):
+    _zip(tmp_path / "two.zip", {**_good_entries("one"), **_good_entries("two")})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "two.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_that_is_too_large_or_too_many_files(workspace, tmp_path):
+    from requivo.deterministic.sessions import MAX_ARCHIVE_FILES
+
+    many = {f"s/artifacts/f{i}.md": "x" for i in range(MAX_ARCHIVE_FILES + 1)}
+    _zip(tmp_path / "many.zip", many)
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "many.zip"), "--json"])
+
+    # A zip bomb compresses to nothing and expands past the ceiling; the cap is on the expanded size.
+    _zip(tmp_path / "big.zip", {"s/session.json": "0" * (64 * 1024 * 1024 + 1)})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "big.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_an_archive_that_is_not_a_session(workspace, tmp_path):
+    # Extraction succeeding is not the same as having imported a session. Import used to declare
+    # success on the strength of the extraction alone.
+    _zip(tmp_path / "nometa.zip", {"s/notes.md": "hello"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "nometa.zip"), "--json"])
+
+    _zip(tmp_path / "badjson.zip", {"s/session.json": "{not json"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "badjson.zip"), "--json"])
+
+    # A session that disagrees with itself about its own identity.
+    _zip(tmp_path / "mismatch.zip", {**_good_entries("claimed")})
+    with zipfile.ZipFile(tmp_path / "mismatch2.zip", "w") as z:
+        meta = json.loads(_good_entries("claimed")["claimed/session.json"])
+        meta["slug"] = "something-else"
+        z.writestr("claimed/session.json", json.dumps(meta))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "mismatch2.zip"), "--json"])
+
+    # A session claiming a model it does not carry.
+    _zip(tmp_path / "noModel.zip", {"s/session.json": json.dumps(
+        {"format_version": 1, "session_id": "a", "slug": "s", "created_at": "t", "updated_at": "t",
+         "current_revision": 3})})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "noModel.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_a_collision_unless_forced(workspace, tmp_path, monkeypatch):
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _run_stdin(["model", "apply", "dup", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "dup.zip"), "--json"])
+    assert store.read_meta("dup").current_revision == 1        # the original is untouched
+    assert "The original." in store.session_request("dup")
+
+    r = _run_json(["session", "import", str(tmp_path / "dup.zip"), "--force", "--json"])
+    assert r["replaced"] is True
+    assert store.read_meta("dup").current_revision == 0        # genuinely replaced, not merged
+    assert "A request." in store.session_request("dup")
+
+
+# ── the archive-shape refusals name the archive, not the model (#101) ───────────
+#
+# #82 split `invalid_session` into a nine-arm family on the principle that a code must name its fact,
+# and gave `unreadable_archive` and `inconsistent_archive` codes of their own. The seven shape
+# refusals *between* those two arms — same function, same code path — kept `InvalidModelError`, whose
+# docstring reads "a proposed model is structurally or semantically invalid". `cli.py` serializes
+# `to_dict()` on every `--json` verb, so a consumer scripting `session import --json` read one handle
+# for *my zip is too big*, *that slug is taken* and *your proposal is malformed*: three remedies
+# behind one code, on the page that tells them to assert on the code and never on the message.
+#
+# One code and not seven, because the seven share a remedy — *give me a different archive*. What a
+# single code owes in exchange is the thing #82 was actually about: `details` must not vary silently
+# under it. `details["problem"]` is on every arm, so a consumer that needs the distinction branches
+# on a key that is always there rather than on a `KeyError`.
+
+
+def _import_error(archive) -> dict:
+    """Drive the real CLI and return the structured envelope a `--json` consumer sees."""
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "import", str(archive), "--json"], client=None)
+    assert e.value.code == 1
+    return json.loads(buf.getvalue())
+
+
+def _lower_the_byte_ceiling(mp):
+    """The real 64 MiB ceiling is driven end-to-end by
+    `test_import_refuses_an_archive_that_is_too_large_or_too_many_files`, which asserts this same
+    code. Paying 64 MiB of allocation a second time to re-read the same branch buys nothing, so the
+    ceiling moves instead of the archive — `_inspect_archive` reads the module global at call time."""
+    from requivo.deterministic import sessions as det
+    mp.setattr(det, "MAX_ARCHIVE_BYTES", 32)
+
+
+@pytest.mark.parametrize("label, problem, build", [
+    ("no entries at all", "empty",
+     lambda p, mp: _zip(p, {})),
+    ("more entries than the ceiling", "too_many_files",
+     lambda p, mp: _zip(p, {f"s/artifacts/f{i}.md": "x"
+                            for i in range(MAX_ARCHIVE_FILES + 1)})),
+    ("expands past the byte ceiling", "too_large",
+     lambda p, mp: (_lower_the_byte_ceiling(mp), _zip(p, {"s/session.json": "0" * 64}))),
+    ("a parent segment", "unsafe_entry",
+     lambda p, mp: _zip(p, {"../escape/session.json": "{}"})),
+    ("an absolute path", "unsafe_entry",
+     lambda p, mp: _zip(p, {"/absolute/session.json": "{}"})),
+    ("a Windows separator zipfile does not treat as a boundary", "unsafe_entry",
+     lambda p, mp: _zip(p, {"..\\windows\\session.json": "{}"})),
+    ("an entry loose at the root", "entry_outside_session_directory",
+     lambda p, mp: _zip(p, {"loose.json": "{}"})),
+    ("two session directories", "multiple_sessions",
+     lambda p, mp: _zip(p, {**_good_entries("one"), **_good_entries("two")})),
+])
+def test_an_archive_shaped_wrong_is_refused_as_an_archive(workspace, tmp_path, monkeypatch,
+                                                          label, problem, build):
+    """#101. Every one of the seven shape refusals, driven through the CLI a consumer actually calls."""
+    archive = tmp_path / "case.zip"
+    build(archive, monkeypatch)
+
+    err = _import_error(archive)
+    assert err["code"] == "invalid_archive", f"{label} still answers {err['code']}"
+    assert err["details"]["problem"] == problem, label
+    assert store.list_session_slugs() == []
+
+
+def test_the_shape_refusals_are_visible_to_a_consumer_that_did_not_enumerate_them(workspace, tmp_path):
+    """The must-fire half of the case above: the harness can see a *good* archive land, so the seven
+    reds are the refusal firing and not the fixture failing to build anything at all.
+
+    Also the family question. `InvalidArchiveError` is an `InvalidSessionError`, so the arm on either
+    side of it on this code path — `unreadable_archive` and `inconsistent_archive` — is caught by the
+    same `except`, which is the asymmetry #101 is about. It is deliberately *not* an
+    `InvalidModelError` any more; that is the breaking half, recorded in `changelog.d/101`."""
+    from requivo.core.errors import InvalidArchiveError, InvalidModelError, InvalidSessionError
+
+    assert issubclass(InvalidArchiveError, InvalidSessionError)
+    assert not issubclass(InvalidArchiveError, InvalidModelError)
+    assert InvalidArchiveError.code == "invalid_archive"
+
+    # must fire: a well-formed archive still imports, so the seven refusals above mean something
+    _zip(tmp_path / "good.zip", _good_entries("fine"))
+    r = _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])
+    assert r["slug"] == "fine"
+    assert store.list_session_slugs() == ["fine"]
+
+
+def test_an_occupied_slug_is_a_conflict_with_the_store_not_an_invalid_model(workspace, tmp_path,
+                                                                           monkeypatch):
+    """#101, the sharpest row: the vocabulary already had the right code. `session_exists` answers
+    409 and its docstring is written for exactly this fact; the import path raised `invalid_model`
+    and 400 instead — a *conflict with the store's current state* reported as a malformed proposal.
+
+    The `--force` half is asserted in the same test on purpose: a refusal that cannot be lifted is a
+    different product, and a code change must not turn the escape hatch off."""
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    err = _import_error(tmp_path / "dup.zip")
+    assert err["code"] == "session_exists"
+    assert err["details"] == {"slug": "dup"}
+    assert "The original." in store.session_request("dup")   # and nothing was replaced
+
+    # must fire: --force still lands, so the code above is the refusal and not a broken archive
+    assert _run_json(["session", "import", str(tmp_path / "dup.zip"), "--force",
+                      "--json"])["replaced"] is True
+
+
+def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_path):
+    """The table in `docs/cli.md` under *Importing a session*, asserted rather than described.
+
+    Seven codes reach this verb and each answers a different question. They are checked together
+    because the defect #101 fixes was not any one of them being wrong — it was two of them being the
+    *same* code while their neighbours on the identical code path had names of their own. A table
+    that drifts back into a single handle fails here before a consumer discovers it.
+    """
+    from requivo.core.errors import (
+        InconsistentArchiveError,
+        InvalidArchiveError,
+        InvalidSessionError,
+        SessionExistsError,
+        UnreadableArchiveError,
+    )
+
+    # not a file at all — before anything is opened
+    assert _import_error(tmp_path / "nowhere.zip")["code"] == "session_not_found"
+
+    # a file that is not a zip
+    (tmp_path / "text.zip").write_text("not a zip at all", encoding="utf-8")
+    assert _import_error(tmp_path / "text.zip")["code"] == "unreadable_archive"
+
+    # a zip whose shape is not an export
+    _zip(tmp_path / "loose.zip", {"loose.json": "{}"})
+    assert _import_error(tmp_path / "loose.zip")["code"] == "invalid_archive"
+
+    # a zip whose one directory could not be a session
+    _zip(tmp_path / "badname.zip", _good_entries("bad slug"))
+    assert _import_error(tmp_path / "badname.zip")["code"] == "invalid_slug"
+
+    # a zip whose session does not tell the truth about itself
+    broken = _good_entries("claimed")
+    broken["claimed/session.json"] = json.dumps(
+        {**json.loads(broken["claimed/session.json"]), "slug": "something-else"})
+    _zip(tmp_path / "lying.zip", broken)
+    assert _import_error(tmp_path / "lying.zip")["code"] == "inconsistent_archive"
+
+    # a zip that is fine, onto a slug that is taken
+    _run(["session", "init", "The original.", "--slug", "taken", "--json"])
+    _zip(tmp_path / "taken.zip", _good_entries("taken"))
+    assert _import_error(tmp_path / "taken.zip")["code"] == "session_exists"
+
+    # a zip that passed every check and could not be moved into place. The seventh code, and the one
+    # this test claimed to cover while asserting six — found by the pre-1.0 release audit reading the
+    # docstring against the body.
+    #
+    # Driven by patching `Path.replace` rather than by arranging a filesystem that refuses a rename:
+    # the conditions that produce one differ per platform (ENOTEMPTY on POSIX, a held handle on
+    # Windows), so a fixture would test the platform on some legs and nothing on others. The patch is
+    # narrowed to the one destination under test, so the backup/restore path — which uses the same
+    # call — is untouched and a failure here cannot come from the harness.
+    _zip(tmp_path / "movefail.zip", _good_entries("move-fails"))
+    doomed = store.canonical_dir("move-fails")
+    real_replace = Path.replace
+
+    def _refuse_only_the_target(self, dest):
+        if Path(dest) == doomed:
+            raise OSError(39, "Directory not empty")
+        return real_replace(self, dest)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(Path, "replace", _refuse_only_the_target)
+        assert _import_error(tmp_path / "movefail.zip")["code"] == "import_move_failed"
+    finally:
+        monkeypatch.undo()
+
+    # must fire: the patch really was the cause, so the same archive lands once it is lifted. Without
+    # this the assertion above would pass just as well against an import broken some other way.
+    assert _run_json(["session", "import", str(tmp_path / "movefail.zip"), "--json"])["slug"] == "move-fails"
+
+    # the three archive codes are one family, so `except InvalidSessionError` still catches every
+    # archive refusal without enumerating them; the other two deliberately are not in it
+    for cls in (UnreadableArchiveError, InvalidArchiveError, InconsistentArchiveError):
+        assert issubclass(cls, InvalidSessionError), cls.__name__
+    assert not issubclass(InvalidSlugError, InvalidSessionError)
+    assert not issubclass(SessionExistsError, InvalidSessionError), (
+        "an occupied slug is a conflict with the store, not a malformed session")
+
+    # must fire: with all seven refusals asserted, a good archive still lands
+    _zip(tmp_path / "good.zip", _good_entries("ok-one"))
+    assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
+
+
+# A directory name inside an archive is caller text that has NOT been validated yet: `validate_slug`
+# runs on the one surviving slug, after the count check, so the message that reports *more than one*
+# is the single site in `_inspect_archive` that interpolates a raw, unvalidated, attacker-chosen
+# string. Its two siblings on the same path already render an entry name with `!r`. Same class as
+# #40 and #98, one function along.
+_FORGED_SLUG = (
+    "ok-session\n"
+    "All clear, nothing to see.\n"
+    "  ✅ sessions        0 in this workspace"
+)
+
+
+def test_an_archive_directory_name_cannot_write_a_line_of_the_refusal_reporting_it(workspace,
+                                                                                   tmp_path):
+    """Found by the audit of #101, on a line #101 edits. The refusal naming the directories it found
+    is rendered to stderr by `cli.py`, and `safe_write` guards encoding, not control characters — so
+    a top-level directory carrying a newline ends the line and writes the next one at column 0.
+
+    Two directories are needed to reach this arm at all, which is why the archive carries an innocent
+    second one."""
+    _zip(tmp_path / "forged.zip", {f"{_FORGED_SLUG}/session.json": "{}",
+                                   "other/session.json": "{}"})
+
+    err = io.StringIO()
+    with redirect_stderr(err), pytest.raises(SystemExit):
+        app(["session", "import", str(tmp_path / "forged.zip")], client=None)
+    rendered = err.getvalue()
+
+    # must fire: the refusal really did run and really did name what it found
+    assert "session directories" in rendered, rendered
+    assert "other" in rendered
+
+    # the forgery does not reach the terminal as lines of its own
+    assert "\nAll clear, nothing to see." not in rendered
+    assert not any(_SESSIONS_ROW.match(line) for line in rendered.splitlines()), rendered
+    # …and it is escaped rather than dropped, so nothing is hidden from the reader
+    assert "ok-session" in rendered
+
+    # `--json` was never exposed — json.dumps escapes a control character before it can reach a line
+    out = _import_error(tmp_path / "forged.zip")
+    assert out["code"] == "invalid_archive"
+    assert _FORGED_SLUG in out["details"]["slugs"], "the raw name is still reported, losslessly"
+
+
+def test_a_refused_import_leaves_no_scratch_directory(workspace, tmp_path):
+    _zip(tmp_path / "bad.zip", _good_entries("bad slug"))
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "bad.zip"), "--json"])
+    _zip(tmp_path / "nometa.zip", {"s/notes.md": "hello"})
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "nometa.zip"), "--json"])
+    assert list((workspace / ".requivo").glob(".import-*")) == []
+
+
+def test_import_refuses_an_archive_whose_history_is_missing(workspace, tmp_path):
+    """An archive can announce revision 2 and carry no `revisions/` at all — every file in it valid,
+    every relationship between them false. Import checked shapes, so it accepted this and the damage
+    surfaced later, somewhere unrelated. It now runs the same integrity check as `session verify`."""
+    entries = _good_entries("s", revision=1)
+    entries["s/session.json"] = json.dumps({
+        "format_version": 1, "session_id": "abc", "slug": "s", "created_at": "t", "updated_at": "t",
+        "current_revision": 2})                        # …with no revision log and no revision files
+    _zip(tmp_path / "hollow.zip", entries)
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "hollow.zip"), "--json"])
+    assert store.list_session_slugs() == []
+
+
+def test_import_refuses_a_file_that_is_not_an_archive(workspace, tmp_path):
+    """`zipfile.BadZipFile` reached the user as a traceback. Every way a supplied file can be wrong
+    has to arrive as a Requivo error."""
+    bad = tmp_path / "notazip.zip"
+    bad.write_text("this is not a zip")
+    with pytest.raises(SystemExit) as e:
+        _run(["session", "import", str(bad), "--json"])
+    assert e.value.code == 1
+
+
+def test_a_failed_forced_replacement_puts_the_original_back(workspace, tmp_path, monkeypatch):
+    """`--force` used to `rmtree` the existing session and *then* move the new one in. If the move
+    failed the user was left with neither: the archive refused, and the session they already had
+    deleted. The old session now steps aside and only dies once the new one is in place."""
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _run_stdin(["model", "apply", "dup", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))
+
+    real_replace = Path.replace
+
+    def failing_replace(self, target):
+        # Only the move that brings the *imported* session into place fails; the step-aside and the
+        # rollback must still work, which is the whole point.
+        if ".import-" in str(self):
+            raise OSError("simulated failure moving the imported session into place")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "dup.zip"), "--force", "--json"])
+
+    assert store.session_exists("dup")
+    assert store.read_meta("dup").current_revision == 1        # the original, intact
+    assert "The original." in store.session_request("dup")
+    assert _run_json(["session", "verify", "dup", "--json"])["ok"] is True
+
+
+def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_path, monkeypatch):
+    """An export reads several files that must agree with each other. Read outside the lock, it can
+    combine an old session.json with a new model.json — an archive that is internally inconsistent and
+    only says so on import. And `.lock` is this machine's coordination, not part of the session: it
+    has no meaning in an archive and would import as a session component."""
+    import threading
+    import time
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    assert (store.canonical_dir("s") / ".lock").exists()       # the writer left one behind
+
+    held = threading.Event()
+
+    def hold_the_lock():
+        with store.session_lock("s"):
+            time.sleep(0.4)
+            held.set()
+
+    t = threading.Thread(target=hold_the_lock)
+    t.start()
+    time.sleep(0.05)                                           # let it take the lock first
+    dest = tmp_path / "s.zip"
+    _run(["session", "export", "s", "-o", str(dest), "--json"])
+    t.join(timeout=10)
+
+    assert held.is_set(), "the export read the session while a writer held it"
+    with zipfile.ZipFile(dest) as z:
+        names = z.namelist()
+    assert not [n for n in names if ".lock" in n]
+    assert "s/model.json" in names and "s/revisions/0001-model.json" in names
+
+
+# ── #111: a session created while the archive was being read is not destroyed ───
+#
+# `session import` used to decide the collision question twice: `session_exists(slug) and not
+# --force` before the extraction, and `replaced = target.exists()` after it. Between those two
+# decisions sits the whole unzip, and a session created in that window was moved aside and then
+# `rmtree`d — destroyed by an import whose user was never asked for `--force`, because at the moment
+# they would have been asked there was nothing to force past.
+#
+# Invariant 9 in the one verb that writes a whole session: a precondition is held across the writes
+# it authorises. The two arms below are what holds it — the free-slug arm claims by rename, which is
+# invariant 11's rule and the only thing that makes the window safe rather than merely narrow.
+
+
+def test_a_session_created_during_the_extraction_window_is_refused_not_destroyed(
+        workspace, tmp_path, monkeypatch):
+    """The defect, driven through the real CLI.
+
+    `_validate_extracted` runs after the archive is on disk and before anything is moved into place,
+    so patching it is the honest way to stand inside the window without reaching into the store."""
+    from requivo.deterministic import sessions as det
+
+    _zip(tmp_path / "race.zip", _good_entries("race"))
+    real = det._validate_extracted
+
+    def _claim_the_slug_mid_import(d, slug):
+        real(d, slug)
+        # A concurrent creator wins the slug while this import is still in scratch space.
+        if not store.session_exists(slug):
+            _run(["session", "init", "The one that was already here.", "--slug", slug, "--json"])
+    monkeypatch.setattr(det, "_validate_extracted", _claim_the_slug_mid_import)
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "race.zip"), "--json"])
+
+    # The whole point: the session that appeared is still there, unmodified.
+    assert store.session_exists("race") is True
+    assert "The one that was already here." in store.session_request("race")
+
+
+def test_that_window_refusal_names_the_conflict_rather_than_a_move_failure(
+        workspace, tmp_path, monkeypatch):
+    """`session_exists` / 409, the same code the guard would have raised — not `import_move_failed`.
+
+    The caller is entitled to the answer they would have got had the timing been different, and the
+    remedy is the same one: pass `--force`. `import_move_failed` would send them looking at their
+    filesystem for a fault that is not there."""
+    from requivo.deterministic import sessions as det
+
+    _zip(tmp_path / "race.zip", _good_entries("race"))
+    real = det._validate_extracted
+
+    def _claim_the_slug_mid_import(d, slug):
+        real(d, slug)
+        if not store.session_exists(slug):
+            _run(["session", "init", "Mine.", "--slug", slug, "--json"])
+    monkeypatch.setattr(det, "_validate_extracted", _claim_the_slug_mid_import)
+
+    envelope = _import_error(tmp_path / "race.zip")
+    assert envelope["code"] == "session_exists", envelope
+    assert envelope["details"]["slug"] == "race"
+    assert "--force" in envelope["message"]
+
+
+def test_the_ordinary_import_arms_still_work_so_the_guard_is_not_a_blanket_refusal(
+        workspace, tmp_path, monkeypatch):
+    """The positive control for both arms. A fix that refused every import, or that never replaced,
+    would pass the two tests above and fail here."""
+    _zip(tmp_path / "fresh.zip", _good_entries("fresh"))
+    r = _run_json(["session", "import", str(tmp_path / "fresh.zip"), "--json"])
+    assert r["replaced"] is False
+    assert store.session_exists("fresh") is True
+
+    r = _run_json(["session", "import", str(tmp_path / "fresh.zip"), "--force", "--json"])
+    assert r["replaced"] is True
+    assert store.session_exists("fresh") is True

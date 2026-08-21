@@ -6,7 +6,9 @@ network. What each test here pins is the *seam* — that the verb reaches the se
 artifact where every other surface writes it, and records what it read.
 
 The parser-shape tests (which verbs bind, which flags exist) live in `test_cli_flag_names.py`; the
-no-LLM verbs live in `test_cli_deterministic.py`.
+no-LLM verbs live in the `test_cli_*.py` set that mirrors `requivo/deterministic/` — `_doctor`,
+`_sessions`, `_session_archives`, `_model`, `_artifacts`, `_shared`, plus `_untrusted_output` for the
+render-safety class that runs across all of them (#141).
 """
 import json
 import shutil
