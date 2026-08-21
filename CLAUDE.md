@@ -27,7 +27,7 @@ Classic install (equivalent; drop `uv run` once the venv is active):
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
-.venv/bin/python -m pytest tests/ -q    # 324 tests, no API calls, no build step
+.venv/bin/python -m pytest tests/ -q    # the whole suite: no API calls, no network, no build step
 .venv/bin/ruff check src tests          # lint (CI runs the same)
 ```
 
@@ -383,6 +383,57 @@ bug that looked like correct behaviour.
     still fails loudly and fast. This is the one place in the
     store where retrying is right rather than a way of hiding something — the operation is idempotent
     and the cause is external (#3).
+
+## Where a bug narrative lives
+
+Every invariant above exists because a plausible assumption produced a bug that looked like correct
+behaviour, and the surrounding code says so at length. That density is deliberate and it is not
+archaeology: the person about to simplify a subtlety away is *in the editor*, not in a docs folder,
+so a pointer they will not follow is strictly worse than the paragraph it replaced.
+
+An external review proposed moving all of it to decision records. That remedy is rejected and its
+diagnosis is not (#75). The rule instead:
+
+> **A comment paragraph that recounts a past bug must be backed by a test that goes red when the
+> guard is removed.**
+>
+> - **If it is** — the paragraph belongs in that test, and the call site keeps one line: the
+>   invariant, the cost of breaking it, and **the name of the test that enforces it**.
+> - **If it is not** — it is either a missing test, which gets written, or genuine archaeology,
+>   which goes to `docs/decisions/`.
+
+It is a rule and not a preference because it is mechanically decidable. *Reduce the archaeology* has
+no stopping condition and two readers will disagree about it forever; *is there a test that goes
+red?* has one answer per paragraph. And it converts density into coverage: nothing is deleted, every
+long comment either becomes a test or moves, and what survives sits on a support that cannot be read
+in diagonal. A comment can be skimmed; a red test cannot. `tests/test_boundaries.py` and
+`tests/test_encoding.py` had already found this answer without stating it.
+
+**The reference is a name, never a path** — a test function, a test module, or a decision record's
+slug. Paths in this repository move: the package was renamed once (`product_copilot` → `requivo`),
+`deterministic.py` became a package, and a 2147-line CLI test module became seven files, all inside a
+fortnight. A name survives every one of those and a path survives none — and the guard below made
+that point on this very paragraph, which first cited that module by its dead filename. **And it must be greppable**,
+because selecting it and grepping is the only way anyone uses one — so an identifier is never split
+across a line wrap. Two of the sixteen references then in the tree were, and were unfindable while
+naming tests that really existed.
+
+`tests/test_narrative_references.py` is the guard, and it checks only what is mechanical: that every
+reference resolves, and that none is broken by a wrap. Whether a given paragraph *should* carry a
+reference is a judgement, stated here for a person to apply — a test that enforced it would be
+guessing at intent.
+
+**The same test applies to a count** (#134). This file said the suite was *324 tests* while it
+collected 687, and correcting the number buys one release: every lane that adds a test invalidates
+it again and nothing goes red when it does. So a count in prose has to answer *what does a reader do
+with this?* — and if the answer is nothing, it comes out rather than getting a guard. The exact size
+of the suite is not a fact anyone acts on; *no API calls, no network, no build step* is. A count that
+does earn its place gets a test, the way `tests/test_version_sites.py` exists because an unguarded
+README badge sat fifteen releases stale.
+
+**What this is not.** Not a licence to remove a reason attached to a guard, or a MUST-FIRE note:
+those *are* the invariant rather than the story around it, and they stay at the line. Not applicable
+to this file, to `docs/`, or to the invariant list, which are already narrative's right home.
 
 ## Two vocabularies, one meaning
 

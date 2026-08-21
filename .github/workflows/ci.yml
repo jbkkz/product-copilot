@@ -62,27 +62,12 @@ jobs:
   # on twelve of these thirteen legs and not on the thirteenth (#3, #11). A difference in the
   # language itself is covered above, on all five. 4 legs rather than 10.
   #
-  # REQUIRED by branch protection since #55 merged: all four legs are in `main`'s required checks,
-  # which now number 13. This block is history rather than an instruction — there is nothing to run.
-  #
-  # It is kept rather than deleted because the command written here first was **destructive**, and
-  # deleting it outright leaves the next person to reconstruct it from the API docs and reach the
-  # same wrong verb. `PATCH .../required_status_checks` with `contexts[]` **replaces** the list
-  # instead of extending it, so the form that used to sit here would have cut the required checks
-  # from 13 to the 4 it named — dropping `Lint (ruff)`, `Gitleaks`, `fragment`, `Wheel install (no
-  # clone)` and all five Python legs. The API answers 200 either way, so nothing would have said so;
-  # it would have surfaced later as a pull request merging green over a check that no longer ran.
-  #
-  # Appending is a different endpoint. If a leg is ever added, this is the form to use:
-  #
-  #   gh api -X POST repos/jbkkz/requivo/branches/main/protection/required_status_checks/contexts \
-  #     -f 'contexts[]=Test (py3.9, macos-latest)'   -f 'contexts[]=Test (py3.13, macos-latest)' \
-  #     -f 'contexts[]=Test (py3.9, windows-latest)' -f 'contexts[]=Test (py3.13, windows-latest)'
-  #
-  # Read the list back either side of it — `gh api .../required_status_checks --jq '.contexts'` —
-  # and compare the counts. An endpoint whose failure mode is a silent 200 is one you verify by
-  # reading, not by checking an exit code. (The line continuations above are single backslashes; the
-  # PATCH form carried doubled ones, which bash reads as a literal backslash and a broken command.)
+  # REQUIRED by branch protection since #55 merged. Adding a leg to this file does **not** add it to
+  # `main`'s required-check list; that is a separate API call a maintainer makes by hand, and the
+  # endpoint's failure mode is a silent 200. The command, the wrong verb it is easy to reach for, and
+  # what that verb would have cost are in `decision: appending-a-required-check` — moved out of this
+  # file under #75, because it is a fact about a GitHub endpoint and no test here can go red for it.
+
   test-platforms:
     name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}

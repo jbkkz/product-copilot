@@ -114,9 +114,9 @@ def doctor_report() -> dict:
 # `core/context.py` deliberately excludes it: `check_selection` lets it propagate rather than
 # returning it, so `_card_health` reports it as `{"checked": False, "problem": None}` and it can
 # never arrive here as a `problem["code"]` at all. Listing it would be a branch that cannot run,
-# which reads to the next person as coverage this does not have. `test_the_two_card_code_tables_
-# agree` pins the pair, so adding it to the refusals tuple later fails loudly here instead of
-# silently routing a permissions fault to the wrong remedy.
+# which reads to the next person as coverage this does not have. The pair is pinned by
+# `test_the_two_card_code_tables_agree`, so adding it to the refusals tuple later fails loudly here
+# instead of silently routing a permissions fault to the wrong remedy.
 _RESTORABLE_CARD_CODES = frozenset({"unknown_context_card", "no_context_cards"})
 
 _RESTORE_HINT = ("Put the card back, or point REQUIVO_CONTEXT_DIR at where it now lives — until "
