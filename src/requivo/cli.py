@@ -21,7 +21,18 @@ from requivo.core.persistence import load_model
 from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
-from requivo.providers.anthropic import EngineError, advise, estimate, new_client, run, track_usage
+
+# The only three names this surface takes from the provider, and each is a *surface* concern rather
+# than an orchestration one: `new_client` builds the SDK client that gets handed to DiscoveryService,
+# `track_usage` scopes the ledger `app()` prints when the command is over, and `EngineError` is an
+# exception type the top-level handler catches — none of them reasons about anything.
+#
+# `run`, `advise` and `estimate` used to be here too, and that was #77: the interactive `discover`
+# branch drove two provider calls of its own before letting the service do the write, so the primary
+# surface held a second orchestration of discovery while CLAUDE.md, the README and
+# docs/architecture.md all said it did not. `tests/test_boundaries.py` guards the list now, in both
+# directions — an unexpected import fails, and so does an entry here that nothing imports.
+from requivo.providers.anthropic import EngineError, new_client, track_usage
 from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import (
     render_brief,
@@ -107,28 +118,34 @@ _RENDER_FAILED_TAIL = (
 )
 
 
-def converse(client, request: str, only: list[str] | None = None) -> EngineOutput | None:
+def converse(disco: DiscoveryService, request: str, only: list[str] | None = None) -> EngineOutput | None:
     """Fill the model, ask, feed answers back, until no high-value question remains.
     Returns the final model (None if the user stopped early). Finalization (brief, save) is
     handled by the caller so the interactive and --from paths share it. `only` restricts the context
-    cards for every turn — held constant across the loop so the cached system prefix survives."""
-    messages = [{"role": "user", "content": request}]
+    cards for every turn — held constant across the loop so the cached system prefix survives.
+
+    This is the CLI's job and all of it: prompting, rendering, and deciding when to stop. The
+    reasoning is `DiscoveryService.draft_turn`, so the loop holds no provider client of its own and a
+    second interactive surface reuses the same operation instead of copying this function (#77).
+
+    **The model is the state that is carried, not a transcript.** Each turn hands back the model so
+    far plus the answers just given — the same shape `requivo answer` and the Web form already use,
+    so there is one turn operation across every surface rather than a conversational one here and a
+    stateless one everywhere else. Turns 1 and 2 send exactly what the old in-CLI loop sent; from
+    turn 3 the earlier rounds of question-and-answer are no longer re-sent, because the evidence they
+    produced is in the model being carried."""
     out = None
+    answers = None
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n──────────── TURN {turn} ────────────")
-        # `carry_from` is the previous turn's model: a later turn answers questions rather than
-        # re-deriving the reasoning, so anything it leaves unstated is carried, not dropped.
-        # `reuse_system=True` is stated rather than inherited: this loop is the reason `run()` has
-        # that default at all, and since #58 the provider seam next door declares the opposite. A
-        # per-call-site decision belongs at the call site (#9).
-        out = run(client, messages, only=only, carry_from=out, reuse_system=True)
+        out = disco.draft_turn(request, current_model=out, answers=answers, cards=only)
         render_turn(out)
 
         if not out.questions:
             break
 
         print("\nYour answers (Enter = skip a question · 'q' = stop):")
-        answers = []
+        replies = []
         try:
             for i, q in enumerate(out.questions, 1):
                 ans = input(f"  {i}. {q.q}\n     > ").strip()
@@ -136,18 +153,16 @@ def converse(client, request: str, only: list[str] | None = None) -> EngineOutpu
                     print("Stopped.")
                     return None
                 if ans:
-                    answers.append(f"[slot: {q.slot}] Q: {q.q} → A: {ans}")
+                    replies.append(f"[slot: {q.slot}] Q: {q.q} → A: {ans}")
         except (EOFError, KeyboardInterrupt):
             print("\nStopped.")
             return None
 
-        if not answers:
+        if not replies:
             print("No answer provided — stopping.")
             return None
 
-        # The assistant's prior model IS the state we refine — carry it in the history.
-        messages.append({"role": "assistant", "content": out.model_dump_json()})
-        messages.append({"role": "user", "content": "Client answers:\n" + "\n".join(answers)})
+        answers = "\n".join(replies)
     else:
         print(f"\n⚠️  Reached the {MAX_TURNS}-turn limit.")
 
@@ -206,11 +221,11 @@ def _cmd_discover(a, client) -> None:
         out = disco.sessions.load_model(slug)
         render_turn(out)
     else:
-        out = converse(client, request, only=only)
+        out = converse(disco, request, only=only)
         if not out:
             return
         print("\nGenerating the solution assessment…")
-        brief = advise(client, out, only=only)
+        brief = disco.draft_assessment(out, cards=only)
         slug = disco.finalize_discovery(request, out, cards=only, slug=slug_hint,
                                         brief=brief, surface="cli-discover")
         render_brief(out, brief)
@@ -399,12 +414,13 @@ def _cmd_stories(a, client) -> None:
 
 def _cmd_estimate(a, client) -> None:
     slug, disco = _generator_service(a, client)
-    svc, client = SessionService(), client or new_client()
     stories = disco.reason(slug, "stories")
     render_stories(stories)
-    # The estimate is the one call that needs a prior artifact as input, so it does not fit the
-    # single-model→artifact shape of the provider's `generate`; it stays a direct call. Terminal-only.
-    draft, soft, confidence = estimate(client, svc.load_model(slug), stories, only=svc.cards(slug))
+    # The estimate is the one call that needs a prior artifact as input, so it does not fit the plain
+    # model→artifact shape — but "does not fit" was being spent on a direct provider call, on a second
+    # client this verb built for itself (#77). It fits `reason()` perfectly well: `stories` rides the
+    # same `**kwargs` a release note's `version` does. Terminal-only, so nothing is written.
+    draft, soft, confidence = disco.reason(slug, "estimate", stories=stories)
     render_estimate(draft, soft, confidence)
 
 

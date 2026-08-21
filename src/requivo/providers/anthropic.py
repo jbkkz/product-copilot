@@ -393,13 +393,16 @@ def run(client, messages: list[dict], retries: int = 2, only: list[str] | None =
     reasoning is carried onto the reply, so what leaves this function is a complete model again.
 
     `reuse_system` is the one thing this function cannot decide, so it is the caller's (#58). The
-    engine prompt is the one genuinely re-sent byte-identically — `converse()` runs up to 8 turns off
-    it and a golden capture runs K — and the completeness `validate` hook below makes a corrective
-    retry likelier here than anywhere else, so the breakpoint earns its 1.25x write on those paths.
-    It does not on the single-call ones: `AnthropicProvider.analyze` is one call per service
-    operation whichever branch it takes, and it now says so rather than inheriting a default written
-    for a loop. The default stays True because that is the safe answer to an unknown — mistakenly
-    caching costs 25% once, mistakenly not caching costs full price on every repeat (`_complete`)."""
+    engine prompt is the one genuinely re-sent byte-identically — the interactive `discover` loop
+    runs up to 8 turns off it and a golden capture runs K — and the completeness `validate` hook
+    below makes a corrective retry likelier here than anywhere else, so the breakpoint earns its
+    1.25x write on those paths. It does not on the single-call ones, and since #77 the *caller* is
+    where that is known rather than the entry point: `AnthropicProvider.analyze` threads whatever it
+    was told, so `DiscoveryService.draft_turn` declares True for the loop while `start`,
+    `run_discovery` and `answer` take the one-shot default. The default here stays True because that
+    is the safe answer to an unknown — mistakenly caching costs 25% once, mistakenly not caching
+    costs full price on every repeat (`_complete`). The remaining direct callers of this function are
+    `answer_turn` and `scripts/golden_run.py`; no interface reaches it."""
     proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
                          validate=_require_complete_model, reuse_system=reuse_system)
     return proposal.resolve(carry_from)
@@ -416,14 +419,18 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
     `only` is the context-card selection the original discovery used (from its session.json) — passing
     it keeps a refinement turn reasoning over the same cards, not silently the full set.
 
-    **Single-call by construction, hence `reuse_system=False`** (#58). This function *is* the whole
-    turn: it assembles a fresh message list, makes one call and returns — there is no loop here for a
-    cached system block to be read back by, so the breakpoint was a flat ~25% surcharge on the write
-    (#9). Checked rather than assumed, because the argument is about callers, not about this body:
-    every surface that reaches it makes one call per operation — `requivo answer` per invocation,
-    `POST /sessions/{slug}/answer` per request, one Claude Code turn — and the multi-turn caller,
-    `converse()`, does not come through here at all. It calls `run()` directly and keeps the
-    breakpoint. A caller that genuinely loops passes True and gets it back."""
+    **Single-call by default, hence `reuse_system=False`** (#58). This function *is* the whole turn:
+    it assembles a fresh message list, makes one call and returns — so on its own there is no loop
+    for a cached system block to be read back by, and the breakpoint would be a flat ~25% surcharge
+    on the write (#9). The argument is about callers, not about this body, and most of them make one
+    call per operation: `requivo answer` per invocation, `POST /sessions/{slug}/answer` per request,
+    one Claude Code turn.
+
+    One caller genuinely loops it and passes True to say so: `DiscoveryService.draft_turn`, the
+    interactive `discover` loop, which reaches this on every turn after the first (#77). It used to
+    bypass this function entirely — `converse()` called `run()` itself with its own message list —
+    which is the sentence that used to be here, and the whole reason the parameter is threaded rather
+    than hard-coded at either end."""
     messages = [
         {"role": "user", "content": request},
         {"role": "assistant", "content": out.model_dump_json()},
@@ -524,6 +531,16 @@ def estimate(client, out: EngineOutput, stories: Stories,
 
 # ── Provider object ─────────────────────────────────────────────────────────────
 
+# Every operation reachable through `ReasoningProvider.generate`. Registration is what puts an
+# operation *inside* the seam: a surface asks the service, the service asks the protocol, and no
+# interface has to import a function from this module to get it (#77).
+#
+# `estimate` is the one entry that does not fit the plain model → contract shape, and it is listed
+# rather than hidden: it takes the prior `stories` through `**kwargs`, and it returns
+# `(EstimateDraft, soft_slots, confidence)` — the last two computed in core from the same model, so a
+# caller cannot get the draft and the confidence out of step. It is absent from `_WRITERS` and from
+# `GENERATABLE` because it is a terminal analysis with no document; `DiscoveryService.reason()` is
+# the way in, and `DiscoveryService.generate()` refuses it by name.
 _GENERATORS = {
     "brief": advise,
     "stories": derive_stories,
@@ -531,6 +548,7 @@ _GENERATORS = {
     "criteria": generate_criteria,
     "epic": generate_epic,
     "release": generate_release,
+    "estimate": estimate,
 }
 
 # The prompt file behind each operation — what `prompt_version()` hashes to identify the reasoning that
@@ -564,25 +582,28 @@ class AnthropicProvider:
         self.client = client or new_client()
 
     def analyze(self, request: str, *, current_model: EngineOutput | None = None,
-                answers: str | None = None, only: list[str] | None = None) -> EngineOutput:
-        """One reasoning turn, on either branch — and **one call**, which is why both say
-        `reuse_system=False` (#58).
+                answers: str | None = None, only: list[str] | None = None,
+                reuse_system: bool = False) -> EngineOutput:
+        """One reasoning turn, on either branch — **one call per operation by default**, which is why
+        the default is `reuse_system=False` (#58).
 
-        This is where the caching question is actually decidable. `DiscoveryService` reaches this
-        once per operation on every path it has — `start`, `run_discovery`, `answer` — so the system
-        block was being written to cache at 1.25x and never read back. The free functions below
-        cannot know that: `run()` is *also* called directly by `converse()`, which sends the
-        identical prompt for up to 8 turns, and by the golden harness, which sends it K times. Both
-        keep the breakpoint by keeping `run()`'s default.
+        This is where the caching question is actually decidable, and the answer is per *operation*,
+        not per function. `DiscoveryService.start`, `run_discovery` and `answer` each reach this
+        once, so the system block was being written to cache at 1.25x and never read back. The free
+        functions below cannot know that, which is why `run()` keeps its own `True` default for the
+        callers that genuinely loop it — the golden harness sends the identical prompt K times.
 
-        The issue that filed this named `converse()`'s `--once` branch as one of the two sites. That
-        branch no longer calls `run()` — since the DiscoveryService seam it goes through `start()`
-        and lands here — so the site moved while the fact about it did not."""
+        The one looping caller *inside* the seam is `DiscoveryService.draft_turn`, the CLI's
+        interactive `discover` loop: up to 8 turns off one system prompt, so it passes
+        `reuse_system=True` and the breakpoint earns its write there. That loop used to call `run()`
+        directly from `cli.py` and keep the breakpoint by accident of the default; since #77 it says
+        so through the seam instead, which is why the parameter is on the protocol rather than
+        hard-coded here."""
         if current_model is not None and answers is not None:
             return answer_turn(self.client, current_model, request, answers, only=only,
-                               reuse_system=False)
+                               reuse_system=reuse_system)
         return run(self.client, [{"role": "user", "content": request}], only=only,
-                   reuse_system=False)
+                   reuse_system=reuse_system)
 
     def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None,
                  **kwargs):

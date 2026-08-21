@@ -43,16 +43,30 @@ class ReasoningProvider(Protocol):
         current_model: EngineOutput | None = None,
         answers: str | None = None,
         only: list[str] | None = None,
+        reuse_system: bool = False,
     ) -> EngineOutput:
         """A discovery turn: request (+ optional prior model and new answers) → a filled model.
-        `only` restricts the context cards, held constant across a session's turns."""
+        `only` restricts the context cards, held constant across a session's turns.
+
+        `reuse_system` is the caller saying *this call is one of a series that will send the
+        identical system prompt* — a drafting loop rather than a one-shot operation. It is a hint
+        about repetition, not a directive about mechanism: an implementation with prompt caching
+        should place its breakpoint on the strength of it, one without may ignore it entirely. It
+        belongs in the contract because only the caller can answer it, and the default is the
+        one-shot answer that every service operation but `draft_turn` gives (#9, #58, #77)."""
         ...
 
     def generate(self, artifact_type: str, model: EngineOutput, *, only: list[str] | None = None,
                  **kwargs) -> object:
         """A model → a typed artifact contract (PRD, Stories, Epic, …). The concrete return type is
         the Pydantic contract for `artifact_type`; the caller renders/persists it. `**kwargs` carries
-        the few per-artifact options a generator takes (e.g. a `version` to stamp on release notes)."""
+        the few per-artifact options a generator takes (e.g. a `version` to stamp on release notes,
+        or the prior `stories` an estimate is read against).
+
+        One operation returns more than its contract and it is said here rather than discovered:
+        `estimate` returns `(EstimateDraft, soft_slots, confidence)`, because the two extras are
+        deterministic reads of the same model and splitting them across two calls is how they get
+        out of step. Everything else returns exactly its contract."""
         ...
 
     def model_name(self) -> str:

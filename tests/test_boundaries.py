@@ -4,6 +4,19 @@ These tests fail loudly if the core/provider separation regresses -- the single 
 invariant of the refactor. They are static (they read source), so they hold even in an environment
 where the Anthropic SDK is not installed.
 
+Two boundaries, one arrow seen from each end
+--------------------------------------------
+`core/` may not reach *down* to a provider (invariant 7). A surface may not reach *past* the services
+to one either: every interface is a thin caller over `services/`, so an interface that calls a
+provider function itself is a second orchestration of discovery. That is what #77 found -- `cli.py`
+imported `run`, `advise` and `estimate`, and the interactive `discover` branch drove two provider
+calls of its own before handing the result to `DiscoveryService` for the write, while CLAUDE.md, the
+README and docs/architecture.md all stated the opposite rule.
+
+The surface half is scoped to `cli.py`. Stated rather than left to read as clean: `web/` and
+`deterministic.py` are not guarded here, and the sibling storage half of the same defect -- a surface
+reaching past `SessionRepository` to `core.persistence` -- is #76 and has no guard at all yet.
+
 Where the line sits
 -------------------
 Invariant 7 used to read "provider-free and IO-free". The second half was never true and was never
@@ -534,3 +547,192 @@ def test_the_process_guard_allows_what_core_legitimately_does(tmp_path):
     _write_tree(root, {"ordinary.py": _LEGITIMATE_CORE})
     path, package = scan(root, CORE_PACKAGE)[0]
     assert process_violations(path, package) == []
+
+
+# --------------------------------------------------------------------------------------------------
+# The other end of the same arrow: a surface reaches the provider through the services, never itself.
+# --------------------------------------------------------------------------------------------------
+
+CLI = REPO_ROOT / "src" / "requivo" / "cli.py"
+CLI_PACKAGE = "requivo"
+
+# What `cli.py` may still pull out of `requivo.providers`, and why each one is a *surface* concern
+# rather than an orchestration one. Everything else is the CLI running a pipeline of its own, which
+# is what #77 was: `run`, `advise` and `estimate` all lived here, and the interactive `discover`
+# branch reasoned two provider calls itself before letting the service do the write.
+#
+# Add an entry only with a reason a reader can argue with. The failure this guards is not a rewrite,
+# it is one more convenient import.
+_CLI_PROVIDER_ALLOWLIST = {
+    "new_client": (
+        "constructs the SDK client from the environment. Building a client is the surface's job -- it "
+        "is handed to DiscoveryService, which is the layer that decides when to reason with it."
+    ),
+    "track_usage": (
+        "scopes the per-run usage ledger that `app()` prints when the command is over. What a run "
+        "cost is a terminal report; nothing downstream reads it and no revision records it."
+    ),
+    "EngineError": (
+        "an exception type, not a call. `app()` catches it (it is a RequivoError, so it surfaces "
+        "without a traceback) and `_cmd_web` raises it. Importing a class the CLI never calls "
+        "orchestrates nothing."
+    ),
+}
+
+# The marker a module import contributes instead of a name. Deliberately unspellable as an allowlist
+# key: it carries dots and spaces, and every key above is a bare identifier.
+_WHOLE_MODULE = "(the whole module)"
+
+
+def subject_module(path: Path) -> Path:
+    """`scan`, for a guard whose subject is one named module rather than a tree.
+
+    Same rule, and it is the rule this file exists for (#10): a subject that is not there is "could
+    not look", never "looked and found nothing". `cli.py` has been renamed along with its package
+    once already, and a guard that read a missing file as an empty import set would have gone green
+    straight through it.
+    """
+    if not path.is_file():
+        raise AssertionError(
+            f"boundary guard could not read {path}: no such file. This is 'could not look', not "
+            f"'looked and found nothing' -- fix the path, never the assertion."
+        )
+    return path
+
+
+def _crosses_providers(module: str) -> bool:
+    """True if a dotted module name passes through `providers`, at any depth and under any prefix."""
+    return "providers" in module.split(".")
+
+
+def provider_names(path: Path, package: str) -> set[str]:
+    """Every name `path` can reach inside `requivo.providers`.
+
+    `from requivo.providers.anthropic import advise` contributes `advise`. A *module* import
+    contributes a `(the whole module)` marker instead, because `import requivo.providers.anthropic`
+    puts every function in that file one attribute away -- reducing it to a bare module name would
+    let a three-entry allowlist launder unrestricted access to the provider.
+
+    Relative imports are resolved against `package`, for the same reason `imported_modules` does it:
+    `from .providers.anthropic import run` is the shortest way to write the violation.
+    """
+    names: set[str] = set()
+    for node in ast.walk(_parse(path)):
+        if isinstance(node, ast.Import):
+            # `import requivo.providers.anthropic`, with or without an `as` alias.
+            names.update(f"{a.name} {_WHOLE_MODULE}" for a in node.names if _crosses_providers(a.name))
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolve_relative(package, node.level)
+            module = f"{base}.{node.module}" if base and node.module else (node.module or base)
+            if node.module is None:
+                # `from . import providers`: each alias is itself a module, not a symbol.
+                for alias in node.names:
+                    full = f"{module}.{alias.name}" if module else alias.name
+                    if _crosses_providers(full):
+                        names.add(f"{full} {_WHOLE_MODULE}")
+            elif _crosses_providers(module):
+                # `from requivo.providers import anthropic` names a submodule; anything deeper
+                # (`from requivo.providers.anthropic import advise`) names a symbol.
+                submodules = module.split(".")[-1] == "providers"
+                for alias in node.names:
+                    names.add(f"{module}.{alias.name} {_WHOLE_MODULE}" if submodules else alias.name)
+    return names
+
+
+def test_the_cli_reaches_the_provider_only_through_the_named_surface_concerns():
+    """#77. The rule CLAUDE.md, the README and docs/architecture.md all state is that every interface
+    is a thin layer over the services and there is never a second implementation of a generation. It
+    was false on the primary surface: `cli.py` imported `run`, `advise` and `estimate`, so the
+    interactive `discover` path orchestrated the provider itself and would not inherit whatever
+    `DiscoveryService` gained next -- the revision-zero gate, the snapshot discipline -- without
+    someone remembering to add it in two places.
+
+    Both directions are asserted, and the second is what stops this from being a negative assertion
+    over an empty set: an allowlist entry naming an import that is no longer there fails too. So a
+    `cli.py` that was emptied, truncated or renamed away goes red here rather than reading as a
+    surface that reaches nothing.
+    """
+    reached = provider_names(subject_module(CLI), CLI_PACKAGE)
+    unexpected = sorted(reached - set(_CLI_PROVIDER_ALLOWLIST))
+    assert not unexpected, (
+        f"{CLI.name} reaches past the service seam to {unexpected}. Route it through "
+        f"DiscoveryService, or add it to _CLI_PROVIDER_ALLOWLIST with the reason it is a surface "
+        f"concern. Currently allowed: {sorted(_CLI_PROVIDER_ALLOWLIST)}"
+    )
+    stale = sorted(set(_CLI_PROVIDER_ALLOWLIST) - reached)
+    assert not stale, (
+        f"_CLI_PROVIDER_ALLOWLIST still names {stale}, which {CLI.name} no longer imports. Either "
+        f"the guard is reading the wrong file, or the entry is stale prose -- delete it."
+    )
+
+
+_SURFACE_PROVIDER_IMPORTS = {
+    "from_module.py": "from requivo.providers.anthropic import advise\n",
+    "aliased_symbol.py": "from requivo.providers.anthropic import advise as a\n",
+    "dotted.py": "import requivo.providers.anthropic\n",
+    "aliased_module.py": "import requivo.providers.anthropic as prov\n",
+    "submodule.py": "from requivo.providers import anthropic\n",
+    "relative_package.py": "from .providers.anthropic import run\n",
+    "relative_bare.py": "from . import providers\n",
+}
+
+
+def test_the_surface_guard_sees_every_way_of_reaching_the_provider(tmp_path):
+    """Positive control. "Nothing unexpected" also passes when the extractor is blind, so each shape
+    of the violation gets a fixture the guard must see -- the module forms included, since those are
+    the ones that would otherwise look like a single tidy name."""
+    root = tmp_path / "requivo"
+    _write_tree(root, _SURFACE_PROVIDER_IMPORTS)
+    missed = [path.name for path, package in scan(root, CLI_PACKAGE) if not provider_names(path, package)]
+    assert not missed, f"the surface guard is blind to these: {missed}"
+
+
+def test_a_whole_module_import_cannot_pass_as_a_named_surface_concern(tmp_path):
+    """`import requivo.providers.anthropic` leaves `advise` one attribute away, so it must not reduce
+    to something an allowlist of bare names can hold. Checked rather than assumed: the marker is the
+    only thing standing between "three reviewed imports" and unrestricted access."""
+    root = tmp_path / "requivo"
+    _write_tree(root, {"dotted.py": "import requivo.providers.anthropic\n"})
+    path, package = scan(root, CLI_PACKAGE)[0]
+    reached = provider_names(path, package)
+    assert reached == {f"requivo.providers.anthropic {_WHOLE_MODULE}"}
+    assert reached - set(_CLI_PROVIDER_ALLOWLIST) == reached, (
+        "a whole-module import matched an allowlist key -- the marker no longer separates them"
+    )
+
+
+_LEGITIMATE_SURFACE = """
+    from __future__ import annotations
+
+    import json
+    import sys
+    from pathlib import Path
+
+    from requivo.core.errors import RequivoError
+    from requivo.render.terminal import render_turn
+    from requivo.services.discovery import DiscoveryService
+    from requivo.services.sessions import SessionService
+
+
+    def show(providers: list) -> list:
+        # a parameter named like the package must not read as an import of it
+        return sorted(providers)
+"""
+
+
+def test_the_surface_guard_does_not_fire_on_what_an_interface_legitimately_imports(tmp_path):
+    """The must-not-fire half. A guard that flags every interface is deleted by the next person: an
+    interface is *supposed* to import the services, the renderers and the core error types."""
+    root = tmp_path / "requivo"
+    _write_tree(root, {"ordinary.py": _LEGITIMATE_SURFACE})
+    path, package = scan(root, CLI_PACKAGE)[0]
+    assert provider_names(path, package) == set()
+
+
+def test_the_surface_guard_refuses_a_subject_it_could_not_read():
+    """The #10 control, one file down. `src/product_copilot/cli.py` is this package's previous name;
+    reading a missing file as "imports nothing" is the same all-clear nobody earned."""
+    renamed_away = REPO_ROOT / "src" / "product_copilot" / "cli.py"
+    assert not renamed_away.exists(), "this control assumes the pre-rename path is gone"
+    with pytest.raises(AssertionError, match="no such file"):
+        subject_module(renamed_away)

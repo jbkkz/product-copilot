@@ -27,8 +27,9 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   `requivo[anthropic]` extra) turns a request into a model and a model into an artifact.
 - **`services/`** — the application seam shared by every interface. `SessionService.update_model` is
   the single validated apply path (validate → diff → propagate → revision → stale-flag).
-  `DiscoveryService` is the provider-backed orchestration (start / answer / generate) the CLI and Web
-  both call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
+  `DiscoveryService` is the provider-backed orchestration (start / answer / generate, plus the
+  un-persisted `draft_turn` / `draft_assessment` an interactive loop repeats) the CLI and Web both
+  call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
   (`FileSessionRepository` today; Postgres-swappable for a future service).
 - **`render/`** turns data into strings; **`cli.py` + `deterministic.py`** are the only layers that
   touch argv/stdout/TTY. **`web/`** is a thin FastAPI + Jinja2 + HTMX layer over the same services.
@@ -40,7 +41,19 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   on an em dash, so the operator re-ran and paid twice (#29).
 
 Every interface — the terminal CLI, the Claude Code plugin, the local Web app — is a thin layer over
-the same Core. There is no second implementation of the apply path.
+the same Core. There is no second implementation of the apply path, and none of the generation path
+either: a surface owns its input and its rendering, and reaches the provider only through
+`DiscoveryService`.
+
+That second half was stated here for two releases before it was true. The CLI's interactive
+`discover` loop called the provider's `run()` and `advise()` itself and used the service only for the
+final write, so the primary surface held an orchestration of its own — one that would not have
+inherited the revision-zero gate or the snapshot discipline when those arrived (#77). It is guarded
+now rather than asserted: `tests/test_boundaries.py` allows `cli.py` exactly three provider names,
+each carrying the reason it is a surface concern rather than a reasoning one, and fails just as
+loudly on an allowlist entry nothing imports as on an import nothing allowed. The storage half of the
+same shape — a surface reaching past `SessionRepository` to `core.persistence` — is #76 and has no
+guard yet.
 
 The services are the **integrity boundary**, not the interfaces. That distinction is easy to blur
 while there are only two callers who are both careful — but an external consumer calls this layer directly,
