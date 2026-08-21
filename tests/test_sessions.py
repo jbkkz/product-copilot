@@ -399,6 +399,40 @@ def test_run_discovery_refuses_a_session_that_already_has_a_model(workspace):
     assert svc.load_model("s").model["workflow"].value == "refined"
 
 
+@pytest.mark.parametrize("call", [
+    lambda d: d.generate("s", "brief"),
+    lambda d: d.generate("s", "prd"),
+    lambda d: d.reason("s", "stories"),
+], ids=["generate-brief", "generate-prd", "reason-stories"])
+def test_generation_refuses_a_session_that_has_no_model_yet(workspace, call):
+    """The mirror of the rule above, and it was missing (#152). `SessionSnapshot.model` is `None`
+    before the first model — the field says so — and `generate`/`reason` unpacked it and handed it
+    to the provider unchecked.
+
+    Nothing was lost and nothing was spent: every generator builds its user message as
+    `out.model_dump_json(...)`, so it died assembling the prompt, before the client was touched. What
+    a user got was a raw `AttributeError` where every other refusal here is a structured error naming
+    the remedy — and the only place the rule existed was `web/routes/sessions.py`, which renders an
+    "offer to run discovery" page at revision 0. One surface out of three, which is the same defect
+    the sibling test above describes in its own docstring.
+
+    Parametrized over all three doors rather than asserted once: `generate` and `reason` take
+    separate paths to the provider, and a guard added to one of them is exactly how this comes back.
+    """
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    SessionService().create_session("Something.", slug="s")     # created, never analysed
+    provider = _CountingProvider()
+
+    with pytest.raises(RevisionConflictError) as e:
+        call(DiscoveryService(provider))
+
+    assert e.value.details["actual"] == 0 and e.value.details["expected"] == 1
+    assert provider.calls == 0                                    # refused before reaching the provider
+    assert "discover" in str(e.value)                             # the refusal names the remedy
+
+
 def test_a_repeat_discovery_is_refused_before_the_provider_is_paid(workspace):
     """Same rule, the other entry point. `start()` used to reason first and discover the conflict
     afterwards, so an accidental re-run bought a discovery turn — and, when finalizing, an assessment
@@ -533,6 +567,13 @@ class _CountingProvider(_FakeProvider):
     def analyze(self, request, *, current_model=None, answers=None, only=None):
         self.calls += 1
         return super().analyze(request, current_model=current_model, answers=answers, only=only)
+
+    def generate(self, artifact_type, model, *, only=None, **kwargs):
+        # Overrides `_FakeProvider.generate`, which raises "not needed for this test". A guard test
+        # has to be able to tell *reached the provider* from *raised somewhere else on the way*, and
+        # an AssertionError from the stand-in reads like a failed assertion in the test itself.
+        self.calls += 1
+        raise AssertionError(f"the provider was reached with model={model!r}")
 
 
 def test_discovery_runs_on_a_provider_that_is_not_anthropic(workspace):

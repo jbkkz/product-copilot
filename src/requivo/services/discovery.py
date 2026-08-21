@@ -26,7 +26,7 @@ from requivo.core.errors import RevisionConflictError
 from requivo.core.persistence import ArtifactStatus
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
-from requivo.services.sessions import SessionService, UpdateResult
+from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
 
 # artifact type → the writer that turns its contract into the Markdown that gets saved. This is the
 # vocabulary of "things a generation produces a document for"; `stories` and `estimate` are absent on
@@ -72,6 +72,34 @@ def _require_revision_zero(slug: str, revision: int) -> None:
             f'would replace it. Refine it instead (`requivo answer {slug} "…"`), or run this '
             "discovery under another slug.",
             details={"slug": slug, "expected": 0, "actual": revision})
+
+
+
+def _require_a_model(slug: str, snap: SessionSnapshot) -> EngineOutput:
+    """Generation may only run on a session that *has* a model — the mirror of the rule above (#152).
+
+    `SessionSnapshot.model` is `None` before the first model, which it says on the field, and
+    `generate`/`reason` unpacked it and handed it to the provider unchecked. Every generator builds
+    its user message as `out.model_dump_json(...)`, so the failure landed as an `AttributeError`
+    while assembling the prompt: no API call, nothing written, and a raw traceback where every other
+    refusal in this codebase is a structured error naming the remedy.
+
+    Written here rather than at each call site for the reason its sibling gives in the paragraph
+    above: the Web already had this rule — `if meta.current_revision == 0` in `routes/sessions.py`,
+    which renders an "offer to run discovery" page instead — and the CLI had nothing, so the rule was
+    enforced on one surface out of three. Hiding a button is good on top of an enforced rule and is
+    not one.
+
+    Returning the model rather than returning `None` is deliberate: the caller binds the result, so
+    the narrowing is in the type as well as in the control flow, and the eight Pyright errors this
+    closes cannot come back as a new call site that forgets the guard."""
+    if snap.model is None:
+        raise RevisionConflictError(
+            f"session '{slug}' has no model yet (revision 0) — there is nothing to generate from. "
+            f'Run `requivo discover` on it, or `requivo answer {slug} "…"` if a discovery is in '
+            "progress.",
+            details={"slug": slug, "expected": 1, "actual": snap.revision})
+    return snap.model
 
 
 def absorb_reasoning(out: EngineOutput, brief) -> None:
@@ -266,7 +294,8 @@ class DiscoveryService:
         a second client of its own, which is exactly the "no interface reaches past it" claim above
         being false one line below where it was written."""
         snap = self.sessions.snapshot(slug)
-        return self._need_provider().generate(artifact_type, snap.model, only=snap.context_cards,
+        model = _require_a_model(slug, snap)
+        return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
                                               **kwargs)
 
     def generate(self, slug: str, artifact_type: str, *, surface: str = "generate", **kwargs) -> Generated:
@@ -292,7 +321,8 @@ class DiscoveryService:
         is perfectly plausible."""
         self.sessions.ensure_canonical(slug)  # migrate a legacy session before its first artifact write
         snap = self.sessions.snapshot(slug)
-        source_revision, out, cards = snap.revision, snap.model, snap.context_cards
+        source_revision, cards = snap.revision, snap.context_cards
+        out = _require_a_model(slug, snap)
         provider = self._need_provider()
 
         if artifact_type == "brief":
