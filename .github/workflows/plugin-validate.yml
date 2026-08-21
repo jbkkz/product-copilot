@@ -37,11 +37,21 @@ name: Plugin manifests
 #
 # ── "Gate" here means the MODE, not the merge button ──────────────────────────────────────
 #
-# Read literally, "gate" above is a claim this file cannot make on its own. `main`'s branch
-# protection required 13 checks when this leg was written and this job is not one of them,
-# so today a red result here is visible on the pull request and does not block the merge.
-# The decision recorded above is which *mode* the leg runs in; making it blocking is one
-# API call, and it is the repository owner's to make:
+# Read literally, "gate" above is a claim this file cannot make on its own -- it is a statement
+# about branch protection, which lives on the forge and not in this file. When this leg was
+# written `main` required 13 checks and this job was not one of them, so a red result here was
+# visible on the pull request and did not block the merge.
+#
+# That is no longer true, and the sentence is corrected rather than deleted because the reasoning
+# above still depends on knowing which state we are in. Measured 2026-08-21:
+# `gh api repos/jbkkz/requivo/branches/main/protection/required_status_checks --jq '.contexts'`
+# returns **14**, and `Plugin manifests (validate --strict)` is among them. The owner ran the
+# append below. A red result in THIS job now blocks the merge, which is what makes the pinned-CLI
+# decision above load-bearing rather than advisory in practice.
+#
+# The `Plugin vs released CLI (advisory)` job further down is NOT in that list and is not intended
+# to be; see its own header. The decision recorded above is which *mode* the leg runs in; making a
+# job blocking is one API call, and it is the repository owner's to make:
 #
 #   gh api -X POST repos/jbkkz/requivo/branches/main/protection/required_status_checks/contexts \
 #     -f 'contexts[]=Plugin manifests (validate --strict)'
@@ -174,4 +184,112 @@ jobs:
           else
             echo "No drift: both manifests are clean under ${latest} as well."
           fi
+          exit 0
+
+  # ── The plugin against a RELEASED CLI (#96) ───────────────────────────────────────────────
+  #
+  # The job above measures two static manifests against a spec. This one measures something no test
+  # in `tests/` can. `tests/test_plugin.py::test_skills_reference_only_real_cli_commands` resolves
+  # the skills' `requivo` invocations against `requivo.cli._build_parser()` **in the same working
+  # tree** — so the plugin and the CLI it is checked against are the same commit, and the comparison
+  # is green by construction.
+  #
+  # A user installs two artifacts that have never been compared with each other. The plugin comes
+  # from a marketplace, and a community listing pins it to a commit SHA that Anthropic's CI advances
+  # as commits land — so the plugin a stranger installs is routinely `main`. The CLI comes from
+  # `uv tool install requivo`, which is the last PyPI release. Between releases the two drift by
+  # construction, and until this leg nothing measured the gap.
+  #
+  # ── Advisory, and unlike the job above there is no gate half ───────────────────────────────
+  #
+  # The job above is a pinned gate plus an advisory `@latest` run. This is the same argument
+  # reaching a different answer, and the difference is worth writing down rather than leaving a
+  # reader to think the two jobs disagree by accident.
+  #
+  # Advisory for the same reason as the step above: this repo's normal state between releases is a
+  # pull request that adds a CLI verb and a skill using it, *before* the next release exists on
+  # PyPI. A red there would be correct about the world and un-actionable by the author, whose only
+  # remedy is to cut a release. A required check that reddens for reasons the author cannot act on
+  # is a check that gets overridden, then ignored, then deleted.
+  #
+  # No gate half, because nothing here is worth pinning. Pinning the released CLI to a version we
+  # choose reddens exactly as often; pinning it to the branch reproduces `tests/test_plugin.py` and
+  # its tautology. What this leg measures is a lag this project runs on purpose, not a disagreement
+  # that picking a version could settle — so it is advisory all the way down.
+  #
+  # The one place a gate would be meaningful is the release gate, where plugin and CLI are about to
+  # become the same commit and drift ought to be zero. That is a different check in a different
+  # file and is not built here.
+  #
+  # ── Three states, and the third is not a pass ──────────────────────────────────────────────
+  #
+  # `scripts/plugin_cli_drift.py` exits 0 resolved / 1 drift / 3 could-not-look — skipping 2, which
+  # `argparse` spends on a usage error, so a run that never reached a verdict cannot be reported as
+  # one. The policy of not failing the build lives here rather than in the script, so changing it is
+  # one reviewed line.
+  # `could-not-look` — PyPI unreachable, no release published, the install failed — is annotated as
+  # its own thing: a released CLI read as an empty verb set would report every invocation as drift,
+  # and read as a pass would hide the check being broken.
+  #
+  # The logic is in `scripts/` and tested in `tests/test_plugin_cli_drift.py`, not written into
+  # this shell. A check that exists only in YAML is one the next skill added drops silently, which
+  # is exactly what #93 turned out to be for six skills.
+  #
+  # `ubuntu-latest` only, for the reason the file header already gives: what is compared is two
+  # argparse verb trees, a property of the packages rather than of the OS reading them.
+  #
+  # The workflow's display name still reads "Plugin manifests" and is deliberately not renamed.
+  # It costs a reader nothing, and renaming CI identifiers is the class of change `ci.yml`'s header
+  # records going wrong twice.
+  drift:
+    name: Plugin vs released CLI (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # The tree side. `-e .` rather than `.[dev]`: the probe imports `requivo.cli` and nothing else.
+      #
+      # `continue-on-error` here too, and it is not decoration. This install resolves `pydantic` and
+      # `python-dotenv` from PyPI, so it needs the network exactly as the released-side install does,
+      # and without this a transient index failure reddens a job whose whole contract is that it
+      # never fails. The script already has the right answer for a tree it cannot introspect: it is
+      # could-not-look, reported in those words, and explicitly not evidence of drift.
+      - name: Install this checkout (the tree side)
+        continue-on-error: true
+        run: pip install -e .
+
+      # The released side, in an interpreter of its own so neither install can shadow the other.
+      # Failure is tolerated on purpose — an unreachable PyPI or an unpublished package is
+      # could-not-look, and the script is what reports it in those words.
+      - name: Provision the last released requivo from PyPI
+        continue-on-error: true
+        run: |
+          set -u
+          python -m venv /tmp/released
+          /tmp/released/bin/pip install --disable-pip-version-check --quiet requivo
+          /tmp/released/bin/python -c "import importlib.metadata as m; print('released requivo', m.version('requivo'))"
+
+      # Never fails the job. `continue-on-error` and the trailing `exit 0` are both deliberate: the
+      # first covers the shell dying on something unforeseen, the second covers the script's own
+      # non-zero states, which are verdicts rather than failures.
+      - name: Resolve the plugin's invocations against it (advisory, never fails)
+        continue-on-error: true
+        run: |
+          set -u
+          if python scripts/plugin_cli_drift.py --released-python /tmp/released/bin/python --github; then
+            code=0
+          else
+            code=$?
+          fi
+          case "$code" in
+            0) echo "Resolved: every invocation the plugin makes exists in the released CLI." ;;
+            1) echo "Drift, annotated above. Advisory: this did not fail the build. If the missing verbs ship in the next release, no action is needed; if they were removed from the CLI, the plugin is broken for anyone installing today." ;;
+            3) echo "Could not look, annotated above. This is not a clean result and it is not evidence of drift either." ;;
+            2) echo "::warning title=Plugin/CLI drift check could not look::scripts/plugin_cli_drift.py exited 2, which is argparse's usage error: this step called it wrong, so nothing was compared and the script never annotated anything. Not a clean result. Fix the invocation in .github/workflows/plugin-validate.yml." ;;
+            *) echo "::warning title=Plugin/CLI drift check could not look::scripts/plugin_cli_drift.py exited ${code}, which is none of its states (0 resolved / 1 drift / 3 could-not-look, 2 argparse usage). Nothing was compared. This is not a clean result." ;;
+          esac
           exit 0
