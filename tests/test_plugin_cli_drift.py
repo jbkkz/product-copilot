@@ -32,6 +32,7 @@ from plugin_cli_drift import (  # noqa: E402
     PLUGIN_ROOT,
     RESOLVED,
     Surface,
+    _label,
     _one_line,
     cli_surface,
     compare,
@@ -460,8 +461,9 @@ def _make_unreadable(directory):
     anyway. A silently-green leg here would be the defect under test wearing the harness as a
     costume."""
     if os.name == "nt":
-        pytest.skip("POSIX directory modes do not bite on Windows. UNTESTED ON THIS RUN: that a "
-                    "directory the walk cannot descend into maps to could-not-look.")
+        pytest.skip("POSIX directory modes do not bite on Windows. UNTESTED HERE: that a directory "
+                    "the walk cannot descend into maps to could-not-look. Every other platform runs "
+                    "it.")
     directory.chmod(0o000)
     try:
         (directory / "SKILL.md").stat()
@@ -575,21 +577,68 @@ def test_the_skills_directory_itself_being_unreadable_is_could_not_look(tmp_path
 # instead of having to remember it.
 
 
+def _forging_dir(parent, label):
+    """Stage a directory whose name breaks a line, or skip saying what went untested.
+
+    Probed rather than decided from `sys.platform`, because the hazard is exactly *this filesystem
+    cannot hold this name*, and the probe is the staging step itself — it cannot pass for a reason
+    unrelated to what it checks. `tests/test_unexaminable_entries.py` stages the same shape the same
+    way, and Windows is the case it catches: NTFS refuses every character from 1 to 31 in a name, so
+    `mkdir` fails with `WinError 123` before any assertion has run.
+
+    That refusal is also why nothing is quietly uncovered there. The forging vector *is* the newline
+    — a workflow command is only parsed at the start of a line, so a name that cannot break one
+    cannot forge one — and a platform that refuses the character refuses the vector with it.
+    """
+    directory = parent / f"plain\n::error::forged-by-{label}"
+    try:
+        directory.mkdir(parents=True)
+    except (OSError, ValueError) as exc:
+        pytest.skip(
+            f"this filesystem refuses a directory name containing a newline ({type(exc).__name__}: "
+            f"{exc}). UNTESTED HERE: that a plugin path name cannot forge a workflow command at "
+            f"column 0 of a CI log, end to end through `main`. Every other platform runs it, and "
+            f"both halves of the guard are asserted on every platform by "
+            f"test_the_squash_collapses_every_shape_of_whitespace and by "
+            f"test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding, neither of which "
+            f"needs the name to exist on disk.")
+    return directory
+
+
 def test_the_squash_collapses_every_shape_of_whitespace():
-    """The portable half, and the only one that runs on every leg. Windows cannot hold a filename
-    with a newline in it, so the integration cases below are POSIX-only by nature rather than by
-    omission — this one keeps the rule itself asserted everywhere."""
+    """The rule itself, on every leg. The end-to-end cases below need a filesystem that will hold a
+    newline in a name and Windows will not, so this is what keeps the claim asserted there."""
     assert _one_line("plain\n::error::forged") == "plain ::error::forged"
     assert _one_line("a\r\nb\tc  d") == "a b c d"
     assert _one_line("ordinary/path/SKILL.md: Permission denied") == \
         "ordinary/path/SKILL.md: Permission denied"
 
 
+def test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding():
+    """The `_label` half of the class, asserted on every platform including the one that cannot
+    stage the fixture.
+
+    `_label` reads `.parent.name` off a path and never touches the filesystem, so the hostile name
+    only has to be *representable*, not creatable — and a `PurePath` represents it identically on
+    both flavours. That is the difference between Windows skipping this class whole and Windows
+    checking the half of it a pure path can reach.
+    """
+    forged = Path("skills") / "plain\n::error::forged" / "SKILL.md"
+    assert _label(forged) == "plain ::error::forged"
+    # The must-not-fire half: an ordinary skill name comes back unchanged, or the squash would be
+    # rewriting every finding's source and the assertion above would pass for the wrong reason.
+    assert _label(Path("skills") / "brief" / "SKILL.md") == "brief"
+
+
 def test_an_unreadable_path_cannot_forge_a_line_of_its_own(tmp_path, capsys):
-    """The half this diff introduced: an unreadable entry's name reaching `print` un-squashed."""
+    """The half this diff introduced, end to end: an unreadable entry's name reaching `print`
+    un-squashed, ahead of anything `_annotate` would have squashed on its way to an annotation.
+
+    Doubly unstageable on Windows — the name is refused by the filesystem, and the `chmod 000` would
+    not bite either — so `_forging_dir` skips first and names the whole class, rather than leaving
+    the second obstacle to be discovered by whoever removes the first."""
     skills = tmp_path / "skills"
-    evil = skills / "plain\n::error::forged-by-an-unreadable-name"
-    evil.mkdir(parents=True)
+    evil = _forging_dir(skills, "an-unreadable-name")
     (evil / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
     (skills / "ok").mkdir()
     (skills / "ok" / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
@@ -605,12 +654,14 @@ def test_an_unreadable_path_cannot_forge_a_line_of_its_own(tmp_path, capsys):
 
 
 def test_a_skill_directory_name_cannot_forge_a_line_of_its_own(tmp_path, capsys):
-    """The half that predates this diff: `_label` returns a skill's directory name, which lands in
-    every finding's `sources` and is printed by `_show`. Swept for after the audit found its sibling
-    — the second instance of a class is usually a few lines from the first."""
+    """The `_label` half end to end, on a real tree — the integration counterpart of
+    `test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding` above.
+
+    Worth having in addition to that unit, because what it pins is not that `_label` squashes but
+    that `_show` prints nothing else derived from the same name: full coverage of a function and an
+    entry point that routes around it look identical from outside."""
     skills = tmp_path / "skills"
-    evil = skills / "plain\n::error::forged-by-a-skill-directory"
-    evil.mkdir(parents=True)
+    evil = _forging_dir(skills, "a-skill-directory")
     (evil / "SKILL.md").write_text("Fix it with `requivo model rebase <slug>`.", encoding="utf-8")
 
     code = main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
