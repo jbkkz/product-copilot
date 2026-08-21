@@ -22,8 +22,8 @@ _Item = TypeVar("_Item")
 # the mirror inherit it: re-annotating a field in a subclass without restating `Field(...)` drops the
 # parent's constraints *and* its default, which would silently make `questions` required. So the
 # mirror is forced to say it again, and two hand-written numbers that must agree and are checked by
-# nothing is the defect class #14 exists to remove. `test_the_persisted_mirror_copies_every_
-# constraint_it_restates` pins the general property; this name removes the instance.
+# nothing is the defect class #14 exists to remove. The general property is pinned by
+# `test_the_persisted_mirror_copies_every_constraint_it_restates`; this name removes the instance.
 # The prompt asset says 3–6 in prose and cannot read this, so `engine.md` is the one place the number
 # is genuinely duplicated — deliberately, and it is a floor-and-ceiling hint there rather than a cap.
 MAX_QUESTIONS = 6
