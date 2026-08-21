@@ -70,7 +70,7 @@ def _seed(slug: str, *, analysed: bool = True) -> str:
     svc = SessionService()
     svc.create_session(f"A request about {slug}", slug=slug)
     if analysed:
-        from tests.test_cli_deterministic import _full_model
+        from _cli_harness import _full_model
         svc.update_model(slug, json.dumps(_full_model()))
     return slug
 
