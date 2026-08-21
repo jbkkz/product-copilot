@@ -10,6 +10,11 @@ negative assertion passes when nothing at all happens: if no context card could 
 schema were unreachable, every refusal below would pass for the wrong reason and report a coverage it
 does not have. `test_harness_can_see_both_vocabularies` is the loud half — it fails rather than
 skips when the fixture is blind.
+
+The last section joined from the `test_engine.py` split (#72): the ordinary, non-adversarial half of
+the same three functions — which cards a healthy install sees, what `only=` narrows to, and how a
+user card overrides a bundled one. The guards above are only meaningful next to the behaviour they
+guard, and until now that behaviour was asserted in another file.
 """
 
 from __future__ import annotations
@@ -615,3 +620,97 @@ def test_display_token_is_the_render_side_companion_where_no_selector_runs():
 
     shown = display_token("ok-card\nAll clear.")
     assert "\n" not in shown and "ok-card" in shown
+
+
+# ── the ordinary path: which cards load, and which one wins ──────────────────
+
+
+def test_load_context_includes_real_cards_and_skips_underscore():
+    ctx = load_context()
+    assert "## b2b-platform" in ctx    # committed context card is included
+    assert "## _template" not in ctx   # underscore-prefixed card is skipped
+
+
+def test_load_context_refuses_when_only_underscore_files_are_present(tmp_path, monkeypatch):
+    """A directory holding nothing but `_`-prefixed files has **no cards**, and since #33 that is a
+    refusal rather than an empty string.
+
+    This test used to assert `load_context() == ""`, which is the defect #33 reports written down as
+    the intended contract: an empty `{{CONTEXT}}` reached `build_prompt` and was sent to a paid call
+    with the product context silently missing. What it is still here to pin is the other half — that
+    an underscore-prefixed file does not count as a card — so the refusal below is the *right*
+    refusal and not an accident of an empty directory.
+    """
+    from requivo.core import context as llm
+    from requivo.core.errors import NoContextCardsError
+
+    ctx_dir = tmp_path / "context"
+    ctx_dir.mkdir()
+    (ctx_dir / "_only_template.md").write_text("skip me", encoding="utf-8")
+    monkeypatch.setattr(llm, "CONTEXT", ctx_dir)
+    monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(tmp_path / "no-user-cards"))
+
+    with pytest.raises(NoContextCardsError):
+        load_context()
+
+    # must fire: the same directory with one *real* card loads, so the refusal above is about the
+    # underscore rule and not about the directory being unreadable or the anchor being wrong
+    (ctx_dir / "real-card.md").write_text("REAL CARD", encoding="utf-8")
+    loaded = load_context()
+    assert "## real-card" in loaded and "## _only_template" not in loaded
+
+
+def test_user_context_cards_merge_and_override_bundled(tmp_path, monkeypatch):
+    # A pip-installed user extends discovery by dropping cards in REQUIVO_CONTEXT_DIR: new stems are added,
+    # and a stem matching a bundled card overrides it (tweak a built-in without editing the package).
+    from requivo.core import context as llm
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "b2b-platform.md").write_text("BUNDLED b2b")
+    (bundled / "shared.md").write_text("BUNDLED shared")
+    monkeypatch.setattr(llm, "CONTEXT", bundled)
+
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "my-product.md").write_text("USER product")
+    (user / "shared.md").write_text("USER shared override")
+    monkeypatch.setenv("REQUIVO_CONTEXT_DIR", str(user))
+
+    assert llm.available_cards() == ["b2b-platform", "my-product", "shared"]  # merged, sorted
+    ctx = load_context()
+    assert "BUNDLED b2b" in ctx            # bundled-only card kept
+    assert "USER product" in ctx           # user-only card added
+    assert "USER shared override" in ctx   # user card wins on stem clash
+    assert "BUNDLED shared" not in ctx      # ...replacing the bundled version
+
+
+def test_available_cards_lists_real_non_underscore_cards():
+    from requivo.core.context import available_cards
+
+    cards = available_cards()
+    assert "b2b-platform" in cards and "financial-reporting" in cards
+    assert all(not c.startswith("_") for c in cards)
+
+
+def test_load_context_only_filters_to_selected_cards():
+    from requivo.core.context import load_context
+
+    ctx = load_context(only=["b2b-platform"])
+    assert "## b2b-platform" in ctx
+    assert "## financial-reporting" not in ctx  # a non-selected card is excluded
+    assert load_context() != ctx                # default still loads everything
+
+
+def test_resolve_cards_maps_stems_and_refuses_an_unknown_one():
+    # One resolver in Core, shared by every surface. An unknown card is an error rather than a warning
+    # you can walk past: dropping it leaves an empty selection, and an empty selection means *all*
+    # cards — so a typo would widen the context instead of narrowing it.
+    from requivo.core.context import resolve_cards
+    from requivo.core.errors import UnknownContextCardError
+
+    assert resolve_cards(["b2b-platform", " financial-reporting"]) == ["b2b-platform", "financial-reporting"]
+    assert resolve_cards([]) is None                      # no selection == every card, explicitly
+    with pytest.raises(UnknownContextCardError) as ei:
+        resolve_cards(["b2b-platform", "nope"])
+    assert ei.value.details["unknown"] == ["nope"]

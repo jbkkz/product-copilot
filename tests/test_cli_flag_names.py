@@ -14,6 +14,10 @@ failure the same way. The rename is the visible half; this file asserts the half
 
 #85 -- the context-card selector was spelled `--context` on two verbs and `--cards` on a third.
 Both spellings now work everywhere; the dest is unchanged on each verb, so no handler moved.
+
+#72 added the parser-shape tests at the foot of the file: which verbs the parser binds, what it does
+with a verb it does not know, and that every command the docs promise is really there. Same subject
+one level up -- what the CLI *is called*, read off the built parser rather than off the source.
 """
 from __future__ import annotations
 
@@ -56,8 +60,11 @@ class _RaisingClient:
 
 class _CannedClient:
     """A client that answers with one canned JSON reply -- enough for `epic` to reach its writers.
-    Local on purpose: the equivalent helper in test_engine.py is that module's fixture, and a test
-    that reaches across modules for it breaks when the other module reorganises."""
+    Local on purpose: `tests/_fakes.py` carries the shared `FakeClient`, and this one is shaped for a
+    single verb's failure path rather than for reuse. Until #72 this note read "the equivalent helper
+    in test_engine.py is that module's fixture, and a test that reaches across modules for it breaks
+    when the other module reorganises" -- that module was then split, which is the reorganisation the
+    note was worried about, so the reason is restated against something that will not move."""
 
     class _Block:
         type = "text"
@@ -301,3 +308,44 @@ def test_every_json_verb_is_inside_the_promise():
     # does not produce is a promise about an output that does not exist.
     stale = sorted(n for n in named if n not in verbs)
     assert not stale, f"the promise table names verbs that do not take `--json`: {stale}"
+
+
+# ── the parser's shape: which verbs exist at all ─────────────────────────────
+
+
+def test_pc_parser_binds_every_subcommand():
+    cases = {
+        ("discover", "req"): "_cmd_discover",
+        ("status", "m.json"): "_cmd_status",
+        ("impact", "m.json"): "_cmd_impact",
+        ("brief", "m.json"): "_cmd_brief",
+        ("prd", "m.json"): "_cmd_prd",
+        ("stories", "m.json"): "_cmd_stories",
+        ("estimate", "m.json"): "_cmd_estimate",
+        ("criteria", "m.json"): "_cmd_criteria",
+        ("epic", "m.json"): "_cmd_epic",
+        ("release", "m.json"): "_cmd_release",
+    }
+    for argv, fname in cases.items():
+        assert _build_parser().parse_args(list(argv)).func.__name__ == fname
+    assert _build_parser().parse_args(["epic", "m", "--github", "--gitlab"]).github
+    assert _build_parser().parse_args(["release", "m", "v1.0"]).version == "v1.0"
+
+
+def test_pc_unknown_command_errors():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["bogus"])
+
+
+def test_documented_cli_commands_exist():
+    # Guard doc/CLI drift: every top-level command the README and docs/cli.md promise must be a real
+    # subcommand, so a rename or removal can't leave the docs pointing at a command that doesn't exist.
+    import argparse
+
+    parser = _build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    documented = {"discover", "answer", "status", "impact", "brief", "prd", "stories", "estimate",
+                  "criteria", "epic", "release", "web", "demo", "doctor", "schema", "context",
+                  "session", "model", "artifact"}
+    missing = documented - set(sub.choices)
+    assert not missing, f"documented CLI commands missing from the parser: {sorted(missing)}"

@@ -1,0 +1,307 @@
+"""The dependency DAG, and the staleness it drives.
+
+Split out of `test_engine.py` (#72). One file rather than two because invariant 1 makes them one
+subject: *staleness is the dependency graph, never the revision number.* So the pure-logic half
+(`propagate`, `diff_models`, `resolve_slots`, `ARTIFACT_SLOTS`) and the on-disk half (what an apply
+actually marks stale, and what the `impact` and `answer` verbs report) are the same rule observed at
+two depths.
+
+Two tests here are lodgers rather than residents — `test_expected_revision_precondition_blocks_a_stale_write`
+(optimistic locking) and `test_each_revision_records_its_provenance` (the revision log). They belong
+with `test_integrity.py` and `test_artifact_provenance.py` by subject. They stayed because those files
+take an opt-in `workspace` fixture and these tests take no arguments: moving them means adding a
+parameter, and #72 moves test bodies unchanged or not at all. Worth doing separately, with the
+signature change visible as its own diff.
+"""
+import json
+import shutil
+
+import pytest
+from _fakes import FakeClient, _model_in_out, _run_app, full_slots, out, slot
+
+from requivo.core import persistence as store
+from requivo.core.contracts import Challenge, DesignDecision, EngineOutput
+from requivo.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
+from requivo.services.artifacts import ArtifactService
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workspace(tmp_path, monkeypatch):
+    """Every test in this module writes sessions/artifacts into an isolated temp workspace, never the
+    real repo. Points both the canonical root (.requivo/sessions) and the legacy root (out/) at tmp."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("REQUIVO_OUTPUT_DIR", str(tmp_path / "out"))
+
+
+# ── Tier 2: the dependency DAG (impact propagation) ───────────────────────────
+# Pure logic — no API. A change to a slot propagates to the decisions that rest on
+# it and the artifacts that consume it.
+
+
+def _out_with_decisions(*decisions):
+    return EngineOutput.model_validate({
+        "model": {
+            "current_process": slot(80, "explicit", "high"),
+            "permissions": slot(60, "inferred", "high"),
+            "workflow": slot(70, "inferred", "high"),
+            "business_objects": slot(50, "inferred", "medium"),
+        },
+        "questions": [], "summary": {},
+        "decisions": [d.model_dump() for d in decisions],
+    })
+
+
+def test_propagate_flags_dependent_decisions_and_artifacts():
+    out_ = _out_with_decisions(
+        DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                       derived_from=["permissions", "workflow"]),
+        DesignDecision(decision="Amount sourced from the Contract",
+                       derived_from=["business_objects"]),
+    )
+    rep = propagate(out_, ["permissions"])
+    # only the decision resting on permissions, and it names the changed slot it rests on
+    assert [d.decision for d in rep.decisions] == ["Draft-first invoices reviewed by Finance"]
+    assert rep.decisions[0].rests_on == ["Permissions"]
+    # artifacts consuming permissions go stale; release (no permissions) does not
+    assert "prd" in rep.artifacts and "criteria" in rep.artifacts
+    assert "release" not in rep.artifacts
+    assert not rep.empty
+
+
+def test_propagate_reaches_only_the_assessment_for_an_otherwise_isolated_slot():
+    # current_process feeds no buildable deliverable and no decision rests on it. The solution
+    # assessment is the exception by design: it is a judgment over the whole model, so it rests on
+    # every slot — describing the as-is process differently does change the assessment on disk.
+    rep = propagate(_out_with_decisions(), ["current_process"])
+    assert rep.artifacts == ["brief"]
+    assert not rep.decisions and not rep.challenges and not rep.empty
+
+
+def test_resolve_slots_accepts_ids_and_label_words_and_flags_unknowns():
+    assert resolve_slots(["permissions"]) == (["permissions"], [])
+    assert resolve_slots(["permission"]) == (["permissions"], [])  # label substring
+    ids, unmatched = resolve_slots(["workflow", "zzz"])
+    assert ids == ["workflow"] and unmatched == ["zzz"]
+    # returned in schema order regardless of input order
+    assert resolve_slots(["risks", "problem"])[0] == ["problem", "risks"]
+
+
+def test_diff_models_flags_material_change_but_ignores_completeness_noise():
+    base = {"workflow": {"completeness": 60, "confidence": "inferred", "impact": "high",
+                         "value": "draft → issued", "evidence": ""}}
+    old = EngineOutput.model_validate({"model": base, "questions": [], "summary": {}})
+    # completeness alone moving is not a material change
+    bumped = json.loads(json.dumps(base))
+    bumped["workflow"]["completeness"] = 90
+    same = EngineOutput.model_validate({"model": bumped, "questions": [], "summary": {}})
+    assert diff_models(old, same) == []
+    # a value change is
+    changed = json.loads(json.dumps(base))
+    changed["workflow"]["value"] = "draft → issued → paid"
+    newv = EngineOutput.model_validate({"model": changed, "questions": [], "summary": {}})
+    assert diff_models(old, newv) == ["workflow"]
+
+
+def test_diff_models_flags_a_removed_slot():
+    # A slot present before and gone after must register as a change — otherwise a decision or artifact
+    # resting on it could go stale silently. (In practice the completeness invariant prevents a real
+    # discovery from dropping a slot, but the diff must not depend on that upstream guarantee.)
+    both = {"workflow": {"completeness": 60, "confidence": "inferred", "impact": "high",
+                         "value": "draft → issued", "evidence": ""},
+            "permissions": {"completeness": 70, "confidence": "explicit", "impact": "high",
+                            "value": "HR only", "evidence": ""}}
+    old = EngineOutput.model_validate({"model": both, "questions": [], "summary": {}})
+    dropped = {"workflow": both["workflow"]}  # permissions removed
+    new = EngineOutput.model_validate({"model": dropped, "questions": [], "summary": {}})
+    assert diff_models(old, new) == ["permissions"]
+
+
+def test_artifact_slots_reference_only_real_slot_ids():
+    from requivo.core.analysis import _slot_meta
+    valid = set(_slot_meta()[1])
+    for name, slots in artifact_slots().items():
+        assert slots <= valid, f"{name} references unknown slot ids: {slots - valid}"
+
+
+def test_pc_impact_reports_blast_radius_offline():
+    # No client needed — impact is a pure DAG query.
+    with _model_in_out("clitest-impact") as p:
+        out_ = _out_with_decisions(
+            DesignDecision(decision="Draft-first invoices", derived_from=["permissions"]))
+        store.save_revision(p.parent.name, out_)
+        text = _run_app(["impact", str(p), "permissions"])
+        assert "Draft-first invoices" in text and "prd" in text
+
+
+def test_pc_impact_no_slots_prints_the_full_map():
+    with _model_in_out("clitest-impact-map") as p:
+        store.save_revision(p.parent.name, _out_with_decisions())
+        text = _run_app(["impact", str(p)])
+        assert "DEPENDENCY MAP" in text
+
+
+# ── Tier 2 (B): change-detection — stale artifacts on disk ────────────────────
+
+
+def test_unrelated_slot_change_keeps_artifact_fresh():
+    # The freshness fix: an artifact goes stale only when the change reaches a slot it consumes — not
+    # on every revision bump. criteria consumes {workflow, business_rules, permissions, edge_cases,
+    # acceptance}; success_metrics is outside that set, so a material change to it leaves criteria fresh.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-fresh-unrelated"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"success_metrics": slot(40, "inferred", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # generated at revision 1
+    try:
+        # confidence moves inferred → explicit on an UNRELATED slot: a real change, new revision.
+        svc.update_model(slug, out({"success_metrics": slot(90, "explicit", "high")}).model_dump())
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is False        # revision advanced, but criteria is untouched
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_completeness_only_change_keeps_artifact_fresh():
+    # A completeness-only bump on a CONSUMED slot is not a material change (diff_models ignores
+    # completeness), so it must not invalidate the artifact — completeness is progress noise, not signal.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-fresh-completeness"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(50, "explicit", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # criteria consumes workflow
+    try:
+        svc.update_model(slug, out({"workflow": slot(95, "explicit", "high")}).model_dump())  # only %
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is False
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_related_slot_change_marks_artifact_stale():
+    # The other side: a material change to a slot the artifact DOES consume flags it stale.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-stale-related"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(50, "inferred", "high")}).model_dump())
+    ArtifactService().save(slug, "criteria", "# criteria", source_revision=1)  # criteria consumes workflow
+    try:
+        wf = {**slot(95, "explicit", "high"), "value": "draft → issued → archived"}
+        svc.update_model(slug, out({"workflow": wf}).model_dump())
+        items = ArtifactService().list(slug)
+        assert items["criteria"]["stale"] is True
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_first_apply_does_not_invalidate_its_own_reasoning():
+    # A first apply of a model that already carries decisions/challenges must NOT report them as
+    # invalidated: they were proposed FOR this state, there is no prior reasoning to unseat. The old
+    # code propagated over `new` when there was no `current`, flagging a model's own reasoning stale.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-first-apply"
+    store.create_session(slug, "req")
+    model = EngineOutput.model_validate({
+        "model": full_slots(workflow=slot(80, "explicit", "high"),
+                            permissions=slot(75, "explicit", "high")),
+        "questions": [], "summary": {"objective": "Invoice lifecycle"},
+        "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                                     derived_from=["workflow", "permissions"]).model_dump()],
+        "challenges": [Challenge(headline="Invoice at signature", premise="p", alternative="a",
+                                 consequence="c", recommendation="r",
+                                 contests=["workflow"]).model_dump()],
+    })
+    try:
+        result = svc.update_model(slug, model.model_dump())
+        assert result.invalidated_decisions == []      # its own reasoning is fresh, not stale
+        assert result.invalidated_challenges == []
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_second_apply_invalidates_prior_reasoning_a_change_unseats():
+    # The other side: once reasoning is established, a later change that reaches a slot it rests on
+    # DOES invalidate it — the behaviour the first-apply guard must not suppress.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-second-apply"
+    store.create_session(slug, "req")
+    first = EngineOutput.model_validate({
+        "model": full_slots(workflow=slot(80, "inferred", "high")),
+        "questions": [], "summary": {"objective": "Invoice lifecycle"},
+        "decisions": [DesignDecision(decision="Draft-first invoices reviewed by Finance",
+                                     derived_from=["workflow"]).model_dump()],
+    })
+    svc.update_model(slug, first.model_dump())
+    try:
+        # a material change to workflow, and the refinement turn drops the decision from its reply
+        second = out({"workflow": {**slot(95, "explicit", "high"), "value": "draft → issued → archived"}})
+        result = svc.update_model(slug, second.model_dump())
+        assert "Draft-first invoices reviewed by Finance" in result.invalidated_decisions
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_expected_revision_precondition_blocks_a_stale_write():
+    # Optimistic locking: a writer that expects an out-of-date revision is rejected rather than landing
+    # silently on top of another update — the guarantee a concurrent Web service needs.
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-lock"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(60, "inferred", "high")}).model_dump())  # → revision 1
+    try:
+        with pytest.raises(RevisionConflictError):   # a racer still thinks it is at revision 0
+            svc.update_model(slug, out({"workflow": slot(80, "explicit", "high")}).model_dump(),
+                             expected_revision=0)
+        r = svc.update_model(slug, out({"workflow": slot(80, "explicit", "high")}).model_dump(),
+                             expected_revision=1)     # the right expectation applies cleanly
+        assert r.revision == 2
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_each_revision_records_its_provenance():
+    # Provenance is per-revision: a session's model is moved by more than one surface over its life, so
+    # each revision records who produced it, what it succeeded, and a content hash.
+    from requivo.services.sessions import SessionService
+    svc = SessionService()
+    slug = "clitest-provenance"
+    store.create_session(slug, "req")
+    svc.update_model(slug, out({"workflow": slot(60, "inferred", "high")}).model_dump(),
+                     provenance={"provider": "anthropic", "surface": "cli-discover", "model_name": "claude-x"})
+    svc.update_model(slug, out({"workflow": {**slot(90, "explicit", "high"), "value": "a → b"}}).model_dump(),
+                     provenance={"provider": "claude-code", "surface": "cli-apply"})
+    try:
+        revs = store.read_meta(slug).revisions
+        assert [r.revision for r in revs] == [1, 2]
+        assert revs[0].previous_revision is None and revs[1].previous_revision == 1
+        assert revs[0].surface == "cli-discover" and revs[0].provider == "anthropic"
+        assert revs[1].surface == "cli-apply" and revs[1].provider == "claude-code"
+        assert all(r.model_hash.startswith("sha256:") for r in revs)
+    finally:
+        shutil.rmtree(store.canonical_dir(slug), ignore_errors=True)
+
+
+def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
+    with _model_in_out("clitest-stale") as p:
+        slug = p.parent.name
+        # a real slot an artifact consumes, and an already-generated PRD tracked in the session
+        wf = {**slot(60, "inferred", "high"), "value": "draft → issued"}
+        store.save_revision(slug, out({"workflow": wf}))
+        # `_model_in_out` applied revision 1 and the line above applied revision 2, so 2 is what this
+        # PRD was generated from — stated by the caller rather than assumed by the service (#6).
+        ArtifactService().save(slug, "prd", "# stale PRD", source_revision=2)
+        turn2 = json.dumps({
+            "model": full_slots(workflow={"completeness": 95, "confidence": "explicit",
+                                          "impact": "high", "value": "draft → issued → paid → archived"}),
+            "questions": [], "summary": {"objective": "Document lifecycle"},
+        })
+        text = _run_app(["answer", str(p), "It also has an archived state."],
+                        client=FakeClient(turn2))
+        assert "STALE" in text and "prd.md" in text
+        assert "Workflow" in text  # the changed slot is named in the warning

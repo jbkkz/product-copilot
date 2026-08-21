@@ -19,6 +19,7 @@ from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
 from requivo.core.integrity import check_session
+from requivo.core.persistence import _atomic_write
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
 
@@ -450,6 +451,15 @@ def test_a_failed_atomic_write_leaves_no_scratch_file(workspace):
     with pytest.raises(TypeError):
         store._atomic_write(d / "model.json", None)  # type: ignore[arg-type]
     assert list(d.iterdir()) == []
+
+
+def test_atomic_write_persists_content_and_leaves_no_tmp(tmp_path):
+    dest = tmp_path / "model.json"
+    _atomic_write(dest, '{"ok": true}')
+    assert dest.read_text(encoding="utf-8") == '{"ok": true}'
+    # The temp sidecar is renamed onto the target, never left behind.
+    assert not (tmp_path / ".model.json.tmp").exists()
+    assert list(tmp_path.iterdir()) == [dest]
 
 
 # ── forward compatibility of the session file ─────────────────────────────────
