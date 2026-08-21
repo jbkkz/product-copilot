@@ -4,13 +4,18 @@ import functools
 import hashlib
 import json
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, model_validator
 
 from requivo.paths import FRAMEWORK
 
 SOFT_COMPLETENESS = 70  # below this a slot is "soft" (tunable)
+
+# The element type of one tri-state reasoning collection. It exists so `ModelProposal.resolve`'s inner
+# `keep` helper can be annotated per call site rather than inferred across all three of them — see the
+# comment at its definition. Runtime behaviour is unchanged; this is a name for the checker.
+_Item = TypeVar("_Item")
 
 # The engine asks at most this many questions per turn. A constant rather than a literal because two
 # contracts carry the cap — `ModelProposal` and its persisted mirror — and pydantic does **not** let
@@ -207,7 +212,12 @@ class ModelProposal(StrictModel):
         supersedes that slot with one this version built."""
         prior = current or EngineOutput(model={}, summary=Summary())
 
-        def keep(stated, established):
+        # Annotated, and it has to be (#78): unannotated, pyright infers one return type across all
+        # three call sites and hands `challenges` a `list[DesignDecision | Challenge]`. The union is
+        # an artefact of the helper being shared, not of anything this function does — the checker
+        # was right that the signature said nothing, and wrong about the code. `_Item` keeps each
+        # call site's own element type.
+        def keep(stated: Optional[list[_Item]], established: list[_Item]) -> list[_Item]:
             return list(established) if stated is None else list(stated)
 
         resolved = EngineOutput(

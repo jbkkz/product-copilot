@@ -53,9 +53,55 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # compare `0.110` with the `0.110.0` pip actually installs as versions rather than as strings. Both
 # are dev-only: they are part of how the runtime floors are *measured* (#91), never part of what a
 # user installs.
+#
+# `pyright` (#78) carries an upper bound on the major for the same reason the workflow files pin
+# their actions to a tag: a type checker's new release can report on code that has not changed, and
+# on a *blocking* leg that turns an unrelated upstream release into a red `main`. The floor is where
+# `pythonPlatform: "All"` and the config keys below it are known to behave; dependabot moves both
+# where a maintainer can review the move.
 dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0,<1", "httpx",
        "fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1",
-       "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0"]
+       "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
+       "pyright>=1.1.400,<2"]
+
+[tool.pyright]
+# #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
+# expressed in types rather than in assertions: Pydantic contracts at every boundary with
+# `StrictModel` and `PersistedEngineOutput` deliberately disagreeing (invariant 8), `Protocol` seams
+# that nothing structural checks, and a store where `Optional` means *could not read* rather than
+# *empty* — the distinction this whole project is organised around. Ruff looks for none of it, and a
+# test finds it only where a test happens to run the path.
+#
+# Here rather than in `pyrightconfig.json` because JSON has no comments: the first draft carried the
+# reasoning in `"//"` keys and pyright reported them as unrecognised settings on every run, which is
+# a config that complains about itself. Pyright reads `[tool.pyright]` natively and prefers a
+# `pyrightconfig.json` when one exists, so there must not be one.
+
+# Scoped, and the scope is the decision: these are the two layers the rest of the repo rests on.
+# Widen to `providers/` and `web/` once these have *stayed* clean — not before, because a check that
+# is red on arrival is a check people learn to scroll past.
+include = ["src/requivo/core", "src/requivo/services"]
+
+# The floor `requires-python` declares, not the interpreter the leg happens to run. A checker at 3.12
+# accepts what the oldest supported interpreter refuses, which is the same shape of unverified claim
+# the Dependency floor leg exists for (#91).
+pythonVersion = "3.9"
+
+# `All` is the stricter setting, not a convenience. It type-checks the Windows-only locking path from
+# the Linux leg, on a codebase bitten by Windows-only behaviour three times (invariants 17 and 18).
+# Left at the host's platform it reported `msvcrt.locking` as missing — a fact about the machine
+# running the check, not about the code.
+pythonPlatform = "All"
+
+typeCheckingMode = "basic"
+
+# The `.venv` this project's own install instructions create and `uv run` uses. Without it pyright
+# resolves against whatever python is first on PATH, `pydantic` reads as an unresolved import, and
+# four real errors hide behind noise. The CI leg builds the same layout rather than installing to the
+# runner's interpreter, so the command a maintainer types locally is the command the leg runs — a
+# check only its own leg can run is verified by nothing but the leg it feeds.
+venvPath = "."
+venv = ".venv"
 
 [project.urls]
 Homepage = "https://github.com/jbkkz/requivo"

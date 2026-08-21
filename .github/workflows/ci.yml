@@ -108,6 +108,42 @@ jobs:
       # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
       - run: python -m pytest tests/ -q -rs
 
+  types:
+    name: Types (pyright)
+    runs-on: ubuntu-latest
+    # #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
+    # expressed in types: Pydantic contracts at every boundary with `StrictModel` and
+    # `PersistedEngineOutput` deliberately disagreeing, `Protocol` seams that nothing structural
+    # checks, and a store where `Optional` means *could not read* rather than *empty* — which is the
+    # distinction this whole project is organised around. A test finds those only where a test
+    # happens to run the path.
+    #
+    # It paid before the leg existed. The first run reported eight errors in one function, all the
+    # same fact: `DiscoveryService.generate` handed a revision-0 session's `None` model straight to
+    # the provider, and the only guard for it lived in a Web route (#152).
+    #
+    # **Blocking rather than advisory, because it is clean.** The issue proposed advisory first and
+    # promote once the scoped layers are green; they are green now, and a permanently-advisory leg is
+    # one people learn to scroll past. Scope and the reason for every config key are in
+    # pyrightconfig.json, next to the keys.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      # A `.venv` rather than the runner's interpreter, and it is not ceremony: pyrightconfig.json
+      # names `venvPath`/`venv` so the checker resolves `pydantic` instead of reporting it as an
+      # unresolved import — and building the same layout here means the command a maintainer types
+      # locally is the command this leg runs. A check only its own leg can run is verified by
+      # nothing but the leg it feeds.
+      - name: Build the venv the checker resolves against
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -U pip
+          .venv/bin/pip install -e ".[dev]"
+      - run: .venv/bin/pyright
+
   floor:
     name: Dependency floor
     runs-on: ubuntu-latest
