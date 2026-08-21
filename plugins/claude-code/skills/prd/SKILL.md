@@ -48,3 +48,9 @@ stale rather than filing a superseded document as current.
 The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
 on flags it stale (`requivo status` will show it). Read `stale` back from the save output: if it is
 `true`, the model moved while you were writing — say so plainly and offer to regenerate.
+
+## 4. Point at the next step, once
+Close by telling the user how to find out what this document rests on: `/requivo:impact <slug>` reads
+the dependency graph and says which change would reach the PRD, so a later edit is answered rather
+than guessed at. If the understanding has already moved and they want to know what else is behind,
+`/requivo:status <slug>`.

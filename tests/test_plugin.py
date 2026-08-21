@@ -247,6 +247,34 @@ def test_every_skill_has_an_answer_for_an_unavailable_requivo():
             "REASONING.md is the single place that names one")
 
 
+def test_every_skill_body_points_at_another_skill():
+    """The six skills are one arc — discover, answer, brief, prd, with status and impact alongside —
+    and a user only walks it if each step says where the next one is. Three bodies carried a forward
+    pointer and three did not, and the three that did not included `status`, which is what a returning
+    user reaches for first: the worst place for the chain to break.
+
+    Checked on the **body**, deliberately not on the frontmatter. A `description` naming another skill
+    would satisfy a whole-file scan while doing nothing for the reader, and the descriptions are the
+    routing signal a model matches on when choosing between skills — six of them each reciting the
+    same six-verb arc makes them more similar to one another, which spends the most valuable text in
+    the plugin on the least discriminating content. So the pointer belongs in the body and the
+    assertion has to look there.
+
+    Its own H1 does not count. That is the trap this would otherwise fall into: every SKILL.md opens
+    with `# /requivo:<name>`, so a naive scan for the invocation form passes on all six whatever the
+    bodies say — a guard that cannot fail, on the exact convention it claims to hold.
+    """
+    files = _skill_files()
+    assert files, "no skills found — this test would otherwise pass by having nothing to check"
+    for p in files:
+        name = p.parent.name
+        body = p.read_text(encoding="utf-8").split("---", 2)[2]
+        others = {re.sub(r"[^a-z]", "", m) for m in re.findall(r"/requivo:([a-z]+)", body)} - {name}
+        assert others, (
+            f"{name}: body names no other skill — a user finishing here is told nothing about where "
+            f"to go next. Its own `# /requivo:{name}` heading does not count.")
+
+
 def test_skill_enum_placeholders_name_values_the_contracts_accept():
     """A skill's JSON template is a prompt: Claude fills it in and the deterministic CLI validates the
     result. So a wrong alternative in a `"field": "a|b|c"` placeholder is not a typo in a comment — it

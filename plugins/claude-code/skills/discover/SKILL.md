@@ -44,10 +44,16 @@ Only when the argument is genuinely a **file path** does it go in as an argument
 ```
 requivo session init path/to/request.md --provider claude-code --json
 ```
-Note the `slug` **and** the `revision` it returns — call the revision `N`. It is `0` for a new session;
-`init` is idempotent, so re-running it on a request that already has a session hands you back that
-session with the model it has already accumulated. (Add `--context a,b` if the user named specific
-product context cards.)
+Note the `slug`, the `revision` and the `path` it returns. Call the revision `N`; it is `0` for a new
+session. `init` is idempotent, so re-running it on a request that already has a session hands you back
+that session with the model it has already accumulated. (Add `--context a,b` if the user named
+specific product context cards.)
+
+`path` is the absolute directory the session was written to, and it is worth keeping because sessions
+land under the **caller's workspace** — the current directory, unless `--workspace` or
+`REQUIVO_WORKSPACE` says otherwise. A discovery started from the wrong directory does not fail: it
+succeeds, produces a perfectly valid session, and puts it somewhere the user will not think to look.
+That has no visible symptom, so state the path in step 7 rather than assuming they know it.
 
 ## 4. Learn the vocabulary and the product
 - `requivo schema` — the slot ids, each slot's impact default and signals, and the driver rule
@@ -83,6 +89,9 @@ session first — re-read the model and continue with `/requivo:answer` instead 
 
 ## 7. Present the understanding + ask
 Run `requivo status <slug> --json` and relay, in plain language:
+- **where the session lives** — the absolute `path` from step 3, in full, once. This is the only
+  moment that fact is guaranteed to be on screen, and it is what tells a user who ran the command
+  from the wrong directory that they did,
 - what Requivo now understands and how confident it is,
 - what is still blocking readiness,
 - your 3–6 priority questions, **verbatim and numbered**.

@@ -1,6 +1,6 @@
 # Requivo — shared reasoning rules for every skill
 
-Read this once per session; every `requivo-*` skill relies on it. It exists so the rules live in one
+Read this once per session; every `/requivo:*` skill relies on it. It exists so the rules live in one
 place, not copied into six skills.
 
 ## Preflight: can you run `requivo` at all?

@@ -98,3 +98,9 @@ reasoned from, never simply the latest.)
 The brief is a judgment over the whole understanding, so any later material change to it flags the saved
 copy stale. Read `stale` back from the save output: if it is `true`, the model moved while you were
 writing — tell the user plainly that the brief is already behind and offer to redo it.
+
+## 6. Point at the next step, once
+The brief is what a scope review is run from, so once it has been reviewed and the scope is agreed,
+`/requivo:prd <slug>` renders the same understanding for build — no second discovery, the same model
+seen from a different angle. If the review reopened something instead, `/requivo:answer <slug>` is
+where that goes.

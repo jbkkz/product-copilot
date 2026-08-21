@@ -39,3 +39,9 @@ to show:
 Be clear about what is still unresolved. If the user wants the full per-topic checklist and every open
 question, run `requivo status <slug>` without `--json` and show that view. Do not invent detail the
 command did not return.
+
+## Then point at the next step, once
+This skill answers *where are we*; the user's next move follows from the answer, so name one and stop
+there. Not ready, with open questions: `/requivo:answer <slug>` folds their answers in. Ready, with no
+decision brief yet: `/requivo:brief <slug>`. Something marked as needing an update: `/requivo:impact
+<slug>` says what that change actually reaches. One pointer, not a menu.
