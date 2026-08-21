@@ -54,6 +54,18 @@ the expected state. Install routes in depth, including the `pip install --user` 
 `requivo` off your `PATH`:
 [getting started](https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md).
 
+**One platform prerequisite: on native Windows you also need
+[Git for Windows](https://git-scm.com/downloads/win).** Every skill reaches the `requivo` CLI through
+Claude Code's Bash tool, and on native Windows that tool is Git Bash. Claude Code's setup
+documentation states that installing Git for Windows "enables the Bash tool by providing Git Bash",
+and that without it Claude Code "runs shell commands via the PowerShell tool". If Git Bash is
+installed and Claude Code does not find it, name the path in your `settings.json` under
+`CLAUDE_CODE_GIT_BASH_PATH`. Under WSL there is nothing extra to install: the same page says WSL
+setups do not need Git for Windows.
+
+What a Requivo skill does on a native Windows machine with no Git Bash has not been measured, so this
+page does not describe it. Treat Git for Windows as required and the case does not arise.
+
 The plugin version tracks the Requivo release it was tested against, and the skills call CLI verbs, so
 keep the two in step. An older CLI may not have a verb a newer skill uses.
 

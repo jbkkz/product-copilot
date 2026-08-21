@@ -314,3 +314,38 @@ def test_skill_enum_placeholders_name_values_the_contracts_accept():
             bad = sorted(set(value.split("|")) - allowed)
             assert not bad, (f"{p.parent.name}: \"{field}\" offers {bad}, "
                              f"but the contract accepts {sorted(allowed)}")
+
+
+def test_every_skill_reaches_the_cli_through_the_bash_tool():
+    """The plugin README states a native-Windows prerequisite — Git for Windows — because Claude
+    Code's Bash tool on that platform is Git Bash, and every skill drives the deterministic CLI
+    through it (#121).
+
+    That claim is true because of a property of these six files, and nothing was holding it true. A
+    skill added tomorrow that declares no Bash grant makes the prerequisite over-broad; a skill that
+    reached a shell some other way makes it incomplete. Either way the README goes wrong in silence,
+    because prose has no failing build.
+
+    Pinned as the property, never the wording. #96 is explicit that the Markdown must not be
+    asserted verbatim: a test that quotes a sentence makes the page expensive to rewrite, and this
+    page is rewritten often. So neither assertion below reads the README at all — they read what the
+    README is *about*, and each message names the sentence that has to move if it fires.
+    """
+    files = _skill_files()
+    assert files, "no skills found — this test would otherwise pass by having nothing to check"
+    for p in files:
+        name = p.parent.name
+        tools = _frontmatter(p.read_text(encoding="utf-8")).get("allowed-tools", "")
+        assert re.search(r"\bBash\(", tools), (
+            f"{name}: declares no Bash grant ({tools!r}). Every skill reaches the `requivo` CLI "
+            "through the Bash tool, and the plugin README states Git for Windows as a native-"
+            "Windows prerequisite on exactly that basis. If this skill genuinely needs no shell, "
+            "the prerequisite needs revisiting in the same change.")
+        # The other direction, and the harder one to notice: a second shell tool would leave the
+        # prerequisite over-broad rather than false, so the page would still read as correct.
+        # Nothing here forbids adding one. It asks that the README move in the same commit.
+        other = re.search(r"\b(PowerShell|Shell)\b", tools)
+        assert not other, (
+            f"{name}: declares {other.group(0)!r} alongside Bash — a second route to the CLI, so "
+            "the README's blanket Git-for-Windows prerequisite is no longer the whole answer for "
+            "this skill.")

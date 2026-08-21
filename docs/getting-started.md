@@ -74,6 +74,11 @@ Use the same sessions inside the Claude Code workflow you already have — reaso
 own Claude session, so **no Anthropic API key is needed**. The deterministic CLI validates and applies
 what Claude proposes.
 
+On **native Windows**, install [Git for Windows](https://git-scm.com/downloads/win) first. The skills
+reach the CLI through Claude Code's Bash tool, and Git Bash is what provides that tool on native
+Windows; under WSL nothing extra is needed. See the
+[plugin README](../plugins/claude-code/) for the detail.
+
 1. Install the plugin. In Claude Code:
 
    ```text
