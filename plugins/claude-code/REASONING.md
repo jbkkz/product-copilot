@@ -20,13 +20,16 @@ command ran at all, not what it reported.** Two different failures wear the same
 
 | what came back | what it means |
 | --- | --- |
-| no JSON at all, and a message from the *shell* naming the command it could not find (`command not found`, `not recognized as an internal or external command`) | the CLI is not installed — take the branch below |
-| JSON, or Requivo's own error envelope on stderr | the CLI is there. Read the report; the install is not the problem |
+| nothing from Requivo at all, and a message from the *shell* naming the command it could not find | the CLI is not installed — take the branch below |
+| anything that came from Requivo itself: the JSON report, its structured error envelope, or even a Python traceback | the CLI is **there**. Read what it says; the install is not the problem |
 
-On a POSIX shell the first case also exits `127`, but read the *shape* rather than the number — the
-exit code for an unfindable command differs across shells, and a message from the shell rather than
-from Requivo is the reliable tell. A `doctor` report with `provider_anthropic.api_key_present: false`
-is **not** this case: that is a healthy install, and this plugin does not use a key.
+The shell's wording varies — `command not found`, `not recognized as an internal or external
+command`, `is not recognized as the name of a cmdlet…` — and on a POSIX shell the first case also
+exits `127`. Read the *shape* rather than matching either: the exit code for an unfindable command
+differs across shells, and **who is speaking** is the reliable tell. A traceback is ugly and is still
+Requivo talking, so it belongs in the second row, not the first. And a `doctor` report with
+`provider_anthropic.api_key_present: false` is not a failure at all: that is a healthy install, and
+this plugin does not use a key.
 
 ### If the CLI is not installed: say these four things, then stop
 

@@ -237,8 +237,11 @@ def test_every_skill_has_an_answer_for_an_unavailable_requivo():
         # skills a new user reaches first.
         assert "Read" in fm.get("allowed-tools", ""), \
             f"{name}: allowed-tools must include Read, or it cannot open REASONING.md"
-        # Stated once. A skill that grows its own install line is how the two drift apart.
-        stray = re.search(r"\b(pip|pipx|uv tool)\s+install\b", text)
+        # Stated once. A skill that grows its own install line is how the two drift apart. The
+        # pattern is wider than the three spellings REASONING.md uses, because the drift arrives as a
+        # *helpful* variant — `pip3 install`, `uv pip install`, `python -m pip install` — and a guard
+        # that only knows the sanctioned wording cannot see the unsanctioned one.
+        stray = re.search(r"\b(pip[\d.]*|pipx|uv(\s+\w+)?)\s+install\b", text)
         assert not stray, (
             f"{name}: states an install command of its own ({stray.group(0)!r}) — the preflight in "
             "REASONING.md is the single place that names one")
