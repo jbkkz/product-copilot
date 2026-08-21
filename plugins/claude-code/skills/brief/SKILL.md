@@ -10,6 +10,12 @@ Write the **decision brief** — what someone needs to review with a client, a p
 engineering lead *before* estimating this request. A judgment, not a recap, and not a PRD. **You** do
 the analysis; Requivo tracks the document. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 
+## 0. Preflight
+Run the shared **preflight** from REASONING.md before anything else: `requivo doctor --json`, checking
+whether the command ran *at all* rather than what it reported. If it could not run, the `requivo` CLI
+is not installed — say the four things REASONING.md lists and stop. Nothing has been applied or saved
+at this point, so there is no half-written brief to find.
+
 ## 1. Check readiness, honestly
 ```
 requivo status <slug> --json
@@ -92,3 +98,9 @@ reasoned from, never simply the latest.)
 The brief is a judgment over the whole understanding, so any later material change to it flags the saved
 copy stale. Read `stale` back from the save output: if it is `true`, the model moved while you were
 writing — tell the user plainly that the brief is already behind and offer to redo it.
+
+## 6. Point at the next step, once
+The brief is what a scope review is run from, so once it has been reviewed and the scope is agreed,
+`/requivo:prd <slug>` renders the same understanding for build — no second discovery, the same model
+seen from a different angle. If the review reopened something instead, `/requivo:answer <slug>` is
+where that goes.

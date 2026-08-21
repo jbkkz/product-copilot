@@ -1,7 +1,61 @@
 # Requivo — shared reasoning rules for every skill
 
-Read this once per session; every `requivo-*` skill relies on it. It exists so the rules live in one
+Read this once per session; every `/requivo:*` skill relies on it. It exists so the rules live in one
 place, not copied into six skills.
+
+## Preflight: can you run `requivo` at all?
+
+**Every skill starts here, before it does anything else.** The plugin ships skills and a manifest; the
+`requivo` CLI is a **separate install** from PyPI. So a user who installed the plugin from the
+marketplace may not have the binary at all, and the first `requivo …` call is where they find out.
+
+The probe is one command — offline, deterministic, and it changes nothing:
+
+```
+requivo doctor --json
+```
+
+`doctor` is also the binary in question, and that is the trap: **what you are checking is whether the
+command ran at all, not what it reported.** Two different failures wear the same red.
+
+| what came back | what it means |
+| --- | --- |
+| nothing from Requivo at all, and a message from the *shell* naming the command it could not find | the CLI is not installed — take the branch below |
+| anything that came from Requivo itself: the JSON report, its structured error envelope, or even a Python traceback | the CLI is **there**. Read what it says; the install is not the problem |
+
+The shell's wording varies — `command not found`, `not recognized as an internal or external
+command`, `is not recognized as the name of a cmdlet…` — and on a POSIX shell the first case also
+exits `127`. Read the *shape* rather than matching either: the exit code for an unfindable command
+differs across shells, and **who is speaking** is the reliable tell. A traceback is ugly and is still
+Requivo talking, so it belongs in the second row, not the first. And a `doctor` report with
+`provider_anthropic.api_key_present: false` is not a failure at all: that is a healthy install, and
+this plugin does not use a key.
+
+### If the CLI is not installed: say these four things, then stop
+
+Do not retry. Do not fall back to reading `.requivo/` by hand, and do not offer to write the model or
+an artifact yourself — Requivo Core validating the work is the point, not a formality. Tell the user,
+in plain language:
+
+1. **The plugin is fine — the CLI is a separate install.** The skills and the `requivo` command ship
+   apart on purpose. This is a one-line install, not a broken plugin and not a bug to report.
+2. **One command:**
+   ```
+   uv tool install requivo
+   ```
+   That is the one to give. It puts `requivo` on the PATH by construction, in an environment of its
+   own, whichever Python happens to be active in this shell. Only if they have no `uv`: `pipx install
+   requivo`, or `pip install requivo` inside an **activated** virtualenv — never `pip install --user`,
+   which succeeds while leaving `requivo` off the PATH, which is this same failure one step later.
+3. **They can retry immediately.** Install, then run the same skill again — no reinstalling the
+   plugin, no restarting Claude Code, because the command is resolved from the PATH on every call.
+   (The one exception is if the installer says its target directory is not on the PATH; then a new
+   terminal is needed, and it says so.)
+4. **Nothing was left behind.** The preflight runs before any mutation, so there is no half-created
+   session, no partial model and nothing to clean up. Say it — otherwise the user goes looking.
+
+Then stop, and let them come back. Carrying on past a missing CLI produces plausible prose with
+nothing tracking it, which is worse than the shell error it replaced.
 
 ## The division of labour
 

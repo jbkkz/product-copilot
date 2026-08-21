@@ -7,13 +7,17 @@ allowed-tools: Bash(requivo:*), Read
 # /requivo:discover
 
 Start a new Requivo session from a client request. **You** do the reasoning here — this Claude Code
-session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (the shared rules:
-trust boundary, honesty per slot, the validate→apply loop). Then:
+session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (the shared rules: the
+preflight, the trust boundary, honesty per slot, the validate→apply loop). Then:
 
-## 1. Check the install
-Run `requivo doctor --json`. Confirm **both** `schema.ok` and `context.ok` are true. A missing
-Anthropic SDK / API key is **fine** — this mode does not use it. If `requivo` is not found, tell the
-user to install it (`pip install requivo`) and stop.
+## 1. Preflight, then check the install
+Start with the **preflight** in REASONING.md: run `requivo doctor --json` and check first whether the
+command ran *at all*. If it did not — no JSON, and a message from the shell about a command it could
+not find — the CLI is not installed. Say the four things REASONING.md lists and stop; nothing has been
+created yet, so there is nothing to clean up.
+
+If it ran, read the report. Confirm **both** `schema.ok` and `context.ok` are true. A missing
+Anthropic SDK / API key is **fine** — this mode does not use it.
 
 `context.ok` is not decoration. The slot schema and the product context cards ship in different
 directories, so an install can lose the cards while `schema.ok` stays true — and the cards are what
@@ -40,10 +44,16 @@ Only when the argument is genuinely a **file path** does it go in as an argument
 ```
 requivo session init path/to/request.md --provider claude-code --json
 ```
-Note the `slug` **and** the `revision` it returns — call the revision `N`. It is `0` for a new session;
-`init` is idempotent, so re-running it on a request that already has a session hands you back that
-session with the model it has already accumulated. (Add `--context a,b` if the user named specific
-product context cards.)
+Note the `slug`, the `revision` and the `path` it returns. Call the revision `N`; it is `0` for a new
+session. `init` is idempotent, so re-running it on a request that already has a session hands you back
+that session with the model it has already accumulated. (Add `--context a,b` if the user named
+specific product context cards.)
+
+`path` is the absolute directory the session was written to, and it is worth keeping because sessions
+land under the **caller's workspace** — the current directory, unless `--workspace` or
+`REQUIVO_WORKSPACE` says otherwise. A discovery started from the wrong directory does not fail: it
+succeeds, produces a perfectly valid session, and puts it somewhere the user will not think to look.
+That has no visible symptom, so state the path in step 7 rather than assuming they know it.
 
 ## 4. Learn the vocabulary and the product
 - `requivo schema` — the slot ids, each slot's impact default and signals, and the driver rule
@@ -79,6 +89,9 @@ session first — re-read the model and continue with `/requivo:answer` instead 
 
 ## 7. Present the understanding + ask
 Run `requivo status <slug> --json` and relay, in plain language:
+- **where the session lives** — the absolute `path` from step 3, in full, once. This is the only
+  moment that fact is guaranteed to be on screen, and it is what tells a user who ran the command
+  from the wrong directory that they did,
 - what Requivo now understands and how confident it is,
 - what is still blocking readiness,
 - your 3–6 priority questions, **verbatim and numbered**.

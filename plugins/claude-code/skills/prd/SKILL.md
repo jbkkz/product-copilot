@@ -9,6 +9,12 @@ allowed-tools: Bash(requivo:*), Read
 Generate a **PRD as a view of the model** — not new invention. **You** write it from the model; Requivo
 tracks it. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 
+## 0. Preflight
+Run the shared **preflight** from REASONING.md before anything else: `requivo doctor --json`, checking
+whether the command ran *at all* rather than what it reported. If it could not run, the `requivo` CLI
+is not installed — say the four things REASONING.md lists and stop. Nothing has been saved at this
+point, so there is no half-written PRD to find.
+
 ## 1. Load the model
 ```
 requivo model show <slug>
@@ -42,3 +48,9 @@ stale rather than filing a superseded document as current.
 The PRD is now tied to the model revision it was written from, so a later change to any slot it rests
 on flags it stale (`requivo status` will show it). Read `stale` back from the save output: if it is
 `true`, the model moved while you were writing — say so plainly and offer to regenerate.
+
+## 4. Point at the next step, once
+Close by telling the user how to find out what this document rests on: `/requivo:impact <slug>` reads
+the dependency graph and says which change would reach the PRD, so a later edit is answered rather
+than guessed at. If the understanding has already moved and they want to know what else is behind,
+`/requivo:status <slug>`.

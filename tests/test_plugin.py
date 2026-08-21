@@ -16,6 +16,10 @@ SKILLS = PLUGIN / "skills"
 # the plugin name — `skills/requivo-discover/` in a plugin called `requivo` is invoked as
 # `/requivo:requivo-discover`, which is not what any of the docs said.
 EXPECTED_SKILLS = {"discover", "answer", "status", "brief", "prd", "impact"}
+# One preferred install command, named in the shared preflight and nowhere else in the skills. The
+# plugin's own README may name it too — that file is a reader's document, not an instruction Claude
+# follows, and it is not walked here.
+PREFERRED_INSTALL = "uv tool install requivo"
 
 
 def _cli_commands() -> set[str]:
@@ -202,6 +206,87 @@ def test_artifact_saving_skills_state_the_revision_they_reasoned_from():
         for ln in lines:
             assert "--revision" in ln, (
                 f"{name}: `artifact save` must state the revision it reasoned from: {ln.strip()}")
+
+
+def test_every_skill_has_an_answer_for_an_unavailable_requivo():
+    """The plugin ships skills; the `requivo` CLI is a separate PyPI install. So the first Bash call of
+    any skill can meet a shell that has never heard of the command, and five of the six skills used to
+    say nothing about it — `status` and `impact` among them, which are the read-only ones a new user
+    tries first (#93).
+
+    Held structurally rather than by wording, because the prose next to it is rewritten often and a
+    test that pins sentences makes documentation expensive to write (#96). What is pinned is the
+    shape: the shared statement exists in REASONING.md, it names the probe and exactly one preferred
+    install command, every skill points at it, and every skill is *able* to read it. The last two are
+    what stop the next skill added from dropping the preflight silently.
+
+    The install command is asserted to live in REASONING.md and **nowhere else** in the plugin's
+    skills. Six copies of an install line is how one of them ends up naming a command that has been
+    superseded, and `discover` already carried a second copy that had drifted to `pip install`.
+    """
+    reasoning = (PLUGIN / "REASONING.md").read_text(encoding="utf-8")
+    head = re.search(r"^##\s+.*preflight.*$", reasoning, re.IGNORECASE | re.MULTILINE)
+    assert head, "REASONING.md must carry the shared preflight section"
+    rest = reasoning[head.end():]
+    nxt = re.search(r"^##\s", rest, re.MULTILINE)          # `###` subsections stay inside the section
+    section = rest[: nxt.start()] if nxt else rest
+
+    assert "requivo doctor" in section, "the preflight must name the probe it runs"
+    assert PREFERRED_INSTALL in section, (
+        f"the preflight must name one preferred install command ({PREFERRED_INSTALL!r}); offering two "
+        "with no guidance is the failure #93 names")
+
+    files = _skill_files()
+    assert files, "no skills found — this test would otherwise pass by having nothing to check"
+    for p in files:
+        text = p.read_text(encoding="utf-8")
+        fm = _frontmatter(text)
+        body = text.split("---", 2)[2]
+        name = p.parent.name
+        assert re.search(r"preflight", body, re.IGNORECASE), \
+            f"{name}: must run the shared preflight before its first `requivo` call"
+        assert "REASONING.md" in body, f"{name}: must point at the shared statement"
+        # A pointer a skill cannot follow is not a pointer. `status` and `impact` shipped without the
+        # Read tool, so `${CLAUDE_PLUGIN_ROOT}/REASONING.md` was unreachable from exactly the two
+        # skills a new user reaches first.
+        assert "Read" in fm.get("allowed-tools", ""), \
+            f"{name}: allowed-tools must include Read, or it cannot open REASONING.md"
+        # Stated once. A skill that grows its own install line is how the two drift apart. The
+        # pattern is wider than the three spellings REASONING.md uses, because the drift arrives as a
+        # *helpful* variant — `pip3 install`, `uv pip install`, `python -m pip install` — and a guard
+        # that only knows the sanctioned wording cannot see the unsanctioned one.
+        stray = re.search(r"\b(pip[\d.]*|pipx|uv(\s+\w+)?)\s+install\b", text)
+        assert not stray, (
+            f"{name}: states an install command of its own ({stray.group(0)!r}) — the preflight in "
+            "REASONING.md is the single place that names one")
+
+
+def test_every_skill_body_points_at_another_skill():
+    """The six skills are one arc — discover, answer, brief, prd, with status and impact alongside —
+    and a user only walks it if each step says where the next one is. Three bodies carried a forward
+    pointer and three did not, and the three that did not included `status`, which is what a returning
+    user reaches for first: the worst place for the chain to break.
+
+    Checked on the **body**, deliberately not on the frontmatter. A `description` naming another skill
+    would satisfy a whole-file scan while doing nothing for the reader, and the descriptions are the
+    routing signal a model matches on when choosing between skills — six of them each reciting the
+    same six-verb arc makes them more similar to one another, which spends the most valuable text in
+    the plugin on the least discriminating content. So the pointer belongs in the body and the
+    assertion has to look there.
+
+    Its own H1 does not count. That is the trap this would otherwise fall into: every SKILL.md opens
+    with `# /requivo:<name>`, so a naive scan for the invocation form passes on all six whatever the
+    bodies say — a guard that cannot fail, on the exact convention it claims to hold.
+    """
+    files = _skill_files()
+    assert files, "no skills found — this test would otherwise pass by having nothing to check"
+    for p in files:
+        name = p.parent.name
+        body = p.read_text(encoding="utf-8").split("---", 2)[2]
+        others = {re.sub(r"[^a-z]", "", m) for m in re.findall(r"/requivo:([a-z]+)", body)} - {name}
+        assert others, (
+            f"{name}: body names no other skill — a user finishing here is told nothing about where "
+            f"to go next. Its own `# /requivo:{name}` heading does not count.")
 
 
 def test_skill_enum_placeholders_name_values_the_contracts_accept():
