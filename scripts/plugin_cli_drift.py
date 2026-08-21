@@ -217,6 +217,22 @@ def cli_surface(python_executable: str) -> Surface | None:
     return parse_surface(proc.stdout or "")
 
 
+def _one_line(text: str) -> str:
+    """Collapse every whitespace run to one space, at the point untrusted text enters this module.
+
+    A directory entry name is untrusted text: on POSIX a filename may legally contain a newline, and
+    everything below is printed at column 0 of a CI step's stdout, where GitHub Actions parses
+    `::command::` at the start of ANY line -- not only lines that went through `_annotate`. So an
+    entry named `plain<LF>::error::...` would forge a workflow command of its own. `_annotate`
+    squashes the message it sends and was never the hole; the bare `print` beside it was, and
+    `_label` was the same hole one function over. This repository has had exactly this defect before
+    -- invariant 14's #40, a stored card name forging a line at column 0 of `doctor`'s own output --
+    which is why the squash sits where the value enters rather than at each place it leaves:
+    `test_an_unreadable_path_cannot_forge_a_line_of_its_own`.
+    """
+    return " ".join(text.split())
+
+
 def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> None:
     """Sort one candidate into walked, absent, or could-not-look.
 
@@ -231,7 +247,7 @@ def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> 
     except (FileNotFoundError, NotADirectoryError):
         return
     except OSError as exc:
-        unreadable.append(f"{candidate}: {exc.strerror or exc}")
+        unreadable.append(_one_line(f"{candidate}: {exc.strerror or exc}"))
 
 
 def invocation_sources(plugin_root) -> Sources:
@@ -268,7 +284,7 @@ def invocation_sources(plugin_root) -> Sources:
         entries = []                       # decided: this plugin root has no skills directory
     except OSError as exc:                 # EACCES on the directory itself, and every skill with it
         entries = []
-        unreadable.append(f"{skills}: {exc.strerror or exc}")
+        unreadable.append(_one_line(f"{skills}: {exc.strerror or exc}"))
 
     for entry in entries:
         _collect_file(entry / "SKILL.md", paths, unreadable)
@@ -278,8 +294,11 @@ def invocation_sources(plugin_root) -> Sources:
 
 def _label(path: Path) -> str:
     """What a finding calls the file it came from. `skills/brief/SKILL.md` is "brief"; anything else
-    is its own name, so `REASONING.md` reads as itself rather than as the directory above it."""
-    return path.parent.name if path.name == "SKILL.md" else path.name
+    is its own name, so `REASONING.md` reads as itself rather than as the directory above it.
+
+    Squashed, because this returns a *directory name* into every finding the script prints, and a
+    name is untrusted text -- see `_one_line`."""
+    return _one_line(path.parent.name if path.name == "SKILL.md" else path.name)
 
 
 def referenced_invocations(paths) -> dict[tuple[str, str | None], list[str]]:

@@ -32,6 +32,7 @@ from plugin_cli_drift import (  # noqa: E402
     PLUGIN_ROOT,
     RESOLVED,
     Surface,
+    _one_line,
     cli_surface,
     compare,
     invocation_sources,
@@ -534,6 +535,99 @@ def test_a_stray_file_in_the_skills_directory_is_absent_and_not_could_not_look(t
     sources = invocation_sources(tmp_path)
     assert [p.parent.name for p in sources.paths] == ["real"], sources.paths
     assert sources.unreadable == [], sources.unreadable
+
+
+def test_the_skills_directory_itself_being_unreadable_is_could_not_look(tmp_path):
+    """The `iterdir()` arm, which the three cases above never reach: they chmod a *sub*directory, so
+    the listing always succeeded and only the per-file stat failed. Found by audit as an untested
+    branch rather than as a defect — the code was right and nothing pinned it, which is how a
+    refactor removes a branch and no test goes red."""
+    skills = tmp_path / "skills"
+    (skills / "hidden").mkdir(parents=True)
+    (skills / "hidden" / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
+    (tmp_path / "REASONING.md").write_text("Preflight: `requivo doctor`.", encoding="utf-8")
+    _make_unreadable(skills)
+    try:
+        sources = invocation_sources(tmp_path)
+    finally:
+        skills.chmod(0o755)
+
+    # The preflight is outside `skills/`, so it is still walked: an unreadable listing loses the
+    # skills and nothing else, which is the difference between a partial walk and total blindness.
+    assert [p.name for p in sources.paths] == ["REASONING.md"], sources.paths
+    assert len(sources.unreadable) == 1, sources.unreadable
+    assert str(skills) in sources.unreadable[0], sources.unreadable
+
+
+# -- untrusted text at column 0 ----------------------------------------------------
+#
+# A directory entry name is untrusted text. On POSIX a filename may legally contain a newline, and
+# these strings are printed at column 0 of a CI step's stdout, where GitHub Actions parses
+# `::command::` at the start of ANY line — not only lines that went through `_annotate`. So a skills
+# entry named `plain<LF>::error::…` would have had its second line read as a workflow command of its
+# own. `_annotate` squashes the message it sends and was never the hole; the bare `print` beside it
+# was, and `_label` — which returns a skill's *directory name* into every finding this script prints
+# — was the same hole one function over, predating the partial-walk work entirely.
+#
+# This repository has had precisely this defect before: invariant 14's #40, where a stored context
+# card name spent a release able to forge a line at column 0 of `doctor`'s own output. Both halves
+# are squashed at the point the untrusted value enters, so a future consumer inherits the guarantee
+# instead of having to remember it.
+
+
+def test_the_squash_collapses_every_shape_of_whitespace():
+    """The portable half, and the only one that runs on every leg. Windows cannot hold a filename
+    with a newline in it, so the integration cases below are POSIX-only by nature rather than by
+    omission — this one keeps the rule itself asserted everywhere."""
+    assert _one_line("plain\n::error::forged") == "plain ::error::forged"
+    assert _one_line("a\r\nb\tc  d") == "a b c d"
+    assert _one_line("ordinary/path/SKILL.md: Permission denied") == \
+        "ordinary/path/SKILL.md: Permission denied"
+
+
+def test_an_unreadable_path_cannot_forge_a_line_of_its_own(tmp_path, capsys):
+    """The half this diff introduced: an unreadable entry's name reaching `print` un-squashed."""
+    skills = tmp_path / "skills"
+    evil = skills / "plain\n::error::forged-by-an-unreadable-name"
+    evil.mkdir(parents=True)
+    (evil / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
+    (skills / "ok").mkdir()
+    (skills / "ok" / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
+    _make_unreadable(evil)
+    try:
+        main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+        out = capsys.readouterr().out
+    finally:
+        evil.chmod(0o755)
+
+    assert "forged-by-an-unreadable-name" in out, "the harness never reached the name at all"
+    _assert_no_forged_workflow_command(out)
+
+
+def test_a_skill_directory_name_cannot_forge_a_line_of_its_own(tmp_path, capsys):
+    """The half that predates this diff: `_label` returns a skill's directory name, which lands in
+    every finding's `sources` and is printed by `_show`. Swept for after the audit found its sibling
+    — the second instance of a class is usually a few lines from the first."""
+    skills = tmp_path / "skills"
+    evil = skills / "plain\n::error::forged-by-a-skill-directory"
+    evil.mkdir(parents=True)
+    (evil / "SKILL.md").write_text("Fix it with `requivo model rebase <slug>`.", encoding="utf-8")
+
+    code = main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+    out = capsys.readouterr().out
+
+    assert code == 1, out
+    assert "forged-by-a-skill-directory" in out, "the harness never reached the name at all"
+    _assert_no_forged_workflow_command(out)
+
+
+def _assert_no_forged_workflow_command(out):
+    """Every `::`-leading line must be one this script meant to emit. Asserted as a whitelist rather
+    than as "no `::error::`", because the injectable vocabulary is every workflow command there is —
+    `set-output`, `add-mask`, `stop-commands` — and a denylist of one is a guard that ages badly."""
+    forged = [line for line in out.splitlines()
+              if line.startswith("::") and not line.startswith("::warning title=")]
+    assert not forged, f"a name forged a workflow command at column 0: {forged}"
 
 
 def test_a_skills_path_that_is_a_regular_file_is_absent_and_not_could_not_look(tmp_path):
