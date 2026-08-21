@@ -14,7 +14,7 @@ calls of its own before handing the result to `DiscoveryService` for the write, 
 README and docs/architecture.md all stated the opposite rule.
 
 The surface half is scoped to `cli.py`. Stated rather than left to read as clean: `web/` and
-`deterministic.py` are not guarded here, and the sibling storage half of the same defect -- a surface
+`deterministic/` are not guarded here, and the sibling storage half of the same defect -- a surface
 reaching past `SessionRepository` to `core.persistence` -- is #76 and has no guard at all yet.
 
 Where the line sits

@@ -695,9 +695,14 @@ migrate` still converts them, and it is now the only thing that reads that layou
 
 ## What is explicitly *not* stable
 
-- **Python internals.** `requivo.core`, `requivo.services` and `requivo.providers` are importable and
-  documented, but they are the engine's own structure, not a published API. A refactor can move them.
-  A downstream consumer that depends on them deliberately tracks the repo.
+- **Python internals.** `requivo.core`, `requivo.services`, `requivo.providers` and
+  `requivo.deterministic` are importable and documented, but they are the engine's own structure, not
+  a published API. A refactor can move them, and #73 moved `requivo.deterministic`, which is why it is
+  named here rather than left to silence. Its public job is the single `register(sub)` the CLI binds
+  through, so it is argparse wiring for the offline verbs rather than an interface. What those verbs
+  promise is on this page already: the CLI exit codes, the `--json` payloads and the session format.
+  Those are promises about what the command does when you run it, not about names you can import. A
+  downstream consumer that depends on any of these four deliberately tracks the repo.
 - **Prompt and context-card content.** These are tuned continuously — that is the point of the
   [golden harness](evaluations.md). Two versions can reason differently about the same request; the
   provenance recorded on each revision (model + prompt hash) is what makes that traceable.
