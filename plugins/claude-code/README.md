@@ -1,8 +1,8 @@
 # Requivo for Claude Code
 
 Requirements discovery for Claude Code. Turn a vague request into a structured, versioned requirements
-model — what is known, what is assumed, what is still open — then generate a decision brief or a PRD
-from it. **Reasoning runs in your Claude Code session, so there is no API key to configure.**
+model that separates what is known, what is assumed and what is still open. From it you can
+generate a decision brief or a PRD. **Reasoning runs in your Claude Code session, so there is no API key to configure.**
 
 Requivo asks a question only when the answer would materially change the solution. The rest it infers
 and marks as an assumption to confirm, so you can see what a plan is resting on before you commit to
@@ -20,7 +20,7 @@ endpoint to set. (Requivo has a second, optional mode where the CLI calls the An
 the reasoning itself. That is not this plugin, and you do not need it.)
 
 **Sessions are written next to you.** A discovery lands in `.requivo/sessions/<slug>/` under your
-current workspace — the directory Claude Code is running in, unless `REQUIVO_WORKSPACE` says
+current workspace, meaning the directory Claude Code is running in, unless `REQUIVO_WORKSPACE` says
 otherwise. So the directory you run `/requivo:discover` from decides where the work lives, and running
 it from the wrong one fails in no visible way: the session is created, valid, and somewhere you will
 not think to look. `requivo doctor` prints the workspace it resolved and the exact sessions directory
@@ -30,7 +30,7 @@ it will use; `requivo session list` prints what that directory already holds.
 
 The plugin and the engine are two separate installs, and you need both.
 
-**The plugin** — the six skills. This is what you already have if you installed from a marketplace; from
+**The plugin**, which is the six skills. This is what you already have if you installed from a marketplace; from
 a fresh Claude Code it is:
 
 ```
@@ -43,10 +43,10 @@ Then `/help` → **Custom commands**: the six skills appear under the `requivo` 
 as `/requivo:discover`, `/requivo:answer` and so on. Claude Code always namespaces a plugin's skills as
 `/<plugin>:<skill>`.
 
-**The `requivo` CLI** — the deterministic engine every skill drives. It is a Python package on PyPI,
+**The `requivo` CLI**, the deterministic engine every skill drives. It is a Python package on PyPI,
 installed the way you install any command-line tool: `uv tool install requivo`, `pipx install requivo`,
 or `pip install requivo` into an environment already on your `PATH`. You do **not** need the
-`requivo[anthropic]` extra — that is for the optional standalone mode above.
+`requivo[anthropic]` extra; that is for the optional standalone mode above.
 
 Then run `requivo doctor` in a terminal. It reports what it found and what it is missing; a missing
 Anthropic SDK or API key is reported as informational rather than an error, which for this plugin is
@@ -54,7 +54,7 @@ the expected state. Install routes in depth, including the `pip install --user` 
 `requivo` off your `PATH`:
 [getting started](https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md).
 
-The plugin version tracks the Requivo release it was tested against, and the skills call CLI verbs — so
+The plugin version tracks the Requivo release it was tested against, and the skills call CLI verbs, so
 keep the two in step. An older CLI may not have a verb a newer skill uses.
 
 To run the plugin from a checkout instead, for development:
@@ -65,20 +65,20 @@ To run the plugin from a checkout instead, for development:
 Six commands, in the order they are usually reached. Every one after the first takes the session slug,
 which `/requivo:discover` reports when it creates the session.
 
-1. **`/requivo:discover <the request>`** — paste the client or stakeholder request in whatever shape it
+1. **`/requivo:discover <the request>`**. Paste the client or stakeholder request in whatever shape it
    arrived. You get the first structured read of it: what the request states outright, what Requivo
    inferred and marked as an assumption, what is genuinely unknown, and the few questions whose answers
    would change the solution.
-2. **`/requivo:status <slug>`** — where it stands: readiness, what is still blocking, which generated
+2. **`/requivo:status <slug>`**. Where it stands: readiness, what is still blocking, which generated
    documents have gone stale. A local read, so use it as often as you like.
-3. **`/requivo:answer <slug>`** — bring back what the client said. The answers are folded in, the model
+3. **`/requivo:answer <slug>`**. Bring back what the client said. The answers are folded in, the model
    is validated and applied as a new revision, and you are told what moved and what that made stale.
    Repeat from 2 until the questions stop being load-bearing.
-4. **`/requivo:brief <slug>`** — the decision brief: what a reviewer needs before estimating or
+4. **`/requivo:brief <slug>`**. The decision brief: what a reviewer needs before estimating or
    committing to scope. Saved as a tracked document, tied to the revision it was written from.
-5. **`/requivo:prd <slug>`** — a PRD from the same model, with the unknowns still visible and the open
+5. **`/requivo:prd <slug>`**. A PRD from the same model, with the unknowns still visible and the open
    decisions still open. Also saved and tracked.
-6. **`/requivo:impact <slug> [topics]`** — before you change an answer, what that change would reach:
+6. **`/requivo:impact <slug> [topics]`**. Before you change an answer, what that change would reach:
    the decisions to re-validate and the documents to regenerate, read off the dependency graph. Another
    local read, and the clearest reason to keep the model rather than just its output.
 
@@ -93,8 +93,8 @@ of it, so any of them can be regenerated later from the saved model without redo
 | `/requivo:answer` | The answers folded in, a new revision, and what moved | this Claude session |
 | `/requivo:brief` | The decision brief, saved and tied to its revision | this Claude session |
 | `/requivo:prd` | A PRD from the same model, saved and tied to its revision | this Claude session |
-| `/requivo:status` | Readiness, open questions, which documents need updating | local read — no reasoning |
-| `/requivo:impact` | What a change would reach, from the dependency graph | local read — no reasoning |
+| `/requivo:status` | Readiness, open questions, which documents need updating | local read, no reasoning |
+| `/requivo:impact` | What a change would reach, from the dependency graph | local read, no reasoning |
 
 The four that reason spend this session's context window. The two local reads do not: they call the
 CLI and print what it computed. None of the six calls an API.
@@ -105,7 +105,7 @@ CLI and print what it computed. None of the six calls an API.
 .requivo/sessions/<slug>/
 ├── session.json          # metadata, provenance, artifact status
 ├── request.md            # the request it started from
-├── model.json            # the current understanding — the durable product
+├── model.json            # the current understanding, the durable product
 ├── revisions/            # every applied revision, in order
 └── artifacts/            # generated documents, each tied to the revision it was written from
 ```
@@ -134,7 +134,7 @@ Two things that would be reasonable to assume and are not true:
 
 - **There is no automatic relevance routing over the product context.** Cards are read as a set. A
   session can opt into a subset when it is created, and that selection is then held constant for its
-  lifetime — but nothing picks the relevant ones for you, and adding a card can sharpen one discovery
+  lifetime. But nothing picks the relevant ones for you, and adding a card can sharpen one discovery
   while diluting another.
 - **`requivo stories` and `requivo estimate` are terminal-only analyses.** They print; they save no
   artifact and are not tracked for staleness. They are also not among the six skills.
@@ -142,23 +142,23 @@ Two things that would be reasonable to assume and are not true:
 ## What the skills send to Claude
 
 The request, the product context cards, the slot schema, and the current model of the session you are
-working on — nothing the CLI did not already hold on your machine. The request and the context cards
+working on. Nothing the CLI did not already hold on your machine. The request and the context cards
 are treated as **data**: the skills reason about them and never follow instructions embedded in them.
 
 The skills also never require `ANTHROPIC_API_KEY`, never hand-edit `model.json` (they propose, and the
-CLI validates and writes), and never invent an answer the client did not give — an unknown is left
+CLI validates and writes), and never invent an answer the client did not give; an unknown is left
 honestly empty.
 
 ## Beyond the six skills
 
 The `requivo` CLI reaches the same sessions and carries generators the plugin does not wrap: acceptance
 criteria, an epic with tracker exports for GitHub and GitLab, release notes, and the terminal-only
-`stories` and `estimate` analyses. Requivo Web is a local browser workspace over those same sessions —
+`stories` and `estimate` analyses. Requivo Web is a local browser workspace over those same sessions:
 paste a request, answer the questions, watch what each answer moved.
 
 ## More
 
-- [Documentation](https://github.com/jbkkz/requivo/tree/main/docs) — architecture, the requirements model, the session format, context cards
+- [Documentation](https://github.com/jbkkz/requivo/tree/main/docs): architecture, the requirements model, the session format, context cards
 - [Getting started](https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md)
 - [The CLI](https://github.com/jbkkz/requivo/blob/main/docs/cli.md)
 - [Requivo Web](https://github.com/jbkkz/requivo/blob/main/docs/web.md)
