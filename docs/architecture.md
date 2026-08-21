@@ -27,9 +27,9 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   `requivo[anthropic]` extra) turns a request into a model and a model into an artifact.
 - **`services/`** — the application seam shared by every interface. `SessionService.update_model` is
   the single validated apply path (validate → diff → propagate → revision → stale-flag).
-  `DiscoveryService` is the provider-backed orchestration (start / answer / generate, plus the
-  un-persisted `draft_turn` / `draft_assessment` an interactive loop repeats) the CLI and Web both
-  call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
+  `DiscoveryService` is the provider-backed orchestration (start / answer / generate, plus
+  `claim_session` and the un-persisted `draft_turn` / `draft_assessment` an interactive loop takes and
+  repeats) the CLI and Web both call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
   (`FileSessionRepository` today; Postgres-swappable for a future service).
 - **`render/`** turns data into strings; **`cli.py` + `deterministic/`** are the only layers that
   touch argv/stdout/TTY. `deterministic/` is a package of one module per verb group (`doctor`,
@@ -54,8 +54,16 @@ inherited the revision-zero gate or the snapshot discipline when those arrived (
 now rather than asserted: `tests/test_boundaries.py` allows `cli.py` exactly three provider names,
 each carrying the reason it is a surface concern rather than a reasoning one, and fails just as
 loudly on an allowlist entry nothing imports as on an import nothing allowed. The storage half of the
-same shape — a surface reaching past `SessionRepository` to `core.persistence` — is #76 and has no
-guard yet.
+same shape — a surface reaching past `SessionRepository` to `core.persistence` — is #76, and it is
+guarded the same way now, over `cli.py`, `deterministic/` and `web/`, by an allowlist keyed on
+`(file, function)` rather than on the name alone.
+
+**Closing the seam did not carry the precondition across it, and that is worth knowing as its own
+fact** (#133). After #77 the loop reasoned through `DiscoveryService` and still met the revision-zero
+gate only inside `finalize_discovery` — after up to nine paid calls, where `--once` refused for free
+before the first one. A shared seam makes a rule *reachable* from both paths; it does not put the
+rule at the same point on both. The loop takes `claim_session` itself now, in the position `start()`
+takes it.
 
 The services are the **integrity boundary**, not the interfaces. That distinction is easy to blur
 while there are only two callers who are both careful — but an external consumer calls this layer directly,

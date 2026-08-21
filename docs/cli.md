@@ -29,6 +29,17 @@ resolve; an unknown *card* is a hard error, since dropping it would silently loa
 the ones you asked for. Pass no selector at all to select everything deliberately. See
 [context-cards.md](context-cards.md#scoping-a-session-to-relevant-cards).
 
+**`discover` claims its session before it reasons**, on both the interactive path and `--once`. Two
+consequences, and both are the point:
+
+- Running `discover` again on a request whose session already carries a model is refused
+  (`revision_conflict`) **before any API call**, not after the turns you paid for — a fresh discovery
+  reasons from the request alone, so it would replace that work rather than refine it. Use
+  `requivo answer <slug> "…"` to refine, or a different slug for a genuinely separate discovery.
+- Stopping an interactive discovery early — `q`, an empty answer, Ctrl-C — leaves the session on disk
+  at revision 0 with your request captured, and the command says where. That is the same state
+  `requivo session init` produces; nothing was reasoned and nothing was written to the model.
+
 ## Artifact generators (provider-backed)
 
 Each is a view of the saved model: `requivo <verb> <slug>`.

@@ -153,13 +153,19 @@ class DiscoveryService:
         path: capture the request now, run discovery later."""
         return self.sessions.create_session(request, context_cards=cards, slug=slug).slug
 
-    def _claim_session(self, request: str, *, cards: list[str] | None, slug: str | None):
+    def claim_session(self, request: str, *, cards: list[str] | None, slug: str | None):
         """Create (or reuse) the session a first discovery will land on, and hold it to revision 0.
 
         Idempotent creation and "a discovery replaces the model" are each reasonable alone and unsafe
         together: the second `discover` of the same request lands on the first one's session. This is
         the single gate, so every entry point — `start`, `finalize_discovery`, the CLI's interactive
-        loop — refuses the same case in the same words."""
+        loop — refuses the same case in the same words.
+
+        **Public because a surface that owns its own loop has to be able to take the gate itself.**
+        `start()` claims before it reasons; the CLI's interactive branch could only reach this through
+        `finalize_discovery`, which runs *after* up to nine provider calls, so the invariant held on
+        the path that documents it and not on the one a person uses at a terminal (#133). Pinned by
+        `test_both_discover_entry_points_refuse_a_refined_session_before_paying`."""
         provider = self._need_provider()
         meta = self.sessions.create_session(
             request, context_cards=cards, slug=slug,
@@ -178,7 +184,7 @@ class DiscoveryService:
         model that had been refined over several turns with a naive first-turn one, and a write that
         landed while the provider was reasoning would be overwritten the same way. Both cases are a
         `revision_conflict`, which is recoverable; a silent replacement is not."""
-        meta = self._claim_session(request, cards=cards, slug=slug)
+        meta = self.claim_session(request, cards=cards, slug=slug)
         if brief is not None:
             absorb_reasoning(out, brief)
         self.sessions.update_model(
@@ -196,7 +202,7 @@ class DiscoveryService:
         means having paid for reasoning (twice, when finalizing) that can only be thrown away. The
         check is cheap and the call is not."""
         provider = self._need_provider()
-        meta = self._claim_session(request, cards=cards, slug=slug)
+        meta = self.claim_session(request, cards=cards, slug=slug)
         out = provider.analyze(request, only=cards)
         brief = provider.generate("brief", out, only=cards) if finalize else None
         return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
@@ -293,8 +299,19 @@ class DiscoveryService:
         `stories` a previous call produced. Until #77 that one call was made by `cli.py` directly, on
         a second client of its own, which is exactly the "no interface reaches past it" claim above
         being false one line below where it was written."""
-        snap = self.sessions.snapshot(slug)
-        model = _require_a_model(slug, snap)
+        return self.reason_from(self.sessions.snapshot(slug), artifact_type, **kwargs)
+
+    def reason_from(self, snap: SessionSnapshot, artifact_type: str, **kwargs):
+        """The same analysis, from a snapshot the caller already holds.
+
+        For the one analysis that is *two* calls: `estimate` is read against the `stories` a previous
+        call produced, and taking a snapshot per call let the two be read against two revisions — the
+        "two reads, two instants" invariant 12 is written about. Nothing here is written, so no
+        provenance can be a lie; what drifts is the answer, which shows both halves side by side and
+        names no revision. A caller that renders between the two calls needs the snapshot rather than
+        a combined operation, and the snapshot carries its own slug so the two cannot disagree (#135).
+        Pinned by `test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot`."""
+        model = _require_a_model(snap.slug, snap)
         return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
                                               **kwargs)
 

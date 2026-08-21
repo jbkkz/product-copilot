@@ -10,15 +10,18 @@ no-LLM verbs live in the `test_cli_*.py` set that mirrors `requivo/deterministic
 `_sessions`, `_session_archives`, `_model`, `_artifacts`, `_shared`, plus `_untrusted_output` for the
 render-safety class that runs across all of them (#141).
 """
+import argparse
 import json
 import shutil
+import sys
 
 import pytest
 from _fakes import _ENGINE_REPLY, FakeClient, _model_in_out, _run_app, full_slots, slot
 
-from requivo.cli import _is_file_arg, app
+from requivo.cli import _cmd_web, _is_file_arg, app
 from requivo.core import persistence as store
 from requivo.core.contracts import EngineOutput
+from requivo.core.errors import RequivoError
 from requivo.core.persistence import load_model
 from requivo.services.artifacts import ArtifactService
 
@@ -120,13 +123,51 @@ def test_pc_stories_renders():
         assert "=== USER STORIES ===" in text and "[S1] T" in text
 
 
+def _estimate_client() -> FakeClient:
+    """The two scripted replies `estimate` needs: the stories, then the estimate read against them."""
+    return FakeClient(
+        json.dumps({"stories": [{"id": "S1", "title": "T"}]}),
+        json.dumps({"items": [{"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]}),
+    )
+
+
 def test_pc_estimate_renders():
     with _model_in_out("clitest-estimate") as p:
-        fake = FakeClient(
-            json.dumps({"stories": [{"id": "S1", "title": "T"}]}),
-            json.dumps({"items": [{"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]}),
-        )
-        assert "=== ESTIMATE" in _run_app(["estimate", str(p)], client=fake)
+        assert "=== ESTIMATE" in _run_app(["estimate", str(p)], client=_estimate_client())
+
+
+def test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot(monkeypatch):
+    """`estimate` makes two provider calls and the second is read against the first's output, so both
+    reason from one `SessionSnapshot` (#135).
+
+    Two snapshots is invariant 12's own sentence — two reads, two instants — and a write landing
+    between them estimates one model's stories against a different model. Nothing is written here, so
+    unlike the case that invariant was written about there is no provenance to become a lie; what
+    drifts is the answer itself, in a single terminal output that shows both halves and no revision.
+    The snapshot is taken by the verb and the rendering stays between the two calls, so the stories
+    still appear while the estimate is being reasoned.
+
+    The call count is the must-fire half: "one snapshot" is also true of a verb that never ran.
+    """
+    from requivo.services.sessions import SessionService
+
+    taken = []
+    real = SessionService.snapshot
+
+    def counting(self, slug):
+        taken.append(slug)
+        return real(self, slug)
+
+    monkeypatch.setattr(SessionService, "snapshot", counting)
+    fake = _estimate_client()
+    with _model_in_out("clitest-estimate-snapshot") as p:
+        _run_app(["estimate", str(p)], client=fake)
+
+    assert len(fake.calls) == 2, "both provider calls have to happen or the count below proves nothing"
+    assert taken == ["clitest-estimate-snapshot"], (
+        f"{len(taken)} snapshots for one analysis — the stories and the estimate can be read against "
+        f"two different revisions"
+    )
 
 
 def test_pc_brief_writes_the_artifact_like_every_other_surface():
@@ -286,3 +327,34 @@ def test_cli_help_exits_cleanly():
     with pytest.raises(SystemExit) as ei:
         app(["--help"])
     assert ei.value.code == 0
+
+def test_the_missing_web_extra_keeps_its_published_error_code(monkeypatch):
+    """A missing `[web]` extra reports `provider_unavailable`, and that is a decision, not an oversight
+    (#135).
+
+    The type reads oddly at the call site: `EngineError` is the *provider transport* error, and an
+    optional dependency has nothing to do with a provider. It stays anyway, because the code travels
+    in the `--json` envelope and `docs/compatibility.md` promises that moving a condition from one
+    code to another is a breaking change — from 1.0.0 that costs a major version, so this is a
+    decision about a published payload rather than a rename.
+
+    And the vocabulary already answers this question the same way one layer down: `new_client()`
+    raises the same code for a missing `[anthropic]` extra. `provider_unavailable` is what this
+    product says when an optional install is absent, so `_cmd_web` is consistent with its sibling
+    rather than an outlier — which is the half that makes the comment at the call site an argument
+    instead of an excuse.
+
+    This test is what makes that decision checkable: swap the type for a new core error and it goes
+    red under the name of the promise being broken.
+    """
+    # `None` in sys.modules is what makes `import uvicorn` raise without uninstalling anything —
+    # the extra really is installed in the dev environment this runs in.
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    args = argparse.Namespace(host="127.0.0.1", port=8000, no_open=True, reload=False)
+
+    with pytest.raises(RequivoError) as e:
+        _cmd_web(args, None)
+
+    assert e.value.code == "provider_unavailable"
+    assert "requivo[web]" in str(e.value), "the remedy is the message's whole job"
+    assert e.value.to_dict()["code"] == "provider_unavailable", "the envelope is what a caller reads"

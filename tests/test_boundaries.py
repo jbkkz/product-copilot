@@ -582,7 +582,10 @@ _CLI_PROVIDER_ALLOWLIST = {
     "EngineError": (
         "an exception type, not a call. `app()` catches it (it is a RequivoError, so it surfaces "
         "without a traceback) and `_cmd_web` raises it. Importing a class the CLI never calls "
-        "orchestrates nothing."
+        "orchestrates nothing. The `_cmd_web` half was the weakest part of this entry and was "
+        "examined rather than tidied in #135: its code, `provider_unavailable`, is published in the "
+        "--json envelope, so moving it to a core error is a breaking change and not a rename. It "
+        "stays, and the call site now carries the argument."
     ),
 }
 
