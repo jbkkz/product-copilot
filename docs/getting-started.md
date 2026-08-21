@@ -121,7 +121,9 @@ requivo discover examples/case1_leave.md
 
 </details>
 
-Discovery runs an interactive loop, then writes the session to `.requivo/sessions/<slug>/`. Every verb
+Discovery claims the session under `.requivo/sessions/<slug>/` first, then runs an interactive loop and
+writes the model when the loop finishes — so stopping early leaves the request captured there rather
+than nothing. Every verb
 takes the session **slug** (or a `model.json` path); regenerate any artifact without redoing discovery:
 
 ```bash

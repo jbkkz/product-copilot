@@ -38,7 +38,9 @@ consequences, and both are the point:
   `requivo answer <slug> "…"` to refine, or a different slug for a genuinely separate discovery.
 - Stopping an interactive discovery early — `q`, an empty answer, Ctrl-C — leaves the session on disk
   at revision 0 with your request captured, and the command says where. That is the same state
-  `requivo session init` produces; nothing was reasoned and nothing was written to the model.
+  `requivo session init` produces; nothing was reasoned and nothing was written to the model. A
+  provider failure part-way through the loop leaves that same state, reported as the error rather
+  than as that line.
 
 ## Artifact generators (provider-backed)
 
