@@ -102,7 +102,11 @@ below untouched, because a rewritten `pip install requivo` still needs a `pip` t
 on a Windows machine without Git Bash the Bash tool is not registered. Nothing in the documentation
 extends `bin/` to the PowerShell tool. So the one platform where "fix your `PATH`" hurts most is the
 platform where the fix is least reliable. (This is worth knowing beyond this spike: the skills'
-`allowed-tools: Bash(requivo:*)` rests on the same assumption. Out of scope here.)
+`allowed-tools: Bash(requivo:*)` rests on the same assumption. It was out of scope here and was
+taken up as [#121](https://github.com/jbkkz/requivo/issues/121), which settled the reader-facing
+half: Git for Windows is now stated as a native-Windows prerequisite on the plugin README, the
+repository README and `docs/getting-started.md`. What a skill declaring that grant actually does on
+a machine with no Bash tool is still unmeasured.)
 
 **The shim cannot find its own data directory.** `CLAUDE_PLUGIN_DATA` is absent from the Bash tool
 environment. A shim can derive its plugin root from `$0`, but that root is version-scoped and
