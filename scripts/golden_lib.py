@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from requivo.core.analysis import _label, _state_of  # noqa: E402
 from requivo.core.contracts import Brief, EngineOutput  # noqa: E402
+from requivo.core.selectors import display_token  # noqa: E402
 
 GOLDEN = REPO / "fixtures" / "golden"
 REQUESTS = GOLDEN / "requests.md"
@@ -209,7 +210,17 @@ def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict
                 best["words"] = best["words"] | words   # absorb the variant so later runs match
             else:
                 clusters.append({"words": words, "label": headline, "runs": {run_idx}})
-    return {c["label"]: len(c["runs"]) for c in clusters}
+    # `display_token` at the point provider prose becomes a *label*. Every other theme label is
+    # `_label(slot_id)` — a validated slot id through the schema's table — and this fallback is the
+    # one path where a headline is the label, so it is the one path where `golden_diff`'s
+    # `assessment + challenge(s) now raised: …` can be handed a newline and write what reads as a
+    # second line of the readout at column 0. Squashed where the value enters rather than at each of
+    # the four prints it reaches, which is the reasoning `_one_line` in `scripts/plugin_cli_drift.py`
+    # applies to its own sink; `display_token` rather than that helper because a headline is judged
+    # on its exact wording here and returns byte-for-byte when it is safe, where `_one_line` is lossy
+    # by design and would silently rewrite the text the lens exists to compare.
+    # `test_a_headline_used_as_a_theme_label_cannot_forge_a_line` is what fails if this is removed.
+    return {display_token(c["label"]): len(c["runs"]) for c in clusters}
 
 
 def _challenge_themes(briefs: list[Brief]) -> dict[str, int]:
@@ -389,9 +400,6 @@ class AnswerSheet:
         treats as a skipped question rather than as an answer."""
         queue = self._layers.get(slot)
         return queue.pop(0) if queue else None
-
-    def remaining(self) -> int:
-        return sum(len(v) for v in self._layers.values())
 
 
 def answer_line(slot: str, question: str, reply: str) -> str:

@@ -11,7 +11,9 @@ sends, when it stops, and what it writes down about each turn.
 """
 from __future__ import annotations
 
+import io
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -71,7 +73,16 @@ def capture(tmp_path, monkeypatch):
         monkeypatch.setattr(golden_run, "TURNS", turns)
         req = {"slug": "scripted", "form": "f", "card": "c", "request": "a request",
                "answers": answers}
-        golden_run.capture_interactive(client=None, req=req)
+        # `redirect_stdout` to a StringIO, which is the pattern `tests/test_cli_interactive.py`'s
+        # `_converse` already uses and for the same reason: `capture_interactive` ends by printing
+        # `✓` and `—`, and a StringIO never encodes. Without it these tests write those glyphs to the
+        # real `sys.stdout`, and pass on Windows only because pytest's own capture happens to open
+        # its buffer as UTF-8 — measured both ways: green under `pytest -q`, five
+        # `UnicodeEncodeError`s under `pytest -q -s` with a cp1252 stdout. A test that is safe only
+        # while a capture setting holds is a platform claim resting on something nobody stated, and
+        # the maintainer who reaches for `-s` to debug one of these is the person it breaks for.
+        with redirect_stdout(io.StringIO()):
+            golden_run.capture_interactive(client=None, req=req)
         captured = load_turns((tmp_path / "scripted.runs.json").read_text(encoding="utf-8"))
         return calls, captured
 

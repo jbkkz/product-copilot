@@ -28,7 +28,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
 .venv/bin/python -m pytest tests/ -q    # the whole suite: no API calls, no network, no build step
-.venv/bin/ruff check src tests          # lint (CI runs the same)
+.venv/bin/ruff check src tests scripts  # lint (CI runs the same)
 ```
 
 `requivo` is the command. Verbs: `discover`,

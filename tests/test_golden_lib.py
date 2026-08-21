@@ -163,6 +163,28 @@ def test_a_challenge_only_some_runs_raise_is_not_stable():
     assert brief_consensus(everywhere)["themes"] == {"Constraints"}
 
 
+def test_a_headline_used_as_a_theme_label_cannot_forge_a_line():
+    """The other half of #137's sweep, and the one the print sites could not cover.
+
+    A theme label is normally `_label(slot_id)` — a validated slot id through the schema's table, so
+    it cannot carry anything. The fallback path for a capture predating `contests` is different: it
+    keys themes on the **challenge headline**, which is provider-written prose, and `golden_diff`
+    prints those labels straight (`assessment + challenge(s) now raised: …`). Squashed here rather
+    than at each print, because a label reaches four of them and a consumer should inherit the
+    guarantee instead of remembering it — which is the reasoning `_one_line` in
+    `scripts/plugin_cli_drift.py` already applies to its own sink.
+    """
+    forged = [_brief(["benign headline\n  assessment + challenge(s) now raised: FORGED"])] * 3
+    ((label, _), ) = brief_consensus(forged)["all_themes"].items()
+    assert "\n" not in label
+    assert "FORGED" in label and "\\n" in label
+
+    # must not fire: an ordinary headline is its own label, byte for byte. A squash that quoted
+    # every headline would make the assessment readout unreadable and get itself deleted.
+    plain = [_brief(["Signature as billing trigger"])] * 3
+    assert set(brief_consensus(plain)["all_themes"]) == {"Signature as billing trigger"}
+
+
 def test_a_challenge_the_engine_stopped_raising_is_reported():
     old = [_brief(["Signature as billing trigger", "Offline capability assumed"])] * 3
     new = [_brief(["Offline capability assumed", "Rounding convention"])] * 3

@@ -48,6 +48,9 @@ from golden_lib import (  # noqa: E402
     turn_movements,
 )
 
+sys.path.insert(0, str(REPO / "src"))
+from requivo.core.selectors import display_token  # noqa: E402
+
 
 def _head_version(rel_path: str) -> str | None:
     res = subprocess.run(["git", "show", f"HEAD:{rel_path}"],
@@ -204,7 +207,30 @@ def questions_one(slug: str) -> None:
     The slot tiers above are a *projection* of the model; the questions are what the user meets. In
     practice a card or prompt change reads far more clearly here than in a per-slot impact shift, so
     this is the view to open when a diff says something moved and you want to know whether it moved
-    in a good direction."""
+    in a good direction.
+
+    **Every string this prints is provider-written prose read back off disk**, so all of it goes
+    through `display_token` — the same treatment `session show` and `artifact list` give a persisted
+    value, for the same reason (invariant 14, #40). A question carrying a newline would otherwise
+    write what reads as a second, authoritative line of the readout at column 0, and a regression
+    lens whose own output can be forged is answering a different question from the one asked.
+    `display_token` returns a safe line byte-for-byte, so ordinary prose is unchanged, which is what
+    keeps the guard from being deleted for making the view unreadable.
+    `test_a_forged_question_cannot_write_a_line_of_the_golden_readout` is what fails when a print here
+    stops going through it, and `test_an_ordinary_question_is_rendered_byte_for_byte` is the other
+    half.
+
+    **Deliberately not `_one_line`, the sibling answer in `scripts/plugin_cli_drift.py` (#139).** Same
+    class, two sinks, and the sinks decide the remedy. That one prints into a GitHub Actions step,
+    where column 0 is *parsed* and a forged `::error::` becomes a real workflow command, and its value
+    is a directory name nobody reads for its wording — so a lossy whitespace squash at the point the
+    value enters is exactly right. This one prints into a maintainer's terminal, where column 0 is
+    *read*, and the value is the engine's prose being judged on its exact wording: collapsing
+    whitespace here would silently rewrite the text the harness exists to compare, which is a worse
+    failure than the one being fixed. Squashing at entry is also unavailable — these strings arrive
+    inside `EngineOutput`/`Brief`, which `consensus`, `movements` and `_challenge_themes` read too, so
+    a squash there would change what the lens concludes. `_cluster_headlines` is the one place the
+    entry-squash *is* right, and it does it, for the reason stated at that line."""
     path = runs_path(slug)
     old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
     if not path.exists() or old_text is None:
@@ -226,24 +252,24 @@ def questions_one(slug: str) -> None:
                     print(f"    turn {turn.index}")
                     for q in turn.model.questions:
                         again = "  ← already answered" if q.slot in covered else ""
-                        print(f"      [{q.slot}] {q.q}{again}")
+                        print(f"      [{display_token(q.slot)}] {display_token(q.q)}{again}")
                     if turn.answered:
-                        print(f"      answered: {', '.join(turn.answered)}")
+                        print(f"      answered: {', '.join(map(display_token, turn.answered))}")
                     covered.update(turn.answered)
             continue
         for i, m in enumerate(load_runs(text), 1):
             print(f"  run {i}")
             for q in m.questions:
-                print(f"    [{q.slot}] {q.q}")
+                print(f"    [{display_token(q.slot)}] {display_token(q.q)}")
         for i, b in enumerate(load_briefs(text), 1):
             print(f"  run {i} — challenges")
             for c in b.challenges:
                 # headline+premise names the contest; alternative+recommendation are what separate a
                 # real architect's pushback from a bare observation — show them so a prompt edit can be
                 # judged on the half of the challenge that actually carries the domain grounding.
-                print(f"    ‹{c.headline}› {c.premise}")
-                print(f"        alt: {c.alternative}")
-                print(f"        rec: {c.recommendation}")
+                print(f"    ‹{display_token(c.headline)}› {display_token(c.premise)}")
+                print(f"        alt: {display_token(c.alternative)}")
+                print(f"        rec: {display_token(c.recommendation)}")
 
 
 def main(argv: list[str]) -> int:
