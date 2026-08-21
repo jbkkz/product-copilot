@@ -10,6 +10,12 @@ Write the **decision brief** — what someone needs to review with a client, a p
 engineering lead *before* estimating this request. A judgment, not a recap, and not a PRD. **You** do
 the analysis; Requivo tracks the document. Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 
+## 0. Preflight
+Run the shared **preflight** from REASONING.md before anything else: `requivo doctor --json`, checking
+whether the command ran *at all* rather than what it reported. If it could not run, the `requivo` CLI
+is not installed — say the four things REASONING.md lists and stop. Nothing has been applied or saved
+at this point, so there is no half-written brief to find.
+
 ## 1. Check readiness, honestly
 ```
 requivo status <slug> --json

@@ -7,13 +7,17 @@ allowed-tools: Bash(requivo:*), Read
 # /requivo:discover
 
 Start a new Requivo session from a client request. **You** do the reasoning here — this Claude Code
-session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (the shared rules:
-trust boundary, honesty per slot, the validate→apply loop). Then:
+session, no Anthropic API key. First read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` (the shared rules: the
+preflight, the trust boundary, honesty per slot, the validate→apply loop). Then:
 
-## 1. Check the install
-Run `requivo doctor --json`. Confirm **both** `schema.ok` and `context.ok` are true. A missing
-Anthropic SDK / API key is **fine** — this mode does not use it. If `requivo` is not found, tell the
-user to install it (`pip install requivo`) and stop.
+## 1. Preflight, then check the install
+Start with the **preflight** in REASONING.md: run `requivo doctor --json` and check first whether the
+command ran *at all*. If it did not — no JSON, and a message from the shell about a command it could
+not find — the CLI is not installed. Say the four things REASONING.md lists and stop; nothing has been
+created yet, so there is nothing to clean up.
+
+If it ran, read the report. Confirm **both** `schema.ok` and `context.ok` are true. A missing
+Anthropic SDK / API key is **fine** — this mode does not use it.
 
 `context.ok` is not decoration. The slot schema and the product context cards ship in different
 directories, so an install can lose the cards while `schema.ok` stays true — and the cards are what

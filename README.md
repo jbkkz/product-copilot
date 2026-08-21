@@ -43,7 +43,8 @@ Two other ways in, on the same local sessions — nothing is locked to the inter
 
 - **[Claude Code](plugins/claude-code/)** — an integration. `/plugin marketplace add jbkkz/requivo`,
   then `/requivo:discover <request>`. Reasoning goes through your own Claude session, so there is no
-  extra API key.
+  extra API key — but the skills drive the `requivo` CLI, so it still has to be installed (above) and
+  on your PATH. If it is not, every skill says so and how to fix it, rather than failing at the shell.
 - **[CLI](docs/cli.md)** — infrastructure. `requivo discover | status | brief …`, for automation and
   anything you drive from a script or a pipeline.
 

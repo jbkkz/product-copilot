@@ -9,6 +9,12 @@ allowed-tools: Bash(requivo:*), Read
 Refine an existing session with the user's answers. **You** reason; Requivo Core validates and applies.
 Read `${CLAUDE_PLUGIN_ROOT}/REASONING.md` first.
 
+## 0. Preflight
+Run the shared **preflight** from REASONING.md before anything else: `requivo doctor --json`, checking
+whether the command ran *at all* rather than what it reported. If it could not run, the `requivo` CLI
+is not installed — say the four things REASONING.md lists and stop. This is before any mutation, so
+the session is exactly as the user left it.
+
 ## 1. Load the session
 `$ARGUMENTS` is the session slug (and, optionally, the answers). Run:
 ```

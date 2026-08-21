@@ -1,13 +1,20 @@
 ---
 name: status
 description: Show a Requivo session's readiness, blocking slots, current revision, and artifact freshness. Pure deterministic read — no reasoning, no API key. Use when the user asks where a session stands or what is still blocking it.
-allowed-tools: Bash(requivo:*)
+allowed-tools: Bash(requivo:*), Read
 ---
 
 # /requivo:status
 
 Report where a session stands. This is a **deterministic read** — do not re-analyse the request with
 Claude; just run the command and translate the result.
+
+## Preflight
+This is often the first Requivo command a new user runs, and the `requivo` CLI is a **separate
+install** from the plugin. So start with the shared **preflight** in
+`${CLAUDE_PLUGIN_ROOT}/REASONING.md`: run `requivo doctor --json` and check whether the command ran
+*at all* — not what it reported. If it could not run, the CLI is not installed; say the four things
+REASONING.md lists and stop. This skill reads and writes nothing, so there is nothing to undo.
 
 ## Run
 `$ARGUMENTS` is the session slug. Run:
