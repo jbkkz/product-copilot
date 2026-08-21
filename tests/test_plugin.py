@@ -18,7 +18,9 @@ SKILLS = PLUGIN / "skills"
 EXPECTED_SKILLS = {"discover", "answer", "status", "brief", "prd", "impact"}
 # One preferred install command, named in the shared preflight and nowhere else in the skills. The
 # plugin's own README may name it too — that file is a reader's document, not an instruction Claude
-# follows, and it is not walked here.
+# follows, and it is not walked here. Its verbs are not unchecked, though (#138): they are checked
+# by `test_the_plugin_readme_names_only_verbs_this_checkout_has`, which reads that page's code spans
+# and never its prose.
 PREFERRED_INSTALL = "uv tool install requivo"
 
 
