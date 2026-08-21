@@ -36,8 +36,16 @@ from requivo.deterministic.model import register_model
 from requivo.deterministic.sessions import register_sessions
 
 # Re-exported because they are read from outside the package: `cli.py` imports `read_user_text`, and
-# `EXIT_DEGRADED` is published under this name (`docs/compatibility.md`, and the 1.0 changelog entry
-# that renamed it from `EXIT_DEGRADED_LISTING`).
+# the suite imports `EXIT_DEGRADED` to assert the code a degraded run exits with.
+#
+# `docs/compatibility.md` publishes the **value 4**, never this name — the page lists
+# `requivo.deterministic` among the internals that are explicitly not stable (#144), so nothing may
+# import this symbol from outside. Publishing it was refused rather than left unchosen (#145): a
+# promised Python name costs a major version to move and buys a consumer nothing the documented exit
+# code does not, since a script gating on a degraded listing reads the process's status and not this
+# namespace. Claiming otherwise invited both mistakes at once — importing it from outside, and
+# reading a rename as a breaking change. Pinned by
+# `test_the_degraded_exit_code_is_published_as_a_value_not_as_a_name`.
 #
 # Nothing private is re-exported, on purpose. A re-export is a *second* binding: rebinding it here
 # would not reach the module global the code actually reads, so a test that patched

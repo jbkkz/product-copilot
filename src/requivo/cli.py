@@ -221,12 +221,20 @@ def _cmd_discover(a, client) -> None:
         out = disco.sessions.load_model(slug)
         render_turn(out)
     else:
+        # Invariant 13's gate, here rather than only inside `finalize_discovery`: refusing after the
+        # loop meant paying for up to nine provider calls first (#133). Pinned by
+        # `test_both_discover_entry_points_refuse_a_refined_session_before_paying`.
+        slug = disco.claim_session(request, cards=only, slug=slug_hint).slug
         out = converse(disco, request, only=only)
         if not out:
+            # Claiming first means an abandoned discovery leaves the request captured at revision 0
+            # rather than nothing, so say where it went — see
+            # `test_stopping_early_leaves_the_claimed_session_and_says_where`.
+            print(f"\nSaved request → {store.canonical_dir(slug)}")
             return
         print("\nGenerating the solution assessment…")
         brief = disco.draft_assessment(out, cards=only)
-        slug = disco.finalize_discovery(request, out, cards=only, slug=slug_hint,
+        slug = disco.finalize_discovery(request, out, cards=only, slug=slug,
                                         brief=brief, surface="cli-discover")
         render_brief(out, brief)
     # `canonical_dir` direct, and justified (#76): where the session landed is the answer, and
@@ -422,13 +430,17 @@ def _cmd_stories(a, client) -> None:
 
 def _cmd_estimate(a, client) -> None:
     slug, disco = _generator_service(a, client)
-    stories = disco.reason(slug, "stories")
-    render_stories(stories)
+    # One snapshot for both calls, decided rather than left as a residual: the estimate is read
+    # against these stories, so a snapshot each let them be read against two revisions (#135). Pinned
+    # by `test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot`.
+    snap = disco.sessions.snapshot(slug)
+    stories = disco.reason_from(snap, "stories")
+    render_stories(stories)   # rendered here, not after both calls, so the stories arrive while the estimate runs
     # The estimate is the one call that needs a prior artifact as input, so it does not fit the plain
     # model→artifact shape — but "does not fit" was being spent on a direct provider call, on a second
     # client this verb built for itself (#77). It fits `reason()` perfectly well: `stories` rides the
     # same `**kwargs` a release note's `version` does. Terminal-only, so nothing is written.
-    draft, soft, confidence = disco.reason(slug, "estimate", stories=stories)
+    draft, soft, confidence = disco.reason_from(snap, "estimate", stories=stories)
     render_estimate(draft, soft, confidence)
 
 
@@ -484,6 +496,12 @@ def _cmd_web(a, client) -> None:
 
         from requivo.web.app import create_app
     except ImportError as e:
+        # `EngineError` for a missing optional dependency is a decision about a published payload, not
+        # a leftover: its `code` is `provider_unavailable`, that code travels in the `--json` envelope,
+        # and `docs/compatibility.md` makes moving a condition from one code to another a breaking
+        # change — a major version from 1.0.0 onward (#135). It is also the vocabulary's existing
+        # answer for "an optional install is absent": `new_client()` says the same thing about
+        # `[anthropic]`. Pinned by `test_the_missing_web_extra_keeps_its_published_error_code`.
         raise EngineError(
             "The web interface is not installed. Install it with `pip install 'requivo[web]'` "
             f"(or `uv tool install 'requivo[web]'`). You do NOT need it for the CLI or Claude Code. "

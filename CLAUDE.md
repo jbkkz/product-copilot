@@ -255,11 +255,31 @@ bug that looked like correct behaviour.
     filed against another, undetectably, because the recorded number is plausible. The lock is released
     before the call (which takes minutes); `expected_revision` handles what happens *after*, the
     snapshot handles what the call started *from*.
+
+    **An *analysis* that is two calls is still one snapshot** (#135). `estimate` reasons the stories
+    and then the estimate *against* those stories, and it took a snapshot each — "two reads, two
+    instants", this invariant's own sentence, one layer up from the case it was written about. Nothing
+    is written there, so no provenance can become a lie; what drifts is the answer, which shows both
+    halves side by side and names no revision. `reason_from` takes the caller's snapshot for exactly
+    this, and the snapshot carries its own slug so the two cannot disagree. Pinned by
+    `test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot`.
 13. **A first discovery only lands on revision 0.** Discovery reasons from the request alone — it never
     sees the current model — so running it on a refined session discards that work rather than
     improving it, with the optimistic lock satisfied throughout (it reads revision N and writes against
     N). `_require_revision_zero` is the gate, taken *before* the paid call, by every entry point. A
     rule that lives in an interface (the Web hides the button after revision 0) is not enforced.
+
+    **"Before" and "every entry point" were aspirational for a release, and on the path a person
+    actually uses** (#133). `--once` claimed the session inside `start()` and refused for free; the
+    CLI's interactive loop reached the gate only through `finalize_discovery`, after up to nine paid
+    calls — eight turns plus the assessment — all of them thrown away by a refusal that was correct
+    and in the wrong place. This is the same shape as the sentence above it: a rule the documenting
+    path takes and the used path does not is not enforced either. `claim_session` is public for that
+    reason — a surface that owns its own loop has to be able to take the gate itself — and the cost is
+    that an abandoned interactive discovery leaves the request captured at revision 0, which is said
+    out loud rather than left as a directory nobody was told about. Pinned by
+    `test_both_discover_entry_points_refuse_a_refined_session_before_paying`, whose assertion is the
+    *call count*: a test asserting only the refusal was green on the defect.
 14. **The service layer is the integrity boundary, not the interfaces.** Context cards are resolved in
     `create_session`, not trusted from the caller, because the CLI and the Web being careful is not a
     guarantee — an external consumer can call the service directly. For the same reason `DiscoveryService`'s

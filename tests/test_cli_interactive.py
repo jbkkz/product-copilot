@@ -15,16 +15,31 @@ from __future__ import annotations
 import builtins
 import inspect
 import io
+import json
+import sys
 from contextlib import redirect_stdout
 
 import pytest
+from _fakes import _ENGINE_REPLY, FakeClient, _run_app, full_slots, slot
 
-from requivo.cli import MAX_TURNS, converse
+from requivo.cli import MAX_TURNS, app, converse
 from requivo.core.contracts import Brief, EngineOutput, Question, Slot, Summary
 from requivo.providers.base import ReasoningProvider
 from requivo.services.discovery import DiscoveryService
+from requivo.services.sessions import SessionService
 
 ARROW = "→"  # the separator converse() puts between a question and its answer
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workspace(tmp_path, monkeypatch):
+    """An isolated temp workspace for every test here, never the real repo.
+
+    The `converse()` tests write nothing, so for them this is protection rather than a requirement.
+    The `app()`-driven ones at the foot of the file really do claim sessions on disk.
+    """
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("REQUIVO_OUTPUT_DIR", str(tmp_path / "out"))
 
 
 def _model(*, objective: str, questions: list[Question] | None = None) -> EngineOutput:
@@ -211,9 +226,13 @@ def test_the_assessment_is_reasoned_through_the_service_too():
     ([""], "No answer provided"),   # every question skipped -- nothing to feed back
 ])
 def test_stopping_early_returns_nothing_and_makes_no_further_call(answers, expected):
-    """A stop is a stop: the loop returns None, `_cmd_discover` returns before finalizing, and no
-    session is claimed. The call count is asserted because "returned None" would also be true of a
-    loop that kept reasoning and then threw the result away -- and that one costs money."""
+    """A stop is a stop: the loop returns None and `_cmd_discover` returns before finalizing. The
+    call count is asserted because "returned None" would also be true of a loop that kept reasoning
+    and then threw the result away -- and that one costs money.
+
+    This used to say "and no session is claimed", which stopped being true in #133: the revision-zero
+    gate now claims the slug *before* the loop, so an abandoned discovery leaves the request captured
+    at revision 0. `test_stopping_early_leaves_the_claimed_session_and_says_where` pins that half."""
     provider = StubProvider(_model(objective="one", questions=[_question()]))
     out, printed = _converse(_service(provider), "a request", answers)
     assert out is None
@@ -249,3 +268,96 @@ def test_an_interrupt_at_the_prompt_stops_rather_than_traces_back(interrupt):
         builtins.input = real_input
     assert out is None, f"{interrupt.__name__} did not stop the loop"
     assert "Stopped." in buf.getvalue()
+
+# ── the entry-point gate, driven through `app()` (#133) ────────────────────────────────────────────
+# Everything above injects a stub provider into the service and drives `converse()` directly. The
+# three below drive the real `requivo discover` over a `FakeClient`, because what they pin is the
+# *position* of a precondition relative to the first billed call — and a position is only visible
+# from the whole verb.
+
+_REQUEST = "a leave approval system, discovered twice"
+_BRIEF_REPLY = json.dumps({"complexity": "low", "solution": "S"})
+_ASKING_REPLY = json.dumps({
+    "model": full_slots(problem=slot(80, "explicit", "high")),
+    "questions": [{"q": "Who approves?", "slot": "permissions", "why": "approval routing drives it"}],
+    "summary": {"objective": "A leave approval system"},
+})
+
+
+def _at_a_terminal(monkeypatch) -> None:
+    """`_cmd_discover` picks its branch on `--once` *or* the absence of a TTY, and under pytest stdin
+    is never one. Patched for both legs of the tests below, so the flag is the only difference between
+    them — which is what "the two entry points refuse identically" has to mean."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+
+@pytest.mark.parametrize("argv_tail", [["--once"], []], ids=["once", "interactive"])
+def test_both_discover_entry_points_refuse_a_refined_session_before_paying(monkeypatch, capsys, argv_tail):
+    """Invariant 13's revision-zero gate is taken before the first billed call on *both* paths (#133).
+
+    `--once` claimed the session inside `start()` and refused for free. The interactive branch reached
+    the provider through `converse()` and met the gate only inside `finalize_discovery`, after the
+    reasoning: two calls in this reproduction, up to nine in the field — eight turns plus the
+    assessment — every one of them paid for and then thrown away by a refusal that was correct and in
+    the wrong place. CLAUDE.md's own text for that invariant says a rule enforced by an interface is
+    not enforced; this was the same shape one surface along.
+
+    **The assertion is the call count, not the refusal.** The refusal already happened before the fix,
+    so a test asserting only `revision_conflict` was green on the defect. The `--once` leg is the
+    control: it passed before this change and must keep passing, or the two paths have merely swapped
+    which one is wrong.
+    """
+    _at_a_terminal(monkeypatch)
+    _run_app(["discover", _REQUEST, "--once"], client=FakeClient(_ENGINE_REPLY))  # → revision 1
+
+    # Scripted with a turn *and* an assessment, so an ungated run gets all the way to the old refusal
+    # point and the count below reports how much it spent rather than dying on an exhausted stub.
+    fake = FakeClient(_ENGINE_REPLY, _BRIEF_REPLY)
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, *argv_tail], client=fake)
+
+    assert exit_.value.code == 1
+    assert "already carries a model" in capsys.readouterr().err
+    assert fake.calls == [], (
+        f"{len(fake.calls)} provider call(s) were billed before the refusal — the gate is downstream "
+        f"of the reasoning on this path"
+    )
+
+
+@pytest.mark.parametrize("argv_tail, calls", [(["--once"], 1), ([], 2)], ids=["once", "interactive"])
+def test_a_first_discovery_still_reaches_the_provider_on_both_paths(monkeypatch, argv_tail, calls):
+    """The must-fire half of the test above. `fake.calls == []` is also true of a verb that never ran,
+    a stub that was never reached and a harness that broke — so a gate refusing *everything* would
+    pass that test and fail this one. The interactive path pays for two calls (the turn, then the
+    assessment); `--once` pays for one, since it does not finalize."""
+    _at_a_terminal(monkeypatch)
+    fake = FakeClient(_ENGINE_REPLY, _BRIEF_REPLY)
+    _run_app(["discover", _REQUEST, *argv_tail], client=fake)
+    assert len(fake.calls) == calls
+    assert [m.current_revision for m in SessionService().list_sessions()] == [1]
+
+
+def test_stopping_early_leaves_the_claimed_session_and_says_where(monkeypatch, capsys):
+    """The cost of taking the gate first, stated as a test rather than left to be discovered.
+
+    Claiming the slug before the loop means a discovery the user abandons leaves the request captured
+    at revision 0 instead of nothing at all. That is not a new state — it is exactly what
+    `create_only` persists on the "capture the request now, discover later" path, and it is what
+    `--once` already leaves behind when the provider call fails after the claim.
+
+    It is *printed* because the alternative is a session directory appearing with no line accounting
+    for it, and a directory nobody was told about is a directory nobody deletes.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "q")
+    fake = FakeClient(_ASKING_REPLY)
+
+    printed = _run_app(["discover", _REQUEST], client=fake)
+
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [0], "the abandoned discovery wrote a model"
+    assert len(fake.calls) == 1, "the loop kept reasoning after the user stopped"
+    assert "Stopped." in printed
+    assert sessions[0].slug in printed, (
+        "the claimed session is on disk and nothing said so — see this test's docstring"
+    )

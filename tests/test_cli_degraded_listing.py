@@ -26,6 +26,7 @@ import io
 import json
 import re
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 
@@ -326,6 +327,36 @@ def test_the_degraded_code_collides_with_nothing():
     dependency cannot run the other way — and nothing but this test stops them being given the same
     number. 0, 1 and 2 are taken by success, `RequivoError` and argparse."""
     assert EXIT_DEGRADED not in {0, 1, 2, EXIT_RENDER_FAILED}
+
+
+def test_the_degraded_exit_code_is_published_as_a_value_not_as_a_name():
+    """What `docs/compatibility.md` promises is the number 4. It has never promised the symbol (#145).
+
+    `deterministic/__init__.py` used to say the page published `EXIT_DEGRADED` "under this name", and
+    it does not: the page carries a `4` row in its exit-code table, and it lists `requivo.deterministic`
+    among the Python internals that are explicitly *not* stable — which #144 added on the argument that
+    the module's whole public job is the `register(sub)` the CLI binds through.
+
+    **Publishing the name was refused, not merely left unchosen.** A promised import costs a major
+    version to move, and it would buy a consumer nothing the documented exit code does not already
+    give them: a script gating on a degraded listing reads the process's status, not this package's
+    namespace. The comment claiming otherwise invited exactly the two mistakes worth avoiding —
+    importing it from outside, and treating a rename as a breaking change.
+
+    This is what makes the corrected comment checkable rather than a second unguarded claim: promote
+    the module to stable, or renumber the code without the page, and this goes red.
+    """
+    page = (Path(__file__).resolve().parents[1] / "docs" / "compatibility.md").read_text(encoding="utf-8")
+    assert EXIT_DEGRADED == 4
+    assert re.search(r"^\| 4 \| ", page, re.MULTILINE), (
+        "the exit-code table no longer publishes 4 — the promise this constant carries is that number"
+    )
+    not_stable = page.split("## What is explicitly *not* stable")
+    assert len(not_stable) == 2, "the not-stable section was renamed; the claim below cannot be checked"
+    assert "`requivo.deterministic`" in not_stable[1], (
+        "`requivo.deterministic` left the not-stable list — if the module is now published, the "
+        "refusal recorded in its own docstring has been reversed and has to be rewritten"
+    )
 
 
 # ── the slug and the error are untrusted text (#40) ──────────────────────────
