@@ -28,7 +28,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools           # a fresh venv often ships pip < 21.3, too old for editable installs
 pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
 .venv/bin/python -m pytest tests/ -q    # the whole suite: no API calls, no network, no build step
-.venv/bin/ruff check src tests          # lint (CI runs the same)
+.venv/bin/ruff check src tests scripts  # lint (CI runs the same)
 ```
 
 `requivo` is the command. Verbs: `discover`,
@@ -583,6 +583,15 @@ python scripts/golden_diff.py [<slug>…]            # what moved, above the noi
 python scripts/golden_diff.py <slug> --questions   # the questions & challenges themselves, old vs new
 ```
 
+**Two shapes of request.** Most are **single-pass** — one discovery call, K times. A request carrying
+`answer.<slot>:` lines in `requests.md` is **interactive**: it drives `DiscoveryService.draft_turn`,
+the loop behind `requivo discover`, for up to `GOLDEN_TURNS` turns per run (5), answering off those
+lines. Each line is one *layer* — the next thing that client has to say when the engine comes back to
+that slot — handed out in order and then exhausted, which is what keeps a conversation moving instead
+of looping on one reply. It exists because the interactive loop is grounded on the carried model alone
+from turn 3, where the loop it replaced re-sent the transcript, and turns 1 and 2 are byte-identical
+between the two — so a single-pass capture, and a two-turn one, measure nothing about it (#77, #137).
+
 `fixtures/golden/requests.md` is the fixed request set — one request per problem *form*. Each is
 captured K times into `fixtures/golden/<slug>.runs.json`; the committed version is the baseline, the
 working tree is the candidate. Workflow: edit an asset → `golden_run` → `golden_diff` → commit the new
@@ -602,9 +611,16 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
   wordings of one challenge share no words and matching read that as one lost plus one gained.
 - **The slot tiers are a projection; the questions and challenges are the product.** `--questions` is
   usually what settles whether a change was an improvement or merely a movement.
+- **The interactive lens** watches turn 3 and beyond on an interactive request: questions **re-asked**
+  after the client already answered them, early confirmations the model **lost** by the end, and
+  completeness that **regressed** across a deep turn. It carries its own third state — a single-pass
+  baseline reports *not measured* rather than an empty finding set, and a run that converged before
+  five turns is flagged as shallow rather than counted as clean.
 
-Cost: K calls per request, doubled under `--brief` — a full six-request cycle is 18. Re-capture the
-targeted request first, the full set only before committing a baseline.
+Cost: K calls per request, doubled under `--brief` — a full six-request cycle is 18. An interactive
+request is K × `GOLDEN_TURNS` on its own (15 at the defaults), so capture it alone rather than as part
+of a full-set run. Re-capture the targeted request first, the full set only before committing a
+baseline.
 
 **Known limit (partially mitigated):** `load_context()` concatenates every card by default, so each new
 card dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost `doc-reapproval`

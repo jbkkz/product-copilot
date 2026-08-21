@@ -18,6 +18,7 @@ import io
 import json
 import sys
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 from _fakes import _ENGINE_REPLY, FakeClient, _run_app, full_slots, slot
@@ -361,3 +362,29 @@ def test_stopping_early_leaves_the_claimed_session_and_says_where(monkeypatch, c
     assert sessions[0].slug in printed, (
         "the claimed session is on disk and nothing said so — see this test's docstring"
     )
+
+
+def test_the_golden_harness_answers_a_turn_in_exactly_the_words_this_loop_does():
+    """The golden harness's multi-turn capture drives `draft_turn` off a scripted answer sheet rather
+    than a TTY, and it is only a measurement of this loop for as long as it hands the seam the same
+    bytes (#137). The answer block is the one thing it has to reproduce and the one thing that can
+    silently drift, because a differently-shaped `Client answers:` body still reasons and still
+    produces a plausible model — the capture would just be of a shape no user ever meets.
+
+    So the comparison is behavioural, not a shared constant: this drives `converse()` with a known
+    answer and asserts the harness's `answers_for_turn` builds character-for-character what the loop
+    passed to `draft_turn`. Either side changing its wording goes red here.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from golden_lib import AnswerSheet, answers_for_turn
+
+    question = _question()
+    provider = StubProvider(_model(objective="one", questions=[question]),
+                            _model(objective="two"))
+    _converse(_service(provider), "a request", ["a scripted reply"])
+    from_the_loop = provider.analyze_calls[1]["answers"]
+
+    from_the_harness, answered = answers_for_turn(
+        [question], AnswerSheet({question.slot: ["a scripted reply"]}))
+    assert from_the_harness == from_the_loop
+    assert answered == [question.slot]

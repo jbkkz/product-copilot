@@ -13,6 +13,12 @@ With no committed baseline yet (a fresh capture), it instead prints the **noise 
 much of each request's model is stable enough to diff on. A request with few unanimous slots will only
 ever surface large changes; that's information, not a failure.
 
+An **interactive** request (one with an answer sheet) gets a second readout on top: what the capture's
+deep turns did — questions re-asked after the client answered them, confirmations the model stopped
+carrying, completeness that fell back. That lens has its own third state and says *not measured*
+rather than printing an empty finding set, because a single-pass baseline is silent about turn 3 in a
+way that reads exactly like a clean one (#137).
+
 Workflow: golden_run.py (re-capture) → golden_diff.py (read the signal) → commit if intended.
 
 Usage:
@@ -29,14 +35,21 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from golden_lib import (  # noqa: E402
     GOLDEN,
+    MEASURABLE_DEPTH,
     REPO,
     brief_movements,
     load_briefs,
     load_runs,
+    load_turns,
     movements,
     runs_path,
     stability,
+    turn_lens,
+    turn_movements,
 )
+
+sys.path.insert(0, str(REPO / "src"))
+from requivo.core.selectors import display_token  # noqa: E402
 
 
 def _head_version(rel_path: str) -> str | None:
@@ -56,6 +69,8 @@ def diff_one(slug: str) -> str:
     new = load_runs(path.read_text(encoding="utf-8"))
     old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
 
+    new_text = path.read_text(encoding="utf-8")
+
     if old_text is None:
         # No baseline yet — report the noise floor so we know how trustworthy future diffs will be.
         st = stability(new)
@@ -64,9 +79,12 @@ def diff_one(slug: str) -> str:
               f"impact, {st['unanimous']['state']}/{st['total_slots']} on confidence, across "
               f"{st['n']} runs")
         print(f"  stable themes: {', '.join(st['themes']) or '—'}")
+        # On a first interactive capture this readout *is* the finding — there is nothing to diff
+        # against, and what the deep turns did is the whole reason the request exists (#137).
+        _show_turns(None, load_turns(new_text))
         return "moved"
 
-    if path.read_text(encoding="utf-8") == old_text:
+    if new_text == old_text:
         # Byte-identical to HEAD means the capture never landed — the engine is non-deterministic, so
         # a genuine re-run can't reproduce a file exactly. Reporting "no change" here would be a false
         # all-clear, which is the one failure mode a regression lens must not have.
@@ -77,9 +95,16 @@ def diff_one(slug: str) -> str:
     m = movements(old, new)
 
     print(f"\n{slug}")
+    # Before the flat short-circuit below, and deliberately. The turn lens watches something the slot
+    # consensus cannot see, so a capture whose slots held still can still have started re-asking
+    # questions the client already answered — reporting "no change above the noise floor" over the top
+    # of that would be the false all-clear this file exists to avoid. (The assessment lens *is* behind
+    # that short-circuit and has the same exposure; that is a separate defect, reported not fixed.)
+    turn_signal = _show_turns(load_turns(old_text), load_turns(new_text))
+
     if not m["moved"] and not m["themes_added"] and not m["themes_removed"]:
         print("  · no change above the noise floor")
-        return "flat"
+        return "moved" if turn_signal else "flat"
 
     def _show(entries: list[dict], tier: str) -> None:
         print(f"  {tier:<10} {len(entries)} slot(s):")
@@ -96,11 +121,60 @@ def diff_one(slug: str) -> str:
     if m["themes_removed"]:
         print(f"  questions  − stable theme(s): {', '.join(m['themes_removed'])}")
 
-    strong = bool(m["strong"])
-    old_briefs, new_briefs = load_briefs(old_text), load_briefs(path.read_text(encoding="utf-8"))
+    strong = bool(m["strong"]) or turn_signal
+    old_briefs, new_briefs = load_briefs(old_text), load_briefs(new_text)
     if old_briefs and new_briefs:
         strong = _show_assessment(old_briefs, new_briefs) or strong
     return "moved" if strong else "weak"
+
+
+def _show_turns(old_turns, new_turns) -> bool:
+    """Print what the interactive capture says about turn 3 and beyond. Returns True on a *strong*
+    signal there — a finding every run agrees on.
+
+    Four states, and the last two are the ones this function exists for:
+
+    - **not applicable** — neither side is interactive. A single-pass request is not silent about the
+      deep turns, it has none, so this prints nothing at all rather than a reassuring dash.
+    - **compared** — both sides are interactive; the unanimous sets are diffed.
+    - **first capture** — the working tree has turns and HEAD does not. The lens is printed with no
+      comparison, because on a first capture the readout *is* the finding.
+    - **lens lost** — HEAD had turns and the working tree does not. That is a request that stopped
+      being interactive, and it has to be loud: the deep-turn lens went away, which reads exactly like
+      it went quiet.
+    """
+    if new_turns is None and old_turns is None:
+        return False
+    if new_turns is None:
+        print("  interactive  ! the baseline has turns and this capture does not — the deep-turn "
+              "lens is gone, which is not the same as clean")
+        return True
+
+    lens = turn_lens(new_turns)
+    depth = "/".join(str(d) for d in lens["depths"])
+    print(f"  interactive  turns {depth} across {lens['n']} run(s)"
+          + ("" if lens["deep_enough"]
+             else f"  ⚠ under {MEASURABLE_DEPTH} — this capture did not reach the deep turns"))
+    for key, caption in (("reasked", "re-asked after the client answered"),
+                         ("lost", "answered early, not confirmed at the end"),
+                         ("regressed", "completeness fell back")):
+        detail = ", ".join(f"{lab} ({c}/{lens['n']})" for lab, c in sorted(lens[key].items()))
+        print(f"               {caption:<38} {detail or '—'}")
+
+    move = turn_movements(old_turns, new_turns)
+    if not move["measured"]:
+        print(f"               no comparison: {move['reason']}")
+        return False
+    strong = False
+    for key, caption in (("reasked", "re-asks"), ("lost", "lost confirmations"),
+                         ("regressed", "completeness regressions")):
+        if move[f"{key}_added"]:
+            strong = True
+            print(f"               + {caption} in every run: {', '.join(move[f'{key}_added'])}")
+        if move[f"{key}_removed"]:
+            print(f"               − {caption} no longer in every run: "
+                  f"{', '.join(move[f'{key}_removed'])}")
+    return strong
 
 
 def _show_assessment(old_briefs: list, new_briefs: list) -> bool:
@@ -133,7 +207,30 @@ def questions_one(slug: str) -> None:
     The slot tiers above are a *projection* of the model; the questions are what the user meets. In
     practice a card or prompt change reads far more clearly here than in a per-slot impact shift, so
     this is the view to open when a diff says something moved and you want to know whether it moved
-    in a good direction."""
+    in a good direction.
+
+    **Every string this prints is provider-written prose read back off disk**, so all of it goes
+    through `display_token` — the same treatment `session show` and `artifact list` give a persisted
+    value, for the same reason (invariant 14, #40). A question carrying a newline would otherwise
+    write what reads as a second, authoritative line of the readout at column 0, and a regression
+    lens whose own output can be forged is answering a different question from the one asked.
+    `display_token` returns a safe line byte-for-byte, so ordinary prose is unchanged, which is what
+    keeps the guard from being deleted for making the view unreadable.
+    `test_a_forged_question_cannot_write_a_line_of_the_golden_readout` is what fails when a print here
+    stops going through it, and `test_an_ordinary_question_is_rendered_byte_for_byte` is the other
+    half.
+
+    **Deliberately not `_one_line`, the sibling answer in `scripts/plugin_cli_drift.py` (#139).** Same
+    class, two sinks, and the sinks decide the remedy. That one prints into a GitHub Actions step,
+    where column 0 is *parsed* and a forged `::error::` becomes a real workflow command, and its value
+    is a directory name nobody reads for its wording — so a lossy whitespace squash at the point the
+    value enters is exactly right. This one prints into a maintainer's terminal, where column 0 is
+    *read*, and the value is the engine's prose being judged on its exact wording: collapsing
+    whitespace here would silently rewrite the text the harness exists to compare, which is a worse
+    failure than the one being fixed. Squashing at entry is also unavailable — these strings arrive
+    inside `EngineOutput`/`Brief`, which `consensus`, `movements` and `_challenge_themes` read too, so
+    a squash there would change what the lens concludes. `_cluster_headlines` is the one place the
+    entry-squash *is* right, and it does it, for the reason stated at that line."""
     path = runs_path(slug)
     old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
     if not path.exists() or old_text is None:
@@ -142,19 +239,37 @@ def questions_one(slug: str) -> None:
     new_text = path.read_text(encoding="utf-8")
     for title, text in (("HEAD", old_text), ("working tree", new_text)):
         print(f"\n{slug} — {title}")
+        turns = load_turns(text)
+        if turns is not None:
+            # An interactive capture: the question that settles this issue is *when* something was
+            # asked, not whether it was, so the turn number leads and an already-answered slot is
+            # marked. Reading the final model's questions alone would show only what the last turn
+            # happened to still be asking.
+            for i, run in enumerate(turns, 1):
+                print(f"  run {i}")
+                covered: set[str] = set()
+                for turn in run:
+                    print(f"    turn {turn.index}")
+                    for q in turn.model.questions:
+                        again = "  ← already answered" if q.slot in covered else ""
+                        print(f"      [{display_token(q.slot)}] {display_token(q.q)}{again}")
+                    if turn.answered:
+                        print(f"      answered: {', '.join(map(display_token, turn.answered))}")
+                    covered.update(turn.answered)
+            continue
         for i, m in enumerate(load_runs(text), 1):
             print(f"  run {i}")
             for q in m.questions:
-                print(f"    [{q.slot}] {q.q}")
+                print(f"    [{display_token(q.slot)}] {display_token(q.q)}")
         for i, b in enumerate(load_briefs(text), 1):
             print(f"  run {i} — challenges")
             for c in b.challenges:
                 # headline+premise names the contest; alternative+recommendation are what separate a
                 # real architect's pushback from a bare observation — show them so a prompt edit can be
                 # judged on the half of the challenge that actually carries the domain grounding.
-                print(f"    ‹{c.headline}› {c.premise}")
-                print(f"        alt: {c.alternative}")
-                print(f"        rec: {c.recommendation}")
+                print(f"    ‹{display_token(c.headline)}› {display_token(c.premise)}")
+                print(f"        alt: {display_token(c.alternative)}")
+                print(f"        rec: {display_token(c.recommendation)}")
 
 
 def main(argv: list[str]) -> int:

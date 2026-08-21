@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 from _cli_harness import _SESSIONS_ROW, _forge_meta, _full_model, _run, _run_json
@@ -440,3 +441,62 @@ def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
         "Artifacts for 'al2':",
         f"  {'prd':<12} {'prd.md':<26} rev 1  fresh",
     ]
+
+
+# ── the same class, one layer out: the golden harness (#137) ─────────────────────────────────────
+#
+# `scripts/golden_diff.py --questions` renders a golden baseline, and every string it prints there —
+# the question text, the challenge headline, the premise — is **provider-written prose read back off
+# disk**. That is the same untrusted-value-renders-a-line class as every verb above, arriving through
+# a file the maintainer captured rather than one a stranger wrote, which is a difference in
+# likelihood and not in kind: invariant 14's rule is that a persisted field is untrusted input every
+# time it is read back, whoever wrote it.
+#
+# It lives in this file rather than beside the harness's own tests because the file's subject is the
+# class, not the layer — its docstring says the sweep across verbs *is* the finding, and a script the
+# maintainer runs by hand is the one caller that was outside every previous sweep. `scripts/` is not
+# shipped in the wheel; a forged line at column 0 of a regression readout is still a forged line.
+
+def _golden_capture(question: str) -> str:
+    """A one-run interactive baseline whose single question carries `question`."""
+    model = {"model": {}, "questions": [{"q": question, "slot": "problem", "why": "w"}],
+             "summary": {"objective": "o", "scope": "", "assumptions": [], "blind_spot": ""},
+             "decisions": [], "challenges": [], "opportunities": []}
+    return json.dumps({"request": "r", "answers": {"problem": ["p"]},
+                       "turns": [[{"index": 1, "answered": [], "model": model}]]})
+
+
+@pytest.fixture
+def golden_readout(tmp_path, monkeypatch):
+    """`questions_one` over a forged baseline, with git and the fixture root stubbed out."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import golden_diff as gd
+    import golden_lib as gl
+
+    def run(question: str) -> list[str]:
+        monkeypatch.setattr(gl, "GOLDEN", tmp_path)
+        payload = _golden_capture(question)
+        (tmp_path / "forged.runs.json").write_text(payload, encoding="utf-8")
+        monkeypatch.setattr(gd, "_head_version", lambda _rel: payload)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            gd.questions_one("forged")
+        return buf.getvalue().splitlines()
+
+    return run
+
+
+def test_a_forged_question_cannot_write_a_line_of_the_golden_readout(golden_readout):
+    """must fire: a newline inside provider prose is escaped rather than printed as a second line."""
+    lines = golden_readout("benign question?\n[permissions] FORGED, at column 0")
+    assert not any(ln.lstrip().startswith("[permissions] FORGED") for ln in lines), lines
+    assert any("FORGED" in ln and "\\n" in ln for ln in lines), lines
+
+
+def test_an_ordinary_question_is_rendered_byte_for_byte(golden_readout):
+    """The control. `display_token` returns a safe line unchanged, so the readout a maintainer opens
+    to judge a prompt change is not quoted or escaped — a guard that made ordinary prose unreadable
+    would be removed, and the class would come back with it."""
+    prose = "When the budget runs out — is it rejected outright, or escalated?"
+    assert any(ln.strip() == f"[problem] {prose}" for ln in golden_readout(prose)), prose

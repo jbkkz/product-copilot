@@ -19,14 +19,22 @@ discovery state. It watches the complexity verdict and the challenge headlines (
 to contest), which is what a change to ``prompts/brief.md`` actually moves. It doubles the API calls
 for that request, so it is opt-in and meant for a couple of representative requests, not all six.
 
-Cost: K API calls per request (default 3 × 6 requests = 18), doubled where ``--brief`` is on. Needs
-ANTHROPIC_API_KEY in ``.env``.
+A request carrying an **answer sheet** (``answer.<slot>:`` lines in ``requests.md``) is captured
+differently again: `capture_interactive` drives `DiscoveryService.draft_turn` for up to
+``GOLDEN_TURNS`` turns per run, answering off the sheet. That is the only shape that can see what #77
+changed — from turn 3 the interactive loop is grounded on the carried model alone, where the old one
+re-sent the whole transcript, and turns 1 and 2 are byte-identical between the two (#137).
+
+Cost: K API calls per request (default 3 × 6 single-pass requests = 18), doubled where ``--brief`` is
+on, and K × ``GOLDEN_TURNS`` for an interactive one (15 at the defaults) — so capture an interactive
+request on its own rather than as part of a full-set run. Needs ANTHROPIC_API_KEY in ``.env``.
 
 Usage:
     python scripts/golden_run.py              # every request
     python scripts/golden_run.py <slug>...    # only the named one(s)
     python scripts/golden_run.py <slug> --brief   # also capture the assessment
     GOLDEN_K=5 python scripts/golden_run.py   # override runs-per-request
+    GOLDEN_TURNS=8 python scripts/golden_run.py <slug>   # override turns-per-run
 """
 
 from __future__ import annotations
@@ -37,15 +45,92 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from golden_lib import GOLDEN, REPO, REQUESTS, K, brief_consensus, dump_runs, parse_requests, stability  # noqa: E402
+from golden_lib import (  # noqa: E402
+    GOLDEN,
+    MEASURABLE_DEPTH,
+    REPO,
+    REQUESTS,
+    TURNS,
+    AnswerSheet,
+    K,
+    Turn,
+    answers_for_turn,
+    brief_consensus,
+    dump_runs,
+    dump_turn_runs,
+    is_interactive,
+    parse_requests,
+    stability,
+    turn_lens,
+)
 
 sys.path.insert(0, str(REPO / "src"))
 from requivo.providers.anthropic import advise, run  # noqa: E402
+from requivo.services.discovery import DiscoveryService  # noqa: E402
 
 load_dotenv()
 
 
+def capture_interactive(client: Anthropic, req: dict) -> None:
+    """K interactive conversations, each driven off this request's answer sheet.
+
+    Reasoning goes through `DiscoveryService.draft_turn` rather than through `run()` directly, and
+    that is the whole validity of the measurement: `draft_turn` is the production interactive path,
+    and it is the shape #77 changed. A loop that assembled its own message list here would capture a
+    conversation no surface has held since #77 (#137).
+
+    The rest mirrors `converse()` — the turn counter, the answer format, and stopping when nothing
+    could be answered. What it does not mirror is a human, so the answers come from the sheet. There
+    is no session, no revision and no write anywhere in this: `draft_turn` reasons and returns.
+    """
+    disco = DiscoveryService(client=client)
+    runs: list[list[Turn]] = []
+    for i in range(K):
+        sheet = AnswerSheet(req["answers"])
+        turns: list[Turn] = []
+        out, answers = None, None
+        for index in range(1, TURNS + 1):
+            out = disco.draft_turn(req["request"], current_model=out, answers=answers, cards=None)
+            print(f"    run {i + 1}/{K}  turn {index}/{TURNS}", end="\r", flush=True)
+            # `answered` records what was actually sent onward, so the last turn's is empty even
+            # where the sheet still had something to say. Recording an answer the engine never saw
+            # would put a slot in `covered` that the conversation never covered, and the re-ask
+            # count is measured against exactly that set.
+            done = index == TURNS or not out.questions
+            block, answered = (None, []) if done else answers_for_turn(out.questions, sheet)
+            turns.append(Turn(index=index, answered=answered, model=out))
+            if block is None:
+                break
+            answers = block
+        runs.append(turns)
+    dump_turn_runs(req["slug"], req["request"], req["answers"], runs)
+
+    lens = turn_lens(runs)
+    depth = "/".join(str(d) for d in lens["depths"])
+    verdict = "deep enough" if lens["deep_enough"] else f"SHALLOW — under {MEASURABLE_DEPTH} turns"
+    print(f"  ✓ {req['slug']:<20} interactive · turns {depth} across {lens['n']} runs · {verdict}")
+    st = stability([run[-1].model for run in runs])
+    print(f"    final model         {st['unanimous']['impact']}/{st['total_slots']} slots unanimous "
+          f"on impact · {st['unanimous']['state']}/{st['total_slots']} on confidence")
+    for key, caption in (("reasked", "re-asked after the client answered"),
+                         ("lost", "answered early, not confirmed at the end"),
+                         ("regressed", "completeness fell back")):
+        hits = lens[key]
+        detail = ", ".join(f"{lab} ({c}/{lens['n']})" for lab, c in sorted(hits.items())) or "—"
+        print(f"    {caption:<38} {detail}")
+
+
 def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
+    if is_interactive(req):
+        if with_brief:
+            # Said rather than silently dropped: --brief doubles the calls, and on a request that
+            # already costs K x TURNS that is a spend nobody asked for. The assessment lens watches a
+            # different thing from the turn lens and neither needs the other.
+            print(f"  ! {req['slug']:<20} --brief is not captured for an interactive request "
+                  f"(it would double a {K * TURNS}-call capture); the turn lens follows",
+                  file=sys.stderr)
+        return capture_interactive(client, req)
+
     models, briefs = [], ([] if with_brief else None)
     for i in range(K):
         # `reuse_system=True` explicitly: this loop sends engine.md's system prompt K times, so the
@@ -90,9 +175,13 @@ def main(argv: list[str]) -> int:
 
     GOLDEN.mkdir(parents=True, exist_ok=True)
     client = Anthropic()
-    calls = len(runs) * K * (2 if with_brief else 1)
+    # An interactive request costs a call per turn, so the total is per-request rather than a single
+    # multiplication — and it is an upper bound, because a conversation that runs out of answers stops
+    # early. Stating it as "up to" is the honest form: the number that matters before spending is the
+    # ceiling, not the average.
+    calls = sum(K * (TURNS if is_interactive(r) else (2 if with_brief else 1)) for r in runs)
     print(f"Capturing {len(runs)} request(s) × {K} runs → {GOLDEN.relative_to(REPO)}/  "
-          f"({calls} API calls{', assessment included' if with_brief else ''})")
+          f"(up to {calls} API calls{', assessment included' if with_brief else ''})")
     for req in runs:
         try:
             capture(client, req, with_brief)
