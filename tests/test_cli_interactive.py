@@ -13,6 +13,7 @@ this path is that a human is on the other end of it.
 from __future__ import annotations
 
 import builtins
+import inspect
 import io
 from contextlib import redirect_stdout
 
@@ -98,9 +99,45 @@ def _converse(disco, request, answers=(), only=None):
 
 def test_the_stub_satisfies_the_provider_protocol():
     """The control for every test in this file. A stub that had drifted from `ReasoningProvider`
-    would let the loop pass against a seam the real provider does not offer -- which is the failure
-    the fixture exists to catch, wearing a green tick."""
+    would let the loop pass against a seam the real provider does not offer -- the failure this
+    fixture exists to catch, wearing a green tick.
+
+    `isinstance` alone does not catch it, and that limit is `docs/providers.md`'s own: a
+    `@runtime_checkable` protocol checks that a member is **present**, never that it has the right
+    signature. The parameters are therefore compared as well, because the drift this file is exposed
+    to is exactly a signature one -- `analyze` grew `reuse_system` in this very change, and a stub
+    that had not grown it would have made every assertion below true about a seam that does not
+    exist.
+
+    The `Drifted` class is the must-fire control for the control: it passes `isinstance` and fails
+    the signature comparison, so this test goes red if the second half is ever deleted as redundant.
+    """
     assert isinstance(StubProvider(), ReasoningProvider)
+    for name in ("analyze", "generate"):
+        declared = set(inspect.signature(getattr(ReasoningProvider, name)).parameters)
+        offered = set(inspect.signature(getattr(StubProvider, name)).parameters)
+        assert declared <= offered, (
+            f"StubProvider.{name} is missing {sorted(declared - offered)} -- the fixture has drifted "
+            f"from the protocol, so the tests below assert against a seam the real provider is not"
+        )
+
+    class Drifted:
+        """Present on every member, wrong on every signature."""
+
+        name = "drifted"
+
+        def analyze(self, request): ...
+        def generate(self, artifact_type, model): ...
+        def model_name(self): ...
+        def provenance(self, op): ...
+
+    assert isinstance(Drifted(), ReasoningProvider), (
+        "this control assumes isinstance passes on a signature-drifted stub -- that is the whole "
+        "limit the parameter comparison above exists to cover"
+    )
+    assert not set(inspect.signature(ReasoningProvider.analyze).parameters) <= set(
+        inspect.signature(Drifted.analyze).parameters
+    ), "the parameter comparison cannot fire, so it is not a check"
 
 
 def test_the_loop_reasons_through_the_service_and_carries_the_model_not_a_transcript():
