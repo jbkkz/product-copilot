@@ -5,6 +5,14 @@ Split out of `test_cli_deterministic.py` by #141; the shared harness is `tests/_
 The forgery case over `artifact list`'s two untrusted fields is deliberately not here. It lives in
 `test_cli_untrusted_output.py` beside the `session show` case it was swept from, because the two
 share `_SHOW_FORGERIES` and the argument for that constant is written once, above it.
+
+That is a statement about which *test* lives where, not a claim that nothing here reads an untrusted
+value: `test_artifact_list_json_has_a_top_level_that_is_not_data` closes on a forged `slug` and
+asserts the envelope names the directory it was asked about instead (invariant 14). The assertion
+belongs to #107's envelope rather than to the render-safety sweep, which is why it stayed with the
+envelope — but the boundary between the two files is thematic and not airtight, and reading the
+sentence above as airtight is how the next person concludes this file has been checked for a class
+it has not.
 """
 from __future__ import annotations
 
