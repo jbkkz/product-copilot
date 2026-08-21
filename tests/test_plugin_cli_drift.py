@@ -536,6 +536,54 @@ def test_a_stray_file_in_the_skills_directory_is_absent_and_not_could_not_look(t
     assert sources.unreadable == [], sources.unreadable
 
 
+def test_a_skills_path_that_is_a_regular_file_is_absent_and_not_could_not_look(tmp_path):
+    """The same three-way rule at the directory level, where it was stated and not applied.
+
+    `_collect_file` sorts `NotADirectoryError` to absent, because a path continuing through a regular
+    file *decides* the question. The `skills.iterdir()` arm above it named only `FileNotFoundError`,
+    so the identical exception twelve lines apart meant two different things: a `skills` that is a
+    file read as could-not-look. Found by review, and the edge case matters less than the split being
+    uniform -- a rule that holds in one of the two places it is written is the thing that bites."""
+    (tmp_path / "skills").write_text("not a directory", encoding="utf-8")
+    (tmp_path / "REASONING.md").write_text("Preflight: `requivo doctor`.", encoding="utf-8")
+
+    sources = invocation_sources(tmp_path)
+    assert [p.name for p in sources.paths] == ["REASONING.md"], sources.paths
+    assert sources.unreadable == [], sources.unreadable
+
+
+def test_the_reason_names_the_unreadable_path_when_nothing_could_be_extracted(tmp_path, capsys):
+    """Could-not-look for the right reason, which is a separate question from could-not-look.
+
+    Found by review. When the only invocation-bearing file is the one the walk could not open,
+    `referenced` comes back empty and `compare()` -- which is never handed the unreadable set, and
+    should not be -- returns its own could-not-look: *no `requivo` invocations were found in the
+    plugin's files*. True as far as it goes and wrong about the cause, because the emptiness is not a
+    fact about the plugin, it is a fact about what this process was allowed to read. Worse, `_run`
+    returned on that arm before ever naming the path, so the exit code was right and the one line a
+    reader could act on never printed.
+
+    The remedy is ordering, not a new state: the unreadable set is named before any verdict detail,
+    on every path through `_run`, so the emptiness below is always read next to its cause."""
+    skills = tmp_path / "skills"
+    only = skills / "only"
+    only.mkdir(parents=True)
+    (only / "SKILL.md").write_text("Run `requivo status <slug>`.", encoding="utf-8")
+    _make_unreadable(only)
+    try:
+        code = main(["--released-python", sys.executable, "--plugin", str(tmp_path)])
+        out = capsys.readouterr().out
+    finally:
+        only.chmod(0o755)
+
+    assert code == 3, out
+    assert "state         : could-not-look" in out, out
+    assert str(only / "SKILL.md") in out, out
+    # The cause has to come before the consequence, or the first sentence a reader meets is the one
+    # that blames the plugin for an emptiness this process created.
+    assert out.index("could not be read") < out.index("no `requivo` invocations were found"), out
+
+
 def test_main_reports_could_not_look_when_it_could_only_walk_part_of_the_plugin(tmp_path, capsys):
     """The defect (#139), staged exactly as the v1.1.0 release audit found it.
 

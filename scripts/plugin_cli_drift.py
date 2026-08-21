@@ -264,7 +264,7 @@ def invocation_sources(plugin_root) -> Sources:
     skills = root / "skills"
     try:
         entries = sorted(skills.iterdir())
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         entries = []                       # decided: this plugin root has no skills directory
     except OSError as exc:                 # EACCES on the directory itself, and every skill with it
         entries = []
@@ -458,6 +458,24 @@ def _run(args) -> int:
     print(f"state         : {state}")
     print("")
 
+    # Named before any verdict detail, on every path out of this function, and that ordering is the
+    # whole of the fix rather than a presentation choice. `compare()` is never handed the unreadable
+    # set -- it is a fact about how `referenced` was built, not about the surfaces it compares -- so
+    # when the only invocation-bearing file is the one that could not be opened it reports `no
+    # requivo invocations were found in the plugin's files`, which blames the plugin for an emptiness
+    # this process created. Returning on that arm first meant the path was never named at all.
+    # `test_the_reason_names_the_unreadable_path_when_nothing_could_be_extracted`.
+    if sources.unreadable:
+        detail = ("{} plugin path(s) could not be read, so this run walked a subset of the plugin and "
+                  "everything below is a verdict over that subset rather than over the plugin: {}. That "
+                  "is not a clean result and it is not evidence of drift either.").format(
+                      len(sources.unreadable), "; ".join(sources.unreadable))
+        # A path is untrusted text reaching an annotation. `_annotate` squashes it to a single line,
+        # and a workflow command is only parsed at the start of one, so a `::` inside a filename
+        # cannot open a directive of its own -- the same guarantee `INVOCATION_RE` makes for tokens.
+        print(detail)
+        _annotate(args.github, "Plugin/CLI drift check could not look", detail)
+
     if report.state == COULD_NOT_LOOK:
         print(report.detail)
         _annotate(args.github, "Plugin/CLI drift check could not look", report.detail)
@@ -493,17 +511,6 @@ def _run(args) -> int:
                                                "; ".join(f.invocation for f in typos))
         print(summary)
         _annotate(args.github, "Plugin names a command that does not exist", summary)
-
-    if sources.unreadable:
-        detail = ("{} plugin path(s) could not be read, so this run walked a subset of the plugin and "
-                  "anything above is a verdict over that subset rather than over the plugin: {}. That "
-                  "is not a clean result and it is not evidence of drift either.").format(
-                      len(sources.unreadable), "; ".join(sources.unreadable))
-        # A path is untrusted text reaching an annotation. `_annotate` squashes it to a single line,
-        # and a workflow command is only parsed at the start of one, so a `::` inside a filename
-        # cannot open a directive of its own -- the same guarantee `INVOCATION_RE` makes for tokens.
-        print(detail)
-        _annotate(args.github, "Plugin/CLI drift check could not look", detail)
 
     if report.findings or typos:
         return EXIT_DRIFT
