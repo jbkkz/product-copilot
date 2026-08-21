@@ -25,5 +25,6 @@ depth — each has one clear responsibility; the README links to them rather tha
 
 - [Roadmap](roadmap.md) — what exists and what's next
 - [Open-source strategy](open-source-strategy.md) — what is public and what stays private
+- [Plugin bundling](plugin-bundling.md) — why the Claude Code plugin does not bundle the CLI (#94)
 - [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md) · [Governance](../GOVERNANCE.md) ·
   [Trademarks](../TRADEMARKS.md)
