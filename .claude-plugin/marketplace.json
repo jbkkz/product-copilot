@@ -5,13 +5,13 @@
     "name": "jbkkz",
     "url": "https://github.com/jbkkz"
   },
-  "description": "The Requivo project's own plugin catalog — the Claude Code surface of Requivo, the requirements engine that also ships a CLI and a web app.",
+  "description": "The Requivo project's own plugin catalog. It carries the Claude Code surface of Requivo, the requirements engine that also ships a CLI and a web app.",
   "plugins": [
     {
       "name": "requivo",
       "displayName": "Requivo",
       "source": "./plugins/claude-code",
-      "description": "Requirements discovery for Claude Code. Turn a vague feature request into a structured, versioned requirements model — what is known, what is assumed, what is still open — then write a decision brief or a PRD from it, or hand the same model to the requivo CLI for acceptance criteria and tracker epics. Reasoning runs in your Claude Code session, so there is no API key to configure.",
+      "description": "Requirements discovery for Claude Code. Turn a vague feature request into a structured, versioned requirements model that separates what is known, what is assumed and what is still open. Write a decision brief or a PRD from it, or hand the same model to the requivo CLI for acceptance criteria and tracker epics. Reasoning runs in your Claude Code session, so there is no API key to configure.",
       "version": "1.0.1",
       "author": {
         "name": "jbkkz"
