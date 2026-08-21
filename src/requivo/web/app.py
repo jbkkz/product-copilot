@@ -27,9 +27,8 @@ from requivo.web.templating import STATIC_DIR, templates
 # obvious gap: `context_unreadable` — the server unable to read its own card directory — was
 # reported to the reader as "your request was bad" (#34). Six codes were sitting on that default;
 # for two of them 400 happened to be right, four were wrong, and one of the four had been noticed.
-# `tests/web/test_web.py::test_every_error_code_has_an_explicit_http_status`
-# walks the RequivoError subclasses and fails on the next omission, so the table cannot silently
-# fall behind the vocabulary again.
+# `test_every_error_code_has_an_explicit_http_status` walks the RequivoError subclasses and fails on
+# the next omission, so the table cannot silently fall behind the vocabulary again.
 #
 # The 4xx/5xx split is the question the default got wrong: is this about what the caller sent, or
 # about the state of the server they sent it to?
@@ -154,8 +153,8 @@ _CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 
 # the downgrade-sensitive values (`strict-origin`, `no-referrer-when-downgrade`,
 # `strict-origin-when-cross-origin`) null it only on an HTTPS→HTTP downgrade, which same-origin cannot
 # be, and `same-origin` itself nulls it only when the request *is* cross-origin.
-# `tests/web/test_web.py::test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` asserts
-# that composition — the defect lived between two files, so no per-file test could see it.
+# `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` asserts that composition — the
+# defect lived between two files, so no per-file test could see it.
 _REFERRER_POLICY = "same-origin"
 
 # Under `requivo web` this rides uvicorn's handler, so a traceback lands in the terminal the user

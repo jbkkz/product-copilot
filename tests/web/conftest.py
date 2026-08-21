@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.services.discovery import DiscoveryService
+from requivo.services.sessions import SessionService
 from requivo.web.app import create_app
 from requivo.web.dependencies import get_discovery
 from requivo.web.security import CSRF_HEADER, csrf_token
@@ -48,6 +49,19 @@ CRITERIA_REPLY = json.dumps({"title": "Leave approval — acceptance criteria", 
     {"name": "Request leave", "scenarios": [
         {"id": "SC-1", "title": "Manager approves", "when": "the manager approves",
          "then": ["the request is marked approved"]}]}]})
+
+
+HIGH_EXPLICIT = {"completeness": 90, "confidence": "explicit", "impact": "high"}
+HIGH_INFERRED = {"completeness": 30, "confidence": "inferred", "impact": "high"}
+
+
+def _make_session(slug="leave-approval", **model_over):
+    """Seed a discovered session directly through the service (no provider), for view/security tests."""
+    svc = SessionService()
+    svc.create_session("A leave approval request", slug=slug)
+    model = {"model": full_model(**model_over), "questions": [], "summary": {"objective": "Leave system"}}
+    svc.update_model(slug, json.dumps(model))
+    return slug
 
 
 class FakeClient:

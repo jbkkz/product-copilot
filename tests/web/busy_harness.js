@@ -1,5 +1,5 @@
 // A minimal DOM, enough to execute `web/static/js/app.js` for real and watch what it does to the
-// page's submit buttons. Driven by `tests/web/test_web.py::test_one_generation_at_a_time_...`.
+// page's submit buttons. Driven by `test_one_generation_at_a_time_is_the_pages_rule_not_the_forms`.
 //
 // Why this exists: the rule under test is "while any request is in flight, every submit button on the
 // page is muted" (#50). That is browser behaviour, and the Python suite drives a `TestClient` which
