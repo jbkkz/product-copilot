@@ -433,6 +433,7 @@ model. Assert on the code, never on the message.
 | `invalid_archive` | 400 | opens, but is not shaped like an export. `details`: `{problem, …}` |
 | `inconsistent_archive` | 400 | holds a session that fails the integrity check. `details`: `{slug, problems}` |
 | `session_exists` | 409 | is fine; that slug is taken and `--force` was not passed. `details`: `{slug}` |
+| `import_destination_occupied` | 409 | is fine; something that is **not** a session already sits at the slug's directory. `details`: `{slug, path}` |
 
 `invalid_archive` covers seven conditions under one code because they share one remedy — *give me a
 different archive*. `details["problem"]` is present on all seven and says which: `empty`,
@@ -450,6 +451,16 @@ Three more codes reach this verb and are about neither the archive's shape nor t
 `session_not_found` when the path you named is not a file, `invalid_slug` when the archive's one
 directory is named something that could not be a session, and `import_move_failed` (500) when the
 validated session could not be moved into place — the archive was fine and the store refused it.
+
+`import_destination_occupied` is the one that used to be reported as `import_move_failed`, and the
+distinction is worth knowing because the remedies differ. The import claims a free slug by renaming
+the extracted directory onto it, and that rename does not answer the same way everywhere: on POSIX
+an **empty** destination directory is replaced silently, while on Windows it is `MoveFileExW`, which
+refuses *any* existing destination directory. A stray `mkdir` at the slug therefore used to import on
+macOS and Linux and fail on Windows with a message about a move that had nothing wrong with it. Both
+platforms now refuse it by name, before the rename is attempted. `--force` does **not** lift this
+refusal — it replaces a *session*, and the point of this code is that there is no session there. Move
+or delete the directory yourself; the import never removes something it cannot interpret.
 
 `session export` reads under the session's write lock, so an archive can never combine an old
 `session.json` with a newer `model.json`, and it excludes `.lock` and any scratch file.

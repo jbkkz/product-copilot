@@ -507,6 +507,33 @@ the check and the move is refused by the move instead. That window predates this
 unchanged by it; it is written down here because the same code now reaches a reader from two places
 that mean subtly different things by it.
 
+### `import_destination_occupied` — a new code, and one behaviour change (#114)
+
+**New in the vocabulary: `import_destination_occupied`, 409, `details` `{slug, path}`.** Adding a code
+is not breaking under the rule above, and this one moves no condition off an existing code that was
+ever correct for it — it takes over a case `import_move_failed` was answering wrongly.
+
+| Condition | Was | Now | Status |
+|---|---|---|---|
+| something that is not a session sits at the slug, POSIX, **non-empty** | `import_move_failed` | `import_destination_occupied` | **500 → 409** |
+| something that is not a session sits at the slug, POSIX, **empty** | *imported silently* | `import_destination_occupied` | — → 409 |
+| something that is not a session sits at the slug, Windows, empty or not | `import_move_failed` | `import_destination_occupied` | **500 → 409** |
+
+The free-slug arm claims the slug by renaming the extracted directory onto it, and `os.replace` does
+not answer that the same way on every platform: POSIX replaces an **empty** destination directory
+silently, while Windows' `MoveFileExW` refuses *any* existing destination directory. So one stray
+`mkdir` imported on macOS and Linux and failed on Windows — and the Windows refusal read *could not
+move the imported session into place*, which is a fact about a move where the fact is about the
+destination.
+
+**The second row is a behaviour change and not only a rename**: an import that used to succeed on
+POSIX now refuses. It is taken deliberately, because the alternative is converging the other way — an
+import that deletes a directory the store never created and cannot interpret — and because no
+in-code producer leaves an empty directory at that path (`create_session` stages and renames,
+`session_lock` refuses rather than materialising one). Reaching this state takes a `mkdir` or a
+half-cleaned checkout, and the remedy is to move or remove that directory. `--force` does not lift
+it: `--force` replaces a *session*, and this code exists to say there is no session there.
+
 ## What a proposal means
 
 The JSON you hand to `model validate`, `model diff` and `model apply` is a **proposal**, and since
