@@ -257,7 +257,7 @@ def test_doctor_keeps_the_whole_root_arm_for_the_case_that_really_is_the_whole_r
     """`iterdir()` itself failing is genuinely the whole root, and that arm must survive the change:
     a fix that turned every listing failure into a per-entry row would answer `0 sessions` about a
     workspace nobody could look into, which is #12's F3."""
-    import requivo.deterministic as det
+    from requivo.deterministic import doctor as det
 
     def _unreadable():
         raise OSError("boom")
@@ -433,7 +433,7 @@ def test_the_error_text_on_a_non_session_line_cannot_forge_a_line_either():
     whatever the exception space happens to look like on the leg it runs on. Whether a reachable
     exception can carry a newline today is a separate question, and the answer being *probably not*
     is not a property of this line."""
-    from requivo.deterministic import _non_session_detail
+    from requivo.deterministic.doctor import _non_session_detail
 
     forged = "boom\nTOTAL: 0 sessions, all clear"
     for entry in ({"kind": "unknown", "error": forged},
@@ -448,7 +448,7 @@ def test_a_plain_error_is_not_mangled_by_the_wrap():
     """The positive control. `display_token` on ordinary text must leave it alone, or the fix trades
     a forgeable line for an unreadable one — and every operator-facing message on this surface would
     pay for a case nobody has reached."""
-    from requivo.deterministic import _non_session_detail
+    from requivo.deterministic.doctor import _non_session_detail
 
     detail = _non_session_detail({"kind": "unknown", "error": "[Errno 13] Permission denied"})
     assert "[Errno 13] Permission denied" in detail
@@ -476,20 +476,29 @@ def test_no_error_string_reaches_a_printed_line_unwrapped():
     ones already inside a `display_token(` call.
 
     What it still does not cover, named rather than left to be discovered: a value that does not have
-    `error` in its expression, and any file other than `deterministic.py`. `cli.py:581` prints a whole
-    `RequivoError` to stderr and is deliberately out of scope — that text is guarded at the
-    interpretation site by `normalize_tokens`, which is where invariant 14 says the guard belongs."""
-    src = (Path(__file__).resolve().parents[1] / "src" / "requivo" / "deterministic.py").read_text(
-        encoding="utf-8")
+    `error` in its expression, and any file outside `src/requivo/deterministic/`. `cli.py:581` prints
+    a whole `RequivoError` to stderr and is deliberately out of scope — that text is guarded at the
+    interpretation site by `normalize_tokens`, which is where invariant 14 says the guard belongs.
+
+    **It walks the package, not a file** (#73). The surface was one module until that split, and a
+    sweep left pointing at `deterministic.py` would have gone on passing while reading nothing at
+    all: the all-clear nobody earned, in the guard that exists to say so. The empty-scan assertion
+    below is what makes that failure loud instead of green."""
+    package = Path(__file__).resolve().parents[1] / "src" / "requivo" / "deterministic"
+    modules = sorted(package.rglob("*.py"))
+    assert modules, (
+        f"the guard found no modules under {package}: it is not looking at the deterministic "
+        f"surface, and a negative assertion over an empty set passes for the wrong reason")
     unwrapped = []
-    for lineno, line in enumerate(src.splitlines(), 1):
-        stripped = line.strip()
-        if stripped.startswith("#") or "f\"" not in line and "f'" not in line:
-            continue
-        for m in re.finditer(r"\{([^{}]*\berror\b[^{}]*)\}", line):
-            if "display_token(" in m.group(1):
+    for path in modules:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#") or "f\"" not in line and "f'" not in line:
                 continue
-            unwrapped.append(f"{lineno}: {m.group(0)}  |  {stripped[:90]}")
+            for m in re.finditer(r"\{([^{}]*\berror\b[^{}]*)\}", line):
+                if "display_token(" in m.group(1):
+                    continue
+                unwrapped.append(f"{path.name}:{lineno}: {m.group(0)}  |  {stripped[:90]}")
     assert not unwrapped, (
         "an error string is interpolated into a printed line without display_token:\n  "
         + "\n  ".join(unwrapped))

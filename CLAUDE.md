@@ -34,7 +34,7 @@ pip install -e ".[dev]"                 # deps + the `requivo` command + pytest
 `requivo` is the command. Verbs: `discover`,
 `answer`, `demo`, `status`, `impact`, `brief`, `prd`, `stories`, `estimate`, `criteria`,
 `epic` (`--export-json/--github/--gitlab` — three flags of one kind, each writing an export file;
-`epic` deliberately has no stdout `--json`, see #83), `release`, `web`, plus the offline ones in `deterministic.py`
+`epic` deliberately has no stdout `--json`, see #83), `release`, `web`, plus the offline ones in `deterministic/`
 (`doctor`, `schema`, `context`, `session` incl. `verify`, `model`, `artifact`). `impact` is a pure query over the
 dependency DAG — no API call. Without an install, `python scripts/requivo_cli.py <cmd>` is equivalent
 (the launcher lives under `scripts/`, not at the repo root, where it would shadow the package).
@@ -60,7 +60,7 @@ Python — and that call lives in a **provider**, never in the core. The layers 
   `DiscoveryService` is the single provider-backed orchestration (reason → apply → save).
   Both storage (`SessionRepository`) and reasoning (`ReasoningProvider`) are injected, so the
   orchestration is backing-agnostic — a Postgres repository reuses it verbatim.
-- **`render/`** turns data into strings; **`cli.py`**, **`deterministic.py`** and **`web/`** are the
+- **`render/`** turns data into strings; **`cli.py`**, **`deterministic/`** and **`web/`** are the
   only layers that touch argv/stdout/HTTP.
 
 Every interface — the terminal CLI, the Claude Code plugin, Requivo Web — is a thin layer over the same
@@ -98,7 +98,16 @@ requivo/
     discovery.py     DiscoveryService — reason → apply → save, shared by CLI + Web
   render/          views (data → str/stdout, no side effects)
   cli.py           the `requivo` CLI: provider verbs (discover/answer/generators/web)
-  deterministic.py the no-LLM verbs: doctor / schema / context / session / model / artifact
+  deterministic/   the no-LLM verbs — one module per axis of change (#73); `register(sub)` is the
+                   single seam `cli.py` binds through and it names its four halves, so a module that
+                   stops registering is an ImportError rather than a quietly shorter `--help`
+    __init__.py      the module docstring + `register(sub)` = register_doctor/_sessions/_model/_artifacts
+    _shared.py       what more than one verb module needs — input, `_print_json`, `EXIT_DEGRADED` —
+                     and the membership rule that keeps it from becoming a second deterministic.py
+    doctor.py        doctor / schema / context: the verbs that answer for the install, not a session;
+                     owns card health + the two remedy hints, which `session verify` imports
+    sessions.py      session init / list / show / migrate / export / verify / import
+    model.py         model show / validate / apply / diff       artifacts.py  artifact save / list / show
   web/             Requivo Web — FastAPI + Jinja2 + HTMX over the services (the `[web]` extra)
     app.py           create_app()   security.py  cross-site guard   routes/  viewmodels/  templates/
     viewmodels/labels.py  the user-facing vocabulary, in one table (see "Two vocabularies" below)
@@ -146,7 +155,7 @@ bug that looked like correct behaviour.
    *IO-free*, which this invariant used to say, was false as written and a guard against the literal
    wording would have to fail on correct code. What core may not do is import a provider or the
    Anthropic SDK, and may not touch **argv, the standard streams, the environment, or process exit** —
-   `cli.py`/`deterministic.py` own argv and stdout, `paths.py` owns the environment. `logging` is
+   `cli.py`/`deterministic/` own argv and stdout, `paths.py` owns the environment. `logging` is
    fine; it is the library-correct way of *not* printing. `tests/test_boundaries.py` enforces both
    halves, walks `core/` recursively, resolves relative imports, and **fails when its scan set is
    empty** — a glob over a directory that no longer exists returns `[]`, and `assert not []` is an

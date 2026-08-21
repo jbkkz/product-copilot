@@ -322,7 +322,7 @@ def test_the_three_outcomes_have_three_exit_codes(workspace):
 
 
 def test_the_degraded_code_collides_with_nothing():
-    """The two exit-code constants live in two modules — `cli.py` imports `deterministic.py`, so the
+    """The two exit-code constants live in two modules — `cli.py` imports `deterministic/`, so the
     dependency cannot run the other way — and nothing but this test stops them being given the same
     number. 0, 1 and 2 are taken by success, `RequivoError` and argparse."""
     assert EXIT_DEGRADED not in {0, 1, 2, EXIT_RENDER_FAILED}

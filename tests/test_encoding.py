@@ -89,7 +89,7 @@ SCAN_ROOTS = {
 # `Path.rglob` on a directory that does not exist returns `[]`, and `assert not []` is an all-clear
 # nobody earned -- the failure #10 exists in order not to repeat.
 SCAN_ANCHORS = {
-    "src/requivo": ("core/persistence.py", "deterministic.py"),
+    "src/requivo": ("core/persistence.py", "deterministic/__init__.py"),
     "scripts": ("golden_lib.py",),
 }
 
