@@ -4,6 +4,8 @@ The harness decides what counts as a regression, so a bug here is worse than a b
 would let a real change through, or invent one that isn't there. None of this needs an API call — the
 captures are fixtures, and every function below is a pure read over them.
 """
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
