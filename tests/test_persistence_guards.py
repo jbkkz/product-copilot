@@ -156,7 +156,7 @@ def test_migrating_a_free_slug_still_works(workspace):
 def test_the_bulk_migrate_command_skips_a_slug_that_is_already_taken(workspace, capsys):
     """The sweep reports `migrated` and `skipped_already_present`, so a refusal has to degrade that one
     row rather than abort the pass — the rule invariant 15 states for a listing, applied to a loop."""
-    from requivo.deterministic import _cmd_session_migrate
+    from requivo.deterministic.sessions import _cmd_session_migrate
 
     svc = SessionService()
     svc.create_session("A real request.", slug="aaa-taken")
@@ -533,7 +533,7 @@ def test_a_migration_onto_such_a_slug_is_performed_not_reported_as_skipped(works
     `create_session`, and the bulk sweep turns `SessionExistsError` into `skipped_already_present` —
     a row that reads as a decision. A ghost directory made the sweep report a session it had refused
     to migrate as one that was already there, and the legacy work silently never landed."""
-    from requivo.deterministic import _cmd_session_migrate
+    from requivo.deterministic.sessions import _cmd_session_migrate
 
     _legacy("stale-lock", "LEGACY")
     with pytest.raises(RequivoError):
@@ -572,7 +572,7 @@ def test_the_lock_still_guards_a_session_that_exists(workspace):
     assert [p.code for p in check_session("live")] == []
 # ── #36: a path that is only printed is still a path this code built ─────────────
 #
-# `deterministic.py`'s `artifact save` and `cli.py`'s `_wrote` each re-joined
+# `deterministic/artifacts.py`'s `artifact save` and `cli.py`'s `_wrote` each re-joined
 # `canonical_dir(slug) / "artifacts" / <recorded filename>` inline, so the chokepoint the two
 # writes (#5) and the read (#23) were routed through was closed in three places and open in two.
 # Neither of the two opens the file, which is exactly how they survived both sweeps — "it only

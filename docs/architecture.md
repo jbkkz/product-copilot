@@ -31,8 +31,10 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   un-persisted `draft_turn` / `draft_assessment` an interactive loop repeats) the CLI and Web both
   call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
   (`FileSessionRepository` today; Postgres-swappable for a future service).
-- **`render/`** turns data into strings; **`cli.py` + `deterministic.py`** are the only layers that
-  touch argv/stdout/TTY. **`web/`** is a thin FastAPI + Jinja2 + HTMX layer over the same services.
+- **`render/`** turns data into strings; **`cli.py` + `deterministic/`** are the only layers that
+  touch argv/stdout/TTY. `deterministic/` is a package of one module per verb group (`doctor`,
+  `sessions`, `model`, `artifacts`, over a `_shared`), composed into the single `register(sub)` the
+  CLI binds through. **`web/`** is a thin FastAPI + Jinja2 + HTMX layer over the same services.
 - **`streams.py`** owns the *encoding* of stdout and stderr, as `paths.py` owns the environment —
   one place where "what happens when the console cannot represent this character" is answered.
   `cli.app()` calls it once, before anything can print. It exists because a renderer must not be able

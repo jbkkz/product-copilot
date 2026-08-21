@@ -361,7 +361,7 @@ class SessionExistsError(RequivoError):
     the final move is replaced without `--force`, silently. That window predates this code and is not
     what #101 changed; what #101 changed is that the refusal used to answer `invalid_model` / 400,
     which described a proposal nobody sent. The same shape is already written down for the sibling
-    case at `deterministic.py`'s `_cmd_session_migrate`, where the check is *reporting, not the
+    case at `deterministic/sessions.py`'s `_cmd_session_migrate`, where the check is *reporting, not the
     guard*. `details`: `{slug}`.
     """
 

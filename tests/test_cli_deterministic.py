@@ -20,7 +20,7 @@ from requivo.cli import _build_parser, app
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError
-from requivo.deterministic import MAX_ARCHIVE_FILES
+from requivo.deterministic.sessions import MAX_ARCHIVE_FILES
 from requivo.services.sessions import SessionService
 
 
@@ -91,7 +91,7 @@ def test_doctor_tells_a_loaded_context_dir_from_a_lost_one_and_from_an_unreadabl
     printed nowhere, while the card line printed a tick unconditionally. A wheel that ships `assets/`
     but loses `assets/context/` therefore showed three green ticks and reasoned with no product
     context at all."""
-    import requivo.deterministic as det
+    from requivo.deterministic import doctor as det
 
     def _unreadable():
         raise OSError("boom")
@@ -138,7 +138,7 @@ def test_doctor_tells_an_empty_workspace_from_an_unreadable_one(workspace):
     byte-identical to a genuinely empty workspace. Twelve unreachable sessions then read as "you have
     no sessions", and the user concludes they were deleted rather than that a directory is
     unreadable."""
-    import requivo.deterministic as det
+    from requivo.deterministic import doctor as det
 
     def _unreadable():
         raise PermissionError("Permission denied")
@@ -1536,7 +1536,7 @@ def test_import_refuses_an_archive_holding_more_than_one_session(workspace, tmp_
 
 
 def test_import_refuses_an_archive_that_is_too_large_or_too_many_files(workspace, tmp_path):
-    from requivo.deterministic import MAX_ARCHIVE_FILES
+    from requivo.deterministic.sessions import MAX_ARCHIVE_FILES
 
     many = {f"s/artifacts/f{i}.md": "x" for i in range(MAX_ARCHIVE_FILES + 1)}
     _zip(tmp_path / "many.zip", many)
@@ -1625,7 +1625,7 @@ def _lower_the_byte_ceiling(mp):
     `test_import_refuses_an_archive_that_is_too_large_or_too_many_files`, which asserts this same
     code. Paying 64 MiB of allocation a second time to re-read the same branch buys nothing, so the
     ceiling moves instead of the archive — `_inspect_archive` reads the module global at call time."""
-    import requivo.deterministic as det
+    from requivo.deterministic import sessions as det
     mp.setattr(det, "MAX_ARCHIVE_BYTES", 32)
 
 
@@ -1873,8 +1873,8 @@ def test_session_verify_reports_a_broken_history_and_exits_non_zero(workspace, t
 def _cards_unreadable(monkeypatch) -> None:
     """The card layer itself cannot be enumerated, so `check_selection` propagates rather than
     returning a verdict — `_card_health`'s `{"checked": False}` arm, which is *we could not look*."""
-    import requivo.deterministic as det
     from requivo.core.errors import ContextUnreadableError
+    from requivo.deterministic import doctor as det
 
     def _boom(only):
         raise ContextUnreadableError(
@@ -2089,7 +2089,7 @@ def test_a_session_created_during_the_extraction_window_is_refused_not_destroyed
 
     `_validate_extracted` runs after the archive is on disk and before anything is moved into place,
     so patching it is the honest way to stand inside the window without reaching into the store."""
-    from requivo import deterministic as det
+    from requivo.deterministic import sessions as det
 
     _zip(tmp_path / "race.zip", _good_entries("race"))
     real = det._validate_extracted
@@ -2116,7 +2116,7 @@ def test_that_window_refusal_names_the_conflict_rather_than_a_move_failure(
     The caller is entitled to the answer they would have got had the timing been different, and the
     remedy is the same one: pass `--force`. `import_move_failed` would send them looking at their
     filesystem for a fault that is not there."""
-    from requivo import deterministic as det
+    from requivo.deterministic import sessions as det
 
     _zip(tmp_path / "race.zip", _good_entries("race"))
     real = det._validate_extracted
