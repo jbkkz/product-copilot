@@ -1,0 +1,105 @@
+name: Plugin manifests
+
+# Runs `claude plugin validate` over both manifests this repo ships: the plugin
+# (`plugins/claude-code/.claude-plugin/plugin.json`) and the distribution catalog
+# (`.claude-plugin/marketplace.json`). Before this leg existed nothing ran the validator at
+# all, in either mode, on either file — so the marketplace manifest had been failing
+# `--strict` for a whole release with nothing saying so (#92).
+#
+# ── Is `--strict` the gate, or are warnings advisory here? ────────────────────────────────
+#
+# `--strict` is the gate, against a pinned CLI. A second run against `@latest` is advisory
+# and cannot fail the build. The reasoning, since #92 asks for it in writing:
+#
+# 1. Plain `claude plugin validate` is not a gate. It exits 0 on "Validation passed with
+#    warnings", and *warning* is the class this leg exists to catch — missing metadata and
+#    unrecognized fields both arrive as warnings. Measured on this repo: the missing
+#    top-level marketplace `description` printed a warning and exited 0. A non-strict leg
+#    would have been green for the entire life of the bug it was added to catch.
+#
+# 2. The cost of `--strict` is real and is not about our files. Claude Code ignores
+#    top-level fields it does not recognize, and the validator reports them as warnings —
+#    so a manifest written against a *newer* plugin spec goes red against an *older* CLI
+#    under `--strict`. That failure lands on someone else's release schedule, on a pull
+#    request that touched nothing near a manifest. A required check that reddens for
+#    reasons the author cannot act on is a check that gets overridden, then ignored, then
+#    deleted.
+#
+# 3. So the gate pins an exact CLI version. The only two things that can change the gate's
+#    answer are a manifest we edited and a pin we bumped on purpose — both of which are a
+#    line in a diff somebody reviewed.
+#
+# 4. A pin goes stale in the other direction: a marketplace reviewer runs *their* current
+#    CLI, not ours. The advisory step re-runs the same two commands against `@latest` with
+#    `continue-on-error`, and annotates the run when it disagrees with the pin. It is how
+#    spec drift gets discovered here, on an ordinary pull request, instead of during a
+#    submission — which is the failure mode #92 asked us to have an opinion about rather
+#    than meet in person.
+#
+# ── Notes on the install ──────────────────────────────────────────────────────────────────
+#
+# `npm install -g @anthropic-ai/claude-code@<version>` is the documented CI install and the
+# only one that pins. (The alternative, `curl -fsSL https://claude.ai/install.sh | bash`,
+# pipes a remote script into a shell and takes no version.) The package resolves a
+# platform-native optional dependency in its postinstall; on this runner that is
+# `@anthropic-ai/claude-code-linux-x64`, a glibc x86-64 ELF of about 320 MB, which is where
+# this job spends most of its wall clock. `claude plugin validate` is a static check: it
+# needs no login, no ANTHROPIC_API_KEY and no network beyond the install.
+#
+# Deliberately no `paths:` filter. A path-filtered check never reports on a pull request
+# that misses the filter, and GitHub treats a required check that never reports as pending
+# forever — so filtering here would block every unrelated merge the day this leg is added
+# to branch protection.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: plugin-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The pinned gate. Bump deliberately, and read the advisory step's output when you do.
+  CLAUDE_CLI_VERSION: "2.1.238"
+
+jobs:
+  validate:
+    name: Plugin manifests (validate --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install the pinned Claude Code CLI
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
+          claude --version
+
+      # The gate. Both manifests, both strict. The plugin manifest is the one a marketplace
+      # review runs the same check on; the catalog is the one our own install path reads.
+      - name: Validate the plugin manifest (gate)
+        run: claude plugin validate --strict ./plugins/claude-code
+
+      - name: Validate the marketplace catalog (gate)
+        run: claude plugin validate --strict .
+
+      # Advisory only — see point 4 above. This step must never fail the job; what it
+      # produces is an annotation on the run.
+      - name: Spec drift against the current CLI (advisory, never fails)
+        continue-on-error: true
+        run: |
+          npm install -g "@anthropic-ai/claude-code@latest"
+          latest="$(claude --version)"
+          echo "pinned=${CLAUDE_CLI_VERSION}  latest=${latest}"
+          drift=0
+          claude plugin validate --strict ./plugins/claude-code || drift=1
+          claude plugin validate --strict . || drift=1
+          if [ "$drift" -ne 0 ]; then
+            echo "::warning title=Plugin spec drift::The manifests pass under the pinned CLI ${CLAUDE_CLI_VERSION} but not under ${latest}. This is advisory and did not fail the build. Read the output above, fix the manifest if the newer CLI is right, then bump CLAUDE_CLI_VERSION in .github/workflows/plugin-validate.yml."
+          else
+            echo "No drift: both manifests are clean under ${latest} as well."
+          fi

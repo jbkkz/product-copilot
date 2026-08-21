@@ -4,15 +4,19 @@
     "name": "jbkkz",
     "url": "https://github.com/jbkkz"
   },
+  "description": "The Requivo project's own plugin catalog — the Claude Code surface of Requivo, the requirements engine that also ships a CLI and a web app.",
   "plugins": [
     {
       "name": "requivo",
+      "displayName": "Requivo",
       "source": "./plugins/claude-code",
-      "description": "Find what could change the solution before you commit to the scope — reasoning happens in your Claude Code session, so no Anthropic API key is needed.",
+      "description": "Requirements discovery for Claude Code. Turn a vague feature request into a structured, versioned requirements model — what is known, what is assumed, what is still open — then write a decision brief or a PRD from it, or hand the same model to the requivo CLI for acceptance criteria and tracker epics. Reasoning runs in your Claude Code session, so there is no API key to configure.",
       "version": "1.0.1",
       "author": {
         "name": "jbkkz"
-      }
+      },
+      "category": "development",
+      "homepage": "https://github.com/jbkkz/requivo/blob/main/plugins/claude-code/README.md"
     }
   ]
 }
