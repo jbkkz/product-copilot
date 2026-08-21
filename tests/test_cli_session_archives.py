@@ -302,12 +302,18 @@ def test_an_occupied_slug_is_a_conflict_with_the_store_not_an_invalid_model(work
 def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_path):
     """The table in `docs/cli.md` under *Importing a session*, asserted rather than described.
 
-    Seven codes reach this verb and each answers a different question. They are checked together
+    Eight codes reach this verb and each answers a different question. They are checked together
     because the defect #101 fixes was not any one of them being wrong — it was two of them being the
     *same* code while their neighbours on the identical code path had names of their own. A table
     that drifts back into a single handle fails here before a consumer discovers it.
+
+    It was seven until #114 added `import_destination_occupied`, and the count is load-bearing rather
+    than decoration: this test *is* the drift guard for that table, so a code that reaches the verb
+    and is missing here is a row a consumer can hit and no test asserts. The count going stale while
+    every assertion stayed green is how the eighth nearly shipped unenumerated — found by review.
     """
     from requivo.core.errors import (
+        ImportDestinationOccupiedError,
         InconsistentArchiveError,
         InvalidArchiveError,
         InvalidSessionError,
@@ -371,15 +377,27 @@ def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_
     # this the assertion above would pass just as well against an import broken some other way.
     assert _run_json(["session", "import", str(tmp_path / "movefail.zip"), "--json"])["slug"] == "move-fails"
 
+    # …and the eighth (#114): a zip that is fine, onto a slug held by something that is not a session
+    # at all. It answers neither of its two nearest neighbours above — not `session_exists`, because
+    # `--force` replaces a session and there is none here, and not `import_move_failed`, which is what
+    # it used to answer and which describes a move that is not what went wrong. The `move-fails` case
+    # just above is the proof that this one did not swallow it: that destination does not exist, so
+    # this guard stays silent and the move failure is still reachable under its own code.
+    _zip(tmp_path / "held.zip", _good_entries("held"))
+    store.canonical_dir("held").mkdir(parents=True)
+    assert _import_error(tmp_path / "held.zip")["code"] == "import_destination_occupied"
+
     # the three archive codes are one family, so `except InvalidSessionError` still catches every
-    # archive refusal without enumerating them; the other two deliberately are not in it
+    # archive refusal without enumerating them; the other three deliberately are not in it
     for cls in (UnreadableArchiveError, InvalidArchiveError, InconsistentArchiveError):
         assert issubclass(cls, InvalidSessionError), cls.__name__
     assert not issubclass(InvalidSlugError, InvalidSessionError)
     assert not issubclass(SessionExistsError, InvalidSessionError), (
         "an occupied slug is a conflict with the store, not a malformed session")
+    assert not issubclass(ImportDestinationOccupiedError, InvalidSessionError), (
+        "a destination holding no session is a conflict with the store, not a malformed session")
 
-    # must fire: with all seven refusals asserted, a good archive still lands
+    # must fire: with all eight refusals asserted, a good archive still lands
     _zip(tmp_path / "good.zip", _good_entries("ok-one"))
     assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
 
