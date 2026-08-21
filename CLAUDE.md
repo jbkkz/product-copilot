@@ -72,8 +72,19 @@ That was stated in three places and enforced in none, which is how the CLI's int
 loop came to reason two provider calls of its own and use the service only for the write (#77).
 `tests/test_boundaries.py` guards it now, from both ends of the same arrow: `core/` may not import a
 provider, and `cli.py` may reach only the three provider names an allowlist there names as *surface*
-concerns, each with its reason. The storage half — a surface reaching past `SessionRepository` to
-`core.persistence` — is #76 and is not guarded yet.
+concerns, each with its reason.
+
+The storage half — a surface reaching past `SessionRepository` to `core.persistence` — was #76, and
+it is guarded now too, over `cli.py`, `deterministic/` and `web/`. Twenty-seven direct calls became
+fifteen; what remains is every call for which no backing-neutral form exists, because it is *about*
+a path: `canonical_dir` telling a caller where a session landed, `artifact_path` validating a
+filename read off disk, `migrate_legacy` converting one filesystem layout into another,
+`validate_slug` refusing a name before any session exists to ask a repository about. A CLI that
+talks about files is entitled to know about files; the target was never zero direct calls, only zero
+unjustified ones, and the reason each survivor is justified is now written both at the call site and
+in the guard's allowlist. That allowlist is keyed by **(file, function)** and asserted in both
+directions, so a new call goes red under the name of the file that made it, and an entry whose call
+site is gone goes red as unchecked prose.
 
 They are equal in capability and **not** equal in weight. **Web is the product experience, Claude Code
 is an integration, the CLI is infrastructure.** That ordering is a product decision, held in the
