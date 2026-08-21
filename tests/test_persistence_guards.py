@@ -11,6 +11,10 @@ What the second group shares is the chokepoint rather than the direction of trav
 groups share is the shape of the defect: a rule stated at the callers that happened to be careful,
 in a store whose threat model is the caller that is not one of them. Offline, like the rest of the
 session tests: a temp workspace via REQUIVO_WORKSPACE.
+
+A third group joined at the foot of the file with the `test_engine.py` split (#72): the slug and the
+model loader. `validate_slug` is a guard of the same family, and `_slug` is the shape it has to keep
+accepting — a test of the guard and a test of what feeds it read better together than apart.
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 # The one control in this repo that can actually move the ambient default encoding, measured rather
 # than assumed. Borrowed rather than restated: two copies of a probe like this drift, and the copy
@@ -32,6 +37,7 @@ from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import RequivoError
 from requivo.core.integrity import check_session
+from requivo.core.persistence import _slug, load_model
 from requivo.services.artifacts import ArtifactService
 from requivo.services.repository import FileSessionRepository
 from requivo.services.sessions import SessionService
@@ -698,3 +704,31 @@ def test_neither_display_site_can_be_made_to_print_a_path_outside_the_session(wo
         _wrote("stay-inside", SimpleNamespace(status=_recorded(ARTIFACT_FILENAMES["epic"])), "epic")
     assert str(artifacts / ARTIFACT_FILENAMES["epic"]) in out.getvalue()
     assert str(artifacts / ARTIFACT_FILENAMES["brief"]) in _run_command(argv)
+
+
+# ── the slug, and the loader that reads a model back ─────────────────────────
+
+
+def test_slug_is_first_five_word_tokens():
+    assert _slug("We'd like an invoice created automatically when signed") == "we-d-like-an-invoice"
+    assert _slug("!!!") == "discovery"
+
+
+def test_invalid_slug_is_rejected_before_touching_the_filesystem():
+    # The traversal guard: an explicit slug that could escape the session root must raise in Core,
+    # never build a path. Covers the separator, the dot segment, an absolute root, and the empty string.
+    from requivo.core.errors import InvalidSlugError
+    from requivo.core.persistence import canonical_dir, validate_slug
+    for bad in ("../../escaped", "a/b", "..", ".", "", "/abs", "Upper", "under_score"):
+        with pytest.raises(InvalidSlugError):
+            validate_slug(bad)
+        with pytest.raises(InvalidSlugError):
+            canonical_dir(bad)
+    assert validate_slug("leave-approval") == "leave-approval"   # the shape _slug() always emits
+
+
+def test_load_model_rejects_invalid_model(tmp_path):
+    bad = tmp_path / "model.json"
+    bad.write_text(json.dumps({"questions": [], "summary": {}}))  # required `model` missing
+    with pytest.raises(ValidationError):
+        load_model(bad)
