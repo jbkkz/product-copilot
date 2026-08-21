@@ -23,7 +23,8 @@ the reasoning itself. That is not this plugin, and you do not need it.)
 current workspace — the directory Claude Code is running in, unless `REQUIVO_WORKSPACE` says
 otherwise. So the directory you run `/requivo:discover` from decides where the work lives, and running
 it from the wrong one fails in no visible way: the session is created, valid, and somewhere you will
-not think to look. `requivo session list` prints what the current workspace holds.
+not think to look. `requivo doctor` prints the workspace it resolved and the exact sessions directory
+it will use; `requivo session list` prints what that directory already holds.
 
 ## Installing
 
@@ -35,7 +36,12 @@ a fresh Claude Code it is:
 ```
 /plugin marketplace add jbkkz/requivo
 /plugin install requivo@requivo
+/reload-plugins
 ```
+
+Then `/help` → **Custom commands**: the six skills appear under the `requivo` namespace, and are typed
+as `/requivo:discover`, `/requivo:answer` and so on. Claude Code always namespaces a plugin's skills as
+`/<plugin>:<skill>`.
 
 **The `requivo` CLI** — the deterministic engine every skill drives. It is a Python package on PyPI,
 installed the way you install any command-line tool: `uv tool install requivo`, `pipx install requivo`,
