@@ -31,12 +31,29 @@ name: Plugin manifests
 #
 # 4. A pin goes stale in the other direction: a marketplace reviewer runs *their* current
 #    CLI, not ours. The advisory step re-runs the same two commands against `@latest` with
-#    `continue-on-error`, and annotates the run when it disagrees with the pin. It is how
-#    spec drift gets discovered here, on an ordinary pull request, instead of during a
-#    submission — which is the failure mode #92 asked us to have an opinion about rather
-#    than meet in person.
+#    `continue-on-error`, and annotates the run. It is how spec drift gets discovered here,
+#    on an ordinary pull request, instead of during a submission — which is the failure
+#    mode #92 asked us to have an opinion about rather than meet in person.
 #
-# ── Notes on the install ──────────────────────────────────────────────────────────────────
+# ── "Gate" here means the MODE, not the merge button ──────────────────────────────────────
+#
+# Read literally, "gate" above is a claim this file cannot make on its own. `main`'s branch
+# protection required 13 checks when this leg was written and this job is not one of them,
+# so today a red result here is visible on the pull request and does not block the merge.
+# The decision recorded above is which *mode* the leg runs in; making it blocking is one
+# API call, and it is the repository owner's to make:
+#
+#   gh api -X POST repos/jbkkz/requivo/branches/main/protection/required_status_checks/contexts \
+#     -f 'contexts[]=Plugin manifests (validate --strict)'
+#
+# Use that endpoint, not `PATCH .../required_status_checks` with `contexts[]` — PATCH
+# *replaces* the list rather than extending it, answers 200 either way, and would silently
+# cut the required checks to the one name it carries. `ci.yml` documents the same trap at
+# length. Read the list back either side and compare the counts (13 → 14):
+#
+#   gh api repos/jbkkz/requivo/branches/main/protection/required_status_checks --jq '.contexts | length'
+#
+# ── Notes on the install and the platform ─────────────────────────────────────────────────
 #
 # `npm install -g @anthropic-ai/claude-code@<version>` is the documented CI install and the
 # only one that pins. (The alternative, `curl -fsSL https://claude.ai/install.sh | bash`,
@@ -45,6 +62,17 @@ name: Plugin manifests
 # `@anthropic-ai/claude-code-linux-x64`, a glibc x86-64 ELF of about 320 MB, which is where
 # this job spends most of its wall clock. `claude plugin validate` is a static check: it
 # needs no login, no ANTHROPIC_API_KEY and no network beyond the install.
+#
+# `ubuntu-latest` only, and unlike `ci.yml` that is a decision rather than an oversight —
+# ci.yml's own header records what an unstated `ubuntu-latest`-only assumption cost this
+# project twice (#11, #29), so it is worth saying why this one is different. What this leg
+# measures is two static JSON documents against a spec; the answer is a property of the
+# files, not of the OS reading them, and no code of ours runs here at all. The one
+# platform-sensitive thing in reach is line endings, and a CRLF checkout is still valid
+# JSON — `\r` between tokens is legal whitespace. The cost of being wrong is also small:
+# these files are read on every platform by `tests/test_plugin.py`, which does run on all
+# four legs of the matrix. Adding an `os` axis here would triple a 320 MB install to
+# re-answer a question about file contents.
 #
 # Deliberately no `paths:` filter. A path-filtered check never reports on a pull request
 # that misses the filter, and GitHub treats a required check that never reports as pending
@@ -74,6 +102,18 @@ jobs:
         with:
           node-version: "22"
 
+      # Both manifests are checked for existence first, because `claude plugin validate`
+      # answers exit 1 for a missing file exactly as it does for a manifest it read and
+      # refused. Asserting the files are there turns "the checkout is wrong" into its own
+      # message instead of leaving it to arrive dressed as a validation failure.
+      - name: Both manifests are present
+        run: |
+          set -eu
+          for f in plugins/claude-code/.claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+            [ -f "$f" ] || { echo "missing manifest: $f" >&2; exit 1; }
+            echo "found $f"
+          done
+
       - name: Install the pinned Claude Code CLI
         run: |
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
@@ -89,17 +129,49 @@ jobs:
 
       # Advisory only — see point 4 above. This step must never fail the job; what it
       # produces is an annotation on the run.
+      #
+      # Three outcomes, and the third one is the point. `claude plugin validate` exits 1
+      # for a real refusal, for a path it could not find, and for a missing argument alike
+      # — measured, not assumed — so an exit code cannot tell "the newer CLI disagrees
+      # with our manifest" from "the validator did not work". Reading only the code, both
+      # render as spec drift, and a reader of the annotation is then confident about a
+      # question nobody answered. So the verdict is taken from what the tool *said*: a run
+      # that printed neither "Validation passed" nor "Validation failed" did not reach a
+      # verdict, and that is reported as could-not-look rather than folded into either
+      # side. Could-not-look is NOT a clean result and says so.
       - name: Spec drift against the current CLI (advisory, never fails)
         continue-on-error: true
         run: |
-          npm install -g "@anthropic-ai/claude-code@latest"
-          latest="$(claude --version)"
+          set -u
+          if ! npm install -g "@anthropic-ai/claude-code@latest"; then
+            echo "::warning title=Drift check could not look::npm could not install the current Claude Code CLI, so nothing was compared against the pinned ${CLAUDE_CLI_VERSION}. This is not a clean result — the drift question is unanswered for this run."
+            exit 0
+          fi
+          latest="$(claude --version 2>/dev/null || echo 'unknown')"
           echo "pinned=${CLAUDE_CLI_VERSION}  latest=${latest}"
+
           drift=0
-          claude plugin validate --strict ./plugins/claude-code || drift=1
-          claude plugin validate --strict . || drift=1
-          if [ "$drift" -ne 0 ]; then
-            echo "::warning title=Plugin spec drift::The manifests pass under the pinned CLI ${CLAUDE_CLI_VERSION} but not under ${latest}. This is advisory and did not fail the build. Read the output above, fix the manifest if the newer CLI is right, then bump CLAUDE_CLI_VERSION in .github/workflows/plugin-validate.yml."
+          unreadable=0
+          for target in ./plugins/claude-code .; do
+            if out="$(claude plugin validate --strict "$target" 2>&1)"; then
+              printf '%s\n' "$out"
+              # Exit 0 with no "Validation passed" line is not a pass we can vouch for.
+              printf '%s' "$out" | grep -q 'Validation passed' || unreadable=1
+            else
+              printf '%s\n' "$out"
+              if printf '%s' "$out" | grep -q 'Validation failed'; then
+                drift=1
+              else
+                unreadable=1
+              fi
+            fi
+          done
+
+          if [ "$unreadable" -ne 0 ]; then
+            echo "::warning title=Drift check could not look::The current CLI (${latest}) did not reach a readable verdict on at least one manifest — it printed neither 'Validation passed' nor 'Validation failed'. Read the step output. This is not a clean result, and it is not evidence of drift either."
+          elif [ "$drift" -ne 0 ]; then
+            echo "::warning title=Plugin spec drift::The manifests pass under the pinned CLI ${CLAUDE_CLI_VERSION} but are refused by ${latest}. This is advisory and did not fail the build. Read the output above, fix the manifest if the newer CLI is right, then bump CLAUDE_CLI_VERSION in .github/workflows/plugin-validate.yml."
           else
             echo "No drift: both manifests are clean under ${latest} as well."
           fi
+          exit 0

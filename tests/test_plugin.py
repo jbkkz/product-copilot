@@ -75,6 +75,11 @@ def test_repo_is_a_marketplace_pointing_at_this_plugin():
     # what a reader scans in a list of thousands, the manifest line is what they land on after.
     # One sentence, two hand-edited files, which is exactly the shape the version above drifted in.
     for field in ("displayName", "description", "homepage"):
+        # Non-empty as well as equal. Equality alone is satisfied by two blanks, and a
+        # synchronised blank is exactly the shape a careless edit of both files produces —
+        # measured: emptying `displayName` and `homepage` in both files passed all 15 tests
+        # in this module before this line existed.
+        assert entry[field], f"{field!r} is empty in the catalog entry"
         assert entry[field] == manifest[field], f"catalog/manifest drift on {field!r}"
     # The marketplace's own description is a different sentence: what this catalog offers, not
     # what the plugin does. `claude plugin validate --strict .` refuses the manifest without one
