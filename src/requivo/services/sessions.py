@@ -150,9 +150,10 @@ class SessionService:
 
         Not a repository method: deriving a name from a request is a naming policy, and it is the
         same policy whatever backs the store. It is here rather than left to each caller because
-        `cli.py` was reaching into `core.persistence` for the private `_slug` to do it (#76), which
+        `cli.py` was reaching into `core.persistence` for the slug derivation itself (#76), which
         is a surface holding a core implementation detail — the one direct storage call in that file
-        that had no defensible reason.
+        that had no defensible reason. What keeps a surface out of the store is this seam, not the
+        underscore `derive_slug` used to carry.
 
         The two callers want it for different inputs and the same reason: `create_session` derives
         a slug from the request text, and `requivo discover <file>` derives a *hint* from a
@@ -160,7 +161,7 @@ class SessionService:
         directory. Passing the raw stem through turned an ordinary input file into an
         `invalid_slug` error.
         """
-        return store._slug(text)
+        return store.derive_slug(text)
 
     def exists(self, slug: str) -> bool:
         """True if a usable session exists (the repository decides what backs it)."""

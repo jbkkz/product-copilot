@@ -46,7 +46,7 @@ from pydantic import ValidationError
 from requivo.core.contracts import PersistedEngineOutput
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import InvalidFilenameError, RequivoError
-from requivo.core.persistence import _hash, _is_contained, canonical_dir, migrate_session, validate_filename
+from requivo.core.persistence import canonical_dir, content_hash, is_contained, migrate_session, validate_filename
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
             bad("missing_revision_file", f"revisions/{i:04d}-model.json is missing")
             continue
         payload = f.read_text(encoding="utf-8")
-        if rec.model_hash and _hash(payload) != rec.model_hash:
+        if rec.model_hash and content_hash(payload) != rec.model_hash:
             bad("revision_hash_mismatch",
                 f"revisions/{i:04d}-model.json does not match the hash recorded for it — the file "
                 "was changed after it was written")
@@ -169,7 +169,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         except (ValidationError, ValueError) as e:
             bad("invalid_model", f"model.json is not a valid model: {e}")
         last_hash = seen_hashes.get(n)
-        if last_hash and _hash(payload) != last_hash:
+        if last_hash and content_hash(payload) != last_hash:
             bad("model_is_not_the_last_revision",
                 f"model.json does not match revision {n}, the revision it is supposed to be — "
                 "the current model and the history describe different states")
@@ -199,7 +199,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         # from an archive that is not in the store — it would answer confidently about the wrong
         # directory, which is this module's own defect class.
         #
-        # The containment confirmation is `_is_contained`, the store's, rather than a third statement
+        # The containment confirmation is `is_contained`, the store's, rather than a third statement
         # of the same rule (#3). It used to be written out here, and was then corrected twice for
         # defects the sibling copies had each been corrected for separately: a spurious disagreement
         # between two resolutions, reporting `unsafe_artifact_filename` about a perfectly bare name,
@@ -213,7 +213,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
         # probed and then reported as absent.
         try:
             f = artifacts / validate_filename(st.filename)
-            safe = _is_contained(f, artifacts)
+            safe = is_contained(f, artifacts)
         except (InvalidFilenameError, OSError, ValueError):
             safe = False
         if not safe:

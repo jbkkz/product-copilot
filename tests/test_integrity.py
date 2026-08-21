@@ -505,12 +505,12 @@ def test_a_long_request_yields_a_slug_the_filesystem_accepts(workspace):
     """A request is arbitrary user text. One 300-character word made a 300-character directory name
     and the write failed deep inside with a bare `OSError: File name too long`."""
     long_word = "a" * 300
-    slug = store._slug(f"{long_word} system")
+    slug = store.derive_slug(f"{long_word} system")
     assert len(slug) <= store.MAX_SLUG_LENGTH
     store.validate_slug(slug)                    # still a well-formed kebab-case token
 
     # Truncation must not merge two different requests into one session directory.
-    other = store._slug(f"{long_word} platform")
+    other = store.derive_slug(f"{long_word} platform")
     assert slug != other
 
     svc = SessionService()
