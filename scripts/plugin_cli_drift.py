@@ -17,8 +17,11 @@ The three states, and the third one is the point
 ------------------------------------------------
   resolved        every invocation the plugin makes exists in the released CLI.
   drift           at least one does not. A stranger installing today gets a skill that fails.
-  could-not-look  the released surface is unknown -- PyPI unreachable, no release published, the
-                  install failed, the probe could not introspect.
+  could-not-look  the question was not answered and we know it was not: the released surface is
+                  unknown (PyPI unreachable, no release published, the install failed, the probe
+                  could not introspect), or the plugin tree could only be walked in part -- a
+                  directory this process cannot descend into hides whatever is inside it, and a
+                  verdict over the subset it managed to read is not a verdict about the plugin (#139).
 
 `could-not-look` is not a pass and it is not drift either. A released CLI read as an empty verb set
 would report every single invocation as drift, which is a confident answer to a question nobody
@@ -65,6 +68,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -166,6 +170,18 @@ class Report(NamedTuple):
     detail: str
 
 
+class Sources(NamedTuple):
+    """What the walk found, and what it could not decide about.
+
+    Two fields rather than a bare list of paths, so a caller cannot take the walked set without
+    being handed the third state alongside it. That is structural on purpose: the neighbouring
+    defect -- an entry point that called `compare()` and never `tree_typos()`, and printed a clean
+    bill over a broken invocation -- is one `_run` already carries a paragraph about."""
+
+    paths: list[Path]
+    unreadable: list[str]
+
+
 # An "invocation" throughout this module is `(verb, second_token_or_None)` -- spelled out in the
 # signatures rather than aliased, because an alias is evaluated at runtime and `str | None` inside
 # one would not survive the Python 3.9 leg of the matrix. Annotations are strings here (see the
@@ -201,9 +217,42 @@ def cli_surface(python_executable: str) -> Surface | None:
     return parse_surface(proc.stdout or "")
 
 
-def invocation_sources(plugin_root) -> list[Path]:
+def _one_line(text: str) -> str:
+    """Collapse every whitespace run to one space, at the point untrusted text enters this module.
+
+    A directory entry name is untrusted text: on POSIX a filename may legally contain a newline, and
+    everything below is printed at column 0 of a CI step's stdout, where GitHub Actions parses
+    `::command::` at the start of ANY line -- not only lines that went through `_annotate`. So an
+    entry named `plain<LF>::error::...` would forge a workflow command of its own. `_annotate`
+    squashes the message it sends and was never the hole; the bare `print` beside it was, and
+    `_label` was the same hole one function over. This repository has had exactly this defect before
+    -- invariant 14's #40, a stored card name forging a line at column 0 of `doctor`'s own output --
+    which is why the squash sits where the value enters rather than at each place it leaves:
+    `test_an_unreadable_path_cannot_forge_a_line_of_its_own`.
+    """
+    return " ".join(text.split())
+
+
+def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> None:
+    """Sort one candidate into walked, absent, or could-not-look.
+
+    `Path.is_file()` cannot express the third: it swallows `OSError` and returns False, so a file
+    behind a directory this process cannot descend into is indistinguishable from one that is not
+    there. Only an error that *decides* the question -- the path is absent, or a parent is not a
+    directory -- is a plain no here; anything else is the walk saying it could not look.
+    """
+    try:
+        if stat.S_ISREG(candidate.stat().st_mode):
+            paths.append(candidate)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    except OSError as exc:
+        unreadable.append(_one_line(f"{candidate}: {exc.strerror or exc}"))
+
+
+def invocation_sources(plugin_root) -> Sources:
     """The plugin files whose `requivo` calls are *executed*, which is not the same set as the files
-    that mention one.
+    that mention one -- and the paths this walk could not decide about.
 
     The six `SKILL.md` bodies, plus `REASONING.md`. That second one is not a reader's document: it
     holds the shared preflight every skill is required to run before its first `requivo` call (#93),
@@ -211,25 +260,45 @@ def invocation_sources(plugin_root) -> list[Path]:
     plugin. It happens to introduce no verb the skills do not already name, which is exactly why it
     needs to be in the walked set rather than left to keep happening to be redundant.
 
-    `plugins/claude-code/README.md` is deliberately NOT here, and that is a real gap rather than a
-    settled question: it names `requivo estimate`, `requivo stories` and `requivo session list`,
-    which no skill does, and a reader who types one after they are dropped from a release gets a
-    command that does not exist. Left out because it is a human-facing document rather than an
-    instruction Claude follows -- the same line `tests/test_plugin.py` draws -- and because it was
-    being rewritten in another branch when this landed. Reported for filing rather than decided here.
+    Three outcomes and not two, because the predicate reaches a filesystem that can refuse. A walk
+    that silently grades the subset it managed to read tells the caller `resolved` about a plugin it
+    never opened -- pinned by
+    `test_main_reports_could_not_look_when_it_could_only_walk_part_of_the_plugin` (#139).
+
+    `plugins/claude-code/README.md` is deliberately NOT in this set, and that is now a decided
+    question rather than an open one (#138). It stays out because it is a page of English prose
+    rather than an instruction Claude follows -- the same line `tests/test_plugin.py` draws -- and
+    `INVOCATION_RE` cannot tell `requivo requires an API key` from a command. What covers it instead
+    is `test_the_plugin_readme_names_only_verbs_this_checkout_has`, which reads only the README's
+    code spans and fenced blocks: narrower than this walk, and it cannot false-positive on a
+    sentence. So the silence here is a decision with a guard behind it, not coverage nobody wrote.
     """
     root = Path(plugin_root)
-    sources = sorted((root / "skills").glob("*/SKILL.md"))
-    reasoning = root / "REASONING.md"
-    if reasoning.is_file():
-        sources.append(reasoning)
-    return sources
+    paths: list[Path] = []
+    unreadable: list[str] = []
+
+    skills = root / "skills"
+    try:
+        entries = sorted(skills.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        entries = []                       # decided: this plugin root has no skills directory
+    except OSError as exc:                 # EACCES on the directory itself, and every skill with it
+        entries = []
+        unreadable.append(_one_line(f"{skills}: {exc.strerror or exc}"))
+
+    for entry in entries:
+        _collect_file(entry / "SKILL.md", paths, unreadable)
+    _collect_file(root / "REASONING.md", paths, unreadable)
+    return Sources(paths=paths, unreadable=unreadable)
 
 
 def _label(path: Path) -> str:
     """What a finding calls the file it came from. `skills/brief/SKILL.md` is "brief"; anything else
-    is its own name, so `REASONING.md` reads as itself rather than as the directory above it."""
-    return path.parent.name if path.name == "SKILL.md" else path.name
+    is its own name, so `REASONING.md` reads as itself rather than as the directory above it.
+
+    Squashed, because this returns a *directory name* into every finding the script prints, and a
+    name is untrusted text -- see `_one_line`."""
+    return _one_line(path.parent.name if path.name == "SKILL.md" else path.name)
 
 
 def referenced_invocations(paths) -> dict[tuple[str, str | None], list[str]]:
@@ -374,7 +443,7 @@ def _run(args) -> int:
     tree = cli_surface(args.tree_python)
     released = cli_surface(args.released_python)
     sources = invocation_sources(args.plugin)
-    referenced = referenced_invocations(sources)
+    referenced = referenced_invocations(sources.paths)
     report = compare(referenced, tree=tree, released=released)
 
     # The other half of the question, and it has to be asked HERE rather than only in the tests.
@@ -390,13 +459,41 @@ def _run(args) -> int:
     typos = tree_typos(referenced, tree) if report.state != COULD_NOT_LOOK else []
     state = DRIFT if (report.state == RESOLVED and typos) else report.state
 
+    # The third state for the part of the plugin this process could not read (#139). It downgrades a
+    # `resolved` and never a firm negative: a complete answer outranks a partial one, which is the
+    # rule invariant 15 states for `session verify`. Pinned from both sides by
+    # `test_drift_in_the_part_it_could_read_outranks_the_part_it_could_not`.
+    if state == RESOLVED and sources.unreadable:
+        state = COULD_NOT_LOOK
+
     print(f"plugin root   : {args.plugin}")
-    print(f"files walked  : {len(sources)}")
+    print(f"files walked  : {len(sources.paths)}")
+    # Printed even when it is zero, because a count that appears only when it is interesting cannot
+    # be told from a check that stopped running.
+    print(f"unreadable    : {len(sources.unreadable)}")
     print("tree CLI      : {}".format(tree.version if tree else "COULD NOT INTROSPECT"))
     print("released CLI  : {}".format(released.version if released else "COULD NOT INTROSPECT"))
     print(f"invocations   : {len(referenced)}")
     print(f"state         : {state}")
     print("")
+
+    # Named before any verdict detail, on every path out of this function, and that ordering is the
+    # whole of the fix rather than a presentation choice. `compare()` is never handed the unreadable
+    # set -- it is a fact about how `referenced` was built, not about the surfaces it compares -- so
+    # when the only invocation-bearing file is the one that could not be opened it reports `no
+    # requivo invocations were found in the plugin's files`, which blames the plugin for an emptiness
+    # this process created. Returning on that arm first meant the path was never named at all.
+    # `test_the_reason_names_the_unreadable_path_when_nothing_could_be_extracted`.
+    if sources.unreadable:
+        detail = ("{} plugin path(s) could not be read, so this run walked a subset of the plugin and "
+                  "everything below is a verdict over that subset rather than over the plugin: {}. That "
+                  "is not a clean result and it is not evidence of drift either.").format(
+                      len(sources.unreadable), "; ".join(sources.unreadable))
+        # A path is untrusted text reaching an annotation. `_annotate` squashes it to a single line,
+        # and a workflow command is only parsed at the start of one, so a `::` inside a filename
+        # cannot open a directive of its own -- the same guarantee `INVOCATION_RE` makes for tokens.
+        print(detail)
+        _annotate(args.github, "Plugin/CLI drift check could not look", detail)
 
     if report.state == COULD_NOT_LOOK:
         print(report.detail)
@@ -436,6 +533,9 @@ def _run(args) -> int:
 
     if report.findings or typos:
         return EXIT_DRIFT
+
+    if sources.unreadable:
+        return EXIT_COULD_NOT_LOOK
 
     print(f"Every invocation the plugin makes resolves against the released CLI ({released.version}).")
     return EXIT_RESOLVED

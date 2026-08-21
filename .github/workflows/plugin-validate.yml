@@ -227,9 +227,11 @@ jobs:
   # `argparse` spends on a usage error, so a run that never reached a verdict cannot be reported as
   # one. The policy of not failing the build lives here rather than in the script, so changing it is
   # one reviewed line.
-  # `could-not-look` — PyPI unreachable, no release published, the install failed — is annotated as
-  # its own thing: a released CLI read as an empty verb set would report every invocation as drift,
-  # and read as a pass would hide the check being broken.
+  # `could-not-look` — PyPI unreachable, no release published, the install failed, or the plugin tree
+  # could only be walked in part (#139) — is annotated as its own thing: a released CLI read as an
+  # empty verb set would report every invocation as drift, and read as a pass would hide the check
+  # being broken. The partial walk is the same argument one layer down: a verdict over the files the
+  # process happened to be allowed to open is not a verdict about the plugin.
   #
   # The logic is in `scripts/` and tested in `tests/test_plugin_cli_drift.py`, not written into
   # this shell. A check that exists only in YAML is one the next skill added drops silently, which
