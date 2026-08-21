@@ -18,7 +18,8 @@ depth — each has one clear responsibility; the README links to them rather tha
 - [Compatibility](compatibility.md) — what is public, what may change, what is deprecated
 - [Providers](providers.md) — the Anthropic provider, models, cost
 - [Context cards](context-cards.md) — teaching the engine your product
-- [Evaluations](evaluations.md) — the golden harness for prompt/context changes
+- [Evaluations](evaluations.md) — the golden harness for prompt/context changes, and for the
+  interactive loop's deep-turn grounding
 - [Product validation](product-validation.md) — the manual protocol for "is this better than a strong prompt?"
 
 ## Project

@@ -38,6 +38,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "requivo"
 TESTS = REPO_ROOT / "tests"
+# `scripts/` carries references too and was outside the scan until #137. It is not shipped in the
+# wheel, which is why it was missed, and that is irrelevant to the convention: a reference is read by
+# a maintainer with a grep, and the harness scripts are read by exactly that person.
+SCRIPTS = REPO_ROOT / "scripts"
 
 # Files that may carry a reference. `.md` is in here for CLAUDE.md, which names two tests in its
 # invariants and is read more often than any module.
@@ -66,12 +70,13 @@ def subjects() -> list[Path]:
     it applies with more force here: this guard's whole job is a negative assertion, and a rename of
     `src/requivo` would turn it into a green test over nothing.
     """
-    found = [p for p in sorted(SRC.rglob("*")) if p.suffix in SUBJECT_SUFFIXES and p.is_file()]
+    found = [p for root in (SRC, SCRIPTS) for p in sorted(root.rglob("*"))
+             if p.suffix in SUBJECT_SUFFIXES and p.is_file() and "__pycache__" not in p.parts]
     found.extend(p for p in EXTRA_SUBJECTS if p.is_file())
     if not found:
         raise AssertionError(
-            f"the narrative-reference guard found no files under {SRC}. This is 'could not look', "
-            f"not 'looked and found nothing' — fix the path, never the assertion."
+            f"the narrative-reference guard found no files under {SRC} or {SCRIPTS}. This is 'could "
+            f"not look', not 'looked and found nothing' — fix the path, never the assertion."
         )
     return found
 
@@ -108,6 +113,14 @@ def test_the_guard_reads_the_real_tree():
     files = subjects()
     assert len(files) > 20, f"only {len(files)} subject files — the scan is not seeing the package"
     assert any(p.name == "contracts.py" for p in files)
+    # `scripts/` was outside the scan for as long as this guard existed, and it was never empty:
+    # `plugin_cli_drift.py` named two tests and `golden_lib.py` named a third, all unchecked. The
+    # convention is repository-wide — a maintainer greps a name out of a script exactly as they grep
+    # one out of a module — so a root that carries references and is not scanned is the guard
+    # reporting a clean tree it did not read (#137).
+    assert any(p.parent.name == "scripts" for p in files), (
+        "scripts/ is not in the scan, and it carries references — this guard would report them clean"
+    )
     assert any(p.name == "CLAUDE.md" for p in files)
     assert len(declared_test_names()) > 100
 

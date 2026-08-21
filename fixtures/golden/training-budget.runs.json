@@ -1,0 +1,2133 @@
+{
+  "request": "We need to hand out a yearly training budget across departments, with rules for who gets priority when it runs out.",
+  "answers": {
+    "problem": [
+      "Department heads fight over the budget by email today and the loudest one wins, and finance only discovers the overspend in March.",
+      "The real cost is not the money, it is that mandatory certifications get bumped by discretionary courses and we then fail the audit."
+    ],
+    "current_process": [
+      "One shared spreadsheet per department, consolidated by HR twice a year, and the two consolidations never match.",
+      "There is no reservation step at all: a manager books with the vendor first and tells HR afterwards."
+    ],
+    "success_metrics": [
+      "Zero certification lapses, and finance seeing committed spend within a week of the booking rather than at year end.",
+      "We would also count it a success if HR stopped spending two weeks each January reconciling the spreadsheets."
+    ],
+    "actors": [
+      "Department heads request, HR validates eligibility, finance owns the envelope, and the employee books the course.",
+      "For the three regulated entities a compliance officer has to countersign anything that is a certification renewal."
+    ],
+    "business_objects": [
+      "A request carries the employee, the course, the vendor quote, the department and the fiscal year.",
+      "The envelope is an object too: an amount, a period and a scope, and it can be split by cost centre."
+    ],
+    "business_rules": [
+      "Certifications outrank everything, then seniority within the department, then first come first served.",
+      "Unused budget carries over one year for the regulated entities and is lost everywhere else.",
+      "A mid-year joiner gets a pro-rata entitlement, and a leaver's committed but unspent amount returns to the envelope."
+    ],
+    "workflow": [
+      "Request, eligibility check, budget reservation, approval, booking, then invoice reconciliation.",
+      "A reservation has to be able to expire: if nobody has booked within thirty days the money goes back to the pool."
+    ],
+    "permissions": [
+      "A department head sees only their own envelope; HR and finance see all of them.",
+      "The compliance officer sees certification requests across every entity but must not see amounts."
+    ],
+    "integrations": [
+      "Bookings come back from the vendor portal as a CSV, and the invoices land in the accounting system.",
+      "We have not decided whether the tool pushes to accounting or accounting pulls from it."
+    ],
+    "constraints": [
+      "The fiscal year is not the calendar year for two of the entities, and the tool has to close within five working days of year end.",
+      "Everything has to work for a department head on a phone, because half of them are never at a desk."
+    ],
+    "config_vs_custom": [
+      "Every client we roll this out to orders the priorities differently, so that has to be configurable rather than coded."
+    ],
+    "edge_cases": [
+      "A vendor can cancel a course after the money is committed, and the refund can land in the next fiscal year.",
+      "Two department heads can request the last remaining seat within the same minute."
+    ],
+    "reporting": [
+      "Finance needs committed versus spent versus remaining per envelope, and an audit trail of who overrode a priority.",
+      "The auditor asks for the state of an envelope as it stood on a given date, not just as it stands now."
+    ],
+    "acceptance": [
+      "It is accepted when a full year can be replayed from the audit trail and matches the accounting system to the cent."
+    ],
+    "risks": [
+      "The main risk is that department heads keep booking with the vendor first, and the tool then records fiction.",
+      "The second is that we roll it out mid-year and nobody can say what the opening balances should be."
+    ]
+  },
+  "turns": [
+    [
+      {
+        "index": 1,
+        "answered": [
+          "business_rules",
+          "business_rules",
+          "workflow",
+          "permissions",
+          "current_process",
+          "reporting"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 40,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Avoid overspending or unfair allocation of a fixed yearly training budget, and give a defensible rule for who gets funded first when demand exceeds available funds.",
+              "evidence": "'yearly training budget across departments, with rules for who gets priority when it runs out'"
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not mentioned \u2014 likely spreadsheet or manual manager approval today."
+            },
+            "success_metrics": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: budget never overspent, allocation seen as fair/transparent, fewer ad-hoc disputes or escalations.",
+              "evidence": "Implied by the need for priority rules."
+            },
+            "actors": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Probable actors: Employee (requests training), Manager (approves), HR/L&D or Finance (sets department budgets, arbitrates priority), Admin (configures rules).",
+              "evidence": "Departments + priority rules imply a request/approval chain, not stated explicitly."
+            },
+            "business_objects": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: Department, Yearly Budget (amount, period), Training Request (employee, course, cost), Priority Rule.",
+              "evidence": "Inferred from 'budget across departments' and 'priority when it runs out'."
+            },
+            "business_rules": {
+              "completeness": 5,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Unknown: what determines priority (seniority, role/level, cost, first-come-first-served, strategic skill need, manager discretion) and whether it varies per department.",
+              "evidence": "Client explicitly asks for 'rules for who gets priority' but gives no criteria."
+            },
+            "workflow": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Unknown: who sets each department's yearly budget and when; request lifecycle (submitted \u2192 checked against remaining budget \u2192 approved/queued/rejected); what happens exactly when budget hits zero (hard stop, waitlist, exception approval).",
+              "evidence": "Not detailed in request; 'when it runs out' implies a depletion event but not its handling."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "No mention of payroll/finance system export needs yet."
+            },
+            "permissions": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Unknown: who can see other departments' budgets, who can adjust an allocation mid-year, who can override priority rules.",
+              "evidence": "Not stated; cross-department budget visibility is a classic gap."
+            },
+            "config_vs_custom": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Priority rules likely need to be configurable per department/client rather than hardcoded, consistent with platform pattern.",
+              "evidence": "Platform context: approval circuits and business rules are typically client-specific."
+            },
+            "constraints": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "No deadline, budget-tool integration or regulatory constraint mentioned."
+            },
+            "edge_cases": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "Unresolved: unused budget rollover to next year, mid-year top-up or department budget transfer, partial funding of a request, cancelled/refunded training.",
+              "evidence": "Not addressed in request."
+            },
+            "reporting": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "Finance will likely want spend-vs-budget visibility per department and a log of rejected/waitlisted requests.",
+              "evidence": "Implied by budget management nature, not stated explicitly."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not defined."
+            },
+            "risks": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "Risk: ambiguous or contested priority rule causes disputes; risk: no visibility into remaining budget causes late-year rejections perceived as arbitrary.",
+              "evidence": "Inferred from the priority-rule ask itself."
+            }
+          },
+          "questions": [
+            {
+              "q": "When the budget for a department runs out, what should actually happen to a new request \u2014 is it rejected outright, put on a waitlist for possible rollover/top-up, or escalated for a manual exception approval?",
+              "slot": "business_rules",
+              "why": "uncertainty(empty) \u00d7 impact(high): this is the exact behaviour the client asked for but never specified; it changes whether we need a queue/waitlist state at all, and how disputes are handled."
+            },
+            {
+              "q": "What determines priority between two competing requests \u2014 seniority, role/level, strategic skill need, cost of the training, or simply order of submission \u2014 and does this rule differ by department?",
+              "slot": "business_rules",
+              "why": "uncertainty(empty) \u00d7 impact(high): 'priority' is undefined; if it varies by department it needs to be configurable per department rather than a single global rule."
+            },
+            {
+              "q": "Who sets each department's yearly budget amount, and can it be revised mid-year (top-up, transfer between departments, rollover of unused funds)?",
+              "slot": "workflow",
+              "why": "uncertainty(empty) \u00d7 impact(high): this is the upstream origin of the core object (the budget) \u2014 without it we don't know if budgets are fixed-at-year-start or a living figure, which changes the whole data model."
+            },
+            {
+              "q": "Who can submit a training request, who approves it, and who is allowed to see or adjust another department's remaining budget?",
+              "slot": "permissions",
+              "why": "uncertainty(empty) \u00d7 impact(high): cross-department budget visibility and approval rights are the classic gap discovered only at acceptance testing."
+            },
+            {
+              "q": "How is this handled today \u2014 spreadsheet, email approvals, another HR module \u2014 and is there existing historical spend data we need to migrate or reconcile against?",
+              "slot": "current_process",
+              "why": "uncertainty(empty) \u00d7 impact(medium): shapes migration effort and reveals informal rules the client may not think to mention."
+            },
+            {
+              "q": "Does finance need a report/audit trail of who was granted, waitlisted or refused training funding, for transparency or budget justification?",
+              "slot": "reporting",
+              "why": "uncertainty(empty) \u00d7 impact(medium, rising if disputes/fairness matter): a fairness-driven priority rule usually implies someone will need to justify a decision after the fact."
+            }
+          ],
+          "summary": {
+            "objective": "Allocate a fixed yearly training budget across departments and fairly/consistently decide who gets funded when demand exceeds the remaining budget.",
+            "scope": "Likely includes: a per-department yearly budget object, a training request/approval workflow that checks remaining budget, a configurable priority rule engine for depletion scenarios, permission rules for who sees/adjusts budgets, and some spend-visibility reporting for finance/HR.",
+            "assumptions": [
+              "Actors are Employee (requester), Manager (approver), HR/Finance (sets budgets and rules), Admin (configures priority rules)",
+              "Priority rules and budget amounts may need to be configurable per department, not hardcoded",
+              "Success is measured by staying within budget and reducing disputes over funding decisions",
+              "Some reporting on spend-vs-budget and rejected/waitlisted requests will be expected by finance"
+            ],
+            "blind_spot": "The client named the need for priority rules but not their actual content or the exact depletion behaviour (reject vs waitlist vs exception) \u2014 building the wrong one silently turns a simple approval check into a queueing/escalation subsystem."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 2,
+        "answered": [
+          "permissions",
+          "workflow",
+          "config_vs_custom",
+          "edge_cases"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace an untrustworthy manual process (per-department spreadsheets that never reconcile) with a governed system that allocates a fixed yearly training budget per department and applies a defensible, auditable priority rule when funds run short.",
+              "evidence": "Current process answer: 'the two consolidations never match'; explicit priority rules and audit-trail requirement confirm the stakes are trust and defensibility, not just allocation."
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "medium",
+              "value": "One shared spreadsheet per department; HR consolidates twice a year; the two consolidations do not reconcile with each other today.",
+              "evidence": "Client answer: 'One shared spreadsheet per department, consolidated by HR twice a year, and the two consolidations never match.'"
+            },
+            "success_metrics": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely success = a single reliable source of truth (envelopes that tie out), no more mismatched consolidations, and a defensible/auditable answer to 'why was this request funded or not.'",
+              "evidence": "Inferred from the reconciliation pain point and the explicit audit-trail requirement."
+            },
+            "actors": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Employee (requester), Department Head (approver/owner of own envelope), HR (oversight, consolidation, sees all envelopes), Finance (sees all envelopes, tracks committed/spent/remaining, audits overrides).",
+              "evidence": "Permissions answer: 'A department head sees only their own envelope; HR and finance see all of them.'"
+            },
+            "business_objects": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "medium",
+              "value": "Department Envelope (yearly, with committed / spent / remaining amounts, rollover flag for regulated entities), Training Request (requester, certification link, seniority, submission date), Invoice (reconciled against reservation).",
+              "evidence": "Reporting answer names 'committed versus spent versus remaining per envelope'; workflow answer names 'budget reservation' and 'invoice reconciliation'."
+            },
+            "business_rules": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order when budget is constrained: (1) certifications outrank everything, (2) seniority within department, (3) first-come-first-served. Rollover rule: unused budget carries over one year for regulated entities, is lost otherwise for all other departments.",
+              "evidence": "Client answers: 'Certifications outrank everything, then seniority within the department, then first come first served.' and 'Unused budget carries over one year for the regulated entities and is lost everywhere else.'"
+            },
+            "workflow": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Lifecycle: Request \u2192 Eligibility check \u2192 Budget reservation \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation.",
+              "evidence": "Client answer: 'Request, eligibility check, budget reservation, approval, booking, then invoice reconciliation.'"
+            },
+            "integrations": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Invoice reconciliation stage implies a link to an accounting/invoicing system or process; not yet specified as manual matching or system integration.",
+              "evidence": "Workflow answer mentions 'invoice reconciliation' as a lifecycle stage without detailing its mechanism."
+            },
+            "permissions": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department Head: view/act on own envelope only. HR & Finance: full visibility across all envelopes. Approval authority and override authority not yet specified.",
+              "evidence": "Client answer: 'A department head sees only their own envelope; HR and finance see all of them.' Reporting answer implies an 'override' capability exists but its owner is undefined."
+            },
+            "config_vs_custom": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Rollover behavior differs by entity type (regulated vs. not) \u2014 likely needs to be a configurable attribute per department/entity rather than hardcoded, consistent with platform pattern of client/entity-specific rules.",
+              "evidence": "Rollover rule explicitly varies by 'regulated entities' vs. everyone else."
+            },
+            "constraints": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "A business rule (rollover) explicitly varies by entity regulatory status \u2014 implies some departments/entities are subject to an external regulatory constraint (labor/training law) that others aren't.",
+              "evidence": "Client answer names 'regulated entities' as a distinct category without defining what regulation or which entities."
+            },
+            "edge_cases": {
+              "completeness": 35,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Open edge cases: how invoice-vs-reservation variance is handled (the current source of the reconciliation mismatch), concurrent requests racing for the last remaining budget at the reservation stage, and how/when a priority override is invoked.",
+              "evidence": "Directly evidenced by 'the two consolidations never match' and the mention of overriding a priority in the reporting answer."
+            },
+            "reporting": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs, per envelope: committed vs. spent vs. remaining amounts, plus a full audit trail of who overrode a priority ranking and why.",
+              "evidence": "Client answer: 'Finance needs committed versus spent versus remaining per envelope, and an audit trail of who overrode a priority.'"
+            },
+            "acceptance": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not yet defined."
+            },
+            "risks": {
+              "completeness": 35,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Risk: reconciliation mismatches persist if reservation-vs-invoice variance isn't handled explicitly; risk: an undefined override authority undermines the very audit trail finance is asking for; risk: concurrent requests at reservation time cause double-allocation of the same remaining budget.",
+              "evidence": "Inferred from the current-process pain point and the unresolved override/concurrency gaps."
+            }
+          },
+          "questions": [
+            {
+              "q": "Who is allowed to override the certification > seniority > FCFS priority order, and does that override require a reason/justification to be recorded before it takes effect?",
+              "slot": "permissions",
+              "why": "uncertainty(explicit audit-trail requirement but override authority undefined) \u00d7 impact(high): finance explicitly asked for an audit trail of overrides, but nobody has said who may trigger one \u2014 this is the exact gap that makes the audit trail meaningful or hollow."
+            },
+            {
+              "q": "When two requests compete for the last of a department's remaining budget at the same time, does the budget get locked the moment it's reserved (before approval), and what happens to the second request if the first reservation succeeds first?",
+              "slot": "workflow",
+              "why": "uncertainty(empty) \u00d7 impact(high): this is the classic concurrency gap in a reservation-based workflow \u2014 unresolved, it produces the same kind of mismatch the client is already suffering from with spreadsheets, just automated."
+            },
+            {
+              "q": "Is 'regulated entity' a fixed, known list of departments, or an attribute that HR/finance can assign/change per department \u2014 and could a department's status change from one year to the next?",
+              "slot": "config_vs_custom",
+              "why": "uncertainty(inferred) \u00d7 impact(high): determines whether the rollover rule is a one-time hardcoded list or a configurable per-entity flag, which changes both the data model and future maintainability."
+            },
+            {
+              "q": "When the actual training invoice differs from the amount reserved at approval time (higher or lower), should the envelope auto-adjust, should it require manual reconciliation by finance, or should booking be blocked until the invoice matches?",
+              "slot": "edge_cases",
+              "why": "uncertainty(empty) \u00d7 impact(high): this variance is very likely the root cause of the current 'consolidations never match' problem \u2014 leaving it undefined reproduces the exact issue the client wants fixed."
+            },
+            {
+              "q": "Who performs the final approval step \u2014 the department head, HR, or an automatic system check based on eligibility (certification/seniority) \u2014 and can that approver differ from the person who reserved the budget?",
+              "slot": "workflow",
+              "why": "uncertainty(explicit stages named, approver role unnamed) \u00d7 impact(high): approval is a named lifecycle stage but its owner is unspecified, and it directly shapes the permission model already partly defined."
+            }
+          ],
+          "summary": {
+            "objective": "Replace error-prone spreadsheet-based training budget tracking with a governed system that allocates a fixed yearly budget per department, applies a clear, auditable priority rule when a department's budget is insufficient, and gives finance reliable committed/spent/remaining figures.",
+            "scope": "A Department Envelope model (yearly budget, with rollover for regulated entities only) feeding a request lifecycle \u2014 Request \u2192 Eligibility check \u2192 Budget reservation \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation \u2014 governed by a fixed priority order (certification > seniority > first-come-first-served), scoped permissions (department heads see only their own envelope; HR/finance see all), and an audit trail covering committed/spent/remaining amounts and any priority overrides.",
+            "assumptions": [
+              "Regulated-entity status is a per-department/entity attribute distinct from the general rule, likely needing to be configurable rather than hardcoded",
+              "Approval is performed by a human role (department head or HR) rather than being fully automatic, though this is unconfirmed",
+              "Invoice reconciliation currently causes the mismatch problem and will require an explicit variance-handling rule going forward",
+              "Priority override capability exists (implied by the requested audit trail) but its owner and required justification are not yet defined"
+            ],
+            "blind_spot": "Finance explicitly wants an audit trail of 'who overrode a priority,' but no one has said who is allowed to override, under what justification, or how that interacts with the reservation/approval race between simultaneous requests \u2014 building the ranking rule without the override-and-concurrency behaviour will just digitize the same reconciliation mismatch the client has today."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 3,
+        "answered": [
+          "edge_cases",
+          "business_rules"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace an untrustworthy manual, spreadsheet-based allocation process with a governed, multi-client-configurable system that allocates a fixed yearly training budget per department, applies a defensible priority rule when funds run short, and produces figures finance and compliance can both trust and act on.",
+              "evidence": "Current-process pain point ('the two consolidations never match') plus explicit compliance-officer visibility need and cross-client configurability confirm the stakes are trust, auditability and reusability across clients, not just allocation logic."
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "medium",
+              "value": "One shared spreadsheet per department; HR consolidates twice a year; the two consolidations do not reconcile with each other today.",
+              "evidence": "Client answer: 'One shared spreadsheet per department, consolidated by HR twice a year, and the two consolidations never match.'"
+            },
+            "success_metrics": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely success = a single reliable source of truth (envelopes that tie out), no more mismatched consolidations, and a defensible/auditable answer to 'why was this request funded or not,' reproducible per client's own priority configuration.",
+              "evidence": "Inferred from the reconciliation pain point, the explicit audit-trail requirement, and the newly confirmed per-client configurability."
+            },
+            "actors": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Employee (requester), Department Head (approver/owner of own envelope), HR (oversight, consolidation, sees all envelopes), Finance (full visibility, tracks committed/spent/remaining, handles overrides), Compliance Officer (cross-entity view of certification-based requests, but amounts hidden from them).",
+              "evidence": "Client answer: 'The compliance officer sees certification requests across every entity but must not see amounts.'"
+            },
+            "business_objects": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "medium",
+              "value": "Department Envelope (yearly, committed/spent/remaining, rollover flag), Reservation (a distinct sub-state of an envelope hold, with a 30-day expiry that returns funds to the pool if unbooked), Training Request (requester, certification link, seniority, submission date), Invoice (reconciled against reservation, can be cancelled/refunded post-commitment, possibly crossing fiscal years).",
+              "evidence": "Client answers: '...if nobody has booked within thirty days the money goes back to the pool' and 'a vendor can cancel a course after the money is committed, and the refund can land in the next fiscal year.'"
+            },
+            "business_rules": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order (certification > seniority > first-come-first-served) is this client's current ranking, but the ranking itself is fully client-configurable \u2014 other clients order priorities differently. Rollover rule (regulated entities carry over unused budget one year, others lose it) is a separate configurable rule. Reservations auto-expire after 30 days, returning funds to the pool.",
+              "evidence": "Client answer: 'Every client we roll this out to orders the priorities differently, so that has to be configurable rather than coded.' plus prior rollover and expiry answers."
+            },
+            "workflow": {
+              "completeness": 85,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Lifecycle: Request \u2192 Eligibility check \u2192 Budget reservation (holds funds, expires after 30 days if unbooked, releasing funds to pool) \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation. Still open: what happens when two requests contend for the same last-remaining budget at reservation time (does the first reservation lock atomically, blocking the second?).",
+              "evidence": "Client answer: 'A reservation has to be able to expire: if nobody has booked within thirty days the money goes back to the pool.' \u2014 confirms reservation is a lockable, time-bound state but doesn't resolve simultaneous-contention behaviour."
+            },
+            "integrations": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Invoice reconciliation and fiscal-year-crossing refunds imply a link to the accounting/GL system's fiscal calendar and period-close logic; mechanism (manual matching vs. system integration) still unspecified.",
+              "evidence": "Workflow mentions 'invoice reconciliation'; new edge case shows refunds can land in a different fiscal year, implying dependency on an external fiscal calendar."
+            },
+            "permissions": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department Head: view/act on own envelope only. HR & Finance: full visibility across all envelopes. Compliance Officer: cross-entity visibility limited to certification-linked requests, with amount fields masked. Who holds authority to override the certification>seniority>FCFS ranking, and whether that override requires a recorded justification, remains undefined.",
+              "evidence": "Client answer describes the compliance officer's restricted view but does not address the override-authority question that was asked."
+            },
+            "config_vs_custom": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Confirmed: the priority ranking (which factor outranks which) must be a per-client configuration, not hardcoded \u2014 this client's cert>seniority>FCFS order is just one instance. Rollover-by-entity-type is a separate, also-configurable rule. This is a genuine multi-client rollout, reinforcing the platform's configurable-rules pattern.",
+              "evidence": "Client answer: 'Every client we roll this out to orders the priorities differently, so that has to be configurable rather than coded.'"
+            },
+            "constraints": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Product must support per-client configurable priority ranking and rollover rules (multi-tenant rollout, not a single-client build). Fiscal-year-crossing refunds imply a constraint around which fiscal calendar/period-close rules govern envelope adjustments.",
+              "evidence": "Client confirms multiple clients with differing priority configurations; vendor-cancellation answer introduces a fiscal-year-boundary constraint on refunds."
+            },
+            "edge_cases": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Open edge cases: (1) simultaneous reservation requests racing for the last remaining budget \u2014 lock/tie-break behaviour still unstated; (2) vendor cancels a committed course and the refund lands in the next fiscal year \u2014 unclear whether it credits the original (possibly closed) year's envelope or the new year's pool; (3) expired reservations returning funds to the pool \u2014 does the original requester get any priority to re-request, or do they re-enter the general queue?",
+              "evidence": "Client answers on 30-day expiry and vendor cancellation/refund-crossing-fiscal-year directly introduce these unresolved cases."
+            },
+            "reporting": {
+              "completeness": 85,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs, per envelope: committed vs. spent vs. remaining amounts, plus a full audit trail of who overrode a priority ranking and why. Compliance Officer's view must exclude amount fields everywhere (not just the primary screen) \u2014 a role-based field-masking requirement that likely extends to any export or report they can access.",
+              "evidence": "Client answer confirms compliance officer 'must not see amounts,' extending the existing reporting/audit requirement into field-level access control."
+            },
+            "acceptance": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not yet defined."
+            },
+            "risks": {
+              "completeness": 45,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Risks: (1) unresolved override authority undermines the audit trail finance explicitly asked for; (2) unresolved reservation-race behaviour reproduces the same kind of mismatch the client already suffers from with spreadsheets; (3) fiscal-year-crossing refunds, if not clearly attributed, could distort year-over-year budget reporting; (4) amount-masking for the compliance officer must be enforced consistently across every view/export or it leaks the very data it's meant to hide.",
+              "evidence": "Inferred from the still-open override, concurrency and fiscal-year-crossing questions plus the newly stated masking requirement."
+            }
+          },
+          "questions": [
+            {
+              "q": "Who is authorized to override the certification > seniority > FCFS priority ranking, and must a reason be recorded before the override takes effect?",
+              "slot": "permissions",
+              "why": "uncertainty(still empty \u2014 the last answer described the compliance officer's visibility but did not address override authority) \u00d7 impact(high): finance explicitly wants an audit trail of overrides; without a named authority and a mandatory justification, that audit trail has nothing to record."
+            },
+            {
+              "q": "Does the Compliance Officer only view certification-linked requests, or do they also validate/approve the certification claim as part of the approval step \u2014 i.e., are they a participant in the workflow or a pure read-only observer?",
+              "slot": "workflow",
+              "why": "uncertainty(new role just introduced, its function undefined) \u00d7 impact(high): if the compliance officer validates certification claims, that's a new approval-circuit step touching the highest-priority tier of every request \u2014 a materially different build than a read-only dashboard."
+            },
+            {
+              "q": "When two requests compete for the last of a department's remaining budget at the same moment, does the first successful reservation lock the funds immediately and block the second \u2014 and if a reservation later expires (30-day rule), does the original requester get first refusal to re-reserve, or do they re-enter the general queue?",
+              "slot": "edge_cases",
+              "why": "uncertainty(partially answered \u2014 expiry is defined, but atomic locking and re-queue priority are not) \u00d7 impact(high): this is the concurrency mechanism that will silently double-allocate or unfairly reorder requests if left undefined, the exact failure mode the client is already living with in spreadsheets."
+            },
+            {
+              "q": "When a vendor cancels a course after the budget was committed and the refund lands in the next fiscal year, should that refund credit the original (possibly already-closed) year's envelope, or the new year's pool \u2014 and does the original year's reporting need to be restated?",
+              "slot": "business_rules",
+              "why": "uncertainty(brand-new edge case, no rule stated) \u00d7 impact(high): this determines whether prior-year figures stay frozen or get retroactively touched, which changes both the data model and the audit/reporting story finance already cares about."
+            }
+          ],
+          "summary": {
+            "objective": "Deliver a multi-client-configurable system that allocates a fixed yearly training budget per department, enforces a client-specific priority ranking when budget runs short, and gives finance and compliance reliable, auditable, role-appropriate visibility into committed/spent/remaining figures.",
+            "scope": "A Department Envelope model (yearly budget, configurable rollover by entity type) feeding a request lifecycle \u2014 Request \u2192 Eligibility check \u2192 Budget reservation (with 30-day auto-expiry back to the pool) \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation \u2014 governed by a fully client-configurable priority ranking (this client: certification > seniority > FCFS), scoped permissions (department heads see only their own envelope; HR/finance see all amounts; compliance officer sees certification requests across entities with amounts masked), and an audit trail covering envelope figures and any priority overrides.",
+            "assumptions": [
+              "The product is being rolled out to multiple clients, each with its own priority-ranking configuration and possibly its own rollover rules \u2014 this is a reusable platform capability, not a one-off build for a single client",
+              "Reservation is a lockable, time-bound state (implied by the 30-day expiry rule), though atomic contention-handling for simultaneous requests is not yet confirmed",
+              "Amount-masking for the compliance officer must apply consistently across all screens and exports, not just the primary view",
+              "Fiscal-year-crossing refunds and closed-period adjustments will need a defined attribution rule, echoing period-close/restatement patterns from financial reporting"
+            ],
+            "blind_spot": "The client has now surfaced a new role (Compliance Officer) with restricted visibility, but the actual question asked \u2014 who can override the priority ranking and how that's justified \u2014 remains unanswered. Building the audit trail and the masking rule without settling override authority means the system will faithfully log an event that has no defined, accountable owner \u2014 the same governance gap the client is trying to fix, just moved one layer deeper."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 4,
+        "answered": [],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 60,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace an untrustworthy manual, spreadsheet-based allocation process with a governed, multi-client-configurable system that allocates a fixed yearly training budget per department, applies a defensible priority rule when funds run short, handles dynamic entitlement changes as staff join/leave, and produces figures finance and compliance can both trust and act on.",
+              "evidence": "Current-process mismatch, explicit compliance visibility need, cross-client configurability, and now confirmed real-world concurrency and headcount-churn scenarios all point to trust, auditability and correctness under contention as the core stakes."
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "medium",
+              "value": "One shared spreadsheet per department; HR consolidates twice a year; the two consolidations do not reconcile with each other today.",
+              "evidence": "Client answer: 'One shared spreadsheet per department, consolidated by HR twice a year, and the two consolidations never match.'"
+            },
+            "success_metrics": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely success = a single reliable source of truth (envelopes that tie out even under concurrent requests and headcount churn), no more mismatched consolidations, and a defensible/auditable answer to 'why was this request funded or not.'",
+              "evidence": "Inferred from reconciliation pain point, audit-trail requirement, and now confirmed concurrency and entitlement-churn scenarios."
+            },
+            "actors": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Employee (requester, whose entitlement can change on join/leave), Department Head (approver/owner of own envelope, can compete with other dept heads for shared/last-remaining budget), HR (oversight, consolidation), Finance (full visibility, tracks committed/spent/remaining, handles overrides), Compliance Officer (cross-entity view of certification-based requests, amounts hidden).",
+              "evidence": "New answer confirms 'two department heads can request the last remaining seat within the same minute' \u2014 department heads are active, competing actors, not passive approvers only."
+            },
+            "business_objects": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department Envelope (yearly, committed/spent/remaining, rollover flag, dynamically adjusted by headcount events), Reservation (time-bound hold, 30-day expiry returns funds to pool, subject to concurrent contention), Training Request, Invoice (can be cancelled/refunded, refund can cross fiscal years), Employee Entitlement (pro-rated for mid-year joiners; leaver's committed-but-unspent amount returns to the envelope).",
+              "evidence": "Client answer: 'A mid-year joiner gets a pro-rata entitlement, and a leaver's committed but unspent amount returns to the envelope' \u2014 introduces Employee Entitlement as a first-class, mutable object tied to headcount events."
+            },
+            "business_rules": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order (certification > seniority > FCFS) is configurable per client. Rollover rule configurable by entity type. Reservations auto-expire after 30 days. New: mid-year joiners receive a pro-rata (not full-year) entitlement \u2014 exact formula (by day, by month, by quarter?) undefined. New: a leaver's committed-but-unspent amount is reclaimed into the department envelope \u2014 but whether this applies only to un-invoiced reservations or also to already-committed-but-not-yet-delivered spend, and at what trigger point (leave date vs. period-end), is undefined. Fiscal-year-crossing refund attribution (which year's envelope gets credited) is still unanswered.",
+              "evidence": "Client answers on priority configurability, plus the new pro-rata/leaver-reclaim answer, which introduced two new open sub-rules without resolving the original fiscal-year-refund question."
+            },
+            "workflow": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Lifecycle: Request \u2192 Eligibility check (now dependent on a possibly-prorated, possibly-just-reduced entitlement) \u2192 Budget reservation (holds funds, expires after 30 days, subject to real same-minute contention between department heads) \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation (refunds can cross fiscal years; leaver events can claw back committed funds mid-flow). Two concurrency/lifecycle questions remain open: (1) tie-break behavior when two reservations compete for the last unit of budget in the same minute, (2) at what point (leave date vs. reconciliation) a leaver's reclaim is applied to the envelope.",
+              "evidence": "Client confirmed concurrent same-minute requests are a real scenario, and that leaver events trigger a reclaim, but did not specify resolution mechanics for either."
+            },
+            "integrations": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Invoice reconciliation and fiscal-year-crossing refunds imply dependency on the accounting/GL system's fiscal calendar; HR headcount events (join/leave dates) likely need to feed entitlement calculations from an HR system rather than manual entry.",
+              "evidence": "New pro-rata/leaver rule implies HR join/leave dates must be a system input, not just a manual figure, to drive entitlement automatically."
+            },
+            "permissions": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department Head: view/act on own envelope only, but now shown to actively compete with peer department heads for scarce shared resources. HR & Finance: full visibility. Compliance Officer: cross-entity visibility limited to certification-linked requests, amounts masked. Override authority for the priority ranking, and whether the compliance officer merely observes or actively validates certification claims, remain undefined.",
+              "evidence": "Neither open permissions question (override authority; compliance officer's role in the approval flow) was addressed by the latest answers."
+            },
+            "config_vs_custom": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority ranking and rollover-by-entity-type are confirmed per-client configuration points. Whether pro-ration formula and leaver-reclaim rules are themselves client-configurable (vs. standard for all clients) is not yet stated.",
+              "evidence": "Prior confirmation of configurable priority ranking; new entitlement rules raise the same configurability question but it hasn't been addressed yet."
+            },
+            "constraints": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Multi-tenant rollout with per-client configurable priority/rollover rules. Fiscal-year-crossing refunds and now headcount-driven entitlement changes both imply the envelope figure must recompute continuously through the year, not just be set once at January 1 \u2014 a materially more dynamic model than a static yearly allocation.",
+              "evidence": "Confirmed pro-rata/leaver rules mean the envelope is a moving target throughout the year, not a fixed pool, which is a new constraint on the data model."
+            },
+            "edge_cases": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Confirmed real scenario: two department heads can request the last remaining budget slot within the same minute \u2014 the client validated this is a live risk, not a hypothetical, but did not state the desired resolution (who wins, does the loser get queued/notified, is this handled automatically or manually). Still open: does an expired-reservation requester get first refusal to re-request. New edge cases from headcount churn: what happens to an in-flight reservation/request if the employee leaves before it's booked, and what happens to a pro-rated entitlement if someone's start date itself changes (correction) after entitlement was already calculated.",
+              "evidence": "Client's concurrency answer confirms the scenario is realistic and frequent; new pro-rata/leaver answer introduces additional churn-related edge cases without resolving them."
+            },
+            "reporting": {
+              "completeness": 85,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs, per envelope: committed vs. spent vs. remaining, a full audit trail of priority overrides, and now visibility into pro-ration adjustments and leaver reclaims as distinct, traceable envelope movements (so a shrinking or growing envelope mid-year is explainable, not just a mismatched number). Compliance Officer's amount-masking must apply consistently across all views/exports.",
+              "evidence": "New entitlement-churn rules mean envelope totals will change mid-year for reasons beyond spend, which finance will need explained in reporting to avoid recreating the current reconciliation problem."
+            },
+            "acceptance": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not yet defined."
+            },
+            "risks": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Risks: (1) unresolved override authority undermines the requested audit trail; (2) unresolved concurrency tie-break can double-allocate the last budget unit \u2014 the exact class of error the client's spreadsheets already produce; (3) undefined pro-ration formula and leaver-reclaim trigger point risk inconsistent envelope totals, reproducing the reconciliation mismatch the project is meant to fix; (4) fiscal-year-crossing refunds, if not clearly attributed, could distort year-over-year reporting; (5) amount-masking for compliance must be enforced everywhere or it leaks the data it's meant to hide.",
+              "evidence": "Directly follows from the still-open concurrency, override, proration, leaver-reclaim and fiscal-year-attribution questions."
+            }
+          },
+          "questions": [
+            {
+              "q": "When two department heads request the last unit of remaining budget within the same minute, should the system guarantee exactly one is granted (with the other automatically bumped to a wait state or notified to escalate), and is that outcome based on timestamp order, or should it fall back to the same priority ranking (certification/seniority/FCFS) used elsewhere?",
+              "slot": "edge_cases",
+              "why": "uncertainty(client confirmed the scenario is real but did not state the desired outcome) \u00d7 impact(high): this is the exact double-allocation failure mode the client is already suffering from in spreadsheets \u2014 leaving it undefined reproduces the core problem in the new system."
+            },
+            {
+              "q": "A leaver's committed-but-unspent amount returns to the envelope \u2014 does that reclaim happen at every reservation/commitment regardless of whether an invoice was already issued, and is it triggered the moment the leave date is recorded, or only at the next reconciliation/close point?",
+              "slot": "business_rules",
+              "why": "uncertainty(new rule just introduced, mechanics undefined) \u00d7 impact(high): this determines whether the envelope figure can change retroactively after money is already committed to a vendor, which affects both the data model and the audit trail."
+            },
+            {
+              "q": "What is the pro-ration formula for a mid-year joiner's entitlement \u2014 by exact day, by full month, or by quarter \u2014 and is this formula the same for every client or something each client configures differently, like the priority ranking?",
+              "slot": "business_rules",
+              "why": "uncertainty(new rule, no formula stated, configurability unclear) \u00d7 impact(high): the formula directly changes every envelope calculation for every joiner, and if it varies by client it must be built as a configuration point, not a hardcoded rule."
+            },
+            {
+              "q": "When a vendor cancels a course after commitment and the refund lands in the next fiscal year, should that refund credit the original (possibly closed) year's envelope or the new year's pool, and does the original year's reported figures need to be restated?",
+              "slot": "business_rules",
+              "why": "uncertainty(asked previously, still unanswered \u2014 the client's last answer addressed a different scenario) \u00d7 impact(high): determines whether closed-period figures can be touched retroactively, a recurring compliance-sensitive pattern in this domain."
+            },
+            {
+              "q": "Who is authorized to override the certification > seniority > FCFS priority ranking, and must a reason be recorded before the override takes effect?",
+              "slot": "permissions",
+              "why": "uncertainty(still empty after two rounds of answers) \u00d7 impact(high): finance explicitly wants an audit trail of overrides, but without a named authority and mandatory justification there is nothing accountable to log."
+            },
+            {
+              "q": "Is the Compliance Officer a read-only observer of certification-linked requests, or do they actively validate the certification claim as a required step before such a request can be approved?",
+              "slot": "workflow",
+              "why": "uncertainty(role introduced but its function in the approval flow never clarified) \u00d7 impact(high): if they validate claims, that's a new mandatory approval step on the highest-priority tier of requests \u2014 a different build than a dashboard view."
+            }
+          ],
+          "summary": {
+            "objective": "Deliver a multi-client-configurable system that allocates a fixed yearly training budget per department, dynamically adjusts entitlements for headcount changes, enforces a client-specific priority ranking when budget runs short, safely resolves concurrent claims on scarce budget, and gives finance and compliance reliable, auditable, role-appropriate visibility.",
+            "scope": "A Department Envelope model (yearly budget, configurable rollover, dynamically adjusted by pro-rated joiner entitlements and leaver reclaims) feeding a request lifecycle \u2014 Request \u2192 Eligibility check \u2192 Budget reservation (30-day auto-expiry, contention-safe for simultaneous claims) \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation (handling cross-fiscal-year refunds) \u2014 governed by a fully client-configurable priority ranking, scoped permissions, and an audit trail covering envelope movements (spend, proration, reclaim, override).",
+            "assumptions": [
+              "The product is being rolled out to multiple clients, each with its own priority-ranking configuration and possibly its own rollover, proration and reclaim rules",
+              "Reservation is a lockable, time-bound state, though the exact concurrency-resolution outcome for simultaneous last-unit claims is not yet confirmed",
+              "Employee join/leave events are expected to feed entitlement calculations automatically (implying an HR data feed), rather than being entered manually",
+              "Amount-masking for the compliance officer must apply consistently across all screens and exports"
+            ],
+            "blind_spot": "The client keeps answering with vivid real-world scenarios (simultaneous requests, joiners, leavers) that confirm these situations happen often, but each time stops short of stating the actual resolution policy. The team risks building a system that faithfully represents every scenario the client has now described, while leaving the deciding rule for each of them absent \u2014 the same kind of silent gap that currently makes the two HR consolidations disagree."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      }
+    ],
+    [
+      {
+        "index": 1,
+        "answered": [
+          "business_rules",
+          "workflow",
+          "actors",
+          "edge_cases",
+          "permissions"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace an ad-hoc/manual way of splitting the yearly training budget with a structured process that stays fair and predictable once demand exceeds the available amount.",
+              "evidence": "'hand out a yearly training budget across departments, with rules for who gets priority when it runs out' implies scarcity is the actual trigger, not just distribution."
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated \u2014 likely spreadsheet or informal manager negotiation, but unconfirmed."
+            },
+            "success_metrics": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "actors": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Likely: employees/managers request training spend, department managers or HR/Finance allocate and arbitrate when budget is short.",
+              "evidence": "'across departments' implies a distributor role distinct from requesting departments, but roles and approval authority aren't named."
+            },
+            "business_objects": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Yearly Training Budget (pool), Department, Training Request, Allocation, Priority Rule.",
+              "evidence": "Implied by 'yearly training budget across departments'."
+            },
+            "business_rules": {
+              "completeness": 5,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "",
+              "evidence": "'rules for who gets priority when it runs out' is named as a requirement but the actual criteria (order of request, department size, role, strategic value...) are not defined."
+            },
+            "workflow": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "",
+              "evidence": "Unclear whether the budget is pre-split per department (each with its own sub-budget) or a single shared pool consumed by requests across all departments \u2014 this changes the entire data model."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned; no external system (payroll, LMS, finance export) named yet."
+            },
+            "permissions": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Likely department-scoped visibility for managers, wider visibility for HR/Finance.",
+              "evidence": "Financial/budget domain typically scopes who can see vs adjust vs approve figures by cost center (department here)."
+            },
+            "config_vs_custom": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated whether priority rules are uniform company-wide or configurable per department/entity."
+            },
+            "constraints": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely tied to a fiscal/calendar year cadence with a fixed reset.",
+              "evidence": "'yearly training budget' implies an annual cycle, but rollover/carry-over behavior is unconfirmed."
+            },
+            "edge_cases": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Unaddressed: unused budget rollover, borrowing against next year, concurrent requests competing for the last available amount, mid-year re-allocation."
+            },
+            "reporting": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated, but budget-allocation disputes typically require a visible trail of who got what and why to be defensible."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated; likely risks are overspend past the pool and perceived unfairness in priority decisions."
+            }
+          },
+          "questions": [
+            {
+              "q": "When the budget runs short, what actually determines who gets priority \u2014 order of request, department size/headcount, role or seniority of the employee, strategic importance of the training, or something else? Does this rule apply the same way to every department?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: this is the one thing explicitly requested but left completely undefined \u2014 it's the core logic of the whole system, and the answer changes the entire ranking/allocation engine."
+            },
+            {
+              "q": "Is the yearly amount split into a fixed sub-budget per department up front (each department manages its own pot), or is it one shared pool that all departments draw from as requests come in \u2014 meaning priority is applied across departments, not just within one?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: determines whether this is 15 independent department ledgers or one contested shared pool \u2014 a fundamentally different data model and UI."
+            },
+            {
+              "q": "Who actually submits a training request (employee or manager), and who has the authority to approve, reject, or apply the priority rule when funds are tight \u2014 the department manager, HR, or Finance?",
+              "slot": "actors",
+              "why": "uncertainty \u00d7 impact: without a clear approval owner, the lifecycle (request \u2192 arbitration \u2192 decision) can't be built; this is the primary object's missing lifecycle."
+            },
+            {
+              "q": "If a department doesn't spend its full allocation, does the leftover roll over to next year, return to a shared pool for other departments, or simply expire? And can a department 'borrow' against a future year?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: year-boundary behavior is a recurring real case (not a rare edge case) and changes how the yearly reset and carry-over are modeled."
+            },
+            {
+              "q": "Can each department only see and manage its own budget/requests, or should everyone see the full company-wide allocation and the reasoning behind priority decisions?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: budget visibility is usually assumed until acceptance testing, and disputed priority calls make transparency a trust-critical design choice, not a detail."
+            }
+          ],
+          "summary": {
+            "objective": "Build a structured way to distribute a yearly training budget across departments and automatically (or semi-automatically) arbitrate who gets funded first once the budget can't cover everyone.",
+            "scope": "Likely includes: a yearly Training Budget entity (company-wide or per-department), a Training Request/Allocation object tied to Departments, a configurable priority rule engine applied when funds are insufficient, and some visibility into who received what and why.",
+            "assumptions": [
+              "The budget resets on a yearly (fiscal or calendar) cycle.",
+              "Department managers or employees submit training requests that draw down the budget.",
+              "HR or Finance holds authority over allocation and priority arbitration.",
+              "Visibility into budget and decisions is at least partly scoped per department."
+            ],
+            "blind_spot": "The request states the need for 'priority rules' but not the underlying pool structure: whether each department has its own fixed sub-budget (rules only matter within a department) or all departments draw from one shared pool (rules must arbitrate across departments). Building the wrong one means redoing the data model and approval logic from scratch."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 2,
+        "answered": [
+          "business_rules",
+          "workflow",
+          "edge_cases",
+          "reporting"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 35,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace ad-hoc training-budget allocation with a governed, rule-based process that stays fair and defensible once the yearly envelope can't cover every request.",
+              "evidence": "Confirmed by the introduction of an explicit priority ladder (certifications > seniority > FIFO) and a formal multi-step workflow \u2014 this is clearly meant to be an auditable arbitration system, not a simple ledger."
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Still not stated; low priority since the target process is now well described."
+            },
+            "success_metrics": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated \u2014 no measure given of what 'success' looks like (fewer disputes, higher spend utilization, faster approval time?)."
+            },
+            "actors": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head submits the request; HR validates eligibility; Finance owns and controls the budget envelope; the employee books the course once approved.",
+              "evidence": "Client answer: 'Department heads request, HR validates eligibility, finance owns the envelope, and the employee books the course.'"
+            },
+            "business_objects": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Training Request, Eligibility Check, Budget Reservation, Approval, Booking, Invoice, Refund, Certification, Seniority, Department Envelope.",
+              "evidence": "Derived from the workflow answer; not all fields/relations confirmed yet (e.g., is Envelope per-department or company-wide, is Certification a flag on employee or on request)."
+            },
+            "business_rules": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order when budget is short: 1) certifications outrank everything, 2) seniority within department, 3) first-come-first-served.",
+              "evidence": "Client answer gives the ranking, but does not clarify whether this ladder arbitrates across departments sharing one pool, or only tie-breaks requests inside each department's own sub-budget \u2014 and it doesn't say what happens to a reservation already granted to a lower-priority request when a higher-priority one arrives later."
+            },
+            "workflow": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 Eligibility check \u2192 Budget reservation \u2192 Approval \u2192 Booking \u2192 Invoice reconciliation.",
+              "evidence": "Client answer gives the full pipeline of states, but the pool structure behind 'budget reservation' (shared vs per-department) and the timing/enforcement of priority within that pipeline (real-time reservation vs periodic ranked allocation) remain unresolved."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned yet; invoice reconciliation implies a link to accounting/finance systems but nothing named."
+            },
+            "permissions": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see and manage only their own envelope; HR and Finance see all departments' envelopes and requests.",
+              "evidence": "Client answer: 'A department head sees only their own envelope; HR and finance see all of them.'"
+            },
+            "config_vs_custom": {
+              "completeness": 10,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Unclear whether the priority ladder and workflow are fixed company-wide or configurable per department/entity \u2014 implied uniform so far but not confirmed."
+            },
+            "constraints": {
+              "completeness": 15,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Annual budget cycle with committed funds that can be affected by vendor-side cancellations crossing fiscal-year boundaries.",
+              "evidence": "Client answer about vendor cancellation refund landing in the next fiscal year implies a cross-year reconciliation constraint."
+            },
+            "edge_cases": {
+              "completeness": 30,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "A vendor can cancel a booked course after funds are committed; the refund can land in the next fiscal year, decoupling the reservation from the year it was originally charged to.",
+              "evidence": "Client answer directly states this case, but the original question about unspent year-end balances (rollover, expiry, borrowing) is still unanswered."
+            },
+            "reporting": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Likely needs a visible trail of who requested, who validated, and why priority was applied or denied, given HR/Finance oversight roles.",
+              "evidence": "Multi-role approval chain (HR validates, Finance owns envelope) and disputed priority outcomes typically require an audit trail for fairness/compliance defense \u2014 not yet confirmed as a requirement."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Risk of budget over-commitment if reservations aren't reconciled with actual invoiced amounts, and of perceived unfairness if priority enforcement timing isn't well defined.",
+              "evidence": "Implied by the reservation\u2192invoice reconciliation gap and the unresolved priority-timing question."
+            }
+          },
+          "questions": [
+            {
+              "q": "Is the yearly budget one shared company-wide envelope that all departments compete for, or does each department get its own fixed sub-budget \u2014 and does the certification > seniority > first-come ladder rank requests across the whole company, or only break ties inside a single department's own budget?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: this decides whether the system is one contested pool with cross-department arbitration or N independent department ledgers \u2014 a fundamentally different data model, and the priority rule's scope is still unstated."
+            },
+            {
+              "q": "If budget is reserved for a request the moment it arrives (first-come, first-served at reservation time), what happens when a higher-priority request (e.g. a certification-driven one) shows up afterward and the remaining budget is no longer enough \u2014 does it bump/displace the earlier reservation, wait in a queue for the next opening, or simply get rejected for the year?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: the described pipeline reserves budget as requests arrive, which can conflict with a priority ladder applied after the fact \u2014 this is the exact mechanism that decides fairness and is not defined yet."
+            },
+            {
+              "q": "If a department doesn't use its full allocation by year-end, does the leftover expire, roll over to next year for that department, or get redistributed to other departments/requests still waiting?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: a recurring year-boundary case (not rare), directly shapes the yearly reset logic and whether unspent funds can rescue a previously-denied request."
+            },
+            {
+              "q": "When a vendor cancels and the refund lands in the next fiscal year, should that refunded amount be credited back to the original year's envelope (retroactively), or added to the new year's budget \u2014 and does it free up room for requests that were previously turned down for lack of funds?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: directly affects the invoice-reconciliation step already named in the workflow, and gets expensive to retrofit if the reconciliation logic is built before this rule is set."
+            },
+            {
+              "q": "Beyond simply approving/denying requests, does the client need a record of who was granted or denied training and why (e.g. to justify a denial by an employee who felt they should have had priority)?",
+              "slot": "reporting",
+              "why": "uncertainty \u00d7 impact: multi-role approval (HR/Finance) plus a ranked priority system is a classic source of disputes; if an audit trail is required it changes the build significantly and is cheap to confirm now, expensive to add later."
+            }
+          ],
+          "summary": {
+            "objective": "Build a governed workflow that allocates a yearly training budget across departments and automatically arbitrates who gets funded first \u2014 by certification, then seniority, then first-come \u2014 once the budget can't cover every request.",
+            "scope": "A Training Request lifecycle (request \u2192 HR eligibility check \u2192 budget reservation \u2192 approval \u2192 booking \u2192 invoice reconciliation) tied to Department Envelopes, with department-head-scoped visibility and full visibility for HR/Finance, plus handling of vendor cancellations/refunds that can cross fiscal years.",
+            "assumptions": [
+              "The priority ladder (certifications > seniority > first-come) is meant to apply company-wide, though its exact scope (cross-department vs within-department only) is unconfirmed.",
+              "Reservation happens as requests arrive, but how a later higher-priority request is reconciled against already-reserved budget is not yet defined.",
+              "The budget resets yearly; year-end rollover/expiry of unspent funds is not yet defined.",
+              "An audit trail of allocation decisions is likely required given the multi-role approval chain, though not explicitly requested yet."
+            ],
+            "blind_spot": "The workflow reserves budget in arrival order ('request \u2192 eligibility \u2192 reservation'), while the business rule ranks requests by certification and seniority \u2014 these two mechanisms can directly contradict each other once the budget is tight, and the client hasn't said which one wins when a high-priority request arrives after a lower-priority one already reserved the remaining funds."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 3,
+        "answered": [
+          "permissions",
+          "business_rules"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 40,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace ad-hoc training-budget allocation with a governed, rule-based process that stays fair and defensible once the yearly envelope can't cover every request, including audit-proof handling of manual overrides.",
+              "evidence": "Confirmed by the priority ladder, the reservation/expiry mechanism, and Finance's explicit need for an audit trail of overrides \u2014 this is an arbitration + compliance system, not a simple ledger."
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Still not stated; low priority since the target process is now well described."
+            },
+            "success_metrics": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated \u2014 no measure given of what 'success' looks like (fewer disputes, higher spend utilization, faster approval time?)."
+            },
+            "actors": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head submits the request; HR validates eligibility; Finance owns the budget envelope and can override priority; the employee books the course once approved.",
+              "evidence": "Client answer reveals a new actor capability: someone can 'override a priority' \u2014 presumably Finance or HR \u2014 not yet confirmed who."
+            },
+            "business_objects": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Training Request, Eligibility Check, Budget Reservation (with expiry), Approval, Override, Booking, Invoice, Refund, Certification, Seniority, Department/Entity Envelope (with regulated-vs-non-regulated carryover flag).",
+              "evidence": "Carryover rule implies the Envelope object needs a regulatory-status attribute; Reservation needs an expiry timestamp; a new Override object/event is implied by the audit-trail requirement."
+            },
+            "business_rules": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order when budget is short: 1) certifications, 2) seniority, 3) first-come. Unused budget carries over one year for regulated entities, and is lost (expires) at year-end for all others. A reservation not booked within 30 days expires and returns funds to the pool. A priority decision can be manually overridden (by an unconfirmed role), and that override must be logged.",
+              "evidence": "Client's answer confirms carryover varies by entity regulatory status (a rule that varies by entity \u2014 the classic contract/country/client trap) and introduces reservation expiry and manual override as new mechanics; whether the priority ladder ranks across the whole company or only within one department's envelope is still unresolved."
+            },
+            "workflow": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 Eligibility check \u2192 Budget reservation (expires after 30 days unbooked, returning funds to pool) \u2192 Approval (optionally overridden) \u2192 Booking \u2192 Invoice reconciliation.",
+              "evidence": "Client confirmed the expiry mechanic, but the core question of what happens when a higher-priority request arrives while a lower-priority reservation is still active (not yet expired) \u2014 bump it, queue it, or reject it \u2014 remains unanswered."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned yet; invoice reconciliation implies a link to accounting/finance systems but nothing named."
+            },
+            "permissions": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see/manage only their own envelope; HR and Finance see all envelopes and requests; someone can override a priority decision \u2014 role and conditions not yet confirmed.",
+              "evidence": "New override capability disclosed by client answer on reporting, but the identity/authority scope of who may override, and whether a reason is mandatory, is unconfirmed \u2014 directly affects both permissions and the audit-trail design."
+            },
+            "config_vs_custom": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "The carryover rule already differs by entity type (regulated vs not) \u2014 suggesting envelope rules are configurable per department/entity rather than uniform.",
+              "evidence": "Inferred from the regulated-entity carryover distinction; not yet confirmed whether other rules (priority ladder, expiry window) are also configurable per entity or fixed company-wide."
+            },
+            "constraints": {
+              "completeness": 45,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Annual budget cycle; regulated entities must retain one year of carryover (likely a compliance/legal requirement), others lose unused funds at year-end; vendor cancellations can produce refunds crossing fiscal-year boundaries.",
+              "evidence": "Client's carryover answer strongly implies a regulatory constraint tied to entity status, reinforcing the earlier fiscal-year-crossing refund case."
+            },
+            "edge_cases": {
+              "completeness": 45,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Concurrent requests: two department heads can request the last remaining budget/seat within the same minute \u2014 resolution rule (priority-based, lock-based, or manual) not yet defined. Also: vendor cancellation refunds landing in the next fiscal year, and reservations expiring after 30 days unbooked.",
+              "evidence": "Client surfaced a genuinely new high-stakes case (simultaneous competing requests) that the current reservation/priority design does not yet resolve \u2014 this determines whether reservation must be synchronous/locking or can tolerate eventual consistency."
+            },
+            "reporting": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs a live view of committed vs. spent vs. remaining per envelope, plus a full audit trail of who overrode a priority decision and (implicitly) why.",
+              "evidence": "Client answer explicitly states this requirement \u2014 confirms reporting/auditability as a hard, high-impact requirement, consistent with the compliance angle already seen in carryover rules."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Risk of a race condition granting the same last-seat budget to two simultaneous requests; risk of unaudited overrides undermining fairness/compliance; risk of reservation expiry silently starving a higher-priority latecomer.",
+              "evidence": "Directly implied by the newly surfaced concurrency case and the override/audit requirement."
+            }
+          },
+          "questions": [
+            {
+              "q": "When a higher-priority request (e.g. certification-driven) arrives while a lower-priority reservation is still active and not yet expired, should the system revoke/bump that earlier reservation, make the new request wait for it to expire or be booked, or simply reject the new request for lack of funds?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: this is the exact mechanism that makes the priority ladder meaningful in practice; the 30-day expiry rule alone doesn't say whether priority can pre-empt an already-granted reservation, and it changes both the data model and the fairness perception."
+            },
+            {
+              "q": "When two department heads request the last remaining budget within the same minute, should the priority ladder (certification > seniority > first-come) always decide the winner, or is a strict 'whoever's request the system received first' outcome acceptable even if it contradicts priority?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: this concurrency case is new, high-stakes, and forces a choice between a real-time locking reservation (synchronous, immediate feedback) and a periodic ranked allocation batch (eventual, queued) \u2014 a fundamentally different architecture, not a detail."
+            },
+            {
+              "q": "Who is allowed to override a priority decision \u2014 Finance only, HR too, or department heads for their own envelope \u2014 and must a reason be entered every time, or only for certain override types?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: an override capability was just disclosed but its authority scope is undefined; since Finance explicitly wants an audit trail of overrides, getting this wrong means rebuilding both the permission model and the audit log."
+            },
+            {
+              "q": "Does the certification > seniority > first-come priority ladder rank requests across the entire company's pool, or does it only break ties inside each department's own envelope \u2014 given that carryover rules already differ between regulated and non-regulated entities?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: still unresolved after the carryover answer; determines whether this is one contested company-wide pool or N independent envelopes, which is a fundamentally different data and workflow model."
+            }
+          ],
+          "summary": {
+            "objective": "Build a governed workflow that allocates a yearly training budget per department/entity and automatically arbitrates who gets funded first \u2014 by certification, then seniority, then first-come \u2014 while tracking committed/spent/remaining figures and auditing every manual override.",
+            "scope": "A Training Request lifecycle (request \u2192 HR eligibility check \u2192 time-limited budget reservation with 30-day expiry \u2192 approval/possible override \u2192 booking \u2192 invoice reconciliation) tied to per-department/entity Envelopes with entity-specific carryover rules (regulated entities keep one year of carryover, others lose unused funds), department-head-scoped visibility, full Finance/HR visibility, and a live committed/spent/remaining report plus an override audit trail.",
+            "assumptions": [
+              "The priority ladder's scope (company-wide vs. per-department tie-break) is still assumed rather than confirmed.",
+              "Reservation expiry (30 days) returns funds to the pool, but whether a higher-priority latecomer can pre-empt an unexpired reservation is unconfirmed.",
+              "The identity and conditions of who may override a priority decision are not yet defined.",
+              "Regulated-entity status is assumed to be a fixed, known attribute of each department/envelope, driving differential carryover rules.",
+              "Concurrent requests for the same scarce budget are assumed to need a defined tie-break rule, not left to chance."
+            ],
+            "blind_spot": "The system now has three mechanisms that can conflict under load: a priority ladder, a 30-day reservation expiry, and a manual override \u2014 none of which yet specifies what happens when two of them fire at once (e.g., a higher-priority request arriving on top of an active reservation, or two simultaneous requests for the last euro of budget). Without resolving this, the reservation logic risks being built as a simple first-come lock that silently violates the very priority rule the client asked for."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 4,
+        "answered": [
+          "reporting"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 40,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace ad-hoc training-budget allocation with a governed, rule-based process that stays fair and defensible once the yearly envelope can't cover every request, including audit-proof handling of manual overrides, entitlement changes for joiners/leavers, and compliance oversight of certification data.",
+              "evidence": "Reinforced by new compliance-officer visibility requirement and joiner/leaver entitlement rules \u2014 this is increasingly a cross-cutting compliance system, not just a budget ledger."
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Still not stated; low priority."
+            },
+            "success_metrics": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Still not stated."
+            },
+            "actors": {
+              "completeness": 95,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head submits requests; HR validates eligibility; Finance owns the budget and can (presumably) override priority; employee books the course; Compliance Officer has cross-entity read access to certification requests but is barred from seeing monetary amounts.",
+              "evidence": "Client explicitly introduced the Compliance Officer role with a scoped, amount-masked view \u2014 a new, distinct permission tier."
+            },
+            "business_objects": {
+              "completeness": 65,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Training Request, Eligibility Check, Budget Reservation (30-day expiry), Approval, Override (with audit log), Booking, Invoice, Refund, Certification, Seniority, Entitlement (pro-rated for mid-year joiners), Leaver Reversal event, Department/Entity Envelope (regulated-vs-non-regulated carryover flag).",
+              "evidence": "Client's answer adds two new object/event needs: a pro-rata Entitlement calculation and a Leaver Reversal that returns committed-but-unspent funds to the envelope."
+            },
+            "business_rules": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority when short: certifications > seniority > first-come (scope \u2014 company-wide vs per-department \u2014 still unconfirmed). Carryover: one year for regulated entities, lost at year-end otherwise. Reservations expire after 30 days unbooked, returning funds to the pool. New: mid-year joiners get a pro-rata entitlement (formula unspecified); when an employee leaves, their committed-but-unspent budget returns to the envelope. Overrides require logging (authority scope still unconfirmed).",
+              "evidence": "Client added proration and leaver-reversal rules but did not answer whether these newly returned/entitled funds re-enter the same priority-ranked pool or are handled outside it, nor whether the ladder ranks company-wide or per-department."
+            },
+            "workflow": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 Eligibility check \u2192 Budget reservation (30-day expiry, returns to pool) \u2192 Approval (optionally overridden, logged) \u2192 Booking \u2192 Invoice reconciliation. Entitlement is recalculated on joining mid-year; leaving triggers a reversal of committed-unspent funds to the envelope.",
+              "evidence": "Still unresolved: whether a higher-priority request can pre-empt an active, unexpired reservation, and whether leaver-reversed funds are immediately available or held like an expired reservation."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned; low priority for now."
+            },
+            "permissions": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see/manage only their own envelope; HR and Finance see all envelopes/amounts; Compliance Officer sees certification requests across all entities but never amounts; who may issue an override, and whether a reason is mandatory, remains unconfirmed.",
+              "evidence": "New amount-masking rule for Compliance Officer is explicit and high-impact (cross-cutting like the classification model in document-management); the original override-authority question was not answered."
+            },
+            "config_vs_custom": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Carryover already varies by entity type; unclear whether priority ladder, proration formula, and override authority are also configurable per entity or fixed company-wide.",
+              "evidence": "No new info this turn."
+            },
+            "constraints": {
+              "completeness": 50,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Annual budget cycle; regulated entities retain one year of carryover; refunds can cross fiscal-year boundaries; compliance data-visibility restrictions (amount-masking) likely reflect a data-privacy or segregation-of-duties requirement.",
+              "evidence": "Compliance Officer's amount-blind access suggests a governance/privacy constraint akin to segregation of duties in financial-reporting context."
+            },
+            "edge_cases": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Concurrent requests for the last budget slot (resolution rule still undefined); reservations expiring after 30 days; vendor-cancellation refunds crossing fiscal years; now also: mid-year joiners requiring pro-rated entitlement, and leavers whose committed-unspent funds must be returned and made available again (timing/priority re-entry unclear).",
+              "evidence": "Two new edge cases explicitly introduced by the client this turn; concurrency case from prior turn remains unresolved."
+            },
+            "reporting": {
+              "completeness": 85,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs live committed/spent/remaining views per envelope and a full audit trail of overrides; Compliance Officer needs a cross-entity, amount-blind view of certification requests specifically \u2014 implying report fields must be role-filtered, not just role-gated.",
+              "evidence": "Confirms reporting must support field-level (not just row-level) permission filtering \u2014 a materially different build than a single dashboard with one access level."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 45,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Race condition on simultaneous last-budget requests; unaudited overrides undermining fairness; reservation expiry starving higher-priority latecomers; risk of accidentally leaking amounts to the Compliance Officer view if filtering is row-level rather than field-level; risk of proration/leaver-reversal rules conflicting with the priority ladder if not explicitly reconciled.",
+              "evidence": "Extends prior risks with the newly disclosed field-level visibility and entitlement-adjustment mechanics."
+            }
+          },
+          "questions": [
+            {
+              "q": "When a higher-priority request arrives while a lower-priority reservation is still active (not yet expired), should the system pre-empt/bump that reservation, force the new request to wait, or reject it outright for lack of funds?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: unresolved across two turns; determines whether the priority ladder can actually override an already-granted reservation or is purely first-come once reserved \u2014 a core architectural fork."
+            },
+            {
+              "q": "Does the certification > seniority > first-come ladder rank requests across the whole company's budget pool, or only break ties inside each department/entity's own envelope \u2014 and do funds returned from a leaver or an expired reservation re-enter that same ranked pool, or are they reserved for the department that generated them?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: still unanswered and now compounded by the new leaver-reversal rule \u2014 decides whether this is one contested company-wide pool or many independent envelopes with their own recycling logic."
+            },
+            {
+              "q": "Who exactly is authorized to override a priority or eligibility decision (Finance only, HR too, department heads for their own envelope?), and must a reason always be logged, or only for certain override types?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: unresolved across two turns despite being directly asked; since an audit trail of overrides is a stated requirement, an undefined authority scope risks under- or over-permissioning a compliance-sensitive action."
+            },
+            {
+              "q": "Should the Compliance Officer's amount-blind view be a special case just for that role, or does it reflect a broader rule that amounts must be hidden from certain roles/screens across the platform (e.g., in exports, dashboards, notifications)?",
+              "slot": "reporting",
+              "why": "uncertainty \u00d7 impact: field-level masking is more expensive to build correctly than row-level access control, and if it's a broader governance rule rather than a one-off, it changes the design of every report and export, not just one screen."
+            },
+            {
+              "q": "When two department heads request the last remaining budget within the same minute, does the priority ladder decide the winner (requiring some form of holding/locking before granting), or is a strict first-received outcome acceptable even if it contradicts priority order?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: unresolved since first raised; forces a choice between synchronous locking reservation and an eventual/batched ranked allocation \u2014 a fundamentally different technical approach with real UX consequences at the moment of scarcity."
+            }
+          ],
+          "summary": {
+            "objective": "Build a governed workflow that allocates a yearly training budget per department/entity and automatically arbitrates who gets funded first \u2014 by certification, then seniority, then first-come \u2014 while tracking committed/spent/remaining figures, adjusting entitlements for joiners/leavers, and auditing every manual override, with a compliance-specific, amount-blind cross-entity view of certification requests.",
+            "scope": "A Training Request lifecycle (request \u2192 HR eligibility check \u2192 time-limited budget reservation with 30-day expiry \u2192 approval/possible override \u2192 booking \u2192 invoice reconciliation) tied to per-department/entity Envelopes with entity-specific carryover rules, pro-rated entitlements for mid-year joiners, automatic fund-return on leaver departure, department-head-scoped visibility, full Finance/HR visibility, a Compliance Officer role with cross-entity but amount-blind visibility into certification requests, and a live committed/spent/remaining report plus an override audit trail.",
+            "assumptions": [
+              "The priority ladder's scope (company-wide pool vs. per-department tie-break) is still assumed rather than confirmed, now further complicated by leaver-reversed and joiner-prorated funds.",
+              "Whether a higher-priority latecomer can pre-empt an already-active, unexpired reservation is still unconfirmed.",
+              "The identity and required justification for who may issue an override remain undefined despite being asked twice.",
+              "The Compliance Officer's amount-masking is assumed to reflect a broader field-level visibility rule rather than a one-off screen exception \u2014 to be confirmed.",
+              "Regulated-entity status is assumed to be a fixed, known attribute of each envelope driving differential carryover, unrelated to the new proration/leaver rules."
+            ],
+            "blind_spot": "Two full turns in, the client keeps introducing new entitlement-adjustment mechanics (compliance visibility, mid-year proration, leaver reversal) while leaving the three foundational arbitration questions \u2014 pre-emption, ladder scope, and override authority \u2014 unanswered. Building the reservation/priority engine before these are settled risks a system that handles the newly disclosed edge cases correctly in isolation but produces contradictory outcomes the moment they interact with the still-undefined core arbitration logic."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 5,
+        "answered": [],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 45,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Replace ad-hoc training-budget allocation with a governed, rule-based, and now historically-auditable process that stays fair once the yearly envelope can't cover every request \u2014 including reconstructing exact past states for audit purposes, not just current balances.",
+              "evidence": "New requirement that an auditor can ask for an envelope's state 'as it stood on a given date' confirms this is a compliance/audit system, not just a live budget tracker \u2014 reinforces and sharpens the earlier compliance signal."
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Still not stated."
+            },
+            "success_metrics": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Still not stated."
+            },
+            "actors": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head submits requests; HR validates eligibility; Finance owns the budget and can override priority; employee books the course; Compliance Officer has cross-entity, amount-blind read access to certification requests; a new 'Auditor' role now surfaces, needing point-in-time reconstruction of an envelope's state \u2014 relationship to Compliance Officer and level of financial visibility unconfirmed.",
+              "evidence": "Client introduced an 'auditor' need this turn without clarifying whether it's the same role as Compliance Officer or a separate, likely full-visibility, role."
+            },
+            "business_objects": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Training Request, Eligibility Check, Budget Reservation (30-day expiry), Approval, Override (audit log), Booking, Invoice, Refund, Certification, Seniority, Entitlement (pro-rated), Leaver Reversal, Department/Entity Envelope. New: an append-only transaction/event ledger per envelope (reservations, approvals, overrides, expiries, reversals, entitlement changes) appears necessary to answer 'what was the state on date X', rather than storing only current running totals.",
+              "evidence": "Point-in-time state requests are only answerable if every balance-changing event is individually timestamped and retained \u2014 a materially different data model than a single mutable balance field."
+            },
+            "business_rules": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority when short: certifications > seniority > first-come (scope unconfirmed). Carryover: one year for regulated entities, lost otherwise. Reservations expire after 30 days, returning funds to pool. Mid-year joiners get pro-rata entitlement; leavers' committed-unspent funds return to the envelope. Overrides require logging (authority unconfirmed). New open question: when a correction/override is made today, does it retroactively rewrite what 'the state on date X' would show, or does history stay exactly as it was recorded and the correction appears as its own new dated event?",
+              "evidence": "The auditor's 'as of a date' need makes this distinction unavoidable \u2014 it's the financial-reporting pattern of period close/restatement (a closed figure isn't silently rewritten, it's corrected via a new dated adjustment) applied here, but the client hasn't said which behaviour they expect."
+            },
+            "workflow": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 Eligibility check \u2192 Budget reservation (30-day expiry) \u2192 Approval (optionally overridden, logged) \u2192 Booking \u2192 Invoice reconciliation. Entitlement recalculated on joining; leaving triggers reversal. Still unresolved: can a higher-priority request pre-empt an active unexpired reservation.",
+              "evidence": "Unchanged this turn; still a core unanswered fork."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned."
+            },
+            "permissions": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see only their own envelope; HR/Finance see all envelopes and amounts; Compliance Officer sees certifications cross-entity but never amounts; an Auditor role apparently needs to see historical envelope state \u2014 likely including amounts, given audit purpose \u2014 but this is unconfirmed; override-authority scope still unconfirmed.",
+              "evidence": "A new role with undefined rights was introduced without addressing the standing override-authority question."
+            },
+            "config_vs_custom": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Carryover varies by entity type; unclear whether priority ladder, proration formula, override authority, and now audit/history retention depth are configurable per entity or fixed company-wide.",
+              "evidence": "No new info this turn."
+            },
+            "constraints": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Annual budget cycle; regulated-entity carryover; refunds crossing fiscal years; compliance amount-masking; now also an implicit requirement to retain enough historical detail (event-level, timestamped) to reconstruct any past envelope state for audit \u2014 a retention/architecture constraint, not just a UI one.",
+              "evidence": "Point-in-time audit query is a data-retention and architecture constraint akin to the 'audit trail must not have gaps' pattern in financial-reporting."
+            },
+            "edge_cases": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Concurrent requests for the last budget slot (resolution undefined); 30-day reservation expiry; cross-fiscal-year refunds; mid-year joiner proration; leaver fund reversal (re-entry timing/priority unclear); now also: what happens to an 'as of date' report when a correction is applied after that date \u2014 does the historical report change retroactively.",
+              "evidence": "New edge case from this turn's answer, directly linked to the correction/restatement question above."
+            },
+            "reporting": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs live committed/spent/remaining views per envelope plus a full override audit trail; Compliance Officer needs amount-blind cross-entity certification visibility; now additionally, an Auditor-facing report must reconstruct an envelope's exact committed/spent/remaining state as of any specified past date \u2014 a fundamentally different capability than a live dashboard, requiring an immutable, fully-timestamped transaction history rather than snapshots of current totals.",
+              "evidence": "Client explicitly named the point-in-time audit query this turn \u2014 this is the single biggest architectural addition so far and changes the reporting/data layer, not just a screen."
+            },
+            "acceptance": {
+              "completeness": 15,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Should include a scenario proving an 'as of date X' query returns figures matching what was actually true at that date, even after later corrections/overrides/reversals have occurred.",
+              "evidence": "Derived from the new auditor requirement; not yet explicitly scoped by the client."
+            },
+            "risks": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Race condition on simultaneous last-budget requests; unaudited overrides undermining fairness; reservation expiry starving latecomers; risk of building only current-balance storage and later discovering point-in-time audit queries are unanswerable without a full event ledger (expensive retrofit); risk of ambiguity between Auditor and Compliance Officer roles leading to wrong access being granted.",
+              "evidence": "The 'as of date' requirement, if underestimated, is exactly the kind of gap the financial-reporting and document-management contexts flag as expensive to retrofit."
+            }
+          },
+          "questions": [
+            {
+              "q": "Is the 'Auditor' who needs the historical view the same person/role as the Compliance Officer (who is explicitly amount-blind), or a separate role \u2014 and should the Auditor see actual monetary amounts in that historical view?",
+              "slot": "actors",
+              "why": "uncertainty \u00d7 impact: brand-new role surfaced with undefined identity and rights; if it's a new role with full financial visibility, it needs its own permission tier distinct from Compliance Officer, changing the access model."
+            },
+            {
+              "q": "When a correction, override, or leaver-reversal is recorded today, should an 'as of last month' audit report change to reflect it (retroactive rewrite), or must it always show exactly what was known/true at that date, with the correction appearing only as a new event on today's date?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: this decides between two fundamentally different architectures (mutable historical balances vs. an immutable append-only ledger) and is the kind of restatement question that is very expensive to get wrong after the fact."
+            },
+            {
+              "q": "Does the certification > seniority > first-come priority ladder rank requests across the whole company's budget pool, or only break ties inside each department/entity's own envelope \u2014 and do funds returned from a leaver or an expired reservation re-enter that same ranked pool, or stay reserved for the originating department?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: unresolved across three turns and now compounded by leaver-reversal \u2014 decides whether this is one contested pool or many independent envelopes with their own recycling logic."
+            },
+            {
+              "q": "When a higher-priority request arrives while a lower-priority reservation is still active (unexpired), should the system pre-empt/bump that reservation, force the new request to wait, or reject it for lack of funds?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: unresolved across three turns; determines whether the priority ladder can override an already-granted reservation or is purely first-come once reserved."
+            },
+            {
+              "q": "Who exactly is authorized to override a priority or eligibility decision (Finance only, HR too, department heads for their own envelope?), and must a reason always be logged, or only for certain override types?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: unresolved across three turns despite being asked twice; an undefined override authority is a compliance gap given the audit-trail requirement already confirmed."
+            }
+          ],
+          "summary": {
+            "objective": "Build a governed workflow that allocates a yearly training budget per department/entity, automatically arbitrates who gets funded first (certification > seniority > first-come) when funds run short, adjusts entitlements for joiners/leavers, logs every override, and can reconstruct the exact historical state of any envelope as of a given past date for audit purposes.",
+            "scope": "A Training Request lifecycle (request \u2192 HR eligibility check \u2192 time-limited budget reservation with 30-day expiry \u2192 approval/possible override \u2192 booking \u2192 invoice reconciliation) tied to per-department/entity Envelopes with entity-specific carryover, pro-rated entitlements for mid-year joiners, automatic fund-return on leaver departure, role-scoped visibility (department head, HR/Finance, amount-blind Compliance Officer, and a newly-surfaced Auditor role needing point-in-time reconstruction), a live committed/spent/remaining report, an override audit trail, and \u2014 newly required \u2014 an immutable, fully-timestamped transaction ledger capable of answering 'what did this envelope look like on date X'.",
+            "assumptions": [
+              "The Auditor role is assumed distinct from the Compliance Officer and likely requires full amount visibility, unlike the Compliance Officer \u2014 to be confirmed.",
+              "Historical 'as of date' queries are assumed to require an append-only event ledger rather than periodic snapshots \u2014 a significant architecture decision still unconfirmed.",
+              "The priority ladder's scope (company-wide vs. per-department) and whether recycled/leaver/joiner funds re-enter the same ranked pool remain unconfirmed after three turns.",
+              "Whether a higher-priority latecomer can pre-empt an already-active, unexpired reservation is still unconfirmed.",
+              "Override authority and mandatory justification remain undefined despite being asked twice."
+            ],
+            "blind_spot": "The client keeps surfacing new compliance/audit mechanics (amount-blind Compliance Officer, now a historical-state-seeking Auditor) while three foundational arbitration questions \u2014 pre-emption, ladder scope, override authority \u2014 remain unanswered after three turns. Worse, the newest answer implies the system may need full event-sourcing to support point-in-time audit queries; if the team builds on a simple running-balance model first (the natural default), retrofitting true historical reconstruction later is a costly rebuild, not an incremental add \u2014 this is the highest-leverage architectural decision still undecided."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      }
+    ],
+    [
+      {
+        "index": 1,
+        "answered": [
+          "business_rules",
+          "business_rules",
+          "workflow",
+          "permissions",
+          "edge_cases",
+          "current_process"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Avoid overspending the annual training budget and arbitrate fairly between departments/employees when demand exceeds funds.",
+              "evidence": "\u2018yearly training budget across departments, with rules for who gets priority when it runs out\u2019"
+            },
+            "current_process": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "",
+              "evidence": "Not mentioned \u2014 likely spreadsheet or ad-hoc manager approval today."
+            },
+            "success_metrics": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: budget never overspent, requests handled consistently, disputes reduced.",
+              "evidence": "Implied by the need for priority rules, not stated."
+            },
+            "actors": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Probably: employee (requester), department manager (approver), HR/Finance (budget owner/administrator).",
+              "evidence": "Standard roles in this domain; not stated explicitly."
+            },
+            "business_objects": {
+              "completeness": 25,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Budget (yearly, total + per-department envelope?), Department, TrainingRequest, Employee, PriorityRule.",
+              "evidence": "Inferred from \u2018budget across departments\u2019 and \u2018priority when it runs out\u2019."
+            },
+            "business_rules": {
+              "completeness": 10,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "A priority rule exists for allocating remaining budget, but its criteria (seniority, role, request date, cost, department quota) are undefined.",
+              "evidence": "\u2018rules for who gets priority when it runs out\u2019 \u2014 explicitly required but not specified."
+            },
+            "workflow": {
+              "completeness": 5,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Lifecycle of a training request (submit \u2192 approve/reject \u2192 budget deducted) and of the yearly budget itself (allocated \u2192 consumed \u2192 reset) not defined.",
+              "evidence": "Not described; only the end constraint (\u2018runs out\u2019) is mentioned."
+            },
+            "integrations": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "low",
+              "value": "",
+              "evidence": "Not mentioned; possible link to HR/payroll or finance reporting."
+            },
+            "permissions": {
+              "completeness": 5,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Who can set department envelopes, approve requests, or override priority rules is undefined.",
+              "evidence": "Not stated; budget control implies restricted rights."
+            },
+            "config_vs_custom": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Priority rules and budget split likely need to be configurable per department, and possibly per year/country.",
+              "evidence": "Platform context: business rules commonly vary by department/client/country."
+            },
+            "constraints": {
+              "completeness": 15,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Annual cycle with a reset/rollover date; possibly tied to fiscal year.",
+              "evidence": "\u2018yearly training budget\u2019 implies a recurring period boundary."
+            },
+            "edge_cases": {
+              "completeness": 5,
+              "confidence": "empty",
+              "impact": "high",
+              "value": "Behavior when two requests compete for the last remaining funds (race condition), partial approval, waitlisting, unused budget carryover, mid-year re-allocation between departments.",
+              "evidence": "Directly implied by \u2018priority when it runs out\u2019 but not detailed."
+            },
+            "reporting": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "Likely need for visibility into remaining budget per department and a log of who was granted/denied and why.",
+              "evidence": "Financial allocation context typically requires traceability of decisions."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "Risk of perceived unfairness or disputes if priority rule is opaque; risk of double-allocation under concurrent requests.",
+              "evidence": "Inferred from the domain (budget scarcity + multiple claimants)."
+            }
+          },
+          "questions": [
+            {
+              "q": "Is the yearly budget split into a fixed envelope per department (priority rules only apply within a department once its own funds run out), or is it one shared pool where departments compete against each other by priority?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: this decides the entire data model and rule engine (per-department ledger vs. global arbitration) \u2014 the request's phrasing is compatible with both readings."
+            },
+            {
+              "q": "What determines priority when funds run out \u2014 e.g. request date, employee seniority/role, training cost, department quota, or manager discretion \u2014 and does that rule differ by department?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: explicitly required by the client but completely unspecified; it's the core logic being asked for, and it may need to be configurable per department."
+            },
+            {
+              "q": "Walk me through a training request end-to-end: who submits it, who approves it, and at what point is the budget actually reserved/deducted \u2014 at submission, at approval, or at completion of the training?",
+              "slot": "workflow",
+              "why": "uncertainty \u00d7 impact: without this, we can't design the approval circuit or prevent two simultaneous requests from both being approved against the same remaining euros."
+            },
+            {
+              "q": "Who is allowed to set each department's budget envelope, approve/reject requests, and override the priority rule in exceptional cases?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: budget control is inherently sensitive; permission gaps here are typically discovered late, at acceptance testing."
+            },
+            {
+              "q": "When the budget for a period is exhausted, what should happen to a new request \u2014 automatic rejection, a waitlist for next year, or borrowing from another department's unused funds?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: this is the exact scenario the client named as needing rules for, yet the desired outcome (reject vs waitlist vs reallocate) isn't stated."
+            },
+            {
+              "q": "How is this handled today (spreadsheet, email approvals, another tool), and does any unused budget roll over to the next year or get lost?",
+              "slot": "current_process",
+              "why": "uncertainty \u00d7 impact: shapes migration effort and clarifies whether 'yearly' means a hard reset or a carryover model, which changes the budget object's lifecycle."
+            }
+          ],
+          "summary": {
+            "objective": "Enable controlled, fair distribution of a yearly training budget across departments, with a clear rule for arbitrating requests when the budget is insufficient to cover them all.",
+            "scope": "Likely includes: a yearly Budget object (split across Departments), a TrainingRequest submission/approval workflow, a configurable priority rule engine for scarcity situations, remaining-budget tracking, and basic reporting/audit of allocation decisions.",
+            "assumptions": [
+              "Actors include an employee requester, a department manager approver, and an HR/Finance budget owner.",
+              "Business objects include Budget, Department, TrainingRequest, Employee, and a PriorityRule.",
+              "The priority rule and possibly the budget split may need to be configurable per department (and potentially per year).",
+              "The budget cycle resets annually, aligned to a fiscal or calendar year."
+            ],
+            "blind_spot": "It's unclear whether the budget is a fixed envelope per department (priority rules apply only inside each department) or a single shared pool where departments compete against each other \u2014 these are two fundamentally different data models and rule engines, and the request's wording ('across departments... who gets priority') is compatible with either reading."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 2,
+        "answered": [
+          "edge_cases",
+          "business_rules",
+          "config_vs_custom",
+          "reporting"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Beyond fair arbitration when the budget runs out, the client also needs a single reliable source of truth: today's twice-yearly spreadsheet consolidations don't reconcile, meaning real spend vs. remaining budget is already unclear before any priority rule even applies.",
+              "evidence": "'One shared spreadsheet per department, consolidated by HR twice a year, and the two consolidations never match.'"
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Each department keeps its own spreadsheet; HR consolidates twice a year; the two consolidations routinely disagree \u2014 no real-time or authoritative ledger exists today.",
+              "evidence": "Client answer."
+            },
+            "success_metrics": {
+              "completeness": 15,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: budget never overspent, consolidations always reconcile, priority rule applied consistently and auditable.",
+              "evidence": "Inferred from reconciliation pain + priority rule requirement."
+            },
+            "actors": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head (own envelope only), HR and Finance (all envelopes, presumably reconciliation and administration), employee (requester), vendor (external, can cancel a committed course).",
+              "evidence": "Permissions answer + vendor cancellation edge case."
+            },
+            "business_objects": {
+              "completeness": 40,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Budget (yearly, per-department envelope, with carryover flag for 'regulated entities'), TrainingRequest, Reservation, Approval, Booking, Invoice, Cancellation/Refund, PriorityRule, Employee (seniority, certifications).",
+              "evidence": "Derived from workflow and priority-rule answers."
+            },
+            "business_rules": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "When budget is insufficient: 1) requests tied to required certifications outrank all others, 2) then seniority within the department, 3) then first-come-first-served. Unused budget carries over one year for 'regulated entities'; it is lost everywhere else at year-end.",
+              "evidence": "Client answers on priority order and carryover."
+            },
+            "workflow": {
+              "completeness": 80,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 eligibility check \u2192 budget reservation \u2192 approval \u2192 booking \u2192 invoice reconciliation. Budget is reserved before approval, meaning a rejected/cancelled request must release the reservation.",
+              "evidence": "Client answer."
+            },
+            "integrations": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Vendor/invoicing side sends cancellations and refunds that must reconcile back against the reserved budget, possibly across a fiscal-year boundary.",
+              "evidence": "'A vendor can cancel a course after the money is committed, and the refund can land in the next fiscal year.'"
+            },
+            "permissions": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see and act only on their own department's envelope; HR and Finance see and presumably administer all departments' envelopes.",
+              "evidence": "Client answer."
+            },
+            "config_vs_custom": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Carryover behavior differs by entity type (regulated vs. not) \u2014 likely needs to be a configurable flag per department/legal entity rather than hardcoded logic.",
+              "evidence": "'carries over ... for the regulated entities and is lost everywhere else.'"
+            },
+            "constraints": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Annual/fiscal-year cycle with a defined close date; at least one class of entities has a one-year carryover window; refunds can cross that boundary.",
+              "evidence": "Carryover + refund-timing answers."
+            },
+            "edge_cases": {
+              "completeness": 45,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Vendor-side cancellation after budget commitment, with refund potentially landing in the following fiscal year \u2014 raises open questions on which year's budget is credited and whether freed funds get reoffered to waitlisted/lower-priority requests. The original question of what happens to a request when budget is fully exhausted (reject vs. waitlist vs. defer) remains unanswered.",
+              "evidence": "Client answer introduced a new edge case without resolving the original one."
+            },
+            "reporting": {
+              "completeness": 15,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Given the reconciliation mismatch pain and the 'regulated entities' carryover rule (compliance flavor), an authoritative, auditable ledger per department (reservations, approvals, cancellations, refunds, carryover) is likely required, not just a passive report.",
+              "evidence": "Reconciliation-mismatch answer + regulated-entity carryover rule."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Persistent spreadsheet mismatch could recur digitally if reservation/release/refund timing isn't tightly modeled; cross-fiscal-year refunds risk double counting or budget leakage if not explicitly ruled.",
+              "evidence": "Inferred from current_process and edge_cases answers."
+            }
+          },
+          "questions": [
+            {
+              "q": "When a request can't be funded because the department's (or pool's) budget is exhausted, what actually happens to it \u2014 outright rejection, a waitlist that can be funded later from cancellations/refunds, or automatic deferral to next year?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: this is the exact scenario the client named as needing rules for; it's still unanswered and now interacts with the newly-revealed cancellation/refund flow \u2014 get it wrong and the reservation/release logic is built for the wrong policy."
+            },
+            {
+              "q": "When a vendor cancels and the refund lands in the next fiscal year, does that money count against the year the course was originally booked, or the year the refund is actually received \u2014 and for a non-regulated department, is that refunded amount lost or restored?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: directly affects the budget ledger's core arithmetic and the carryover rule; if unresolved, closed-period totals won't reconcile \u2014 the same mismatch problem the client already suffers from today, just moved into the new system."
+            },
+            {
+              "q": "Which departments or legal entities count as 'regulated' for carryover purposes, and is that a fixed list or something an admin needs to configure/change over time?",
+              "slot": "config_vs_custom",
+              "why": "uncertainty \u00d7 impact: determines whether carryover is a hardcoded rule or a configurable per-entity flag \u2014 gets this wrong and every new regulated entity requires a code change instead of a settings update."
+            },
+            {
+              "q": "Is the yearly budget one shared pool that departments compete for by the certification \u2192 seniority \u2192 FIFO order, or does each department have its own fixed envelope and that priority order only decides who wins inside a single department's shrinking budget?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: the priority answer describes the ranking criteria but never confirmed the scope it applies within \u2014 this still decides the entire data model (one ledger vs. per-department ledgers) and wasn't actually resolved by the previous answer."
+            },
+            {
+              "q": "Beyond approving requests, do HR/Finance need a real-time, always-reconciled view of committed vs. available budget per department (replacing the current twice-yearly spreadsheet consolidation), including a full audit trail of reservations, approvals, cancellations and refunds?",
+              "slot": "reporting",
+              "why": "uncertainty \u00d7 impact: the client's own pain point (consolidations that never match) suggests this is a hard requirement, not a nice-to-have \u2014 confirming it now avoids retrofitting an audit trail later, which the domain notes flag as expensive."
+            }
+          ],
+          "summary": {
+            "objective": "Replace the current, unreliable spreadsheet-and-biannual-consolidation process with a system that allocates a yearly training budget across departments, reserves and tracks spend through the full request-to-invoice lifecycle, and applies a clear, auditable priority rule (certification > seniority > first-come-first-served) when funds run short.",
+            "scope": "A per-department budget ledger with configurable carryover (one year, for 'regulated entities' only), a training-request workflow (request \u2192 eligibility check \u2192 reservation \u2192 approval \u2192 booking \u2192 invoice reconciliation) with reservation release on rejection/cancellation, a priority engine for scarcity, department-head vs. HR/Finance visibility scoping, and handling of vendor-side cancellations/refunds that can cross a fiscal-year boundary \u2014 likely underpinned by a single authoritative, audit-tracked ledger replacing the current spreadsheets.",
+            "assumptions": [
+              "The priority order (certification > seniority > FIFO) applies consistently, but whether it arbitrates within one shared pool or within each department's own envelope is not yet confirmed.",
+              "'Regulated entities' is a configurable classification rather than a fixed hardcoded list.",
+              "A real-time reconciled ledger with an audit trail is required, given the client's explicit pain with mismatched spreadsheet consolidations and the compliance flavor of 'regulated entities'.",
+              "Refunds from vendor cancellations need an explicit rule for which fiscal year they credit and whether they're recoverable for non-regulated departments."
+            ],
+            "blind_spot": "The client answered 'what determines priority' but never actually confirmed whether departments each have a fixed, separate budget envelope or compete inside one shared pool \u2014 and the new vendor-cancellation/refund detail adds a second, entangled unknown: whether money freed up by a cancellation (possibly in a different fiscal year) can flow back to a waitlisted request. Both remain unresolved and each implies a materially different data model and ledger design."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 3,
+        "answered": [
+          "permissions"
+        ],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Beyond fair arbitration when the budget runs out, the client needs a single reliable, real-time source of truth (replacing mismatched biannual spreadsheet consolidations), a configurable rules engine since priority logic differs per client, and a governed way for humans to override the automatic allocation.",
+              "evidence": "Reconciliation mismatch, multi-client configurability answer, and priority-override audit requirement."
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Each department keeps its own spreadsheet; HR consolidates twice a year; the two consolidations routinely disagree \u2014 no real-time or authoritative ledger exists today.",
+              "evidence": "Client answer."
+            },
+            "success_metrics": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: budget never overspent even under concurrent requests, envelopes always reconcile (committed/spent/remaining), every priority override is traceable to a person and reason.",
+              "evidence": "Inferred from concurrency scenario and override-audit answer."
+            },
+            "actors": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head (own envelope, requester/approver), HR/Finance (all envelopes, reconciliation, and apparently the ones able to override priority), employee (requester, with entitlement that varies by join/leave date), vendor (external, can cancel a committed course and trigger a refund).",
+              "evidence": "Permissions answer, override-audit answer, mid-year joiner/leaver rule."
+            },
+            "business_objects": {
+              "completeness": 45,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Budget (yearly, per-department envelope, configurable carryover), Employee (with join/leave date driving pro-rata entitlement), TrainingRequest, Reservation, Approval, PriorityOverride (with author + reason), Booking, Invoice, Cancellation/Refund, PriorityRuleSet (client-configurable).",
+              "evidence": "Derived from pro-rata rule, override-audit answer, and configurability answer."
+            },
+            "business_rules": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order when budget is short: certification-required > seniority > first-come-first-served \u2014 but this ranking and its criteria are client-configurable, not fixed. Mid-year joiners get a pro-rata entitlement; a leaver's committed-but-unspent amount returns to the department envelope. Unused budget carries over one year for 'regulated entities' (classification likely also configurable, unconfirmed). Still open: which fiscal year a vendor refund is credited to, and whether it's restored or lost for non-regulated departments.",
+              "evidence": "Client answers on configurability, pro-rata entitlement, and leaver reversal; fiscal-year refund crediting still unanswered."
+            },
+            "workflow": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 eligibility/entitlement check (pro-rata if mid-year joiner) \u2192 budget reservation \u2192 approval (possibly with a manual priority override step) \u2192 booking \u2192 invoice reconciliation; a rejected/cancelled request or employee departure releases/returns the reserved amount to the envelope. Simultaneous requests for the last remaining budget are a real scenario the reservation step must resolve deterministically.",
+              "evidence": "Prior workflow answer plus concurrency and leaver-reversal answers."
+            },
+            "integrations": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Vendor/invoicing side sends cancellations and refunds that must reconcile back against the reserved budget, possibly across a fiscal-year boundary.",
+              "evidence": "Prior answer, unchanged this turn."
+            },
+            "permissions": {
+              "completeness": 55,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads see/act only on their own envelope; HR/Finance see all envelopes. A new, still-unconfirmed right has surfaced: someone (presumably HR/Finance) can override the automatic priority ranking \u2014 who exactly holds that right, and whether it needs a second approval, is not yet defined.",
+              "evidence": "Permissions answer plus this turn's override-audit answer."
+            },
+            "config_vs_custom": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Confirmed: the priority ordering (which criteria, in which sequence) must be configurable per client rather than hardcoded, since every rollout orders priorities differently. Not yet confirmed whether 'regulated entity' carryover eligibility, pro-rata entitlement rules, and the override policy are part of the same configurable rule set or separate fixed logic \u2014 this determines whether a full rules-engine is needed or a handful of settings.",
+              "evidence": "Client answer this turn: 'Every client we roll this out to orders the priorities differently, so that has to be configurable.'"
+            },
+            "constraints": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Annual/fiscal-year cycle with a defined close date; regulated entities carry over one year; refunds can cross that boundary; the product is being deployed across multiple clients with differing rule configurations.",
+              "evidence": "Carryover, refund-timing, and multi-client configurability answers."
+            },
+            "edge_cases": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Confirmed real scenario: two department heads can request the last remaining seat within the same minute \u2014 a concurrency case the reservation logic must resolve deterministically. Still unresolved: what the losing request's outcome actually is (hard rejection, waitlist funded later by cancellations/refunds, or automatic deferral), and whether the priority ranking itself applies as the tie-break.",
+              "evidence": "Client answer introduced the concurrency case but did not resolve the original reject/waitlist/defer question."
+            },
+            "reporting": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs a live committed vs. spent vs. remaining view per envelope, plus an audit trail specifically covering who overrode an automatic priority decision and why. This confirms an authoritative, audited ledger is required, not a passive report.",
+              "evidence": "Client answer this turn."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 35,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Naive reservation logic could double-commit the last seat under concurrent requests (the exact new scenario raised); an unresolved refund-year crediting rule risks the same cross-period mismatch the client already suffers from today; an unconstrained override capability without clear authority/approval could undermine the whole priority system's fairness and auditability.",
+              "evidence": "Inferred from concurrency, refund-timing, and override-audit answers."
+            }
+          },
+          "questions": [
+            {
+              "q": "When two department heads (or two requests generally) contend for the last remaining budget within the same window, does the configured priority ranking act as the tie-break, and what happens to the request that loses \u2014 is it rejected outright, placed on a waitlist to be funded from later cancellations/refunds, or deferred to the next cycle?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: this is now a confirmed real scenario, but the outcome for the losing request \u2014 the original question \u2014 is still open, and it decides whether a reservation, waitlist, or deferral subsystem needs to be built."
+            },
+            {
+              "q": "Who is authorized to override the automatic priority decision on a request, does it require a stated reason and/or a second person's approval, and can a department head override their own department's ranking or only HR/Finance across all departments?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: an audit trail for overrides was just confirmed as a requirement, but the governance around who may exercise that power \u2014 and whether it can be abused to bypass the fairness rules the whole feature exists for \u2014 is undefined and touches permissions, workflow and trust in the system."
+            },
+            {
+              "q": "Beyond the priority ranking itself, should 'regulated entity' carryover eligibility, pro-rata entitlement calculation, and the override policy all live in the same client-configurable rule set (a general rules engine an admin edits per client), or are some of those meant to stay fixed platform behaviour?",
+              "slot": "config_vs_custom",
+              "why": "uncertainty \u00d7 impact: confirms whether this is a small set of toggles or a full configurable rules engine \u2014 a materially different build cost \u2014 and the answer wasn't scoped beyond the priority order itself."
+            },
+            {
+              "q": "When a vendor cancels a booking and the refund lands in the next fiscal year, does that amount get credited back to the year the course was originally reserved, or the year the refund is actually received \u2014 and for a non-regulated department, is that money recovered or simply lost?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: still unanswered from the prior turn; without it, cross-period ledger totals won't reconcile \u2014 the same mismatch problem driving this whole project, now recreated inside the new system."
+            },
+            {
+              "q": "For a mid-year joiner's pro-rata entitlement, is the pro-ration based on their join date relative to the fiscal year (e.g. remaining months \u00f7 12), or some other formula \u2014 and does a leaver's returned committed-but-unspent amount go back into the shared departmental envelope immediately, or only at the next reconciliation point?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: the rule was stated in principle but not the formula or timing, and it directly affects how much budget is available for the priority/concurrency logic to arbitrate over at any given moment."
+            }
+          ],
+          "summary": {
+            "objective": "Replace the current, unreliable spreadsheet-and-biannual-consolidation process with a configurable, multi-client system that allocates a yearly training budget across departments, reserves and tracks spend through the full request-to-invoice lifecycle, resolves scarcity via a client-configurable priority ranking, and gives Finance a live, audited committed/spent/remaining view.",
+            "scope": "A per-department budget ledger with configurable carryover and a client-configurable priority rule set (criteria and order vary per client); a training-request workflow (eligibility/entitlement check \u2192 reservation \u2192 approval, with a possible manual-override step \u2192 booking \u2192 invoice reconciliation) that must resolve concurrent last-seat requests deterministically; pro-rata entitlement for mid-year joiners and envelope-return for leavers; handling of vendor cancellations/refunds crossing fiscal-year boundaries; department-head vs. HR/Finance visibility scoping plus a new override-permission question; and a live, audited ledger (committed/spent/remaining per envelope, with a trail of who overrode a priority and why) replacing the current spreadsheets.",
+            "assumptions": [
+              "The priority ranking, and likely carryover eligibility and other rules, need to be configurable per client rather than hardcoded \u2014 the exact boundary of what's configurable vs. fixed is not yet confirmed.",
+              "Someone (presumably HR/Finance) can manually override the automatic priority decision; the authority, approval, and scope of that override are not yet defined.",
+              "A live, audited ledger (committed/spent/remaining) is required, not a periodic report, given the reconciliation pain and the new override-audit requirement.",
+              "Pro-rata entitlement and leaver-reversal timing follow some formula/point not yet specified by the client."
+            ],
+            "blind_spot": "The client's last two answers didn't resolve the questions asked \u2014 they revealed new mechanisms instead: a real concurrency scenario at the point of scarcity, a newly-disclosed manual override power over the priority system (now requiring an audit trail), and confirmation that priority rules must be configurable per client. The biggest unaddressed risk is that this override capability, if ungoverned, can silently undermine the very fairness rule (certification > seniority > FIFO) the whole project was commissioned to enforce \u2014 and nobody has yet said who can invoke it or under what constraint."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      },
+      {
+        "index": 4,
+        "answered": [],
+        "model": {
+          "model": {
+            "problem": {
+              "completeness": 55,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Beyond fair arbitration when the budget runs out, the client needs a single reliable, real-time source of truth (replacing mismatched biannual spreadsheet consolidations), a configurable rules engine since priority logic differs per client, and a governed way for humans to override the automatic allocation \u2014 now compounded by a compliance-monitoring need that is separate from the override question itself.",
+              "evidence": "Reconciliation mismatch, multi-client configurability answer, override-audit requirement, and now a compliance officer role."
+            },
+            "current_process": {
+              "completeness": 90,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Each department keeps its own spreadsheet; HR consolidates twice a year; the two consolidations routinely disagree \u2014 no real-time or authoritative ledger exists today.",
+              "evidence": "Client answer."
+            },
+            "success_metrics": {
+              "completeness": 20,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Likely: budget never overspent even under concurrent requests, envelopes always reconcile (committed/spent/remaining), every priority override is traceable to a person and reason, and compliance can monitor certification requests without exposure to financial data.",
+              "evidence": "Inferred from concurrency scenario, override-audit answer, and compliance-officer answer."
+            },
+            "actors": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department head (own envelope, requester/approver), HR/Finance (all envelopes, reconciliation, likely priority-override authority \u2014 still unconfirmed), Employee (requester, pro-rata entitlement by join/leave date), Vendor (external, cancellations/refunds), and now Compliance Officer \u2014 cross-entity visibility into certification-required requests specifically, but explicitly barred from seeing amounts.",
+              "evidence": "Permissions answer, override-audit answer, pro-rata rule, and this turn's compliance-officer answer."
+            },
+            "business_objects": {
+              "completeness": 50,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Budget (yearly, per-department envelope, configurable carryover), Employee, TrainingRequest (now implied to carry a category/type flag such as 'certification-required' that drives cross-entity visibility independent of department), Reservation, Approval, PriorityOverride (author + reason), Booking, Invoice, Cancellation/Refund, PriorityRuleSet (client-configurable).",
+              "evidence": "Derived from compliance-officer's certification-scoped, amount-masked view."
+            },
+            "business_rules": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority order (certification-required > seniority > FIFO) is client-configurable. Mid-year joiners get pro-rata entitlement (formula unconfirmed); a leaver's committed-but-unspent amount returns to the envelope (timing unconfirmed). Carryover applies to 'regulated entities' (classification basis unconfirmed). Vendor-refund fiscal-year crediting still unanswered.",
+              "evidence": "Client answers on configurability, pro-rata entitlement, leaver reversal; refund-timing and formula still open."
+            },
+            "workflow": {
+              "completeness": 75,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Request \u2192 eligibility/entitlement check \u2192 budget reservation \u2192 approval (possibly with a manual priority-override step) \u2192 booking \u2192 invoice reconciliation; rejection/cancellation/departure releases the reserved amount. Concurrent requests for the last remaining budget must resolve deterministically. Certification-flagged requests are additionally visible, read-only and amount-redacted, to a compliance officer across all entities \u2014 a parallel visibility path alongside the approval workflow.",
+              "evidence": "Prior workflow, concurrency, and leaver-reversal answers, plus this turn's compliance-officer answer."
+            },
+            "integrations": {
+              "completeness": 10,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Vendor/invoicing side sends cancellations and refunds that must reconcile back against reserved budget, possibly across a fiscal-year boundary.",
+              "evidence": "Unchanged this turn."
+            },
+            "permissions": {
+              "completeness": 65,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Department heads scoped to their own envelope; HR/Finance see all envelopes. A new field-level dimension has emerged: a Compliance Officer sees certification-required requests across every entity but must not see amounts \u2014 permissions are therefore not purely row/department-scoped but also field-scoped by data sensitivity. Still entirely unresolved: who is authorized to override the automatic priority ranking, whether an override needs a stated reason and/or a second approver, and whether a department head can override only their own department's ranking or only HR/Finance can act platform-wide.",
+              "evidence": "Prior permissions answer plus this turn's compliance-officer answer, which addressed a different, related but distinct question."
+            },
+            "config_vs_custom": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Priority ordering must be configurable per client. Not yet confirmed whether carryover eligibility ('regulated entity'), pro-rata entitlement, override policy, and the new compliance-visibility/redaction rule all live in the same configurable rule set or are fixed platform behaviour \u2014 this determines rules-engine scope vs. a handful of settings.",
+              "evidence": "Client answer on configurable priority ordering; scope beyond that still unconfirmed."
+            },
+            "constraints": {
+              "completeness": 30,
+              "confidence": "inferred",
+              "impact": "medium",
+              "value": "Annual/fiscal-year cycle with a close date; regulated entities carry over one year; refunds can cross that boundary; multi-client deployment with differing configurations; now also a compliance/segregation-of-duties constraint (compliance sees requests but not money).",
+              "evidence": "Carryover, refund-timing, configurability, and compliance-officer answers."
+            },
+            "edge_cases": {
+              "completeness": 60,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Confirmed: two department heads can request the last remaining seat within the same window \u2014 reservation logic must resolve this deterministically. Still unresolved: the losing request's actual outcome (hard rejection, waitlist funded by later cancellations/refunds, or deferral), and whether the priority ranking itself is the tie-break.",
+              "evidence": "Prior turn's concurrency answer; outcome still not given."
+            },
+            "reporting": {
+              "completeness": 70,
+              "confidence": "explicit",
+              "impact": "high",
+              "value": "Finance needs a live committed/spent/remaining view per envelope plus an audit trail of priority overrides (who, why). Now also: compliance needs a certification-request view scoped across entities with amounts stripped \u2014 implying the reporting layer needs field-level redaction, not just role-based row filtering.",
+              "evidence": "Prior override-audit answer plus this turn's compliance-officer answer."
+            },
+            "acceptance": {
+              "completeness": 0,
+              "confidence": "empty",
+              "impact": "medium",
+              "value": "",
+              "evidence": "Not stated."
+            },
+            "risks": {
+              "completeness": 40,
+              "confidence": "inferred",
+              "impact": "high",
+              "value": "Naive reservation logic could double-commit the last seat under concurrency; unresolved refund-year crediting risks recreating the client's existing reconciliation problem; an ungoverned override capability could undermine the fairness the whole system exists to enforce; and now, an unclarified compliance-officer scope risks either under-sharing (compliance can't do their job) or over-building a generalized field-level permission engine that wasn't actually requested.",
+              "evidence": "Inferred from concurrency, refund-timing, override, and compliance-officer answers."
+            }
+          },
+          "questions": [
+            {
+              "q": "When two requests contend for the last remaining budget, does the configured priority ranking act as the tie-break, and what happens to the losing request \u2014 outright rejection, a waitlist funded later by cancellations/refunds, or deferral to the next cycle?",
+              "slot": "edge_cases",
+              "why": "uncertainty \u00d7 impact: confirmed as a real scenario for two turns now but the actual outcome \u2014 the original ask \u2014 is still open, and it decides whether a waitlist/deferral subsystem must be built."
+            },
+            {
+              "q": "Specifically for overriding the automatic priority decision on a request (not the compliance officer's viewing rights): who can do it, must they record a reason and/or get a second person's sign-off, and is a department head limited to their own department's ranking while only HR/Finance can act across all departments?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: this exact question has now been asked twice and answered with an adjacent-but-different fact both times; override governance remains completely undefined and is the mechanism that could bypass the fairness rules the project exists to enforce."
+            },
+            {
+              "q": "Is the compliance officer's certification-request visibility purely read-only monitoring, or do they also act on those requests (flag, block, escalate)? And does the 'visible but amounts hidden' pattern need to generalize to other roles/objects (e.g. a department head seeing a peer department's certification request), or is it unique to this one role?",
+              "slot": "permissions",
+              "why": "uncertainty \u00d7 impact: determines whether this is a one-off field mask on one role or a general field-level permission model needed across the platform \u2014 a materially different build."
+            },
+            {
+              "q": "Beyond the priority ranking, should carryover eligibility ('regulated entity'), pro-rata entitlement, the override policy, and the new compliance amount-redaction rule all live in one client-configurable rule set (an admin-editable rules engine), or should some stay fixed platform logic?",
+              "slot": "config_vs_custom",
+              "why": "uncertainty \u00d7 impact: still unresolved and now larger in scope with the new redaction rule \u2014 decides rules-engine vs. a few settings, a major cost driver."
+            },
+            {
+              "q": "When a vendor cancels a booking and the refund arrives in the next fiscal year, is the amount credited back to the year the course was originally reserved or the year the refund lands \u2014 and for a non-regulated department, is it recovered or simply lost?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: unresolved for two turns; without it, ledger totals won't reconcile across fiscal years \u2014 recreating the exact mismatch problem driving this project."
+            },
+            {
+              "q": "What is the exact pro-rata formula for a mid-year joiner's entitlement, and does a leaver's returned committed-but-unspent amount return to the shared envelope immediately or only at the next reconciliation point?",
+              "slot": "business_rules",
+              "why": "uncertainty \u00d7 impact: stated as a principle but not a formula or timing; it directly affects how much budget the priority/concurrency logic has to arbitrate over at any moment."
+            }
+          ],
+          "summary": {
+            "objective": "Replace the current, unreliable spreadsheet-and-biannual-consolidation process with a configurable, multi-client system that allocates a yearly training budget across departments, reserves and tracks spend through the full request-to-invoice lifecycle, resolves scarcity via a client-configurable priority ranking, and gives Finance a live, audited committed/spent/remaining view \u2014 now with an added compliance-monitoring dimension that must not expose financial figures.",
+            "scope": "A per-department budget ledger with configurable carryover and a client-configurable priority rule set; a training-request workflow (eligibility check \u2192 reservation \u2192 approval, possibly with manual override \u2192 booking \u2192 invoice reconciliation) resolving concurrent last-seat requests deterministically; pro-rata entitlement for joiners and envelope-return for leavers; vendor cancellation/refund handling across fiscal-year boundaries; row-level permission scoping (department head vs. HR/Finance) now joined by a field-level permission need (compliance officer sees certification requests cross-entity but never amounts); and a live, audited ledger replacing today's spreadsheets.",
+            "assumptions": [
+              "The priority ranking, and likely other rules (carryover, redaction), need to be configurable per client \u2014 the exact boundary of configurable vs. fixed is still unconfirmed.",
+              "Someone (presumably HR/Finance) can override the automatic priority decision; the authority, approval requirement, and scope of that override remain completely undefined after two direct questions.",
+              "Permissions are not purely row/department-scoped: the compliance officer's case shows a field-level redaction need (amounts hidden) that may or may not generalize to other roles.",
+              "A live, audited ledger is required, not a periodic report, given the reconciliation pain, the override-audit need, and now the compliance visibility requirement.",
+              "Pro-rata entitlement and leaver-reversal timing follow some formula/point not yet specified by the client."
+            ],
+            "blind_spot": "For the second consecutive turn, the client's answer introduced a new actor or mechanism instead of resolving the question asked \u2014 this time a Compliance Officer with cross-entity, amount-redacted visibility, when the actual ask was about who governs priority overrides. This pattern is itself a signal: the override-authority question is being avoided or genuinely unowned internally, and building the system without settling it risks shipping an allocation engine whose fairness rules can be silently bypassed by an undefined party with undefined constraints."
+          },
+          "decisions": [],
+          "challenges": [],
+          "opportunities": []
+        }
+      }
+    ]
+  ]
+}
