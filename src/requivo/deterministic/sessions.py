@@ -32,9 +32,11 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Optional
 
 from requivo.core import persistence as store
 from requivo.core.errors import (
+    ImportDestinationOccupiedError,
     ImportMoveFailedError,
     InconsistentArchiveError,
     InvalidArchiveError,
@@ -49,6 +51,7 @@ from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _print_json, _read_source, _resolve_cards
 from requivo.deterministic.doctor import _REPAIR_HINT, _RESTORABLE_CARD_CODES, _RESTORE_HINT, _card_health
 from requivo.paths import session_root
+from requivo.services.repository import SessionRepository
 from requivo.services.sessions import SessionService
 
 
@@ -599,6 +602,55 @@ def _swap_in(extracted: Path, target: Path, slug: str) -> None:
     shutil.rmtree(backup, ignore_errors=True)
 
 
+def _refuse_a_non_session_destination(target: Path, slug: str, repo: SessionRepository,
+                                      cause: Optional[BaseException] = None) -> None:
+    """Refuse when something that is **not a session** already occupies the slug's directory.
+
+    `os.replace` answers this differently per platform, so without this guard the same stray `mkdir`
+    imported on POSIX and failed on Windows, and the Windows refusal read `import_move_failed` — a
+    sentence about a move, naming a cause that is not the cause. Enforced by
+    `test_a_stray_directory_at_the_slug_is_refused_by_name_on_every_platform`.
+
+    **It only ever refuses**, so invariant 11 is intact: the rename is still the claim, and nothing
+    here authorises an import the rename would have lost. It is called on *both* sides of that rename
+    because the two sides catch different windows — before it for a stray already on disk, and from
+    the `except OSError` arm for one that landed while the archive was being read
+    (`test_a_stray_appearing_in_the_rename_window_is_named_rather_than_called_a_move_failure`).
+
+    The session half of the question goes through `repo.exists` rather than `store.session_exists`:
+    *is this slug a session* is not a question about a path, so it has a backing-neutral form and
+    `test_the_surfaces_reach_the_store_only_through_the_named_filesystem_concerns` is right to refuse
+    the direct call. `target` is a path because the import moves a directory onto it, which is the
+    justification the sibling `canonical_dir` call above already carries.
+
+    **Three answers, not two.** Both probes re-raise rather than answering `False` — `Path.exists` on
+    EACCES, `repo.exists` as `SessionUnreadableError` — and a probe that could not look has not
+    established anything about the destination, so it says nothing and lets the rename decide, which
+    is the only decision that was ever authoritative. `is_symlink` rides with `exists` for the reason
+    invariant 17 gives: `exists()` follows the link, so a dangling symlink at the slug is a stray this
+    would otherwise call an empty space.
+
+    **A destination that really is a session is not this function's answer**, and reading the name
+    without the body is how that gets lost. It belongs to `SessionExistsError` — *created while this
+    archive was being read; pass `--force`* — which is a different remedy from this one and is raised
+    by the caller. Answering here instead would replace a code a consumer already branches on with a
+    new one, in the window `test_that_window_refusal_names_the_conflict_rather_than_a_move_failure`
+    exists to pin.
+    """
+    try:
+        if not (target.exists() or target.is_symlink()):
+            return
+        if repo.exists(slug):
+            return
+    except (OSError, SessionUnreadableError):
+        return
+    raise ImportDestinationOccupiedError(
+        f"cannot import session '{slug}': {display_token(str(target))} already exists and is not a "
+        "session — nothing was imported and nothing was removed. Move or delete it and import again; "
+        "--force replaces a session and does not apply here.",
+        details={"slug": slug, "path": str(target)}) from cause
+
+
 def _validate_extracted(d: Path, slug: str) -> None:
     """Confirm an extracted directory really is a *coherent* session before it is allowed in.
 
@@ -666,9 +718,20 @@ def _cmd_session_import(a, client) -> None:
                 # The slug was free when it was checked, so **the rename is the claim** and nothing
                 # steps aside — invariant 11's rule, and the only thing that makes the window above
                 # safe rather than merely narrow. `os.replace` refuses a non-empty destination
-                # directory, so a session that appeared while the archive was unzipping stops this
-                # import instead of being destroyed by it. The caller gets the refusal the guard
-                # would have given them, which is the answer they were entitled to either way.
+                # directory — POSIX on `ENOTEMPTY`, Windows on any existing directory at all, which
+                # is stricter still — so a session that appeared while the archive was unzipping
+                # stops this import instead of being destroyed by it. The caller gets the refusal
+                # the guard would have given them, which is the answer they were entitled to either
+                # way. Read without the platform qualifier, that sentence is how #114 happened: the
+                # safety claim holds on both, and the *answer* did not.
+                #
+                # **What `os.replace` does *not* answer the same way on every platform is a
+                # destination that holds no session at all** (#114), which is what
+                # `_refuse_a_non_session_destination` is for. It is called on both sides of the
+                # rename: neither side alone converges the platforms, because a stray already on
+                # disk never reaches the `except` on POSIX and one that lands mid-window never
+                # reaches the pre-check.
+                _refuse_a_non_session_destination(target, slug, repo)
                 try:
                     extracted.replace(target)
                 except OSError as e:
@@ -677,6 +740,7 @@ def _cmd_session_import(a, client) -> None:
                             f"session '{slug}' was created while this archive was being read — "
                             "nothing was imported and nothing was replaced; pass --force to replace it",
                             details={"slug": slug}) from e
+                    _refuse_a_non_session_destination(target, slug, repo, e)
                     raise ImportMoveFailedError(
                         f"could not move the imported session into place: {e}",
                         details={"slug": slug}) from e

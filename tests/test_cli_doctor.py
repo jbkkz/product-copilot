@@ -402,6 +402,32 @@ def test_an_empty_directory_is_still_reported_and_still_marked(workspace):
         assert meta.slug == "leave-approval", "rename(2) replaces an empty destination directory"
 
 
+def test_the_name_taken_hint_names_what_import_does_about_it(workspace):
+    """#114, and the composition defect it would otherwise have shipped.
+
+    The `[name taken]` hint closed with *which is the only symptom any of this has*. #114 gave that
+    state a second and much louder symptom — `session import` refuses the name outright — and a
+    diagnostic that still claims there is only one answers confidently against a rule the product no
+    longer follows. Neither diff could see it alone: one taught a verb to refuse, the other simply did
+    not change.
+
+    The hint is asserted against the code `session import` really raises rather than against a
+    remembered spelling, so the two cannot drift apart silently.
+    """
+    from requivo.core.errors import ImportDestinationOccupiedError
+
+    store.session_root().mkdir(parents=True)
+    (store.session_root() / "leave-approval").mkdir()
+    hint = _run(["doctor"])
+
+    assert "[name taken]" in hint, "the control: the marked row and its hint really were printed"
+    assert ImportDestinationOccupiedError.code in hint, (
+        "the hint does not say what `session import` now does about this directory")
+    assert "only symptom" not in hint, "the hint still claims the hash-suffixed name is the only one"
+    # the older consequence is still true and must not have been dropped on the way
+    assert "plus a hash" in hint
+
+
 def test_an_entry_that_could_not_be_looked_inside_is_not_reported_as_empty(workspace):
     """The third state one level below the one `_session_health` already has: the root listed fine,
     this directory did not. `entries: []` would say we looked and it holds nothing — the one reading

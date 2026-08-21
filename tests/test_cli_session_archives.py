@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -301,12 +302,18 @@ def test_an_occupied_slug_is_a_conflict_with_the_store_not_an_invalid_model(work
 def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_path):
     """The table in `docs/cli.md` under *Importing a session*, asserted rather than described.
 
-    Seven codes reach this verb and each answers a different question. They are checked together
+    Eight codes reach this verb and each answers a different question. They are checked together
     because the defect #101 fixes was not any one of them being wrong — it was two of them being the
     *same* code while their neighbours on the identical code path had names of their own. A table
     that drifts back into a single handle fails here before a consumer discovers it.
+
+    It was seven until #114 added `import_destination_occupied`, and the count is load-bearing rather
+    than decoration: this test *is* the drift guard for that table, so a code that reaches the verb
+    and is missing here is a row a consumer can hit and no test asserts. The count going stale while
+    every assertion stayed green is how the eighth nearly shipped unenumerated — found by review.
     """
     from requivo.core.errors import (
+        ImportDestinationOccupiedError,
         InconsistentArchiveError,
         InvalidArchiveError,
         InvalidSessionError,
@@ -370,15 +377,27 @@ def test_every_refusal_on_the_import_path_names_what_it_is_about(workspace, tmp_
     # this the assertion above would pass just as well against an import broken some other way.
     assert _run_json(["session", "import", str(tmp_path / "movefail.zip"), "--json"])["slug"] == "move-fails"
 
+    # …and the eighth (#114): a zip that is fine, onto a slug held by something that is not a session
+    # at all. It answers neither of its two nearest neighbours above — not `session_exists`, because
+    # `--force` replaces a session and there is none here, and not `import_move_failed`, which is what
+    # it used to answer and which describes a move that is not what went wrong. The `move-fails` case
+    # just above is the proof that this one did not swallow it: that destination does not exist, so
+    # this guard stays silent and the move failure is still reachable under its own code.
+    _zip(tmp_path / "held.zip", _good_entries("held"))
+    store.canonical_dir("held").mkdir(parents=True)
+    assert _import_error(tmp_path / "held.zip")["code"] == "import_destination_occupied"
+
     # the three archive codes are one family, so `except InvalidSessionError` still catches every
-    # archive refusal without enumerating them; the other two deliberately are not in it
+    # archive refusal without enumerating them; the other three deliberately are not in it
     for cls in (UnreadableArchiveError, InvalidArchiveError, InconsistentArchiveError):
         assert issubclass(cls, InvalidSessionError), cls.__name__
     assert not issubclass(InvalidSlugError, InvalidSessionError)
     assert not issubclass(SessionExistsError, InvalidSessionError), (
         "an occupied slug is a conflict with the store, not a malformed session")
+    assert not issubclass(ImportDestinationOccupiedError, InvalidSessionError), (
+        "a destination holding no session is a conflict with the store, not a malformed session")
 
-    # must fire: with all seven refusals asserted, a good archive still lands
+    # must fire: with all eight refusals asserted, a good archive still lands
     _zip(tmp_path / "good.zip", _good_entries("ok-one"))
     assert _run_json(["session", "import", str(tmp_path / "good.zip"), "--json"])["slug"] == "ok-one"
 
@@ -597,3 +616,118 @@ def test_the_ordinary_import_arms_still_work_so_the_guard_is_not_a_blanket_refus
     r = _run_json(["session", "import", str(tmp_path / "fresh.zip"), "--force", "--json"])
     assert r["replaced"] is True
     assert store.session_exists("fresh") is True
+
+
+# ── a stray directory at the slug answers the same on every platform (#114) ─────
+#
+# The free-slug arm claims the slug with `os.replace`, and that call is where the platforms part
+# company. On POSIX an **empty** destination directory is replaced silently; on Windows `os.replace`
+# is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, which Microsoft documents as unusable when
+# either name is a directory, so *any* existing destination fails there — empty or not. One stray
+# `mkdir` therefore imported on macOS and failed on Windows, and the Windows failure arrived as
+# `import_move_failed`: *could not move the imported session into place*. Both halves are defects,
+# and the second is the worse one, because it names a cause that is not the cause.
+
+
+@pytest.mark.parametrize("label, populate", [
+    # ASCII ids on purpose: a parametrize label becomes a node id, which is written to a console
+    # whose codepage is not the source file's.
+    ("empty - the case the two platforms disagree about", lambda d: None),
+    ("holding a file", lambda d: (d / "junk.txt").write_text("x", encoding="utf-8")),
+    ("holding only a stray .lock", lambda d: (d / ".lock").write_text("", encoding="utf-8")),
+])
+def test_a_stray_directory_at_the_slug_is_refused_by_name_on_every_platform(workspace, tmp_path,
+                                                                           label, populate):
+    """#114. All three rows are one answer now — `import_destination_occupied`, before the rename is
+    attempted, so the verdict is the guard's rather than the platform's.
+
+    The claim is still the rename (invariant 11). This guard only ever *refuses*, so it cannot
+    authorise an import the rename would have lost; what it removes is the platform from the answer,
+    and `import_move_failed` from a sentence that was never about a move.
+    """
+    _zip(tmp_path / "stray.zip", _good_entries("stray"))
+    target = store.canonical_dir("stray")
+    target.mkdir(parents=True)
+    populate(target)
+    before = sorted(p.name for p in target.iterdir())
+
+    err = _import_error(tmp_path / "stray.zip")
+    assert err["code"] == "import_destination_occupied", f"{label}: {err}"
+    assert err["details"]["slug"] == "stray"
+    assert str(target) in err["details"]["path"]
+    # the old message sent the reader at their filesystem looking for a fault that is not there
+    assert "could not move" not in err["message"], label
+    # …and it must not offer the one remedy that cannot work: `--force` replaces a *session*, and
+    # the whole point of this arm is that there is no session here
+    assert "does not apply here" in err["message"], label
+
+    # nothing was imported, and the directory the caller put there is untouched — an import does not
+    # delete a directory it cannot interpret
+    assert store.list_session_slugs() == []
+    assert sorted(p.name for p in target.iterdir()) == before
+
+    # must fire: with the stray gone the same archive lands. Without this the assertion above would
+    # pass just as well against an import broken some other way, or against a harness that never
+    # built an archive at all.
+    shutil.rmtree(target)
+    assert _run_json(["session", "import", str(tmp_path / "stray.zip"), "--json"])["slug"] == "stray"
+
+
+def test_a_stray_appearing_in_the_rename_window_is_named_rather_than_called_a_move_failure(
+        workspace, tmp_path, monkeypatch):
+    """The second half of #114, and why the guard is called from two places rather than one.
+
+    The pre-check runs *before* the rename, so a stray directory that lands during the window
+    between them reaches the `except OSError` arm instead — which knew only *a session appeared* and
+    *a move failed*, and answered the second for a destination that holds no session.
+
+    The stray is non-empty on purpose. An empty one is precisely the case POSIX's `os.replace`
+    swallows, so on this leg the rename would succeed and the test would exercise nothing.
+    """
+    _zip(tmp_path / "late.zip", _good_entries("late"))
+    target = store.canonical_dir("late")
+    real_replace = Path.replace
+    armed = [True]
+
+    def _a_stray_lands_in_the_window(self, dest):
+        if armed[0] and Path(dest) == target:
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "junk.txt").write_text("x", encoding="utf-8")
+        return real_replace(self, dest)
+
+    monkeypatch.setattr(Path, "replace", _a_stray_lands_in_the_window)
+    err = _import_error(tmp_path / "late.zip")
+    assert err["code"] == "import_destination_occupied", err
+    assert err["details"]["slug"] == "late"
+    assert "could not move" not in err["message"], err
+    assert store.list_session_slugs() == []
+
+    # must fire: disarm the patch, clear the stray, and the same archive lands. The patch is turned
+    # off with a flag rather than `monkeypatch.undo()`: `workspace` takes the same function-scoped
+    # `monkeypatch` object, so undoing here would also revert `REQUIVO_WORKSPACE` and import the
+    # session into whatever directory the suite happens to be running from.
+    armed[0] = False
+    shutil.rmtree(target)
+    assert _run_json(["session", "import", str(tmp_path / "late.zip"), "--json"])["slug"] == "late"
+
+
+def test_the_occupied_destination_is_a_conflict_with_the_store_and_not_a_malformed_session():
+    """Where the new code sits in the vocabulary, asserted rather than described.
+
+    Not an `InvalidSessionError`: that family means *a session on disk is malformed*, and here there
+    is no session at all — the ten-arm enumeration in
+    `test_every_arm_of_the_family_names_a_distinct_fact` would otherwise go red for a condition that
+    is not one of its own. Not a `SessionExistsError` either, because that code carries a remedy
+    (*pass --force*) which does nothing against a directory the store never made.
+    """
+    from requivo.core.errors import (
+        ImportDestinationOccupiedError,
+        InvalidSessionError,
+        RequivoError,
+        SessionExistsError,
+    )
+
+    assert ImportDestinationOccupiedError.code == "import_destination_occupied"
+    assert issubclass(ImportDestinationOccupiedError, RequivoError)
+    assert not issubclass(ImportDestinationOccupiedError, InvalidSessionError)
+    assert not issubclass(ImportDestinationOccupiedError, SessionExistsError)

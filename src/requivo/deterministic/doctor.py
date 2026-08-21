@@ -470,7 +470,14 @@ def _print_non_sessions(entries: list[dict] | None) -> None:
     falls through to its hash-suffixed candidate without a word. It is printed only for a name
     `create_session` can actually be asked for — `canonical_dir` refuses anything else long before a
     rename — because a consequence that cannot happen is noise on a report that is already a
-    judgement call."""
+    judgement call.
+
+    The hint used to end *which is the only symptom any of this has*, and #114 made that false in the
+    same release it would have shipped in: `session import` now refuses such a name by its own code
+    rather than converting it into a message about a failed move. Two individually correct commits —
+    one teaching a verb to refuse, one leaving the diagnostic describing the world before it — is a
+    defect neither diff review can see, so the sentence names both consequences now. Pinned by
+    `test_the_name_taken_hint_names_what_import_does_about_it`."""
     if not entries:
         # `None` here is the unreadable-root arm, which has already returned above with its own
         # line; `[]` is a clean workspace, and a clean check earns no row on this report.
@@ -486,7 +493,8 @@ def _print_non_sessions(entries: list[dict] | None) -> None:
     if any(e["slug_shaped"] for e in entries):
         print("     [name taken]: a new session asked for that name will not get it. The rename "
               "that claims a slug loses to anything already occupying it, so the session is "
-              "created under that name plus a hash — which is the only symptom any of this has.")
+              "created under that name plus a hash, and `session import` refuses that name outright "
+              "(import_destination_occupied).")
     print("     Requivo has not read, moved or deleted any of these, and does not say what they "
           "are: an interrupted copy and a directory an older version left behind look the same "
           "from here. Check before removing anything.")

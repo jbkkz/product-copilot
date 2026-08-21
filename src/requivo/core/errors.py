@@ -368,6 +368,26 @@ class SessionExistsError(RequivoError):
     code = "session_exists"
 
 
+class ImportDestinationOccupiedError(RequivoError):
+    """`session import` found something at the slug's directory that is **not** a session. `details`:
+    `{slug, path}` — the path because the remedy is to move or remove that directory, and naming the
+    slug alone would leave the reader to reconstruct where it is.
+
+    **Deliberately outside the `InvalidSessionError` family, and deliberately not a
+    `SessionExistsError`.** That family means *a session on disk is malformed*, and here there is no
+    session at all. `session_exists` is nearer but carries a remedy that cannot work: `--force`
+    replaces a session, and the store never made this directory, so offering it would send the reader
+    down a path that fails the same way twice.
+
+    409 for the reason `session_exists` is 409 — a conflict with the store's current state, not a
+    malformed request. It is emphatically not `import_move_failed`/500: nothing about the move is
+    wrong, and that code sent the reader at their filesystem looking for a fault that is not there
+    (#114).
+    """
+
+    code = "import_destination_occupied"
+
+
 class SessionLockedError(RequivoError):
     """Another writer holds the session lock and did not release it within the timeout. Distinct from
     `RevisionConflictError`: nothing raced to a conclusion here, the write never got to start, so

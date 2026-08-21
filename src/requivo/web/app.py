@@ -97,6 +97,10 @@ _STATUS_BY_CODE = {
     "revision_conflict": 409,
     "stale_artifact": 409,
     "session_exists": 409,
+    # …and its neighbour, for the destination that holds no session at all. Not 500 beside
+    # `import_move_failed`: the store is in a state that conflicts with the request, which is
+    # exactly what 409 is for, and nothing failed that a retry could fix (#114).
+    "import_destination_occupied": 409,
     # 5xx — the server, or what it depends on
     "context_unreadable": 500,        # we cannot read our own card directory: permissions, usually
     "no_context_cards": 500,          # this install shipped no cards; nothing the caller sent caused it
