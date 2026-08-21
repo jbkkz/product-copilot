@@ -144,6 +144,24 @@ class SessionService:
             return p.name
         return ref  # a bare slug
 
+    @staticmethod
+    def slug_hint(text: str) -> str:
+        """Turn arbitrary text into a slug-shaped name — the surface's route to slug derivation.
+
+        Not a repository method: deriving a name from a request is a naming policy, and it is the
+        same policy whatever backs the store. It is here rather than left to each caller because
+        `cli.py` was reaching into `core.persistence` for the private `_slug` to do it (#76), which
+        is a surface holding a core implementation detail — the one direct storage call in that file
+        that had no defensible reason.
+
+        The two callers want it for different inputs and the same reason: `create_session` derives
+        a slug from the request text, and `requivo discover <file>` derives a *hint* from a
+        filename stem, because "Leave Approval v2.md" has a space and a capital and a slug names a
+        directory. Passing the raw stem through turned an ordinary input file into an
+        `invalid_slug` error.
+        """
+        return store._slug(text)
+
     def exists(self, slug: str) -> bool:
         """True if a usable session exists (the repository decides what backs it)."""
         return self.repo.exists(slug)
@@ -177,7 +195,7 @@ class SessionService:
         the selection back, and an empty resolved selection means *every* card, so a bad name silently
         widens the context instead of narrowing it."""
         context_cards = resolve_cards(context_cards) if context_cards else None
-        base = slug or store._slug(request)
+        base = slug or self.slug_hint(request)
         for candidate in (base, f"{base}-{self._identity_hash(request, context_cards)}"):
             try:
                 return self.repo.create(candidate, request, provider=provider, model_name=model_name,

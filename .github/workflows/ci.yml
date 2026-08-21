@@ -108,6 +108,51 @@ jobs:
       # forced), and a skip whose reason nobody can see is indistinguishable from a test that ran.
       - run: python -m pytest tests/ -q -rs
 
+  floor:
+    name: Dependency floor
+    runs-on: ubuntu-latest
+    # pyproject's lower bounds are a promise to whoever runs `pip install requivo`, and until this
+    # leg existed nothing installed one of them (#91): every other job runs `pip install -e ".[dev]"`
+    # and gets the newest satisfying release, so the floors were measured nowhere.
+    #
+    # It found a real one on its first run. `pydantic>=2.0` was false by eleven minor versions — the
+    # package does not import at all on 2.0.x — and the v0.11.0 audit had cleared that same bound by
+    # confirming `SerializeAsAny` is exported by 2.0.0. A symbol existing is not the symbol working,
+    # and only installing the thing tells them apart.
+    #
+    # One interpreter, once per push. The class does not vary by Python version, and a matrix here
+    # would multiply a resolve that deliberately picks the oldest release of everything.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      # `uv` from PyPI rather than `astral-sh/setup-uv`, and the reason is worth a line: that action
+      # publishes a moving major tag only up to `v7` while its newest release is `v10.0.1`, so
+      # `@v10` does not resolve and `@v7` is three majors behind. `pip install uv` has no such
+      # archaeology, and the action's only job here is to put one binary on PATH.
+      - run: pip install uv
+      # `uv --resolution lowest-direct`, not a generated constraints file. A `name==floor` pin was
+      # tried first and is wrong twice: `jinja2==3.1` names no release that exists (the oldest is
+      # 3.1.0), and pydantic's oldest *installable* release is not the one its bound names. The floor
+      # a user actually gets is whatever a resolver picks when it prefers the oldest, so that is what
+      # gets installed. `lowest-direct` leaves transitive dependencies at their newest, which is the
+      # shape of the promise: these bounds are ours, the ones underneath them are not.
+      #
+      # `--python "$(which python)"` rather than `--system`: setup-python puts its interpreter first
+      # on PATH, and naming it leaves no question about which environment the floors landed in — the
+      # one the verify step and pytest then read.
+      - name: Install the package at its declared floors
+        run: uv pip install --python "$(which python)" --resolution lowest-direct -e ".[dev]"
+      # Asking a resolver for the oldest releases is a request, not an outcome: drop the flag, or
+      # install an extra in a second command without it, and the environment comes back at the newest
+      # of everything with this leg still green over it. So the answer is read back out of the
+      # environment that was actually built.
+      - name: Verify the environment really is at the floor
+        run: python scripts/dependency_floor.py --verify
+      - run: python -m pytest tests/ -q -rs
+
   wheel:
     name: Wheel install (no clone)
     runs-on: ubuntu-latest

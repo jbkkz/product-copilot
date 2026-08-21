@@ -214,7 +214,7 @@ def _cmd_discover(a, client) -> None:
     # A filename is a *suggestion* for the slug, not a slug: "Leave Approval v2.md" has a space and a
     # capital, and a slug names a directory under the session store, so it is validated strictly.
     # Passing the raw stem through turned a perfectly ordinary input file into an invalid_slug error.
-    slug_hint = store._slug(Path(a.request).stem) if is_file else None
+    slug_hint = SessionService.slug_hint(Path(a.request).stem) if is_file else None
     quick = a.once or not sys.stdin.isatty()
     if quick:
         slug = disco.start(request, cards=only, slug=slug_hint, finalize=False, surface="cli-discover")
@@ -229,6 +229,9 @@ def _cmd_discover(a, client) -> None:
         slug = disco.finalize_discovery(request, out, cards=only, slug=slug_hint,
                                         brief=brief, surface="cli-discover")
         render_brief(out, brief)
+    # `canonical_dir` direct, and justified (#76): where the session landed is the answer, and
+    # `SessionRepository` exposes no path because a non-file backing has none. Same at the three
+    # other display sites in this file and in `deterministic/sessions.py`.
     print(f"\nSaved session → {store.canonical_dir(slug)}")
     if quick and out.questions:
         print(f'\n→ Answer and refine: requivo answer {slug} "<your answers>"')
@@ -279,8 +282,9 @@ def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
     layered on when the reference resolves to a canonical session (a bare model.json has none)."""
     out, slug = _resolve_ref(ref)
     payload: dict = {"slug": slug, **model_status(out)}
-    if store.session_exists(slug):
-        meta = store.read_meta(slug)
+    svc = SessionService()
+    if svc.exists(slug):
+        meta = svc.meta(slug)
         payload["revision"] = meta.current_revision
         payload["context_cards"] = meta.context_cards
         # Freshness is the explicit stale flag only — revision is provenance, not an invalidation rule.
@@ -387,6 +391,10 @@ def _wrote(slug: str, result, label: str) -> None:
     still disclosing one, and `result.status.filename` is a plain `str` off an `ArtifactStatus` that
     nothing re-validates on the way out; that function carries the argument for why a display-only
     join is not exempt from the chokepoint, and which door is actually open."""
+    # Through the chokepoint rather than joined here (#36), and direct rather than through the
+    # repository (#76): `artifact_path` validates both halves of a name that came *off disk*, and a
+    # printed path is a disclosure like any other. The repository's `load_artifact` is the read
+    # seam; there is no seam that hands back a path, on purpose.
     print(f"\nWrote {label} → {store.artifact_path(slug, result.status.filename)}")
 
 
@@ -438,6 +446,10 @@ def _cmd_epic(a, client) -> None:
     print(epic_markdown(epic))
     _wrote(slug, result, "epic")
     if a.export_json:
+        # `write_artifact_file`, not `repo.save_artifact`: these three are extra *views* of one
+        # already-saved artifact and are deliberately untracked — no type, no source revision, no
+        # staleness. Giving them artifact status would put three rows in `artifact list` that no
+        # generator can refresh. Direct, and it stays direct until a second surface writes them.
         print(f"Wrote neutral epic export → {store.write_artifact_file(slug, 'epic.json', epic_export_json(epic))}")
     if a.github:
         print(f"Wrote GitHub issue-creation plan → "

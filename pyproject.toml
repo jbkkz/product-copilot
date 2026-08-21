@@ -32,7 +32,13 @@ classifiers = [
 # actually been run against.
 dependencies = [
     "python-dotenv>=1.0.0,<2",
-    "pydantic>=2.0,<3",
+    # 2.11, not 2.0, and the difference is eleven minor versions of a promise nothing tested (#91).
+    # The Dependency floor leg found it on its first run: on 2.0.x the package does not import at all
+    # — `SerializeAsAny` inside an `Optional[...]` is unhashable under 3.9's `typing`, so every model
+    # in `contracts.py` fails to build — and from 2.0.3 up to 2.10 the two guards that pin invariant
+    # 8's permissive-mirror graph fail. The v0.11.0 audit checked that `SerializeAsAny` is exported by
+    # 2.0.0 and stopped there, which is the whole lesson: a symbol existing is not the symbol working.
+    "pydantic>=2.11,<3",
 ]
 
 [project.optional-dependencies]
@@ -42,8 +48,14 @@ anthropic = ["anthropic>=0.40.0,<1"]
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
 web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
+# `tomli` is `tomllib` backported, for `scripts/dependency_floor.py` on the 3.9/3.10 legs — the same
+# library under its pre-stdlib name, not a second TOML reader. `packaging` is what lets that script
+# compare `0.110` with the `0.110.0` pip actually installs as versions rather than as strings. Both
+# are dev-only: they are part of how the runtime floors are *measured* (#91), never part of what a
+# user installs.
 dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0,<1", "httpx",
-       "fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
+       "fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1",
+       "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0"]
 
 [project.urls]
 Homepage = "https://github.com/jbkkz/requivo"

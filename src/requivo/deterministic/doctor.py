@@ -146,7 +146,12 @@ def _card_health(slug: str) -> dict:
     itself applies rather than a second implementation of it.
     """
     try:
-        problem = check_selection(store.read_meta(slug).context_cards)
+        # `SessionService.meta`, not `repo.context_cards`: the two differ on the case that matters
+        # here. `context_cards` answers None for a session it cannot find, and None means *all
+        # cards* — so an unreadable session would be reported as healthy. `meta` raises, the
+        # `except` below turns that into `checked: False`, and "could not look" stays distinct from
+        # "looked and found nothing" (#80, #86).
+        problem = check_selection(SessionService().meta(slug).context_cards)
     except Exception as e:  # noqa: BLE001 - a health check reports that it could not look; it never raises
         return {"checked": False, "problem": None, "error": str(e)}
     return {"checked": True, "problem": problem.to_dict() if problem else None, "error": None}
@@ -192,6 +197,9 @@ def _session_health(*, cards_readable: bool = True) -> dict:
         # state this key exists to end, reintroduced by the key itself. Neither
         # `_describe_non_session` nor the partition's third bucket raises, so what this `except`
         # catches is the listing, which is genuinely the whole root.
+        # Which is also why this one call stays direct rather than going through the repository
+        # (#76): `list_slugs` and `list_unexaminable` are deliberately two scans there, and two
+        # scans are the very thing this key exists to avoid.
         slugs, entries, blind = store.scan_session_root()
         non_sessions = [e.to_dict() for e in entries]
         unexaminable = [e.to_dict() for e in blind]

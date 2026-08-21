@@ -13,9 +13,16 @@ imported `run`, `advise` and `estimate`, and the interactive `discover` branch d
 calls of its own before handing the result to `DiscoveryService` for the write, while CLAUDE.md, the
 README and docs/architecture.md all stated the opposite rule.
 
-The surface half is scoped to `cli.py`. Stated rather than left to read as clean: `web/` and
-`deterministic/` are not guarded here, and the sibling storage half of the same defect -- a surface
-reaching past `SessionRepository` to `core.persistence` -- is #76 and has no guard at all yet.
+The surface half of the *provider* rule is scoped to `cli.py`; `web/` and `deterministic/` are not
+guarded for that one, and that is stated rather than left to read as clean.
+
+The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
+`core.persistence` -- is #76, and it is guarded now, over all three surfaces. It needed a different
+extractor rather than a second table: every surface writes `from requivo.core import persistence as
+store`, so the import set is one entry for a file making eighteen calls, and a name-only guard would
+let one reviewed line stand in for all of them. `persistence_names` resolves the alias first and
+collects the attributes taken off it, which is what makes `_SURFACE_STORAGE_ALLOWLIST` per-function
+and keyed by file.
 
 Where the line sits
 -------------------
@@ -736,3 +743,255 @@ def test_the_surface_guard_refuses_a_subject_it_could_not_read():
     assert not renamed_away.exists(), "this control assumes the pre-rename path is gone"
     with pytest.raises(AssertionError, match="no such file"):
         subject_module(renamed_away)
+
+
+# --------------------------------------------------------------------------------------------------
+# The storage half of the same arrow: a surface reaches the store through SessionRepository.
+# --------------------------------------------------------------------------------------------------
+#
+# #76, and it is #77's twin rather than a separate rule. `services/` takes both its storage and its
+# reasoning as injected seams, which is what makes "a Postgres repository reuses the orchestration
+# verbatim" true of that layer. It was **not** true of the surfaces: 27 call sites across `cli.py`
+# and `deterministic/` reached `core.persistence` directly, so on the day a second backing exists
+# the services hold and the CLI breaks. The claim was read as a property of the system and was a
+# property of one layer.
+#
+# The target is not zero direct calls and never was. `requivo session migrate` is *about* the retired
+# filesystem layout; `session export` zips a directory; `session init` prints where the session
+# landed because a path is the answer the caller asked for. A CLI that talks about files is entitled
+# to know about files. The target is zero *unjustified* ones, and this is where the justification is
+# recorded so that the next one has to be argued for rather than merely typed.
+
+SURFACE_MODULE = REPO_ROOT / "src" / "requivo" / "cli.py"
+SURFACE_TREES = (
+    (REPO_ROOT / "src" / "requivo" / "deterministic", "requivo.deterministic"),
+    (REPO_ROOT / "src" / "requivo" / "web", "requivo.web"),
+)
+PERSISTENCE_MODULE = "requivo.core.persistence"
+
+# Keyed by (file, name), not by name alone. A global name list would let `deterministic/model.py`
+# newly call `canonical_dir` and stay green because `sessions.py` is allowed to -- which is the
+# unjustified call this guard exists to catch, arriving under a name already argued for elsewhere.
+_SURFACE_STORAGE_ALLOWLIST = {
+    ("cli.py", "canonical_dir"): (
+        "prints where a session landed, after discover and after answer. `SessionRepository` exposes "
+        "no path on purpose -- a Postgres backing has none -- so there is no seam to route this "
+        "through, and 'where is it?' is the answer the caller asked for."
+    ),
+    ("cli.py", "artifact_path"): (
+        "prints the path a generated artifact was written to. Through the chokepoint rather than "
+        "joined at the call site (#36): it validates a filename that came off disk, and a printed "
+        "path is a disclosure like any other."
+    ),
+    ("cli.py", "write_artifact_file"): (
+        "writes the three neutral epic exports, which are extra *views* of one already-saved "
+        "artifact and deliberately untracked -- no type, no source revision, no staleness. "
+        "`repo.save_artifact` would put three rows in `artifact list` that no generator can refresh."
+    ),
+    ("cli.py", "load_model"): (
+        "reads a bare `model.json` the user named on the command line. That file is not a session "
+        "and has no slug, so no repository method can reach it: the reference resolver falls back "
+        "to it precisely when the store has nothing."
+    ),
+    ("deterministic/sessions.py", "canonical_dir"): (
+        "four sites, all about a directory: `session init` and `session import` report where the "
+        "session landed, and `session export` zips the tree. See the cli.py entry."
+    ),
+    ("deterministic/sessions.py", "migrate_legacy"): (
+        "converts a session in the retired `out/` layout into one in `.requivo/sessions/`. A "
+        "statement about two filesystem layouts, which is what the verb *is*; a backing with "
+        "neither has nothing to migrate."
+    ),
+    ("deterministic/sessions.py", "validate_slug"): (
+        "checks that a directory name inside an uploaded archive is slug-shaped, before anything is "
+        "extracted. Asked about a name, before any session exists to ask a repository about."
+    ),
+    ("deterministic/doctor.py", "scan_session_root"): (
+        "the one caller that needs all three parts of *one* partition. `list_slugs` and "
+        "`list_unexaminable` are two scans by design (see `FileSessionRepository.list_unexaminable`) "
+        "and two scans are two instants -- a `session.json` landing between them lands in no answer "
+        "at all, which is the invisible state this key exists to end."
+    ),
+    ("deterministic/artifacts.py", "artifact_path"): (
+        "prints where `artifact save` put the file. See the cli.py entry."
+    ),
+    ("web/dependencies.py", "validate_slug"): (
+        "refuses a slug-shaped path segment at the HTTP boundary, before it reaches any service. A "
+        "name rule, applied to a request, with no session in hand yet."
+    ),
+    ("web/routes/sessions.py", "validate_slug"): (
+        "same rule at the route that takes a slug from a form field. See web/dependencies.py."
+    ),
+}
+
+
+def surface_subjects() -> list[tuple[Path, str, str]]:
+    """Every surface file, as (path, package, label). The label is the allowlist key.
+
+    `cli.py` is named individually and the other two are walked, for the reason `scan` walks core
+    recursively: `deterministic/` became a package five days ago (#73) and `web/` gains route
+    modules, so a guard listing files by hand would go quietly narrower with each one. Both
+    helpers refuse an absent or empty subject, so a renamed package is 'could not look' here too.
+    """
+    src = REPO_ROOT / "src" / "requivo"
+    subjects = [(subject_module(SURFACE_MODULE), "requivo", "cli.py")]
+    for root, package in SURFACE_TREES:
+        subjects.extend((p, pkg, p.relative_to(src).as_posix()) for p, pkg in scan(root, package))
+    return subjects
+
+
+def _dotted(node: ast.AST) -> str | None:
+    """`a.b.c` as a string, for an Attribute chain rooted in a plain Name. None if it is not one."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def persistence_names(path: Path, package: str) -> set[str]:
+    """Every name `path` can reach inside `core.persistence`.
+
+    Import names alone are not enough here and that is the whole difficulty: every surface writes
+    `from requivo.core import persistence as store`, so the import set is one entry -- the module --
+    for a file making eighteen different calls. The provider guard can stop at imports because a
+    whole-module import there is itself the violation; here it is the *idiom*, and reducing it to a
+    single name would let one allowlist entry launder unrestricted access to the store.
+
+    So the module aliases are resolved first and then every attribute taken off one is collected,
+    which is what makes the allowlist per-function. A symbol imported by name
+    (`from requivo.core.persistence import validate_slug`) contributes itself directly.
+
+    Not seen, and stated rather than left to read as clean: an alias rebound at runtime, a name
+    reached through `getattr`, and a re-export of a persistence function from some other module.
+    Each is reachable and none is the shape this catches, which is one more convenient call.
+    """
+    tree = _parse(path)
+    aliases: set[str] = set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == PERSISTENCE_MODULE:
+                    # `import requivo.core.persistence as store` binds the alias; without `as` it
+                    # binds `requivo`, and the call is written as the full dotted chain instead.
+                    aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolve_relative(package, node.level)
+            module = f"{base}.{node.module}" if base and node.module else (node.module or base)
+            if module == PERSISTENCE_MODULE:
+                names.update(alias.name for alias in node.names)
+            elif module == "requivo.core":
+                # `from requivo.core import persistence as store` -- the idiom in every surface.
+                aliases.update(alias.asname or alias.name
+                               for alias in node.names if alias.name == "persistence")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            dotted = _dotted(node)
+            if dotted is None:
+                continue
+            head, _, attr = dotted.rpartition(".")
+            if head in aliases:
+                names.add(attr)
+    return names
+
+
+def test_the_surfaces_reach_the_store_only_through_the_named_filesystem_concerns():
+    """#76. Both directions asserted, for the reason the provider guard gives: "nothing unexpected"
+    also passes over an empty set, so an allowlist entry naming a call that is no longer made fails
+    too. A surface that was emptied, renamed away or split into a package goes red here rather than
+    reading as one that reaches nothing.
+
+    A stale entry is not bookkeeping. Every line above is a claim that a direct call is justified,
+    and a claim about a call site that no longer exists is prose nobody can check.
+    """
+    reached = {(label, name)
+               for path, package, label in surface_subjects()
+               for name in persistence_names(path, package)}
+    unexpected = sorted(reached - set(_SURFACE_STORAGE_ALLOWLIST))
+    assert not unexpected, (
+        f"a surface reaches past SessionRepository to core.persistence: {unexpected}. Route it "
+        f"through the repository if an equivalent exists (`exists`, `read_meta`, `lock`, "
+        f"`list_slugs`, `load_model`, `save_artifact`, …), or add it to "
+        f"_SURFACE_STORAGE_ALLOWLIST with the reason no backing-neutral form is possible."
+    )
+    stale = sorted(set(_SURFACE_STORAGE_ALLOWLIST) - reached)
+    assert not stale, (
+        f"_SURFACE_STORAGE_ALLOWLIST still names {stale}, which the surfaces no longer reach. "
+        f"Either the guard is reading the wrong files, or the entry is prose about a call site that "
+        f"is gone -- delete it."
+    )
+
+
+_SURFACE_STORAGE_IMPORTS = {
+    "aliased.py": "from requivo.core import persistence as store\nstore.canonical_dir('s')\n",
+    "bare.py": "from requivo.core import persistence\npersistence.canonical_dir('s')\n",
+    "symbol.py": "from requivo.core.persistence import canonical_dir\n",
+    "dotted.py": "import requivo.core.persistence as p\np.canonical_dir('s')\n",
+    "relative.py": "from .core import persistence as store\nstore.canonical_dir('s')\n",
+    "relative_symbol.py": "from .core.persistence import canonical_dir\n",
+}
+
+
+def test_the_storage_guard_sees_every_way_of_reaching_the_store(tmp_path):
+    """Positive control, and the one that matters most: the extractor has to resolve an alias before
+    it can see anything at all, so a blind version of it returns the empty set for every file here
+    and the real test above passes green over nothing."""
+    root = tmp_path / "requivo"
+    _write_tree(root, _SURFACE_STORAGE_IMPORTS)
+    missed = [path.name for path, package in scan(root, "requivo")
+              if "canonical_dir" not in persistence_names(path, package)]
+    assert not missed, f"the storage guard is blind to these: {missed}"
+
+
+def test_the_storage_guard_separates_two_calls_behind_one_import(tmp_path):
+    """The property a name-only extractor does not have. One import, two functions, two allowlist
+    keys -- otherwise a single reviewed entry stands in for every call the module makes."""
+    root = tmp_path / "requivo"
+    _write_tree(root, {"two.py": (
+        "from requivo.core import persistence as store\n"
+        "store.canonical_dir('s')\n"
+        "store.session_lock('s')\n"
+    )})
+    path, package = scan(root, "requivo")[0]
+    assert persistence_names(path, package) == {"canonical_dir", "session_lock"}
+
+
+_LEGITIMATE_STORAGE_SURFACE = """
+    from __future__ import annotations
+
+    from pathlib import Path
+
+    from requivo.core.errors import RequivoError
+    from requivo.services.sessions import SessionService
+
+
+    def show(slug: str) -> str:
+        svc = SessionService()
+        # a repository call is the point of the seam, and must not read as a store call
+        meta = svc.repo.read_meta(slug)
+        store = Path(slug)          # a local named like the alias
+        return f"{meta.slug} {store.name} {store.parent}"
+"""
+
+
+def test_the_storage_guard_does_not_fire_on_what_a_surface_legitimately_does(tmp_path):
+    """The must-not-fire half. A surface is *supposed* to call the services and the repository, and
+    a local variable that happens to be called `store` is not an import of the module."""
+    root = tmp_path / "requivo"
+    _write_tree(root, {"ordinary.py": _LEGITIMATE_STORAGE_SURFACE})
+    path, package = scan(root, "requivo")[0]
+    assert persistence_names(path, package) == set()
+
+
+def test_the_storage_guard_names_what_it_scanned():
+    """The #10 rule, for this scan set. Everything above is a negative assertion, and `deterministic/`
+    is a package rather than a module as of #73 -- a walk that silently found nothing under it would
+    be an all-clear over the surface with the most direct calls in the repository."""
+    labels = sorted(label for _, _, label in surface_subjects())
+    assert "cli.py" in labels
+    for expected in ("deterministic/sessions.py", "deterministic/doctor.py", "web/dependencies.py"):
+        assert expected in labels, f"the storage guard did not scan {expected}; it scanned {labels}"

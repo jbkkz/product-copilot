@@ -33,6 +33,8 @@ def _cmd_artifact_save(a, client) -> None:
     # Through the chokepoint, not re-joined here (#36). This line only prints the path, which is
     # exactly how it survived the sweeps that closed the writes and the read — `artifact_path` says
     # why display is not exempt, and which caller can actually hand this an unvalidated `st.filename`.
+    # Direct rather than through `SessionRepository` (#76) for the reason that chokepoint exists: the
+    # validation is of a *path*, and the repository has no path to validate.
     where = store.artifact_path(slug, st.filename)
     print(f"Saved {a.type} → {where} (from revision {st.revision})")
     if st.stale:

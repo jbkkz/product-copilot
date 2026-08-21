@@ -59,6 +59,11 @@ def _cmd_session_init(a, client) -> None:
     cards = _resolve_cards(a.context)
     meta = SessionService().create_session(
         request, context_cards=cards, slug=a.slug, provider=a.provider)
+    # Both lines below reach `canonical_dir` directly, and that is the justified kind (#76): where
+    # the session landed on this machine is the answer the caller asked for, in `--json` for a script
+    # and in prose for a reader. `SessionRepository` deliberately exposes no path — a Postgres
+    # backing has none to expose — so there is no seam to route this through, and a CLI that talks
+    # about files is entitled to know about them.
     if a.json:
         # `revision` is 0 for a genuinely new session — but init is idempotent, so re-running it on the
         # same request returns an *existing* session that may already carry a model. A caller about to
@@ -285,9 +290,9 @@ def _cmd_session_show(a, client) -> None:
     """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    if not store.session_exists(slug):
+    if not svc.exists(slug):
         raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
-    meta = store.read_meta(slug)
+    meta = svc.meta(slug)
     if a.json:
         _print_json(meta.model_dump())
         return
@@ -340,11 +345,15 @@ def _cmd_session_migrate(a, client) -> None:
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
     migrated, skipped = [], []
+    repo = SessionService().repo
     for slug in slugs:
-        if store.session_exists(slug):
+        if repo.exists(slug):
             skipped.append(slug)
             continue
         try:
+            # No repository equivalent, and there cannot be one: this converts a directory in the
+            # retired `out/` layout into one in `.requivo/sessions/`. It is a statement about two
+            # filesystem layouts, which is what the verb *is* — a Postgres backing has neither.
             store.migrate_legacy(slug)
         except SessionExistsError:
             skipped.append(slug)
@@ -375,13 +384,15 @@ def _cmd_session_export(a, client) -> None:
     into place, so an interrupted export leaves no half-written .zip looking like a real one."""
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
-    if not store.session_exists(slug):
+    if not svc.exists(slug):
         raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
+    # Direct, and legitimately so: this verb archives the session's *directory*. A path is the
+    # subject of the command, not an implementation detail leaking through it.
     d = store.canonical_dir(slug)
     dest = Path(a.output) if a.output else Path.cwd() / f"{slug}.requivo.zip"
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.part")
     try:
-        with store.session_lock(slug):
+        with svc.repo.lock(slug):
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
                 for f in sorted(d.rglob("*")):
                     if f.is_file() and not any(part.startswith(".") for part in f.relative_to(d).parts):
@@ -436,7 +447,7 @@ def _cmd_session_verify(a, client) -> None:
     # directory this call could not stat.
     session_probe: dict = {"checked": True, "error": None}
     try:
-        found = store.session_exists(slug)
+        found = svc.exists(slug)
     except SessionUnreadableError as e:
         session_probe = {"checked": False, "error": str(e)}
         found = True
@@ -555,7 +566,8 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
     slug = slugs.pop()
     # The directory name becomes a session slug, so it faces the same validation as any other — this is
     # what stopped an archive whose folder was called `bad slug` from being unpacked into the store and
-    # breaking every later `session list`.
+    # breaking every later `session list`. Direct on purpose: this is the *name* rule the file
+    # backing enforces, asked before any session exists to ask a repository about.
     return store.validate_slug(slug)
 
 
@@ -616,6 +628,7 @@ def _cmd_session_import(a, client) -> None:
                                    details={"archive": str(archive)})
     root = session_root()
     root.mkdir(parents=True, exist_ok=True)
+    repo = SessionService().repo
 
     try:
         z = zipfile.ZipFile(archive)
@@ -634,7 +647,7 @@ def _cmd_session_import(a, client) -> None:
         # asked to force there was nothing to force past. That is invariant 9 ("a precondition is
         # held across the writes it authorises") in the one verb that writes a whole session, and it
         # is why the two arms below are two arms rather than one flag.
-        occupied = store.session_exists(slug)
+        occupied = repo.exists(slug)
         if occupied and not a.force:
             raise SessionExistsError(
                 f"session '{slug}' already exists in this workspace — pass --force to replace it",
@@ -647,6 +660,7 @@ def _cmd_session_import(a, client) -> None:
                 z.extract(info, scratch)
             extracted = scratch / slug
             _validate_extracted(extracted, slug)
+            # Direct: the import moves a directory into place, so the destination *is* a path.
             target = store.canonical_dir(slug)
             if not occupied:
                 # The slug was free when it was checked, so **the rename is the claim** and nothing
@@ -658,7 +672,7 @@ def _cmd_session_import(a, client) -> None:
                 try:
                     extracted.replace(target)
                 except OSError as e:
-                    if store.session_exists(slug):
+                    if repo.exists(slug):
                         raise SessionExistsError(
                             f"session '{slug}' was created while this archive was being read — "
                             "nothing was imported and nothing was replaced; pass --force to replace it",
@@ -711,6 +725,7 @@ def _cmd_session_import(a, client) -> None:
         # extraction. Those two used to be able to disagree, and the disagreement was #111.
         _print_json({"slug": slug, "path": str(target), "replaced": occupied})
         return
+    # Same as `session init`: the line's subject is where the session landed on this machine.
     print(f"Imported session '{slug}' → {store.canonical_dir(slug)}"
           + (" (replaced an existing session)" if occupied else ""))
 
