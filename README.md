@@ -45,6 +45,8 @@ Two other ways in, on the same local sessions — nothing is locked to the inter
   then `/requivo:discover <request>`. Reasoning goes through your own Claude session, so there is no
   extra API key — but the skills drive the `requivo` CLI, so it still has to be installed (above) and
   on your PATH. If it is not, every skill says so and how to fix it, rather than failing at the shell.
+  On native Windows it also needs [Git for Windows](https://git-scm.com/downloads/win), which is what
+  gives Claude Code the Bash tool the skills run through.
 - **[CLI](docs/cli.md)** — infrastructure. `requivo discover | status | brief …`, for automation and
   anything you drive from a script or a pipeline.
 
@@ -161,6 +163,11 @@ version, and the ends are the point: a platform's own standard library can behav
 one. Windows on 3.9 cannot resolve a symlink whose target is missing, where Windows on 3.13 can —
 which once left a path-containment guard holding on twelve of thirteen CI legs and not on the
 thirteenth. Differences in the language itself show on the Linux axis, which runs all five.
+
+Those legs test the `requivo` **package**. Nothing in CI exercises the Claude Code plugin, which runs
+inside Claude Code rather than inside Python, and on native Windows that plugin carries a prerequisite
+of its own: [Git for Windows](https://git-scm.com/downloads/win), for the reason the
+[plugin README](plugins/claude-code/) gives.
 
 Requivo reads and writes **UTF-8 everywhere**, regardless of the machine's locale or the console's
 codepage. A session written on one machine reads back byte-identically on another. Where a console
