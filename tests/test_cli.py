@@ -73,14 +73,14 @@ def test_pc_demo_runs_offline_from_saved_example():
     assert "REQUIVO — DEMO" in text
     assert "freelancers to check guests in" in text     # the real request is shown
     assert "UNDERSTANDING" in text                       # status rendered live from the saved model
-    assert "SOLUTION ASSESSMENT" in text                 # the assessment (the differentiator)
+    assert "DECISION BRIEF" in text                      # the deliverable (the differentiator)
     assert "event-checkin-reconciliation/epic.md" in text  # the other artifacts are pointed to
 
 
 def test_pc_brief_uses_injected_client():
     with _model_in_out("clitest-brief") as p:
         text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
-        assert "SOLUTION ASSESSMENT" in text
+        assert "DECISION BRIEF" in text
 
 
 def test_demo_payload_matches_the_browsable_example():

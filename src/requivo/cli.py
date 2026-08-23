@@ -232,7 +232,7 @@ def _cmd_discover(a, client) -> None:
             # `test_stopping_early_leaves_the_claimed_session_and_says_where`.
             print(f"\nSaved request → {store.canonical_dir(slug)}")
             return
-        print("\nGenerating the solution assessment…")
+        print("\nGenerating the decision brief…")
         brief = disco.draft_assessment(out, cards=only)
         slug = disco.finalize_discovery(request, out, cards=only, slug=slug,
                                         brief=brief, surface="cli-discover")
@@ -261,12 +261,12 @@ def _cmd_answer(a, client) -> None:
         render_stale(pairs, [_label(sid) for sid in result.changed_slots])
     n_reasoning = len(result.invalidated_decisions) + len(result.invalidated_challenges)
     if n_reasoning:
-        print(f"\n⚠  This change unseats {n_reasoning} piece(s) of the assessment's reasoning "
+        print(f"\n⚠  This change unseats {n_reasoning} piece(s) of the decision brief's reasoning "
               f"({len(result.invalidated_decisions)} decision(s), {len(result.invalidated_challenges)} "
               f"premise(s)) — regenerate the brief to refresh it.")
     print(f"\nSaved session → {store.canonical_dir(slug)}")
     if not out.questions:
-        print(f"\n✅ Discovery converged — run `requivo brief {slug}` for the assessment.")
+        print(f"\n✅ Discovery converged — run `requivo brief {slug}` for the decision brief.")
     else:
         print(f'\n→ Keep going: requivo answer {slug} "<your answers>"')
 
@@ -347,7 +347,7 @@ def _cmd_demo(a, client) -> None:
     print("\n\n② WHAT THE ENGINE MADE OF IT  — computed live from the saved model, no API\n")
     render_turn(out)
 
-    print("\n\n③ THE SOLUTION ASSESSMENT  — a judgment, not a recap (the differentiator)\n")
+    print("\n\n③ THE DECISION BRIEF  — a judgment, not a recap (the differentiator)\n")
     print(assessment)
 
     print("\n\n" + bar)
@@ -412,7 +412,9 @@ def _cmd_brief(a, client) -> None:
     # so downstream generators inherit the decisions and challenges, not just the facts.
     result = disco.generate(slug, "brief", surface="cli-brief")
     render_brief(result.model, result.artifact)
-    _wrote(slug, result, "solution assessment")
+    # The caption is "decision brief" everywhere a person reads it; the type, the verb and the file
+    # on disk are all still `brief`/`solution-assessment.md` (#166).
+    _wrote(slug, result, "decision brief")
 
 
 def _cmd_prd(a, client) -> None:

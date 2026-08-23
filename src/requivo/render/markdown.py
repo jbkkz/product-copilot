@@ -124,9 +124,15 @@ def brief_markdown(out: EngineOutput, brief: Brief) -> str:
         + (f" — reaches {', '.join(o.modules)}" if o.modules else "")
         for o in brief.opportunities])
 
-    section("Ready to estimate?",
-            [f"**Not yet.** These topics still move the solution: {' · '.join(blockers)}." if blockers
-             else "**Yes.** No high-impact topic is still unresolved."])
+    # Not a second readiness question. `Ready to estimate?` read as a threshold of its own while
+    # branching on the same blocker list as everywhere else, and asking *ready for a first decision
+    # brief* here would be circular — the reader is holding one. So the one boolean is stated as what
+    # it means for this document (#165). Pinned by
+    # `test_every_surface_asks_the_same_readiness_question`.
+    section("Are we ready?",
+            [f"**Not ready.** This brief is a draft: these topics are still unconfirmed and can move "
+             f"the solution — {' · '.join(blockers)}." if blockers
+             else "**Ready.** No high-impact topic is still unresolved."])
     section("Recommended next steps", [f"- {s}" for s in brief.next_steps])
 
     return "\n".join(md).rstrip() + "\n"

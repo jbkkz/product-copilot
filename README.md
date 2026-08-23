@@ -183,8 +183,9 @@ refused by name rather than silently decoded into something that reads like pros
 Actively developed, and at **1.0**. The Core, CLI, Claude Code plugin and local Web interface are usable
 today. The **session format is a published contract** — versioned, forward-compatible, and shared by
 every interface; what is guaranteed and what is deprecated is written down in
-[compatibility](docs/compatibility.md). Output is non-deterministic — treat the assessment as a senior
-colleague's read, not an oracle, and get expert review for any legal/tax/compliance flag it raises.
+[compatibility](docs/compatibility.md). Output is non-deterministic — treat the decision brief as a
+senior colleague's read, not an oracle, and get expert review for any legal/tax/compliance flag it
+raises.
 See the [roadmap](docs/roadmap.md).
 
 ---

@@ -44,7 +44,7 @@ Produce it in PM language, in the order a scope review is run:
 6. **Scope implications** — what this genuinely introduces into the system.
 7. **Assumptions worth contesting** — premises worth challenging *before* build. This is the differentiator.
 8. **Main risks**, **unresolved questions**, **opportunities**.
-9. **Ready to estimate?** — yes, or the topics that still move the solution.
+9. **Are we ready?** — ready, or the topics that are still unconfirmed and can move the solution.
 10. **Recommended next steps.**
 
 Sections 3 and 4 are read off the model, not invented: a topic whose evidence is `explicit` is

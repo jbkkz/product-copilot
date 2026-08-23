@@ -120,7 +120,7 @@ def test_release_markdown_omits_version_when_empty():
     assert "—" not in md.splitlines()[0]
 
 
-def test_render_brief_titles_solution_assessment_and_shows_challenges():
+def test_render_brief_titles_decision_brief_and_shows_challenges():
     model = {"problem": slot(80, "explicit", "high")}
     brief = Brief(
         problem="P",
@@ -149,7 +149,9 @@ def test_render_brief_titles_solution_assessment_and_shows_challenges():
     with redirect_stdout(buf):
         render_brief(out(model), brief)
     text = buf.getvalue()
-    assert "SOLUTION ASSESSMENT" in text and "DISCOVERY BRIEF" not in text
+    # One vocabulary for one artifact (#166): the caption is "decision brief" wherever a person reads
+    # it, while the type, the verb and the filename on disk stay `brief`/`solution-assessment.md`.
+    assert "DECISION BRIEF" in text and "SOLUTION ASSESSMENT" not in text
     assert "CHALLENGES" in text
     # the top challenge surfaces in the executive summary, detail in the full analysis
     assert "Challenge Invoice at signature" in text

@@ -37,9 +37,14 @@ def render_understanding(out: EngineOutput) -> None:
 
 
 def render_readiness(out: EngineOutput) -> None:
-    print("READY FOR IMPLEMENTATION?")
+    # One question, in the vocabulary every other surface reads ("are we ready?"), answered with the
+    # one boolean the Core publishes. The length of the blocker list is not a readiness signal — the
+    # list itself is the answer, printed below — so branching on it invents a state the model
+    # contract, the Web and the plugin all forbid (#165). Pinned across surfaces by
+    # `test_readiness_renders_as_one_boolean_on_every_surface`.
+    print("ARE WE READY?")
     blockers = [_label(b) for b in _readiness_blockers(out)]
-    status = "Ready" if not blockers else ("Nearly ready" if len(blockers) <= 2 else "Not ready")
+    status = "Not ready" if blockers else "Ready"
     print(f"  {'Status':<20} {status}")
     if blockers:
         print(_labeled("Blocking decision", "Confirm " + ", ".join(b.lower() for b in blockers), lw=20))
@@ -57,7 +62,9 @@ def render_turn(out: EngineOutput) -> None:
     print()
     render_understanding(out)
     blockers = [_label(b) for b in _readiness_blockers(out)]
-    verdict = "✅ Ready" if not blockers else (f"⚠ Nearly — {len(blockers)} to confirm" if len(blockers) <= 2 else f"⛔ Not yet — {len(blockers)} open")
+    # Same rule as `render_readiness`, and the count is gone from the verdict for the same reason: it
+    # is what the deleted "nearly" arm branched on, and the blockers are named on the line already.
+    verdict = "⛔ Not ready" if blockers else "✅ Ready"
     print(f"\n  Ready?  {verdict}" + (f"  → {', '.join(blockers)}" if blockers else ""))
     if out.questions:
         print("\nPRIORITY QUESTIONS")
@@ -87,14 +94,17 @@ def render_usage(ledger: UsageLedger) -> None:
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:
-    """The deliverable: a two-tier solution assessment — an executive summary a PM reads in seconds,
-    then the full analysis below (including what to *challenge*, not just what was learned). Written
-    in a PM's language, never the engine's internals."""
-    # While a blocking decision is unresolved the assessment rests on unconfirmed ground — label it a
+    """The deliverable: a two-tier decision brief — an executive summary a PM reads in seconds, then
+    the full analysis below (including what to *challenge*, not just what was learned). Written in a
+    PM's language, never the engine's internals.
+
+    "Decision brief" is a caption, not an identity: the artifact type is still `brief`, the verb is
+    still `requivo brief`, and the file on disk is still `solution-assessment.md` (#166)."""
+    # While a blocking decision is unresolved the brief rests on unconfirmed ground — label it a
     # draft so the reader knows it is not yet ready to build from, honestly rather than in the prose.
     draft = bool(_readiness_blockers(out))
     print("\n" + "═" * 64)
-    print("DRAFT SOLUTION ASSESSMENT" if draft else "SOLUTION ASSESSMENT")
+    print("DRAFT DECISION BRIEF" if draft else "DECISION BRIEF")
     if draft:
         print("(blocking decisions remain — see Unknowns below)")
     print("═" * 64)
