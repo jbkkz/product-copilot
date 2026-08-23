@@ -655,6 +655,10 @@ def test_the_sanitiser_collapses_whitespace_and_breaks_both_command_forms():
                     "  ::error::x  ", "plain\n::error::x", "brief##[error]title=x"):
         assert not _log_safe(hostile).lstrip().startswith("::"), hostile
         assert "##[" not in _log_safe(hostile), hostile
+        # Idempotent, because `_annotate` applies this as a backstop to a message whose parts were
+        # already sanitised where they entered. A rule that changed a value it had already seen would
+        # make the plain `print` of one string and the annotation of it disagree.
+        assert _log_safe(_log_safe(hostile)) == _log_safe(hostile), hostile
 
     # Must-not-fire: an ordinary path, and the lone colon every one of them carries, comes back
     # byte-identical. Without this the assertions above would pass for a sanitiser that mangled

@@ -257,7 +257,13 @@ def _one_line(text: str) -> str:
 # reached `_show`'s bare `print` and forged an annotation stating something no tool concluded.
 # `test_a_skill_directory_name_cannot_forge_the_legacy_command_form` is what goes red if this is
 # removed, and it needs no newline, so it runs on every platform in the matrix.
-_COMMAND_KEYS = (("##[", "## ["), ("::", ": :"))
+#
+# A RUN of colons is broken apart whole rather than pairwise, which is what makes `_log_safe`
+# idempotent. `str.replace("::", ": :")` turns `:::` into `: ::` -- still holding a `::`, and broken
+# differently by a second pass. That matters because `_annotate` applies this as a backstop to a
+# message whose parts were already sanitised where they entered, so a non-idempotent rule would make
+# the plain `print` and the annotation of one value disagree.
+_COLON_RUN_RE = re.compile(r":{2,}")
 
 
 def _log_safe(text: str) -> str:
@@ -268,6 +274,9 @@ def _log_safe(text: str) -> str:
     leaves, so a future consumer inherits the guarantee instead of having to remember it. This
     repository has had exactly this defect before: invariant 14's #40, a stored card name forging a
     line at column 0 of `doctor`'s own output.
+
+    The result is idempotent, which is what lets `_annotate` apply it as a backstop over a message
+    whose parts were already sanitised: see the note on `_COLON_RUN_RE` above.
 
     Both keys are broken, and the second one is a deliberate widening of what `_one_line` alone
     bought. Collapsing whitespace already means a value cannot *start* a line, which is all
@@ -285,10 +294,8 @@ def _log_safe(text: str) -> str:
     the same class on the other entry point, and
     `test_an_unreadable_path_cannot_forge_a_line_of_its_own` is the newline-borne half.
     """
-    out = _one_line(text)
-    for key, broken in _COMMAND_KEYS:
-        out = out.replace(key, broken)
-    return out
+    out = _COLON_RUN_RE.sub(lambda run: " ".join(run.group()), _one_line(text))
+    return out.replace("##[", "## [")
 
 
 def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> None:
