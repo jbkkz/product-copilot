@@ -10,6 +10,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Declared at workflow level rather than per job, so a job added later inherits read-only instead of
+# falling back to the repository default -- which is read/write in a repository whose owner has
+# never changed it (#178). Not one of the jobs below writes anything through the API: they check
+# out, install, lint, type-check and run pytest. A branch pull request runs contributor Python
+# here, which is what makes the default worth narrowing even with nothing known to be exploitable
+# through it. See tests/test_workflow_permissions.py.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint (ruff)
