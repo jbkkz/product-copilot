@@ -19,6 +19,13 @@ carrying, completeness that fell back. That lens has its own third state and say
 rather than printing an empty finding set, because a single-pass baseline is silent about turn 3 in a
 way that reads exactly like a clean one (#137).
 
+A capture taken with ``golden_run.py --brief`` gets a third: the **assessment** lens, over the
+complexity verdict and the challenge themes. All three run on every request, and the run's verdict is
+the **union** of the ones that ran — the strongest signal any of them found. They are independent
+measurements of one capture rather than votes on one question, so a lens finding nothing is never
+evidence against another lens finding something, and a lens that could not look says so on its own
+line instead of being folded into a silent pass (#162).
+
 Workflow: golden_run.py (re-capture) → golden_diff.py (read the signal) → commit if intended.
 
 Usage:
@@ -37,7 +44,9 @@ from golden_lib import (  # noqa: E402
     GOLDEN,
     MEASURABLE_DEPTH,
     REPO,
+    brief_consensus,
     brief_movements,
+    configure_output,
     load_briefs,
     load_runs,
     load_turns,
@@ -79,9 +88,11 @@ def diff_one(slug: str) -> str:
               f"impact, {st['unanimous']['state']}/{st['total_slots']} on confidence, across "
               f"{st['n']} runs")
         print(f"  stable themes: {', '.join(st['themes']) or '—'}")
-        # On a first interactive capture this readout *is* the finding — there is nothing to diff
-        # against, and what the deep turns did is the whole reason the request exists (#137).
+        # On a first capture these readouts *are* the finding — there is nothing to diff against,
+        # and what the deep turns did is the whole reason an interactive request exists (#137). The
+        # assessment gets the same treatment for the same reason (#162).
         _show_turns(None, load_turns(new_text))
+        _show_assessment(None, load_briefs(new_text))
         return "moved"
 
     if new_text == old_text:
@@ -95,16 +106,36 @@ def diff_one(slug: str) -> str:
     m = movements(old, new)
 
     print(f"\n{slug}")
-    # Before the flat short-circuit below, and deliberately. The turn lens watches something the slot
-    # consensus cannot see, so a capture whose slots held still can still have started re-asking
-    # questions the client already answered — reporting "no change above the noise floor" over the top
-    # of that would be the false all-clear this file exists to avoid. (The assessment lens *is* behind
-    # that short-circuit and has the same exposure; that is a separate defect, reported not fixed.)
-    turn_signal = _show_turns(load_turns(old_text), load_turns(new_text))
+    # Every lens runs, and the verdict is the union of what the ones that ran found. Independence is
+    # the point, not the ordering: each watches something the others cannot see, so a null result
+    # from one is not evidence against a finding from another. CLAUDE.md says this directly about
+    # these two — *the slot tiers are a projection; the questions and challenges are the product*.
+    #
+    # It used to be a short-circuit over the whole function: a flat slot consensus printed "no change
+    # above the noise floor" and returned, so the assessment lens was unreachable in exactly the case
+    # it exists for, and `--brief` doubles that request's calls — the maintainer who paid for the
+    # capture was the one told there was nothing to see. A lens that never ran, reported as a lens
+    # that ran and found nothing, which is this file's own stated failure mode one lens over (#162).
+    # `test_the_assessment_lens_runs_when_the_slot_consensus_held_still` is what fails if the
+    # short-circuit comes back.
+    signals = [
+        _show_turns(load_turns(old_text), load_turns(new_text)),
+        _show_slots(m),
+        _show_assessment(load_briefs(old_text), load_briefs(new_text)),
+    ]
+    if "strong" in signals:
+        return "moved"
+    return "weak" if "weak" in signals else "flat"
 
+
+def _show_slots(m: dict) -> str | None:
+    """Print what moved in the slot consensus. Returns its tier: `strong`, `weak` or None.
+
+    The flat line decides only whether *this section* is a dash. It is not a verdict on the run, and
+    reading it as one is what made the assessment lens unreachable (#162)."""
     if not m["moved"] and not m["themes_added"] and not m["themes_removed"]:
         print("  · no change above the noise floor")
-        return "moved" if turn_signal else "flat"
+        return None
 
     def _show(entries: list[dict], tier: str) -> None:
         print(f"  {tier:<10} {len(entries)} slot(s):")
@@ -120,17 +151,12 @@ def diff_one(slug: str) -> str:
         print(f"  questions  + stable theme(s): {', '.join(m['themes_added'])}")
     if m["themes_removed"]:
         print(f"  questions  − stable theme(s): {', '.join(m['themes_removed'])}")
-
-    strong = bool(m["strong"]) or turn_signal
-    old_briefs, new_briefs = load_briefs(old_text), load_briefs(new_text)
-    if old_briefs and new_briefs:
-        strong = _show_assessment(old_briefs, new_briefs) or strong
-    return "moved" if strong else "weak"
+    return "strong" if m["strong"] else "weak"
 
 
-def _show_turns(old_turns, new_turns) -> bool:
-    """Print what the interactive capture says about turn 3 and beyond. Returns True on a *strong*
-    signal there — a finding every run agrees on.
+def _show_turns(old_turns, new_turns) -> str | None:
+    """Print what the interactive capture says about turn 3 and beyond. Returns its tier — `strong`
+    for a finding every run agrees on, None for no signal or no measurement.
 
     Four states, and the last two are the ones this function exists for:
 
@@ -144,11 +170,11 @@ def _show_turns(old_turns, new_turns) -> bool:
       it went quiet.
     """
     if new_turns is None and old_turns is None:
-        return False
+        return None
     if new_turns is None:
         print("  interactive  ! the baseline has turns and this capture does not — the deep-turn "
               "lens is gone, which is not the same as clean")
-        return True
+        return "strong"
 
     lens = turn_lens(new_turns)
     depth = "/".join(str(d) for d in lens["depths"])
@@ -164,12 +190,12 @@ def _show_turns(old_turns, new_turns) -> bool:
     move = turn_movements(old_turns, new_turns)
     if not move["measured"]:
         print(f"               no comparison: {move['reason']}")
-        return False
-    strong = False
+        return None
+    strong = None
     for key, caption in (("reasked", "re-asks"), ("lost", "lost confirmations"),
                          ("regressed", "completeness regressions")):
         if move[f"{key}_added"]:
-            strong = True
+            strong = "strong"
             print(f"               + {caption} in every run: {', '.join(move[f'{key}_added'])}")
         if move[f"{key}_removed"]:
             print(f"               − {caption} no longer in every run: "
@@ -177,28 +203,76 @@ def _show_turns(old_turns, new_turns) -> bool:
     return strong
 
 
-def _show_assessment(old_briefs: list, new_briefs: list) -> bool:
-    """Print what moved in the assessment. Returns True if a *strong* signal was found there.
+def _show_assessment(old_briefs: list | None, new_briefs: list) -> str | None:
+    """Print what moved in the assessment. Returns its tier: `strong`, `weak` or None.
+
+    Four states, mirroring `_show_turns` and for the same reason (#162, #137). This lens used to sit
+    behind the slot section's short-circuit, so a capture whose slots held still printed "no change
+    above the noise floor" over an assessment nobody had looked at:
+
+    - **not captured** — neither side has `--brief` output. Named on a line of its own rather than
+      left silent, because `--brief` is an opt-in flag and not a property of the request: an absent
+      assessment is *not measured*, and with nothing said it reads exactly like measured-and-clean.
+      It contributes nothing to the verdict, since it did not look.
+    - **first capture** — nothing to compare against, so the consensus readout *is* the finding, the
+      same shape the noise floor beside it already has.
+    - **baseline only** — HEAD has an assessment and this capture does not. Marked `!` rather than
+      `·`, because committing this capture would drop a lens the baseline had — but it contributes
+      **nothing** to the verdict, for the same reason the not-captured state does: there is nothing
+      to compare, so nothing was measured.
+    - **compared** — both sides have one, and `brief_movements` grades it.
 
     A lost challenge theme counts as strong on its own: the engine used to contest that premise in a
     majority of runs and stopped. On the deliverable, losing a challenge is the regression that
-    matters most — sharper questions are worth little if the pushback quietly disappears."""
+    matters most — sharper questions are worth little if the pushback quietly disappears.
+
+    **Why `baseline only` is not strong, unlike `_show_turns`' matching state.** It was, and that was
+    wrong. Interactivity is declared in `requests.md` and reproduced on every capture, so the turn
+    lens cannot vanish by accident and its disappearance really is a finding. `--brief` is a manual
+    per-invocation flag that no capture remembers, and **every** single-pass baseline in
+    `fixtures/golden/` currently carries one — so grading this strong turns the documented workflow
+    (`golden_run.py` with no `--brief`, to measure an `engine.md` or context-card change) into six
+    strong signals over a run where nothing moved. That is the noise this file exists to suppress,
+    manufactured by the lens meant to catch it, and it is the rule stated two bullets up: a lens that
+    could not look contributes nothing to the verdict.
+
+    Deliberately *not* tallied in the summary line the way `stale` is: the per-request line is where
+    a lens's own state belongs, and a counter that fires on nearly every run is one nobody reads.
+    """
+    if not new_briefs:
+        if old_briefs:
+            print("  assessment ! the baseline has an assessment and this capture does not — nothing "
+                  "to compare (re-capture with --brief, or the committed baseline loses this lens)")
+            return None
+        print("  assessment · not captured — this lens did not look "
+              "(re-run golden_run.py with --brief to measure it)")
+        return None
+    if not old_briefs:
+        bc = brief_consensus(new_briefs)
+        print(f"  assessment first capture · complexity {bc['complexity'][0]} "
+              f"({bc['complexity'][1]}/{bc['n']} runs) · stable challenges: "
+              f"{'; '.join(sorted(bc['themes'])) or '—'}")
+        return None
+
     b = brief_movements(old_briefs, new_briefs)
-    strong = False
+    tier = None
     if b["complexity"]:
         c = b["complexity"]
         tier = "strong" if c["strong"] else "weak"
-        strong = strong or c["strong"]
         print(f"  assessment {tier} complexity {c['from']}→{c['to']}"
               f"   (was {c['old_agree']}/{c['n']}, now {c['new_agree']}/{c['n']})")
     if b["themes_removed"]:
-        strong = True
+        tier = "strong"
         print(f"  assessment − challenge(s) no longer raised: {'; '.join(b['themes_removed'])}")
     if b["themes_added"]:
+        # A gained challenge is a movement worth watching rather than acting on: the engine raising
+        # something new is as often a rephrasing that cleared the clustering threshold as it is a
+        # real gain, so it never outranks a loss on the same capture.
+        tier = tier or "weak"
         print(f"  assessment + challenge(s) now raised: {'; '.join(b['themes_added'])}")
     if not (b["complexity"] or b["themes_added"] or b["themes_removed"]):
         print("  assessment · verdict and challenges unchanged")
-    return strong
+    return tier
 
 
 def questions_one(slug: str) -> None:
@@ -273,6 +347,9 @@ def questions_one(slug: str) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # First, before anything can print: a box rule or an arrow must not be able to kill this script
+    # on a console that cannot encode it (invariant 16, #164).
+    configure_output()
     show_questions = "--questions" in argv
     argv = [a for a in argv if a != "--questions"]
     slugs = argv or sorted(p.name[: -len(".runs.json")]

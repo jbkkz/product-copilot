@@ -1,0 +1,285 @@
+"""The golden harness's readout: what each lens says, what the run's verdict is, and what happens
+when the console cannot encode it.
+
+Two defects, both found by the #137 lane and filed rather than folded into that diff.
+
+**#162 — a lens that never ran, reported as a lens that ran and found nothing.** `diff_one`
+short-circuited the *whole function* on a flat slot consensus: it printed "no change above the noise
+floor" and returned before the assessment lens ran. So a `brief.md` edit that moved the complexity
+verdict or the challenges without moving a single slot reported as no change -- on the one capture a
+maintainer had paid double for, since `--brief` doubles that request's calls. `golden_diff`'s own
+docstring names the rule this breaks: a false all-clear is the one failure mode a regression lens
+must not have. This is that failure one lens over.
+
+**#164 — invariant 16, in the scripts that measure the product.** Neither harness script routed its
+output through `streams.py`, so a glyph the console cannot encode raised `UnicodeEncodeError` at the
+`print` -- after the capture had been paid for and written to disk.
+
+Nothing here touches the network or the committed baselines. `GOLDEN` is redirected into a tmp
+directory and `_head_version` is stubbed, so every capture below is a fixture; `golden_run`'s client
+and capture loop are stubbed out entirely.
+"""
+from __future__ import annotations
+
+import io
+import json
+import sys
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import golden_diff  # noqa: E402
+import golden_lib  # noqa: E402
+import golden_run  # noqa: E402
+
+from requivo.core.analysis import _label  # noqa: E402
+from requivo.core.contracts import (  # noqa: E402
+    Brief,
+    Challenge,
+    Confidence,
+    EngineOutput,
+    Impact,
+    Level,
+    Slot,
+    Summary,
+)
+
+K = 3  # runs per captured baseline, matching the harness default
+
+
+# ── builders ─────────────────────────────────────────────────────────────────────────────────────
+
+def _model(impact: Impact = Impact.medium, completeness: int = 80) -> dict:
+    """One captured run. `completeness` is what varies between two otherwise identical baselines:
+    `movements()` grades impact and confidence only, so moving it makes the two files differ in bytes
+    -- which is what stops `diff_one` reporting `stale` -- while leaving the slot consensus flat.
+    That is the exact situation #162 is about."""
+    slot = Slot(value="v", completeness=completeness, confidence=Confidence.explicit,
+                impact=impact, evidence="e")
+    return EngineOutput(model={"problem": slot}, questions=[],
+                        summary=Summary()).model_dump(mode="json")
+
+
+def _brief(contested: list[str], complexity: Level = Level.high) -> dict:
+    """One captured assessment, contesting the named slots. `contests` is populated rather than left
+    to the headline fallback so the theme labels are exact on both sides of a diff."""
+    challenges = [Challenge(headline=f"about {slot_id}", premise="p", alternative="a",
+                            consequence="c", recommendation="r", contests=[slot_id])
+                  for slot_id in contested]
+    return Brief(challenges=challenges, complexity=complexity).model_dump(mode="json")
+
+
+def _capture(*, impact: Impact = Impact.medium, completeness: int = 80,
+             briefs: list[dict] | None = None) -> str:
+    """A `.runs.json` envelope with K identical runs, and optionally K assessments."""
+    body: dict = {"request": "r", "runs": [_model(impact, completeness) for _ in range(K)]}
+    if briefs is not None:
+        body["briefs"] = briefs
+    return json.dumps(body, indent=2)
+
+
+def _briefs(contested: list[str], complexity: Level = Level.high, *, runs: int = K) -> list[dict]:
+    return [_brief(contested, complexity) for _ in range(runs)]
+
+
+@pytest.fixture
+def diff(tmp_path, monkeypatch):
+    """`diff_one` over two forged baselines. Returns its verdict and everything it printed."""
+    def run(old_text: str | None, new_text: str) -> tuple[str, list[str]]:
+        monkeypatch.setattr(golden_lib, "GOLDEN", tmp_path)
+        (tmp_path / "forged.runs.json").write_text(new_text, encoding="utf-8")
+        monkeypatch.setattr(golden_diff, "_head_version", lambda _rel: old_text)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            verdict = golden_diff.diff_one("forged")
+        return verdict, buf.getvalue().splitlines()
+    return run
+
+
+def _line(lines: list[str], needle: str) -> str | None:
+    return next((ln for ln in lines if needle in ln), None)
+
+
+# ── #162: every lens runs, and the verdict is the union of the ones that did ─────────────────────
+
+def test_the_assessment_lens_runs_when_the_slot_consensus_held_still(diff):
+    """The finding. Slots flat, challenges moved: the run must report the challenge and must not
+    report itself as flat.
+
+    Asserting the *verdict* is not enough on its own and asserting the exit code is worth nothing at
+    all -- `golden_diff` exited 0 throughout the defect. What settles it is that the assessment line
+    is present, because that is the lens having actually looked."""
+    old = _capture(completeness=80, briefs=_briefs(["problem", "workflow"]))
+    new = _capture(completeness=70, briefs=_briefs(["workflow"]))
+
+    verdict, lines = diff(old, new)
+
+    lost = _line(lines, "no longer raised")
+    assert lost is not None, lines
+    assert _label("problem") in lost, lost
+    assert verdict == "moved", lines
+    # The short-circuit still decides the *slot* section, and only that: the flat line is the honest
+    # readout for a consensus that held still, and removing it would trade one silence for another.
+    assert _line(lines, "no change above the noise floor") is not None, lines
+
+
+def test_a_captured_assessment_that_held_still_says_so_rather_than_going_quiet(diff):
+    """The positive control for the test above, and for the one below it.
+
+    An assertion that a lens reported nothing passes when the lens never ran, so the clean case has
+    to *speak*: `verdict and challenges unchanged` is what distinguishes a measurement from an
+    absence, and it is a different sentence from the not-captured line."""
+    briefs = _briefs(["problem"])
+    verdict, lines = diff(_capture(completeness=80, briefs=briefs),
+                          _capture(completeness=70, briefs=briefs))
+
+    assert _line(lines, "verdict and challenges unchanged") is not None, lines
+    assert _line(lines, "did not look") is None, lines
+    assert verdict == "flat", lines
+
+
+def test_an_assessment_nobody_captured_is_named_as_a_lens_that_did_not_look(diff):
+    """The third state. `--brief` is an opt-in flag rather than a property of the request, so an
+    absent assessment is *not measured* -- and with nothing said, it reads exactly like the clean
+    case above. One line is what separates them."""
+    verdict, lines = diff(_capture(completeness=80), _capture(completeness=70))
+
+    not_run = _line(lines, "did not look")
+    assert not_run is not None, lines
+    assert "--brief" in not_run, not_run
+    # must not fire: a lens that did not look reports no finding, so it cannot move the verdict.
+    assert _line(lines, "verdict and challenges unchanged") is None, lines
+    assert verdict == "flat", lines
+
+
+def test_a_capture_that_dropped_the_assessment_says_so_without_manufacturing_a_signal(diff):
+    """HEAD has an assessment and this capture does not.
+
+    Marked `!` because committing this capture would drop a lens the baseline had — and graded as
+    *nothing measured*, not as a finding. This was `strong` when the change was first written, on the
+    analogy of `_show_turns`' matching state, and the analogy fails: interactivity is declared in
+    `requests.md` and reproduced on every capture, while `--brief` is a per-invocation flag no
+    capture remembers. Every single-pass baseline in `fixtures/golden/` carries one, so grading this
+    strong turned the documented no-`--brief` workflow into six strong signals over a run where
+    nothing moved. The assertion that matters is the second one."""
+    verdict, lines = diff(_capture(completeness=80, briefs=_briefs(["problem"])),
+                          _capture(completeness=70))
+
+    dropped = _line(lines, "nothing to compare")
+    assert dropped is not None, lines
+    assert dropped.lstrip().startswith("assessment !"), dropped
+    assert verdict == "flat", lines
+    # must not fire: this state is louder than the never-captured one and must not be the same line.
+    assert _line(lines, "did not look") is None, lines
+
+
+def test_a_first_capture_prints_the_assessment_it_has_nothing_to_compare_against(diff):
+    """No baseline in HEAD at all. There is nothing to diff, and the consensus readout is the finding
+    -- the same shape the noise floor beside it already has."""
+    verdict, lines = diff(None, _capture(briefs=_briefs(["problem"], Level.medium)))
+
+    first = _line(lines, "first capture")
+    assert first is not None, lines
+    assert "medium" in first, first
+    assert verdict == "moved", lines  # a fresh capture is always worth reading
+
+
+def test_the_verdict_is_the_union_of_the_lenses_that_ran(diff):
+    """What happens when the lenses disagree: the strongest signal any of them produced wins. They
+    are independent measurements of one capture, not votes on one question, so a null result from one
+    is not evidence against a finding from another."""
+    # slots moved strongly, assessment clean -> still strong.
+    briefs = _briefs(["problem"])
+    verdict, lines = diff(_capture(impact=Impact.low, briefs=briefs),
+                          _capture(impact=Impact.high, briefs=briefs))
+    assert verdict == "moved", lines
+    assert _line(lines, "verdict and challenges unchanged") is not None, lines
+
+    # slots flat, assessment moved on a bare majority -> weak, not flat and not strong.
+    split = _briefs([], Level.medium, runs=2) + _briefs([], Level.high, runs=1)
+    verdict, lines = diff(_capture(completeness=80, briefs=_briefs([], Level.high)),
+                          _capture(completeness=70, briefs=split))
+    assert verdict == "weak", lines
+    assert _line(lines, "assessment weak complexity") is not None, lines
+
+
+# ── #164: a glyph must not be able to kill a script after the work has landed ────────────────────
+#
+# `PYTHONIOENCODING=ascii` is what reaches a real strict encoder on every platform rather than only
+# on a Windows leg -- `streams._target_encoding` honours an operator-named codec, so without it
+# `configure_streams` would move the stream to UTF-8 and these tests would prove nothing. It is the
+# same mechanism `tests/test_encoding.py` uses for the product's own streams.
+
+@pytest.fixture
+def ascii_console(monkeypatch):
+    """Substitute stdout and stderr with real ASCII-strict encoders, and hand back stdout's bytes."""
+    def install() -> io.BytesIO:
+        monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+        raw = io.BytesIO()
+        monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="ascii", errors="strict"))
+        monkeypatch.setattr(sys, "stderr",
+                            io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict"))
+        return raw
+    return install
+
+
+@pytest.fixture
+def golden_diff_run(tmp_path, monkeypatch):
+    """`golden_diff.main([])` over one forged capture with no baseline in HEAD."""
+    def run() -> int:
+        monkeypatch.setattr(golden_lib, "GOLDEN", tmp_path)
+        monkeypatch.setattr(golden_diff, "GOLDEN", tmp_path)
+        (tmp_path / "forged.runs.json").write_text(_capture(), encoding="utf-8")
+        monkeypatch.setattr(golden_diff, "_head_version", lambda _rel: None)
+        return golden_diff.main([])
+    return run
+
+
+@pytest.fixture
+def golden_run_run(tmp_path, monkeypatch):
+    """`golden_run.main([])` with the client and the capture loop stubbed out -- no key, no call, no
+    write. What survives is the header line, which is where the glyphs are."""
+    def run() -> int:
+        monkeypatch.setattr(golden_run, "GOLDEN", tmp_path)
+        monkeypatch.setattr(golden_run, "REPO", tmp_path.parent)
+        monkeypatch.setattr(golden_run, "Anthropic", lambda *a, **k: object())
+        monkeypatch.setattr(golden_run, "parse_requests",
+                            lambda _path: [{"slug": "forged", "request": "r", "answers": {}}])
+        monkeypatch.setattr(golden_run, "capture", lambda *a, **k: None)
+        return golden_run.main([])
+    return run
+
+
+@pytest.mark.parametrize("script, runner", [("golden_diff", "golden_diff_run"),
+                                            ("golden_run", "golden_run_run")])
+def test_a_strict_console_kills_a_harness_script_that_does_not_configure_its_streams(
+        script, runner, request, ascii_console, monkeypatch):
+    """must fire. Without this the two silence assertions below would pass on a harness that printed
+    nothing at all, or on a script that had quietly stopped emitting the glyph rather than surviving
+    it -- which is the sweep #164 explicitly refuses."""
+    ascii_console()
+    monkeypatch.setattr(sys.modules[script], "configure_output", lambda: None)
+    with pytest.raises(UnicodeEncodeError):
+        request.getfixturevalue(runner)()
+
+
+@pytest.mark.parametrize("runner", ["golden_diff_run", "golden_run_run"])
+def test_a_harness_script_survives_a_console_that_cannot_encode_its_output(
+        runner, request, ascii_console):
+    """must not fire, and the escape is the evidence it ran rather than fell silent.
+
+    The handler is asserted directly rather than by hunting for a `?` in the bytes. `backslashreplace`
+    over `replace` is the decision that matters — a reader cannot tell a substituted character from
+    one that was never there — but scanning the output for `?` would couple this test to the claim
+    that no line of the harness ever legitimately prints a question mark, which is true today and is
+    not something this test is entitled to assume."""
+    raw = ascii_console()
+    assert request.getfixturevalue(runner)() == 0
+    sys.stdout.flush()
+    out = raw.getvalue()
+    assert b"\\u" in out or b"\\x" in out, out
+    assert sys.stdout.errors == "backslashreplace", sys.stdout.errors
