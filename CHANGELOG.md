@@ -6,6 +6,748 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-23
+
+### Added
+
+- A `Types (pyright)` CI leg, scoped to `core/` and `services/` (#78). Ruff and pytest were the whole
+  static story, on a codebase whose architectural safety is expressed in types rather than in
+  assertions: Pydantic contracts at every boundary with `StrictModel` and `PersistedEngineOutput`
+  deliberately disagreeing, `Protocol` seams that nothing structural checks, and a store where
+  `Optional` means *could not read* rather than *empty*. Ruff looks for none of that, and a test
+  finds it only where a test happens to run the path.
+- **Blocking rather than advisory.** The plan was advisory first and promote once the scoped layers
+  were clean; they are clean now, and a permanently-advisory leg is one people learn to scroll past.
+  Widening to `providers/` and `web/` waits until these two have *stayed* clean.
+- `pythonPlatform = "All"` rather than the host's, which is the stricter setting and not a
+  convenience: it type-checks the Windows-only locking path from the Linux leg, on a codebase bitten
+  by Windows-only behaviour three times. `pythonVersion = "3.9"` is the floor `requires-python`
+  declares, for the same reason the Dependency floor leg exists.
+- The configuration lives in `[tool.pyright]` in `pyproject.toml`, not in `pyrightconfig.json`,
+  because JSON has no comments and every key here has a reason worth reading. The CI leg builds the
+  same `.venv` a maintainer has locally and runs the same command, so the check is not one that only
+  its own leg can run.
+
+- A `Dependency floor` CI leg that installs Requivo at the oldest release every runtime dependency
+  declares, and runs the suite against it (#91). Until now `pyproject.toml`'s lower bounds were a
+  promise to whoever runs `pip install requivo` that nothing checked: all fourteen legs ran
+  `pip install -e ".[dev]"` and got the newest satisfying release. It found a real defect on its
+  first run, above.
+- The floor is installed with `uv pip install --resolution lowest-direct`, not with a generated
+  `name==floor` constraints file. The constraints form was tried first and is wrong twice over:
+  `jinja2==3.1` names no release that exists (the oldest is 3.1.0), and pydantic's oldest
+  *installable* release is not the one its bound names. A floor is the oldest release a user can
+  actually get, not the string in the manifest.
+- `scripts/dependency_floor.py` owns the two halves a resolver cannot supply: which requirements the
+  runtime promise covers — `dependencies` plus the `anthropic` and `web` extras, never the dev
+  toolchain — and whether the environment that came out is the one that was asked for. It refuses a
+  requirement with no lower bound rather than skipping it, because a requirement that drops out
+  silently leaves the leg green over the newest release while reporting that it tested the floor.
+
+- The golden harness can capture the **interactive** discovery shape, not only a single-pass one
+  (#137). A request in `fixtures/golden/requests.md` that carries `answer.<slot>:` lines now drives
+  `DiscoveryService.draft_turn` — the loop behind `requivo discover` — for up to `GOLDEN_TURNS` turns
+  per run, answering the engine's questions off those lines. Each line is one layer: the next thing
+  that client has to say when the engine comes back to that slot.
+- It exists because a single-pass capture cannot see the thing #77 changed. From turn 3 the
+  interactive loop is grounded on the carried model alone, where the loop it replaced re-sent the
+  whole transcript; turns 1 and 2 are byte-identical between the two, so a two-turn capture measures
+  nothing. `training-budget` is the first such request, on a new problem form.
+- A new lens reads what the deep turns did, in three measures: questions **re-asked** after the client
+  had already answered them, early confirmations the model **lost** by the end, and completeness that
+  **regressed** across a deep turn. Findings are reported per run and as the unanimous set, on the
+  same rule as a slot move.
+- The lens carries its own third state throughout. A single-pass baseline reports *not measured*
+  rather than an empty finding set, a run that converged before five turns is flagged as shallow
+  rather than counted as clean, and a request that stops being interactive is reported as a lens that
+  went away rather than one that went quiet — because each of those would otherwise read exactly like
+  a clean result.
+- What the first capture measured: the carried model does keep the client's evidence. Every slot the
+  client confirmed in turns 1 and 2 was still confirmed in the final model, in all three runs. What it
+  does not keep is the engine's own asking history beyond one turn, and the observable cost is
+  verbatim question repetition across three consecutive turns.
+
+- The plugin README's `requivo` verbs are checked now (#138). `plugins/claude-code/README.md` names
+  `requivo estimate`, `requivo stories` and `requivo session list`, which no skill invokes, and
+  nothing verified any of them. That page is the landing page a marketplace sends an uncloned reader
+  to, so it is the one page whose verbs a stranger types by hand — and it was the only page whose
+  verbs nothing checked. A verb renamed or dropped left the README naming it, every test green, and
+  the person who found out was a new user following the page.
+- It is deliberately **not** added to `scripts/plugin_cli_drift.py`'s walked set, and the reason #96
+  gave for leaving it out was a real one rather than an excuse: that walk feeds whole files to a regex
+  that cannot tell `requivo requires an API key` from a command. The README gets something narrower
+  instead — `test_the_plugin_readme_names_only_verbs_this_checkout_has` reads only the page's code
+  spans and fenced blocks, never its prose, so it cannot false-positive on a sentence because it never
+  looks at one. Both halves are pinned: the reader ignores prose, and the guard fires on a bad verb
+  and on a bad subcommand.
+- The decision is written down at both places that previously stated the exclusion, so the silence
+  there stops reading as coverage.
+
+### Changed
+
+- `providers/anthropic.py` is a package (#74). One 626-line module whose own docstring announced seven
+  responsibilities became five, cut along them: `client.py` (the SDK handle, the optional-import guard,
+  the model id), `pricing.py` (the dated rate tables), `completion.py` (`_complete`, the retry loop, the
+  JSON extraction, the truncation check), `generators.py` (the discovery turn, the seven generators, the
+  registry) and `provider.py` (`AnthropicProvider`). The point was never the line count: an accurate
+  inventory of seven things is the signal to split.
+- `_GENERATORS` and `_OP_PROMPTS` stay one table each, in `generators.py`. They are the registry every
+  surface reaches through, and a registry split across two modules is a registry with two answers.
+- Nothing about the prompt cache moved. `reuse_system` and its per-call-site declarations are the same
+  bytes they were after #9 and #58, and `providers/base.py` — the seam a second provider would
+  implement — is untouched.
+- `from requivo.providers.anthropic import <public name>` still works: the package `__init__` re-exports
+  the public surface. The underscore names are deliberately not re-exported, so a test that drives
+  `_complete` or `_GENERATORS` now names the module it lives in.
+- **The one constraint the split could have broken quietly, pinned rather than commented.** `_complete`
+  records the spend *before* it surfaces a clean failure — a failed call is still billed for whatever it
+  consumed — and that was two adjacent lines in one file. It is now a call across a module boundary, so
+  `test_a_failed_call_is_still_recorded_on_every_exit` drives all three failure exits (transport,
+  truncation, retry give-up) and asserts the tokens and attempt count on each, with the success path as
+  its positive control. Shown red by deleting the recording from `_stop()` first.
+- Compatibility: compatible - `requivo.providers` is explicitly not a stable API
+  (`docs/compatibility.md`), and the package `__init__` re-exports every public name the old module
+  exposed, so no import in or outside this repository has to change for the split alone. Nothing on
+  the CLI, the `--json` payloads, the session format or the web routes moves.
+
+- **A rule for where a bug narrative lives, and a guard that keeps it honest** (#75). This codebase
+  explains itself at length — the original bug, the rejected alternatives, the issue number — because
+  the person about to simplify a subtlety away is in the editor, not in a docs folder. An external
+  review proposed moving all of it to decision records; the diagnosis was right and the remedy was
+  not, because a pointer nobody follows is worse than the paragraph it replaced.
+- The rule instead: **a comment paragraph recounting a past bug must be backed by a test that goes
+  red when the guard is removed.** If it is, the paragraph belongs in that test and the call site
+  keeps one line naming it. If it is not, it is a missing test or genuine archaeology. It is a rule
+  rather than a preference because it is mechanically decidable — *reduce the archaeology* has no
+  stopping condition, *is there a test that goes red?* has one answer per paragraph.
+- **The reference is a name, never a path** — a test function, a test module, or a decision record's
+  slug. Paths here move: the package was renamed once, `deterministic.py` became a package, and a
+  2147-line test module became seven files, all inside a fortnight.
+- `tests/test_narrative_references.py` is new and found two live defects on its first run. The
+  convention was already in use across `src/` and `CLAUDE.md` and nothing checked it: two references
+  were split by a line wrap — `test_the_persisted_mirror_copies_every_` on one line and
+  `constraint_it_restates` on the next — so the only way anyone uses one of these, selecting it and
+  grepping, silently failed while the test it named really existed. Both are reflowed.
+- `docs/decisions/` exists now, for what no test can reach: a fact about something outside the
+  repository, a rejected alternative, or a cost tradeoff with a threshold. The first record is the
+  branch-protection story that was 33 lines inside `ci.yml` — including the destructive `PATCH` verb
+  the API docs lead you to, which would have cut `main`'s required checks from 13 to 4 and answered
+  200 while doing it.
+
+- The CLI, the deterministic verbs and the Web now reach session storage through `SessionRepository`
+  wherever a backing-neutral equivalent exists (#76). "Both storage and reasoning are injected, so
+  the orchestration is backing-agnostic" was true of `services/` and false of everything above it:
+  27 call sites reached `core.persistence` directly, so on the day a second backing exists the
+  services would hold and the surfaces would break.
+- Twelve of those became repository calls. The fifteen that remain are every call for which no
+  backing-neutral form is possible, because the subject *is* a path — `canonical_dir` answering
+  "where did this session land?", `artifact_path` validating a filename that came off disk,
+  `migrate_legacy` converting one filesystem layout into another, `validate_slug` refusing a name
+  before any session exists to ask a repository about. A CLI that talks about files is entitled to
+  know about files; the target was never zero direct calls, only zero unjustified ones.
+- `tests/test_boundaries.py` guards it now, which is what the previous release said it did not.
+  It needed a different extractor rather than a second table: every surface writes
+  `from requivo.core import persistence as store`, so an import-name guard would see one entry for a
+  file making eighteen calls and let a single reviewed line stand in for all of them. The allowlist
+  is keyed by **(file, function)** and asserted in both directions, so a new call goes red under the
+  name of the file that made it, and an entry whose call site is gone goes red as unchecked prose.
+- One user-visible consequence, and it is a removal of a leak rather than a change: `cli.py` was
+  calling the private `core.persistence._slug` to turn a filename into a slug hint. That policy is
+  `SessionService.slug_hint` now, which `create_session` also uses, so there is one definition of
+  how text becomes a session name.
+
+- `CLAUDE.md` no longer states a test count (#134). It said 324 while the suite collected 687, and
+  correcting the number buys one release: every lane that adds a test invalidates it again and
+  nothing goes red when it does.
+- The criterion is written down beside the narrative rule, because it is the same one: a count in
+  prose has to answer *what does a reader do with this?*, and if the answer is nothing it comes out
+  rather than getting a guard. The exact size of the suite is not a fact anyone acts on; *no API
+  calls, no network, no build step* is. A sweep of `README.md` and `docs/` found no other instance —
+  every remaining three-digit number there is an HTTP status or a port.
+
+- `requivo web` without the `[web]` extra keeps reporting error code `provider_unavailable`, and the
+  reason is now written at the call site instead of being a question (#135). The type reads oddly —
+  `EngineError` is the provider *transport* error — but the code travels in the `--json` envelope,
+  `docs/compatibility.md` makes moving a condition from one code to another a breaking change, and
+  from 1.0.0 that costs a major version. Tidying it would have been a silent break of a published
+  payload.
+- It is also what this product already says when an optional install is absent: `new_client()` raises
+  the same code for a missing `[anthropic]` extra. A test now pins it, so the decision goes red if it
+  is reversed by accident rather than on purpose.
+
+- `tests/web/test_web.py` is split into four files along the five subjects its own docstring named
+  (#142). 1111 lines and 62 tests in one file, the largest #72 and #73 did not touch.
+- `tests/web/test_web_security.py` is the one that earns the split rather than being sized into it:
+  the slug and traversal refusals, the cross-site layers, the API key that may not reach the browser
+  and the escaping. Among sixty tests about routing and templates, a security assertion that stops
+  being collected looks exactly like one that passes; in a file somebody opens on purpose, it looks
+  like a shorter list.
+- The other three are `test_web_routing.py` (14: the routes, plus the error-code to HTTP-status
+  contract they answer with), `test_web_discovery.py` (21: create, answer, generate, and the busy
+  rule, whose subject is a second paid generation rather than a template) and
+  `test_web_input_bounds.py` (7: invariant 3 at the web edge, where a server-side refusal and the
+  template scan proving it is reachable from a browser are two halves of one story).
+- Nothing about the product changed and no test body changed. Every top-level statement moved as an
+  exact line range, verified byte-identical in source and AST; the collected set is the same 70 ids
+  before and after. `HIGH_EXPLICIT`, `HIGH_INFERRED` and `_make_session` moved to
+  `tests/web/conftest.py`, beside the fixtures the four files already share.
+- Four narrative references that named the split file by path — in `web/app.py`,
+  `services/artifacts.py`, `tests/test_artifact_provenance.py` and `tests/web/busy_harness.js` — now
+  name the test, which is what `CLAUDE.md` asks for and what survives a file being split. The one in
+  `busy_harness.js` was also truncated mid-identifier, so it had named nothing greppable since it was
+  written.
+
+- Three names in `core/persistence.py` that other modules were already importing now carry public
+  names: `_is_contained` is `is_contained`, `_hash` is `content_hash`, and `_slug` is `derive_slug`.
+  A private name consumed across a module boundary is a contract wearing a disguise — the underscore
+  says *do not depend on this* while `core/integrity.py` and `services/sessions.py` depend on it.
+- This is the one gain taken from the proposal in #143, which argued for splitting the file and was
+  refused (the measurement it asked for came back negative: the parts do not change independently,
+  and 73% of recent corrections touch two or more of them). The refusal named this as the only
+  value the defensible seam would have bought, and it is buyable without moving any code.
+- No re-export and no private alias is left behind. An alias would be worse than the underscore:
+  a test patching the alias while the code reads its own module global is a guard that stops firing
+  and stays green, which is the trap `_blind_to_dangling_links` in `tests/test_integrity.py` exists
+  to record.
+- Compatibility: compatible - `docs/compatibility.md` promises stability for the session format and
+  the `--json` payloads, not for Python import paths, and all three names were private.
+
+- `requivo.deterministic` no longer claims that `docs/compatibility.md` publishes `EXIT_DEGRADED`
+  under that name (#145). The page publishes the **value 4**; the symbol is internal, and the same
+  page lists `requivo.deterministic` among the Python internals that are explicitly not stable.
+- Publishing the name was refused rather than merely left unchosen, and the refusal is written down:
+  a promised Python symbol costs a major version to move and buys a consumer nothing the documented
+  exit code does not, since a script gating on a degraded listing reads the process's status and not
+  this package's namespace. The old comment invited both mistakes at once — importing it from
+  outside, and reading a rename as a breaking change.
+- A test pins the corrected claim, so it cannot become a second unguarded one: promote the module to
+  stable, or renumber the code without the page, and it goes red.
+
+- The "Decision brief" rename reaches the CLI and the terminal (#166). The same artifact was called
+  two things depending on where you stood: Requivo Web, the Claude Code plugin, the README and the
+  generated Markdown said *decision brief*, while `requivo discover` narrated *Generating the
+  solution assessment…*, `requivo demo` announced *THE SOLUTION ASSESSMENT*, `requivo brief` wrote
+  *Wrote solution assessment →* and the terminal banner read *SOLUTION ASSESSMENT*. All four now say
+  decision brief, as does `requivo answer` — which said *the assessment's reasoning* and *run
+  `requivo brief <slug>` for the assessment* — plus the two browsable examples, the README's one
+  remaining use of the old noun, and the discovery-feedback issue template.
+- Captions only — no machine contract moved. The artifact type is still `brief`, the verb is still
+  `requivo brief`, the contract is still `Brief`, and the file on disk is still
+  `solution-assessment.md`, which `docs/compatibility.md` pins as part of the session format.
+- The two model-facing assets are deliberately left alone: `assets/prompts/brief.md` and
+  `assets/framework/elicitation.md` are read by the engine, not by a person, so changing them
+  changes what the model is asked to produce and belongs in a measured change of its own. #166 stays
+  open for that half.
+
+- The usage ledger is provider-neutral and lives in `requivo.usage` (#167). `render/terminal.py` — the
+  purest view layer in the tree — imported `PRICING_AS_OF` and `UsageLedger` from
+  `providers.anthropic` to print a cost line. Nothing it needed was Anthropic's: calls, tokens, cache
+  tiers and latency are concepts any provider has, and `UsageLedger`'s own docstring already said it was
+  presentation-free.
+- `EngineError` moved to `providers/errors.py`. It is a transport failure the `ReasoningProvider` seam
+  raises, not a vendor's, and `cli.py` and `web/app.py` were importing it from the vendor module — a
+  second provider would have had to import it from a competitor's. Its code, `provider_unavailable`, is
+  published in the `--json` envelope and is unchanged: this is a relocation, not a rename.
+  `providers/errors.py` pulls in no SDK, so the web app no longer loads the whole provider to classify
+  one exception.
+- **A price is stamped onto a call, not looked up when a total is printed.** Moving the ledger only
+  halved the leak while `cost_usd()` still reached into Anthropic's table, so a `CallRecord` now carries
+  the `(input, output)` rate it was billed at and the date of the table it came from, stamped by
+  `price_call` as the provider files the call. The ledger holds arithmetic and no table; the renderer
+  asks the ledger for the rate date and never the vendor. Two things follow: a second provider brings
+  its own rates with no registry, and an estimate spanning a price change is right on both sides of it
+  rather than re-pricing yesterday's calls at today's rate.
+- Three states rather than two, in the code as well as the report: priced, unpriced (`cost_usd()`
+  returns `None` and the line says *no price on file*), and priced-with-no-table-date, which prints the
+  cost without a *rates as of* clause instead of borrowing a date. An undated estimate that reads as a
+  dated one is the more expensive of the two mistakes.
+- **The guard asymmetry is closed, and it is the part that was worth fixing regardless.**
+  `tests/test_boundaries.py` watched `core/` from one end and `cli.py` from the other; `render/` was in
+  neither scan set, so the layer with the weakest claim to a provider import was the one with no guard,
+  and `terminal.py` sat there through the whole hardening effort that produced the allowlist. `render/`
+  is in the scan set now, the allowlist is keyed by (file, name) with a reason per entry and asserted in
+  both directions, and a companion test names what was scanned so an empty walk cannot read as an
+  all-clear. Shown red against `main` first, naming both leaked imports.
+- `track_usage` left the CLI allowlist as a consequence rather than a concession — the stale half of
+  that assertion is what made deleting the entry mandatory instead of optional.
+- Compatibility: compatible - the three moved names are Python internals under
+  `requivo.providers`/`requivo.usage`, explicitly not a stable API (`docs/compatibility.md`, which
+  now names both). `provider_unavailable` is unchanged in the `--json` envelope and the web banner.
+  `UsageLedger.cost_usd()` lost its `on=` argument, which no surface passed — the calendar lives in
+  `price_per_mtok`, which keeps it.
+
+### Fixed
+
+- **`pydantic>=2.0` was false by eleven minor versions.** The real floor is 2.11, and the manifest
+  now says so (#91). On pydantic 2.0.x Requivo does not import at all — `SerializeAsAny` inside an
+  `Optional[...]` is unhashable under Python 3.9's `typing`, so every model in `contracts.py` fails
+  to build — and from 2.0.3 up to 2.10 the two guards that pin the persisted contract's permissive
+  mirror fail. Anyone whose resolver landed on an early 2.x got a broken install and no leg in this
+  repository would have gone red.
+- The v0.11.0 audit had cleared that same bound by confirming `SerializeAsAny` is exported by
+  pydantic 2.0.0. That was correct and it was the wrong question: a symbol existing is not the symbol
+  working, and only installing the thing tells them apart.
+
+- `session import --force` renamed the session directory out from under the lock every writer holds,
+  so two writers could hold one slug at once (#113). The lock was an fd on `<slug>/.lock` — a claim
+  on an **inode** — while every writer under it resolved the session directory and wrote by
+  **pathname**. The swap made those two stop describing the same thing.
+- Three consequences, all reproduced. A writer inside `save_revision` went on writing into the
+  *freshly imported* directory, stamping the replaced session's `session_id` and revision log onto
+  the import. A third process opening the lock found a different inode and acquired at once, while
+  the first writer still held the old one — which `_swap_in` then unlinked, leaving that lock
+  permanently unobservable. And between the swap's two renames `<root>/<slug>` did not exist, so a
+  concurrent `save_revision`'s `mkdir` recreated it: the move **and** its rollback then both failed
+  on a non-empty destination, the rollback raising a bare `OSError`, and the user's session was
+  stranded at a dot-prefixed name every listing skips while the slug was held by a stub, and
+  `session list` reported no sessions at all. The step-aside exists to be reversible, and the same
+  race defeated it.
+- The fix moves the one lock every writer already takes, from `<slug>/.lock` to
+  `.requivo/locks/<slug>.lock`. `_swap_in` then holds it like any other compound write (invariant 9),
+  because the open handle is no longer inside the directory being renamed — which is what Windows
+  refuses and what killed the obvious fix when it was tried. The step-aside, the rollback and the
+  atomicity are all unchanged.
+- The existence check `session_lock` makes moved *under* the lock, where it is authoritative. It used
+  to be closed by accident — the lock file lived inside the session, so `os.open` raised
+  `FileNotFoundError` once the directory was gone — and opening a file in `.requivo/locks/`
+  establishes nothing about the session. A cheap non-authoritative check stays before the open so a
+  slug with no session still refuses without creating a lock file.
+- **Compatibility: an older Requivo running in the same workspace at the same time does not
+  serialise against a newer one.** It locks `<slug>/.lock` and this one locks
+  `.requivo/locks/<slug>.lock`, and two different files do not contend. Bounded — it needs two
+  Requivo versions writing one workspace at the same instant — and real. Finish or close the older
+  process before running this one against the same workspace.
+- Not a format change: `.lock` was already excluded from archives as this machine's coordination, so
+  no `format_version` bump and no migration. A `.lock` left inside an existing session by an earlier
+  Requivo is inert — nothing opens it, `session export` skips it, `session verify` ignores it — and
+  is safe to delete. `docs/compatibility.md` carries both this and the cross-version limitation
+  above, because that page is where every other "two versions, one workspace" fact lives and a
+  changelog fragment is folded away at the next release.
+- Deleting a session by hand now leaves its lock file behind, where the lock used to die with the
+  directory. There is no `session delete` verb, so this is the ordinary way a session goes: what
+  stays is one empty file under `.requivo/locks/` that claims no slug and is read by nothing.
+- `session_unreadable` gains a second condition — the write lock could not be opened — and it is
+  documented as such in `docs/compatibility.md` and on the exception. It deliberately does not answer
+  `session_not_found`, which is what the old code did only because the lock lived inside the session.
+- `requivo doctor` reports the lock root under `workspace.locks` and on its own line. A permission
+  fault there fails every verb at once with `could not open the write lock`, and nothing else in the
+  workspace names that directory. Additive: `workspace.sessions` is unchanged.
+- `docs/session-format.md` and `docs/cli.md` describe the new location and the legacy residue.
+
+- `session import` gave two different answers on two platforms for one stray directory at the target
+  slug, and named the wrong cause on both (#114). The free-slug arm claims the slug by renaming the
+  extracted directory onto it, and `os.replace` diverges there: POSIX replaces an **empty**
+  destination directory silently, while Windows' `MoveFileExW` refuses *any* existing destination
+  directory. So a user's `mkdir` at the slug imported on macOS and Linux and failed on Windows.
+- The Windows failure arrived as `import_move_failed` — *could not move the imported session into
+  place* — which is a fact about a move where the fact is about the destination, and sent the reader
+  at their filesystem looking for a fault that is not there.
+- Both platforms now refuse it by name, before the rename is attempted: a new code
+  `import_destination_occupied` (409, `details` `{slug, path}`), documented in
+  `docs/compatibility.md` and `docs/cli.md`. The guard is called on both sides of the rename, because
+  neither side alone converges the platforms — a stray already on disk never reaches the `except` on
+  POSIX, and one that lands mid-window never reaches the pre-check.
+- The rename is still the claim on a free slug (invariant 11). The new guard only ever *refuses*, so
+  it cannot authorise an import the rename would have lost, and a probe that cannot look — `exists()`
+  re-raises EACCES — says nothing and lets the rename decide rather than reporting the slug free.
+- Compatibility: an import that previously succeeded on POSIX against an **empty** stray directory
+  now refuses. Deliberate: the alternative converges the other way, on an import that deletes a
+  directory the store never created and cannot interpret. No in-code producer leaves an empty
+  directory there, so reaching this state takes a `mkdir` or a half-cleaned checkout.
+- `requivo doctor` already reported such a directory and marked it `[name taken]`, and its hint closed
+  with *which is the only symptom any of this has* — which this change makes false. The hint now names
+  both consequences: the hash-suffixed name a new session gets, and the refusal `session import` gives.
+  A diagnostic left describing the world before the fix is a defect neither diff review can see, so it
+  ships in the same commit.
+- No test exercised this path, which is why the divergence was invisible to a suite with a Windows
+  leg. Four now do, and the empty-destination row is the one that was silently green.
+
+- `requivo discover` on a session that already carries a model is now refused **before the first API
+  call** on the interactive path, not after up to nine of them (#133). `--once` already refused for
+  free; the interactive branch met the same gate only at the end, so a user who re-discovered a
+  refined session paid for eight turns plus the assessment and got `revision_conflict` with nothing
+  to show for it.
+- The refusal itself was always correct — its position was not. Invariant 13 says the revision-zero
+  gate is taken before the paid call by every entry point, and that was true of the path documenting
+  it and false of the path a person uses at a terminal. `DiscoveryService.claim_session` is public
+  now, so a surface that owns its own loop takes the gate itself instead of inheriting it at the
+  write.
+- The cost, stated because it is visible: stopping an interactive discovery early (`q`, an empty
+  answer, Ctrl-C) now leaves the session on disk at revision 0 with your request captured, and the
+  command prints where. That is the same state `requivo session init` produces — nothing was
+  reasoned and nothing was written to the model.
+
+- `requivo estimate` reads its stories and its estimate from **one** session snapshot (#135). It took
+  one per provider call, so a write landing between them estimated one model's stories against a
+  different model — invariant 12's own "two reads, two instants", in a single terminal output that
+  shows both halves and names no revision.
+- Nothing is written by that verb, so unlike the case the invariant was written about no provenance
+  could become a lie; what drifted was the answer. `DiscoveryService.reason_from` takes a snapshot the
+  caller already holds, which also keeps the stories on screen while the estimate is still being
+  reasoned — a combined operation would have delayed both until the second call returned.
+
+- `scripts/plugin_cli_drift.py` no longer grades a plugin tree it could only partly read (#139).
+  `invocation_sources()` walked with `Path.glob` and `Path.is_file()`, and **both swallow `OSError`**:
+  glob skips a subdirectory it cannot descend into and raises nothing, `is_file()` returns `False` on
+  EACCES. So a partially readable plugin was graded as a verdict over whatever subset the walk
+  happened to manage. The v1.1.0 release audit staged three files, two were walked, and the caller was
+  told `resolved`, exit 0, about a plugin containing a verb that does not exist.
+- The walk now has three outcomes rather than two — walked, absent, and could-not-look — which is
+  invariant 15's third paragraph one directory over: a partition whose predicate can raise has three
+  outcomes whether or not its return type says so. `invocation_sources()` returns a `Sources` pair, so
+  a caller cannot take the paths without being handed what could not be read alongside them, and the
+  run prints `unreadable    : N` even when N is zero: a count that appears only when it is interesting
+  cannot be told from a check that stopped running.
+- Could-not-look for the *right* reason, which review caught as a separate question. `compare()` is
+  never handed the unreadable set, so when the only invocation-bearing file is the one that could not
+  be opened it reported *no `requivo` invocations were found in the plugin's files* — blaming the
+  plugin for an emptiness the process created — and returned before naming the path at all. The
+  unreadable set is now stated before any verdict detail, on every path out of the run. Review also
+  found `NotADirectoryError` classified two ways twelve lines apart; both arms now sort it to absent.
+- A firm negative still outranks a partial one. Drift found in the part it *could* read keeps the
+  drift exit and reports the partial walk beside it, which is the rule invariant 15 already states for
+  `session verify`. Only a `resolved` is downgraded.
+- **A plugin directory name can no longer break a line and start a workflow command at column 0 of
+  the CI log** — one of the two forms the runner parses, and this bullet claimed the whole class
+  until #176 corrected it in the same unreleased batch; the legacy `##[name]` form, which is an
+  unanchored substring search and needs no newline at all, was still live and is fixed there. Found
+  by the audit of this diff, and it has two halves. A filename may legally contain a newline on
+  POSIX, and GitHub Actions parses `::command::` at the start of *any* stdout line, not only lines
+  routed through `_annotate` — which squashes its message and was never the hole. The bare `print`
+  beside it was. Sweeping the file for the class found the second instance in `_label`, which returns
+  a skill's *directory name* into every finding the script prints and predates this work entirely.
+  Both are squashed at the point the untrusted value enters. This is invariant 14's #40 one script
+  over, where a stored context card name spent a release able to forge a line at column 0 of
+  `doctor`'s output.
+- No user-visible change: `scripts/` is not in the wheel and the CI leg is `continue-on-error`, so
+  this was a wrong annotation rather than a wrong build.
+
+- `test_every_generator_drives_a_real_call_without_a_cache_write` now covers every generator the
+  provider actually registers (#146). It was parametrized over `_GENERATOR_REPLIES`, a hand-maintained
+  dict of six, while `_GENERATORS` held seven: `estimate` joined the registry in 1.1.0 and nothing
+  related the two sets, so an eighth generator would have shipped with no cache assertion and nothing
+  would have gone red, under a test whose name reads *every generator*. A guard that did not run and a
+  guard that found nothing rendered identically.
+- `set(_GENERATOR_REPLIES) == set(_GENERATORS)` is asserted once, in both directions: a registry entry
+  with no reply is an uncovered generator, and a reply for a name the registry does not hold is a case
+  that stopped exercising anything. That turns "somebody remembered" into "the build says so". Shown
+  red against the seven-entry registry first, then fixed.
+- `estimate` is driven through the parametrization rather than by a test of its own. It is the one
+  entry that is not the plain model to contract shape, so the extra `stories` it reads is carried in a
+  small per-generator table and passed as a keyword, which is how `AnthropicProvider.generate`
+  dispatches it. Its separate test asserted the same two facts and is gone.
+- The comment justifying that separate test was false in both clauses and is replaced by an accurate
+  one. It said `estimate` was not in `_GENERATORS` and that the CLI called it directly past the
+  provider seam; `estimate` has been in the registry since 1.1.0, and `cli.py` has gone through
+  `disco.reason_from(snap, "estimate", stories=stories)` since #77 and #135. A reader auditing that
+  file was told the opposite of what the code does.
+- Tests only. No behaviour change, and no write path was opened by the registry entry this covers:
+  `DiscoveryService.generate(slug, "estimate")` still refuses it by name, and the web's `GENERATABLE`
+  is built from the service's writers rather than the provider's registry.
+
+- The advisory drift step in `.github/workflows/plugin-validate.yml` no longer echoes a third-party
+  binary's output into a CI log that parses it (#147). It captured the combined stdout and stderr of
+  `claude plugin validate --strict` and printed it raw, and interpolated `claude --version` into six
+  lines beginning at column 0, five of them GitHub Actions workflow commands. `scripts/plugin_cli_drift.py`
+  had been hardened against this exact class inside the same feature (#96) and the shell beside it had
+  not: one half of a change knew about the hazard and the other half did not.
+- The two fixes the issue proposed were both measured against the runner's own parser and neither
+  holds on its own. `ActionCommand.TryParseV2` trims leading whitespace **before** it tests for the
+  `::` prefix, so indenting untrusted output contains nothing — #147's own measurement leaned on *the
+  line is indented two characters*, where what actually saved it was the newline collapsing to a
+  space. And `TryParse`, the legacy `##[name]data` form, is an unanchored substring search, so
+  collapsing the output onto one line contains nothing either.
+- So the captured output is printed **verbatim inside a `::stop-commands::` fence**, which is the
+  mechanism GitHub documents for logging untrusted input and the only candidate that covers both
+  parser forms at any column. It is also the only one that leaves the log as readable as it was,
+  which matters for a step whose own annotation tells the reader to go and read that output. If the
+  shell dies inside the fence, commands stay off for the rest of the step: an annotation is lost
+  rather than forged.
+- `claude --version` cannot be fenced, since it is interpolated into six lines emitted outside the
+  fence, so it is sanitised at capture instead and needs both halves: the newline goes, because a
+  `::` mid-line is data, and a `##[` is spaced apart, because that form needs no line start at all
+  and one of the six sites is the plain `pinned=` echo rather than a command the parser consumes
+  first.
+- No user-visible change and no change to any build's verdict: the step is `continue-on-error`, ends
+  `exit 0`, and the gate steps beside it take their answer from the process exit code rather than
+  from the log. What this closes is a run's annotations being able to state something no tool
+  concluded.
+- The test that can go red here executes the step's shell out of the workflow file against a `claude`
+  that forges, because the pytest suite runs no YAML. Two of the four cases are must-fire controls
+  that strip one containment back out and assert the forgery reappears — including the indented `::`
+  and the mid-line `##[error]`, the two shapes the refused fixes would have missed.
+- Two things were reported for filing rather than fixed here, and the first has since landed in the
+  same unreleased batch. It was that the same unanchored `##[` form was reachable in
+  `scripts/plugin_cli_drift.py`, whose `_one_line` squashes whitespace only, so a skill directory
+  named `brief##[error]...` forged an annotation with no newline at all — which also made the Windows
+  leg's skip in `_forging_dir` unsound, since that platform refuses the newline and not this vector.
+  It needed its own review, because it reopened a heavily-argued docstring, a test helper that only
+  checked for a leading `::`, and a claim already written into `changelog.d/139.fixed.md`: that is
+  #176. The other two have since landed in the same unreleased batch and are no longer open: this
+  workflow had no `permissions:` block and neither did `ci.yml` or `secret-scan.yml`, which is
+  `changelog.d/178.fixed.md`; and the two gate steps and the CLI install step ran `claude` unfenced,
+  which is `changelog.d/177.fixed.md` — where the fence had to preserve the exit code that *is* the
+  gate, and the measurement came back the other way from this one. `claude plugin validate` does
+  echo an attacker-controlled manifest field name, in the unanchored `##[` form this issue never
+  tested.
+
+- `docs/compatibility.md` no longer undercounts what `requivo.deterministic` exports (#148). Its
+  *explicitly not stable* entry said the module's "public job is the single `register(sub)` the CLI
+  binds through". It is three names: `__init__.py` re-exports `EXIT_DEGRADED` and `read_user_text`
+  beside `register`, `cli.py` imports two of the three, and three test modules import one of them from
+  the package root. The page now names all three and says who reads each. (The issue counted two
+  importing test modules; `tests/test_unexaminable_entries.py` is the third, found by the audit of
+  this diff. The other `requivo.deterministic` imports in the suite reach submodules, which is a
+  different thing and not a claim about this surface.)
+- This is the one page whose whole job is precision about surface, and the sentence sat in a paragraph
+  added to close a gap in that same page.
+- The conclusion is unchanged and this is a wording fix, not a version one. `requivo.deterministic`
+  was never a promised surface at 1.0.1 and is still explicitly not stable; nothing here reopens the
+  1.1.0 number.
+- The same undercount was restated in the docstring of
+  `test_the_degraded_exit_code_is_published_as_a_value_not_as_a_name`, which quotes the page's
+  argument, and is corrected there too. Fixing the page and leaving its restatement standing would
+  have been half a fix.
+
+- `requivo brief|prd|criteria|epic|release|stories|estimate` on a session that has never been
+  analysed now refuses with a structured error naming the remedy, instead of exiting on a raw
+  `AttributeError` (#152). Found by the new type-checking leg on its first run.
+- `SessionSnapshot.model` is `None` before the first model — the field says so — and
+  `DiscoveryService.generate`/`reason` unpacked it and handed it to the provider unchecked. Nothing
+  was lost and nothing was spent: every generator builds its user message as `out.model_dump_json(…)`,
+  so it failed while assembling the prompt, before the client was touched.
+- The rule existed in exactly one place, and it was a Web route: `if meta.current_revision == 0`
+  renders an "offer to run discovery" page. One surface out of three. It is in `DiscoveryService`
+  now, as the mirror of `_require_revision_zero` — whose own docstring already says a business rule
+  enforced by a hidden button is not enforced. Hiding the button is good on top of an enforced rule
+  and is not one.
+
+- `scripts/golden_diff.py` reported "no change above the noise floor" and stopped, before the
+  assessment lens ran (#162). A `prompts/brief.md` edit that moved the complexity verdict or the
+  challenges without moving a single slot therefore reported as no change — and `--brief` doubles
+  that request's calls, so whoever paid for the assessment capture was exactly who was told there
+  was nothing to see. A lens that never ran, reported as a lens that ran and found nothing.
+- Every lens now runs on every request, and the run's verdict is the **union** of the ones that ran:
+  the strongest signal any of them found. The slot section's flat line decides only whether that
+  section is a dash. Measured on the committed `leave-approval` baseline with two challenge themes
+  dropped and no slot moved: before, one line and a verdict of `flat`; after, both lost themes named
+  and a verdict of `moved`.
+- A lens that could not look now says so on its own line rather than being folded into a silent
+  pass, and moves no verdict. `assessment · not captured — this lens did not look` is a different
+  sentence from `assessment · verdict and challenges unchanged`; a baseline that *had* an assessment
+  where the new capture has none is louder — `assessment ! … nothing to compare`, because committing
+  it would drop a lens — and still grades as nothing measured. A first capture prints its assessment
+  consensus, since there is nothing to compare against and the readout is the finding.
+- That last state was graded as a strong signal in the first cut of this change, by analogy with the
+  interactive lens, and review caught it. The analogy fails: interactivity is declared in
+  `requests.md` and reproduced on every capture, while `--brief` is a per-invocation flag no capture
+  remembers, and all six single-pass baselines in `fixtures/golden/` carry one. Re-capturing the set
+  without `--brief` is the documented workflow for an `engine.md` or context-card change, so the
+  grading would have reported six strong signals on a run where nothing moved — the noise this file
+  exists to suppress, manufactured by the lens meant to catch it.
+- Not tallied in the summary line the way `not re-captured` is: a lens's own state belongs on the
+  per-request line, and a counter that fires on nearly every run is one nobody reads.
+
+- `scripts/golden_run.py` and `scripts/golden_diff.py` printed non-ASCII across roughly sixteen
+  lines and never reached `streams.py`'s reconfiguration, which ran only from `cli.app()` (#164). On
+  a Windows cp1252 console either raised `UnicodeEncodeError` at the print — after the work it was
+  reporting had already landed. `golden_run.py` is the script that spends real API calls, so a
+  capture that completed fifteen of them and wrote its runs file could still die rendering the
+  summary, leaving a traceback standing where a result should be.
+- Fixed as the class rather than the instances: both scripts now call `golden_lib.configure_output()`
+  first thing in `main()`, which routes them through `streams.py` with `errors="backslashreplace"` —
+  never `replace`, because a reader cannot tell a substituted character from one that was never
+  there. Sweeping the glyphs out of the two files would have fixed today's strings and left the next
+  print to reopen it.
+- No `EXIT_RENDER_FAILED` arm for these two, deliberately. `golden_diff.py` neither calls nor writes
+  anything, so a guard there could never fire; `golden_run.py` writes each request's baseline before
+  any summary print and already catches per-request failure, so its work is durable by the time a
+  render could die. What remains is `configure_stream`'s own third state — a stream it could not
+  reach is the one that can still crash — and that is reported on stderr as a line somebody can
+  read, rather than as an exit code nothing under `scripts/` consumes.
+- The other entries under `scripts/` were checked in the same pass. `requivo_cli.py` delegates to
+  `cli.app()` and was already covered; `dependency_floor.py` and `plugin_cli_drift.py` print no
+  non-ASCII literal and run only on `ubuntu-latest` in CI, so neither was changed.
+
+- The terminal no longer invents a third readiness state (#165). Readiness is one boolean — the Core
+  publishes exactly `{"ready": not blockers}` and `docs/requirements-model.md` says outright that
+  Requivo does not invent graded "nearly ready" levels — but `render/terminal.py` branched on the
+  *length* of the blocker list in two places and produced `Nearly ready` and `⚠ Nearly — N to
+  confirm`. A session with two unresolved high-impact topics was told *Nearly ready* by `requivo
+  status` and *Not ready to produce a reliable scope* by Requivo Web, off the same `model.json` at
+  the same revision. Both splits are gone; the verdict is binary, on the same predicate as
+  everywhere else.
+- The blocker *count* is gone from the verdict too. It is what the deleted arm branched on, and the
+  blocking topics are named on the same line, so it added nothing that was not already there and it
+  was the raw material the invented state was made of.
+- One boolean is no longer asked as three different questions. `READY FOR IMPLEMENTATION?` in the
+  terminal and `Ready to estimate?` in the decision brief both branched on the same blocker list as
+  *are we ready?* does everywhere else, which invited a reader to believe they were three
+  thresholds. Both now use the wording Requivo Web already ships — the heading *Are we ready?* and
+  the two badges *Ready* and *Not ready*. No new readiness dimension was introduced; if *ready to
+  estimate* is ever a genuinely different threshold it gets modelled explicitly.
+- Inside the decision brief the same boolean is stated as a consequence rather than as a second
+  question: **Not ready** now says the brief is a draft and names the topics that can still move the
+  solution. Asking *ready for a first decision brief* there would be circular, since the reader is
+  holding one.
+- The contract is pinned across surfaces for the first time, in `tests/test_readiness_contract.py`.
+  It asserts as a property — the verdict a surface renders is a function of `bool(blockers)` and of
+  nothing else — over the terminal status block, the per-turn view, the decision brief and the Web
+  view model, at 0, 1, 2, 3 and 5 blockers. Nothing pinned it before, which is how the terminal
+  contradicted two other surfaces and a documented rule for a whole release without a single leg
+  going red.
+- Not a compatibility break: terminal output layout is listed under *what is explicitly not stable*
+  in `docs/compatibility.md`, and the `--json` payload's `readiness.ready` boolean is unchanged.
+
+- `scripts/plugin_cli_drift.py` no longer lets a plugin directory name forge a GitHub Actions
+  workflow command in the CI log (#176). The script runs as a `--github` step in
+  `.github/workflows/plugin-validate.yml`, which triggers on `pull_request` with no `paths` filter,
+  so a fork pull request controls that name — and a skills entry called
+  `brief##[error]title=...`, **with no newline anywhere in it**, reached a bare `print` and produced
+  an annotation stating something no tool concluded.
+- The runner parses its log twice and this repository had been reasoning about one of the two
+  parsers. `ActionCommand.TryParseV2` handles `::name::data` and calls `message.TrimStart()` before
+  testing the prefix, so a line start is what matters and indenting contains nothing.
+  `ActionCommand.TryParse` handles the legacy `##[name]data` form and is `message.IndexOf("##[")` —
+  no anchor at all, needing neither a line start nor a newline. Collapsing whitespace defends the
+  first form and does nothing whatever about the second.
+- The remedy is sanitising at the point the value enters rather than fencing the region it is
+  printed in, which is the opposite call from #147 one file over, for a stated reason: there the
+  fenced text was a third-party binary's whole output and the step's own annotation tells a reader
+  to go and read it, so readability was the deliverable. Here the untrusted text is a bounded set of
+  named values — a directory name, a path in an error, a verb name — that already funnel through one
+  chokepoint, and a mangled hostile filename costs nothing. A fence would also have had to be opened
+  and closed around five `print` sites interleaved with the script's own annotations, and anything
+  leaving the region without closing it turns command processing off for the rest of the step —
+  including the `could not look` annotation this script emits when it crashes.
+- `_log_safe` is that chokepoint. It collapses whitespace and then spaces both command keys apart,
+  `##[` to `## [` and `::` to `: :`, the same spelling the workflow already uses on
+  `claude --version`. Breaking `::` as well as `##[` is deliberate: killing newlines already meant a
+  value could not *start* a line, but that was a guarantee about the layout of five format strings
+  rather than about the value, and it would evaporate the day one of them printed a label first.
+- A second instance of the same class, found by sweeping the file rather than by being reported:
+  `parse_surface` reads the probe's stdout, and the tree half of that probe introspects
+  `requivo.cli._build_parser()` in the **working tree**, which a fork pull request edits as freely as
+  it names a directory. A verb or subcommand name carrying a newline put the remainder at column 0 —
+  reaching both parsers rather than only the unanchored one. Those names are sanitised where they
+  enter now, which costs nothing, since a name this changes could never have matched an
+  `INVOCATION_RE` token anyway.
+- The guard that should have caught all of it was itself checking the wrong thing.
+  `_assert_no_forged_workflow_command` in `tests/test_plugin_cli_drift.py` tested
+  `line.startswith("::")` and nothing else, so both end-to-end tests leaning on it ran, checked one
+  of the two parsers, and reported a pass over a live vector. It models both now, and it has a
+  must-fire control of its own, because a guard nobody can make fail cannot be told from one that
+  always passes.
+- The Windows skip in `_forging_dir` was unsound and its docstring said why in reverse: it claimed
+  the forging vector *is* the newline, so a platform refusing the character refused the vector with
+  it. NTFS refuses the newline and does not refuse `brief##[error]...`. The skip is narrower now and
+  names only the half it really covers, and the half NTFS cannot refuse has an end-to-end test that
+  runs on every platform.
+- `changelog.d/139.fixed.md` and `changelog.d/147.fixed.md` are corrected in the same change. Both
+  are unreleased, and the first claimed a plugin directory name can no longer forge a line at column
+  0 of the CI log — a guarantee the code did not provide. Folding that into a tag would have shipped
+  a false guarantee, which is worse than shipping the gap.
+- Three more places said the same thing and are corrected too, all found by review of this diff
+  rather than by the issue: `tests/test_workflow_untrusted_output.py`'s module docstring said this
+  script "had already been hardened against exactly this class", which is the sentence #176
+  disproves; and `scripts/golden_lib.py` and `tests/test_golden_lib.py` both cited `_one_line` as
+  the validated pattern for a sink a CI runner parses, where it is now only half of one. A neighbour
+  claiming a guarantee its neighbour does not provide is how this survived a review the first time.
+- No user-visible change and no build's verdict moves: `scripts/` is not packaged, the leg is
+  `continue-on-error`, and the gate steps beside it take their answer from the process exit code
+  rather than from the log. What this closes is a run's annotations being able to state something no
+  tool concluded.
+
+- The two gate steps and the CLI install step in `.github/workflows/plugin-validate.yml` no longer
+  run a third-party binary straight into a CI log that parses it (#177). #147 fenced the advisory
+  drift step in the same file and left these three, and they are the ones that matter most: the two
+  gates are required, branch-protected checks, so a forged annotation lands on a run a reader is
+  more likely to believe **because** it is required.
+- The vector was measured rather than reasoned, twice — once on the issue and again on this branch,
+  against `claude` 2.1.241. `claude plugin validate --strict` echoes an unknown manifest field name
+  **verbatim, twice**, in `> <name>: Unknown field '<name>'. Claude Code ignores it at load time.`,
+  so a field called `benign##[error]title=X::y` puts `##[` at column 10 of a line the runner reads
+  with an unanchored `IndexOf("##[")`. No newline is needed and no line start is needed. The same
+  holds for the marketplace catalog on the second gate. A fork pull request edits both manifests.
+- The `::` form stays contained for a field name — a newline inside one comes back collapsed to a
+  space, which is what #147 measured and it is still true — but that measurement never covered the
+  legacy form, which needs neither containment.
+- `::stop-commands::` with an unguessable token, the same mechanism #147 used, and deliberately not
+  the sanitise-at-capture route #176 took one file over: a gate's output is what a human reads when
+  the gate is red, so spacing `##[` apart would trade a forging problem for an unreadable failure.
+  Inside the fence the log is byte-identical to what the validator printed.
+- **The part that made this its own change rather than a rider on #147 is the exit code.** `echo`
+  clobbers `$?`, so a fence written as open / run / close silently reports success for a failed
+  gate — trading a log-forging problem for a required check that cannot fail, which is strictly
+  worse than the defect. Each step now captures the code with `|| code=$?` while it still exists and
+  ends `exit "$code"`.
+- That also takes the containment off the shell's flags. GitHub runs a `run:` block with
+  `bash -e {0}` when the workflow names no `shell:` key, and this one names none — but nothing here
+  rests on that claim about somebody else's runner, and the tests execute each block under `bash -e`
+  and under a plain `bash` to show it.
+- The guard is over the class rather than the three instances. `tests/test_workflow_untrusted_output.py`
+  now enumerates every step in the workflow that starts `claude`, in both the `run: |` and the
+  one-line `run:` form, and requires each to fence its output or capture it — so a fourth step added
+  later goes red under its own name instead of being found the way these three were. A scanner that
+  understood only block scalars would have reported this very defect as absent.
+- The extractor that class guard rests on had a blind spot of its own, found by review of this diff
+  rather than by anything going red. It matched the block scalar only as the exact string `run: |`,
+  so a step written `run: |-` — the ordinary way to drop a trailing newline — fell through to the
+  one-line branch, which took `|-` as the whole command and discarded the body. An unfenced step
+  written that way reached neither the scan nor the step count, so the guard against *a fourth step
+  added later* would have answered cleanly about a step it never saw. Every block-scalar header is
+  read now, a nested sequence inside a step no longer clears the step's name, and both are asserted
+  against YAML the real workflow does not contain — a guard exercised only on a file that happens
+  not to use the form proves nothing about the form.
+- Three must-fire controls, because every other assertion here is must-not-fire and passes against a
+  harness that never ran: strip the fence and the three forged shapes reappear; strip `exit "$code"`
+  and a gate that failed reports success; and the failing-CLI case asserts exit **7** specifically
+  rather than merely non-zero, since a fence that lost the code and then died for another reason
+  would satisfy `!= 0` and prove nothing.
+- No user-visible change and no build's verdict moves. A fork pull request carries a read-only token
+  and no secrets, and the gates take their answer from the process exit code rather than from the
+  log. What this closes is forged annotations and log-command effects — `##[error]`, or a
+  `##[group]` that hides the output beneath it — on a required check.
+
+- Every workflow now declares the token it wants (#178). `plugin-validate.yml`, `ci.yml` and
+  `secret-scan.yml` had no `permissions:` block at all, so every job in them took the repository
+  default — read/write in a repository whose owner has never changed it — while doing nothing but
+  checking out, installing tools and running pytest.
+- Weight, honestly: nothing is known to be exploitable through this today. #176 and #177 are where
+  the reachable vectors were. This is defence in depth, and what it buys is that a future step
+  reaching for a token it should not have fails rather than succeeding quietly.
+- Declared at workflow level rather than per job, so a job added later inherits read-only instead of
+  falling back to the default. `oss-changelog.yml` already reached that answer and these match it.
+- `secret-scan.yml` is the one that is not `contents: read` alone. gitleaks-action's entire use of
+  `GITHUB_TOKEN` is `pulls.createReviewComment` and its `GITLEAKS_ENABLE_COMMENTS` defaults to true,
+  so a bare `contents: read` would have silently stopped the scanner reporting on the pull request
+  it had just scanned. Read out of the action's own README at both `master` and the `v3` tag this
+  workflow pins, rather than inferred from the action's name. Turning the comments off instead would
+  be a narrower grant and a different product decision, which nobody asked for.
+- `publish.yml` already declared `id-token: write` at job level for PyPI Trusted Publishing, and it
+  keeps that shape rather than gaining a workflow-level block: naming any permission on a job
+  **replaces** the workflow-level set rather than adding to it, so a top-level grant here would be
+  discarded by the job's own and read as a guarantee it does not give. What it gains is
+  `contents: read` beside the OIDC grant, because `actions/checkout` reads the tag being published
+  and nothing else in that job granted it — without it `contents` is implicitly `none` and the
+  checkout works only because the repository is public, which is a property of the repository rather
+  than of the file, and the wrong thing for a publish to depend on.
+- `tests/test_workflow_permissions.py` is the guard, and it is why this is one change over four
+  files rather than four edits. Sweeping a class in one file and missing the one beside it inside
+  the same feature is exactly the shape #147 was; the edits are a few lines each, and the thing
+  worth keeping is that the fifth workflow cannot be added without answering the question.
+- The guard checks two things and both directions of each. Every workflow declares permissions
+  somewhere, with per-job scoping allowed only for a file that says in `_JOB_SCOPED` why it cannot
+  declare them at the top; and every `write` scope granted anywhere has a written reason in
+  `_WRITE_GRANTS`, since `permissions: write-all` satisfies the first check while granting more than
+  the default it replaced. An entry in either list whose call site is gone goes red as stale prose.
+- It has a must-fire control. Three must-not-fire assertions over a tree that is already clean
+  cannot tell a working guard from one that returns an empty list whatever it is shown, so the
+  offending shapes are put in front of it directly — a silent workflow, one whose only grant is
+  inside a job, an unexplained `write`, `write-all`, and a clean one so a guard that flagged
+  everything would not read as coverage either.
+- No user-visible change and nothing about what any workflow prints; that is #147, #176 and #177.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added
@@ -2623,7 +3365,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/jbkkz/requivo/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jbkkz/requivo/releases/tag/v1.1.0
 [1.0.1]: https://github.com/jbkkz/requivo/releases/tag/v1.0.1
 [1.0.0]: https://github.com/jbkkz/requivo/releases/tag/v1.0.0

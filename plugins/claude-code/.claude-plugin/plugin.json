@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "requivo",
   "displayName": "Requivo",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Requirements discovery for Claude Code. Turn a vague feature request into a structured, versioned requirements model that separates what is known, what is assumed and what is still open. Write a decision brief or a PRD from it, or hand the same model to the requivo CLI for acceptance criteria and tracker epics. Reasoning runs in your Claude Code session, so there is no API key to configure.",
   "author": {
     "name": "jbkkz"
