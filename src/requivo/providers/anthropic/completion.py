@@ -44,8 +44,9 @@ def _record(rec: CallRecord) -> None:
     """Price the call at Anthropic's rates, then file it against whatever ledger is active.
 
     The one place this provider meets `requivo.usage`, so the vendor's price table is consulted here
-    and the ledger stays neutral (#167). Idempotent in the sense that matters: `price_call` only
-    fills a rate that is not already set.
+    and the ledger stays neutral (#167). Called exactly once per `CallRecord` -- `_complete` builds
+    one and reaches one exit with it -- which is why `price_call` needs no first-write-wins guard and
+    deliberately has none.
     """
     record_call(price_call(rec))
 

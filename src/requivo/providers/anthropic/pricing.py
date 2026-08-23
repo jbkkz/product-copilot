@@ -62,6 +62,14 @@ def price_call(rec: CallRecord, on: date | None = None) -> CallRecord:
     Both fields are set together or neither is, which is invariant 6 applied to a price: a record
     carrying a rate with no table date would print an estimate that reads exactly like a dated one.
     An unknown model leaves both None and `cost_usd()` returns None rather than guessing.
+
+    **It re-stamps unconditionally, and that is deliberate rather than an oversight.** Called twice
+    on one record, the second call wins. A first-write-wins guard was considered and rejected: the
+    only caller is `_record` in `completion.py`, which runs exactly once per `CallRecord` because
+    `_complete` builds one record and reaches one exit with it, so the guard could never fire and a
+    guard that provably cannot fire is worse than none -- it reads as protection against a case
+    nobody has. What this function means is *price this call at Anthropic's rates*, and that is a
+    question with one answer, not an answer that depends on whether somebody asked before.
     """
     rate = price_per_mtok(rec.model, on)
     if rate is not None:

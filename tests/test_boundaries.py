@@ -13,8 +13,14 @@ imported `run`, `advise` and `estimate`, and the interactive `discover` branch d
 calls of its own before handing the result to `DiscoveryService` for the write, while CLAUDE.md, the
 README and docs/architecture.md all stated the opposite rule.
 
-The surface half of the *provider* rule is scoped to `cli.py`; `web/` and `deterministic/` are not
-guarded for that one, and that is stated rather than left to read as clean.
+The surface half of the *provider* rule covers `cli.py` and `render/`; `web/` and `deterministic/`
+are not guarded for that one, and that is stated rather than left to read as clean. `render/` joined
+with #167, and the reason it had to is the reason this sentence is worth keeping accurate: for a
+release it read "scoped to `cli.py`" and was correct, while `render/terminal.py` imported
+`PRICING_AS_OF` and `UsageLedger` from `providers.anthropic` and no test in this file could see it.
+The two still outside are the ones with a real claim -- `web/config.py` probes for the SDK by name,
+and `deterministic/` is the offline half that reaches no provider at all -- but "has a real claim"
+is what an allowlist entry is for, and neither has been written.
 
 The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
 `core.persistence` -- is #76, and it is guarded now, over all three surfaces. It needed a different
