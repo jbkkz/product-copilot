@@ -28,7 +28,17 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/p/requivo
+    # Job-level rather than workflow-level, and deliberately not matched to the one-line
+    # `contents: read` the other three workflows took under #178: naming any permission on a job
+    # replaces the whole set rather than adding to it, so a workflow-level block here would be
+    # discarded by this one and read as a guarantee it does not give.
+    #
+    # `contents: read` is stated because this job checks out a tag and nothing else here grants it.
+    # Without it `contents` is implicitly `none` and the checkout works only because the repository
+    # is public — a property of the repository rather than of this file, and the wrong thing for a
+    # publish to depend on. Widening none → read cannot affect what the job is able to publish.
     permissions:
+      contents: read    # `actions/checkout` reads the tag this publishes; nothing here writes
       id-token: write   # mint the OIDC token Trusted Publishing uses — this is what replaces a token
     steps:
       - uses: actions/checkout@v7

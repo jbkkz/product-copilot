@@ -98,6 +98,18 @@ concurrency:
   group: plugin-validate-${{ github.ref }}
   cancel-in-progress: true
 
+# Declared at workflow level rather than per job, so a job added later inherits read-only instead
+# of falling back to the repository default -- which is read/write in a repository whose owner has
+# never changed it (#178). Neither job here writes anything through the API: they check out, install
+# tools, and annotate the run, and an annotation is a log line rather than a token-authenticated
+# call. `.github/workflows/oss-changelog.yml` reached the same answer first and this matches it.
+#
+# A `pull_request` from a fork already gets a read-only token whatever this says. The grant that
+# matters is the one on a BRANCH pull request and on `push: main`, where the default is otherwise
+# read/write for steps that have no use for it. See tests/test_workflow_permissions.py.
+permissions:
+  contents: read
+
 env:
   # The pinned gate. Bump deliberately, and read the advisory step's output when you do.
   CLAUDE_CLI_VERSION: "2.1.238"
@@ -124,18 +136,88 @@ jobs:
             echo "found $f"
           done
 
+      # ── Everything below runs a third-party binary into a log the runner parses (#177) ──────
+      #
+      # Two forms, and neither of the obvious defences covers both: `::name::` is tested after the
+      # runner calls `TrimStart()`, so indenting contains nothing, and the legacy `##[name]` is an
+      # unanchored `IndexOf("##[")`, so collapsing onto one line contains nothing either. A fork
+      # pull request controls the field names in `plugins/claude-code/.claude-plugin/plugin.json`
+      # and in `.claude-plugin/marketplace.json`, and `claude plugin validate` echoes an unknown
+      # field name VERBATIM, twice, in its warning line. Measured 2026-08-23 against `claude`
+      # 2.1.241: a field named `benign##[error]title=X::y` comes back with `##[` at column 10 of a
+      # line the runner acts on. The advisory step below has been fenced since #147/#175 for this
+      # same reason; these three steps were the ones it did not cover.
+      #
+      # ── Why fencing a GATE is not the same edit as fencing the advisory step ─────────────────
+      #
+      # The advisory step is `continue-on-error: true` and ends `exit 0`, so nothing it does with
+      # `$?` matters. These are the other shape: the two gates are required, branch-protected
+      # checks whose verdict IS the process exit code, and `echo` clobbers `$?`. Written as
+      # open-fence / run / close-fence, a failed gate would report success -- trading a log-forging
+      # problem for a required check that cannot fail, which is strictly the worse outcome. So the
+      # code is captured while it still exists and re-raised as the step's own, which is why each
+      # block below ends `exit "$code"`.
+      #
+      # That re-raise is also what takes the containment off the shell's flags. GitHub runs a
+      # `run:` block with `bash -e {0}` when the workflow names no `shell:` key, and this file
+      # names none -- but nothing here depends on it: `|| code=$?` plus an explicit `exit` behaves
+      # identically with errexit off. `tests/test_workflow_untrusted_output.py` runs each of these
+      # blocks both ways rather than trusting a claim about somebody else's runner.
+      #
+      # ── Fenced rather than sanitised, and that is a decision ─────────────────────────────────
+      #
+      # `claude --version` inside the advisory step is squashed at capture, because it is
+      # interpolated into lines emitted outside the fence. Nothing here can take that route: a
+      # gate's output is what a human reads when the gate is red, and spacing `##[` apart or
+      # collapsing newlines would trade a forging problem for an unreadable failure. Inside a fence
+      # the log is byte-identical to what the validator printed.
+      #
+      # If the shell dies between the two fence lines the fence stays open and later annotations
+      # are suppressed. That is the right way to fail here -- an annotation lost rather than one
+      # forged -- and it is why no `trap` closes the fence: a trap that fires on an unexpected
+      # death would re-enable command processing at exactly the moment nobody knows what state the
+      # step is in.
+      #
+      # See test_every_step_that_runs_the_cli_contains_what_it_prints,
+      # test_a_gate_step_reports_the_cli_failure_through_its_fence, and
+      # test_removing_the_exit_line_lets_a_failing_gate_report_success.
       - name: Install the pinned Claude Code CLI
         run: |
-          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
-          claude --version
+          set -u
+          fence="requivo-cli-$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -dc 'a-f0-9')"
+          # A token the fenced text could guess would let it resume command processing and then
+          # forge, so a machine with no readable /dev/urandom gets a worse token rather than an
+          # empty one -- and says so by being a different shape.
+          [ -n "${fence#requivo-cli-}" ] || fence="requivo-cli-noentropy-$$-${RANDOM}${RANDOM}"
+          echo "::stop-commands::${fence}"
+          code=0
+          { npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" && claude --version; } || code=$?
+          echo "::${fence}::"
+          exit "$code"
 
       # The gate. Both manifests, both strict. The plugin manifest is the one a marketplace
       # review runs the same check on; the catalog is the one our own install path reads.
       - name: Validate the plugin manifest (gate)
-        run: claude plugin validate --strict ./plugins/claude-code
+        run: |
+          set -u
+          fence="requivo-gate-$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -dc 'a-f0-9')"
+          [ -n "${fence#requivo-gate-}" ] || fence="requivo-gate-noentropy-$$-${RANDOM}${RANDOM}"
+          echo "::stop-commands::${fence}"
+          code=0
+          claude plugin validate --strict ./plugins/claude-code || code=$?
+          echo "::${fence}::"
+          exit "$code"
 
       - name: Validate the marketplace catalog (gate)
-        run: claude plugin validate --strict .
+        run: |
+          set -u
+          fence="requivo-gate-$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -dc 'a-f0-9')"
+          [ -n "${fence#requivo-gate-}" ] || fence="requivo-gate-noentropy-$$-${RANDOM}${RANDOM}"
+          echo "::stop-commands::${fence}"
+          code=0
+          claude plugin validate --strict . || code=$?
+          echo "::${fence}::"
+          exit "$code"
 
       # Advisory only — see point 4 above. This step must never fail the job; what it
       # produces is an annotation on the run.
