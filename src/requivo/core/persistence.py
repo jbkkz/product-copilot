@@ -31,7 +31,7 @@ from requivo.core.errors import (
     UnsupportedFormatVersionError,
     UnsupportedSchemaVersionError,
 )
-from requivo.paths import output_root, session_root
+from requivo.paths import lock_root, output_root, session_root
 
 try:  # POSIX
     import fcntl
@@ -141,6 +141,26 @@ def _no_session(slug: str) -> SessionNotFoundError:
     return SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
 
 
+def lock_path(slug: str) -> Path:
+    """The write lock for `slug`: `<workspace>/.requivo/locks/<slug>.lock`.
+
+    **Outside the session directory, which is the whole of #113's fix.** `lock_root()` carries why;
+    the short version is that a lock inside a directory `session import --force` renames is a claim
+    on an inode that every writer under it has already stopped agreeing with.
+
+    Validated exactly as `canonical_dir` and `artifact_path` validate theirs, and for the same
+    reason: the slug reaches here from `session_lock`, whose callers include the service layer and
+    therefore, under invariant 14, an external consumer. The pattern already makes a separator or a
+    dot segment unrepresentable; `is_contained` is the belt to that pair of braces, and it is the
+    one shared statement of that rule rather than a fourth local one."""
+    root = lock_root()
+    p = root / (validate_slug(slug) + ".lock")
+    if not is_contained(p, root):
+        raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
+                               details={"slug": slug})
+    return p
+
+
 @contextmanager
 def session_lock(slug: str) -> Iterator[None]:
     """Hold the exclusive lock on a session for the duration of the block.
@@ -149,27 +169,42 @@ def session_lock(slug: str) -> Iterator[None]:
     core calls inside it (`save_revision`, `save_session_artifact`) re-enter without deadlocking.
     Across threads and across processes the lock is genuinely exclusive.
 
-    **A session must already exist to be locked**, and this function creates nothing. It used to
-    `mkdir` the session directory before opening `.lock` inside it, which made the guard a producer of
-    the very state it guards: locking a slug with no session left behind a directory holding only
-    `.lock`, invisible to `list_session_slugs` (no session.json) and non-empty, so the next
-    `create_session` lost its rename and refused a slug nobody had ever taken (#22). Under invariant 11
-    that rename is the *only* claim on a slug; a second producer makes the claim decidable by
-    something other than the claim. So the lock refuses instead, and a failed lock leaves the store
-    exactly as it found it.
+    **The lock file lives outside the session** (`lock_path`), so this function no longer touches the
+    session directory at all. That is what lets `session import --force` hold it across the swap it
+    could not hold it across before (#113), and it retires #22's coupling permanently rather than
+    guarding it: `session_lock` is structurally incapable of producing a directory under the session
+    root, so it can never again make `create_session`'s rename — the only claim on a slug under
+    invariant 11 — lose to a ghost nobody created.
 
-    Removing the directory afterwards was the other repair, and it is worse: unlinking a `.lock` a
-    concurrent process is holding is legal on POSIX and silently breaks mutual exclusion — the waiter
-    proceeds holding a lock on an unlinked inode. Refusing costs an ordering change instead, and the
-    error is the same `SessionNotFoundError` the `read_meta` immediately inside every one of these
-    blocks already raised, so what moves is when it is raised, not what the caller is told.
+    **A session must still exist to be locked, and the check that decides that is taken *after* the
+    lock is held.** It used to be closed by accident rather than by ordering: the lock file lived
+    inside the session, so a directory deleted after the check made `os.open` raise
+    `FileNotFoundError` and that arm mapped it onto "no such session". Opening
+    `.requivo/locks/<slug>.lock` establishes nothing about `<slug>`, so the accident is gone and the
+    check has to earn its place — which it does by moving under the lock, where invariant 9's rule
+    ("a precondition is held across the writes it authorises") applies to it like any other.
+    `test_a_session_deleted_before_the_lock_is_granted_is_refused` goes red if it moves back out.
 
-    **The ones already on disk are still there, and are no longer invisible.** This stopped new ones;
-    it found none of the old, and neither could anything else, so the only symptom was the next
-    `create_session` on that name losing its rename. `list_non_session_entries` is the half of the
-    store's listing that sees them, and `doctor` reports it — describing what is there and never
-    concluding what it is, because deleting one on sight is the same mistake pointing the other way
-    (#67)."""
+    **The check before the open stays, and is deliberately not authoritative.** It buys two things
+    and decides nothing: a slug with no session refuses without leaving an empty lock file behind,
+    and — the reason it is worth a line — `os.open` is never reached for a name that is not a
+    session, which on Windows keeps a slug spelling a reserved device (`con`, `nul`, `lpt1`) out of
+    `os.open` entirely. `validate_slug` does not exclude those, and such a name can never be a real
+    session on Windows anyway because `create_session`'s directory is refused first; this keeps the
+    error for one immediate and correct instead of a 30-second `SessionLockedError` on a console
+    handle. It can be wrong in exactly one direction — `_swap_in` holds this lock across two renames
+    and `<root>/<slug>` does not exist for the microseconds between them, so a caller sampling that
+    instant refuses `session_not_found` about a session that is merely being replaced. That window
+    is the one the pre-#113 code already had at its `os.open`, and a refusal is the safe direction:
+    this check can decline a lock, never grant one.
+
+    Neither the lock file nor a session directory is ever removed here. Unlinking a lock file a
+    concurrent process may be holding is legal on POSIX and silently breaks mutual exclusion — the
+    repair #22 rejected, and the same reason `_swap_in` could not be written as a contents swap.
+
+    **Legacy `.lock` files inside existing session directories are inert.** Nothing opens them now,
+    `session export` already skips every dot-prefixed entry, and `check_session_dir` does not look
+    for unexpected files. They cost a few empty bytes and are safe to delete."""
     depths: dict[str, int] = getattr(_held_locks, "depths", None) or {}
     _held_locks.depths = depths
     if depths.get(slug):
@@ -180,21 +215,25 @@ def session_lock(slug: str) -> Iterator[None]:
             depths[slug] -= 1
         return
 
-    d = canonical_dir(slug)
-    if not session_exists(slug):
+    if not session_exists(slug):     # cheap, non-authoritative — see above
         raise _no_session(slug)
+    p = lock_path(slug)
     try:
-        fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-    except FileNotFoundError as e:
-        # The session was removed between the check and the open. Not the check being pointless: it
-        # answers a directory that is a *file*, or that holds no session.json, both of which reach
-        # `os.open` as something other than FileNotFoundError. This arm closes the race the check
-        # cannot, and closes it by refusing rather than by re-creating what was deleted.
-        raise _no_session(slug) from e
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        # Not `SessionNotFoundError`: the session's existence is not what this failed to establish.
+        # The old code mapped a `FileNotFoundError` here onto "no such session" because the lock file
+        # lived inside the session; it no longer does, so that mapping would now be a sentence about
+        # a session naming a cause that is not the cause — the shape #114 was filed for.
+        raise SessionUnreadableError(
+            f"could not open the write lock for session '{slug}': {e}", details={"slug": slug}) from e
     acquired = False
     try:
         _acquire(fd, slug)
         acquired = True
+        if not session_exists(slug):
+            raise _no_session(slug)
         depths[slug] = 1
         yield
     finally:

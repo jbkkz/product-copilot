@@ -574,7 +574,7 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
     return store.validate_slug(slug)
 
 
-def _swap_in(extracted: Path, target: Path, slug: str) -> None:
+def _swap_in(extracted: Path, target: Path, slug: str, repo: SessionRepository) -> None:
     """Replace an existing session directory with a freshly extracted one, reversibly.
 
     A swap, not a delete-then-move. `rmtree` followed by a rename leaves nothing at all if the
@@ -584,22 +584,53 @@ def _swap_in(extracted: Path, target: Path, slug: str) -> None:
 
     **Only ever called for a session the caller passed `--force` for**, and never for a slug that was
     free at the guard — that arm claims by rename instead, because a session that appeared during the
-    extraction window has an owner who never asked for it to be replaced (#111).
+    extraction window has an owner who never asked for it to be replaced (#111). That is why taking
+    `session_lock` here needs no relaxation of the rule that a session must exist to be locked: this
+    function is unreachable unless one does.
 
-    It does not run under `session_lock`, and cannot: the lock is an open handle on `.lock` inside
-    the very directory being renamed, which Windows refuses. See the call site for what that costs
-    and what it does not."""
-    backup = target.with_name(f".{target.name}.replaced-{os.getpid()}")
-    target.replace(backup)
-    try:
-        extracted.replace(target)
-    except OSError as e:
-        backup.replace(target)
-        raise ImportMoveFailedError(
-            f"could not move the imported session into place: {e}"
-            " — the session that was already here has been restored",
-            details={"slug": slug}) from e
-    shutil.rmtree(backup, ignore_errors=True)
+    **It runs under `session_lock`, which it could not do for a release** (#113). The lock used to be
+    an open handle on `.lock` *inside* the directory being renamed, which Windows refuses — #112's
+    four Windows legs died on `WinError 5`. It now lives in `lock_root()`, outside every session, so
+    the swap is serialised against the writers of the session it replaces like any other compound
+    write (invariant 9), and `os.replace` sees no open handle.
+
+    Three things the lock closes, and the third is the one the issue did not name:
+
+    1. a writer inside `save_revision` no longer keeps writing by pathname into the *imported*
+       directory, stamping the replaced session's identity and revision log onto it;
+    2. a third process no longer opens a fresh lock file in the imported directory and acquires a
+       lock the first writer still holds on the old, since-unlinked inode;
+    3. between the two renames below `<root>/<slug>` does not exist, and a concurrent
+       `save_revision` recreated it with `(d / "revisions").mkdir(parents=True, exist_ok=True)`.
+       Both the move and the rollback then failed on a non-empty destination — the rollback raising a
+       bare `OSError` rather than `ImportMoveFailedError` — leaving the user's session stranded at a
+       dot-prefixed name `_scan_session_root` skips and the slug held by a stub containing only
+       `revisions/`. Reproduced before the fix: `session list` reported no sessions at all. So the
+       step-aside, whose whole justification is that it is reversible, was defeated by the same race.
+
+    A window remains between the caller's `repo.exists(slug)` and this lock, and it now ends in a
+    structured `SessionNotFoundError` rather than the bare `FileNotFoundError` `target.replace` used
+    to raise there.
+
+    The lock is taken through `repo.lock`, not `store.session_lock`: *hold this session exclusively*
+    has a backing-neutral form, so the direct call is the one
+    `test_the_surfaces_reach_the_store_only_through_the_named_filesystem_concerns` is right to
+    refuse. The two `Path.replace` calls below stay direct, because moving a directory onto another
+    is genuinely about paths — the justification the sibling `canonical_dir` call already carries.
+
+    Pinned by `test_a_forced_import_serialises_against_a_concurrent_writer`."""
+    with repo.lock(slug):
+        backup = target.with_name(f".{target.name}.replaced-{os.getpid()}")
+        target.replace(backup)
+        try:
+            extracted.replace(target)
+        except OSError as e:
+            backup.replace(target)
+            raise ImportMoveFailedError(
+                f"could not move the imported session into place: {e}"
+                " — the session that was already here has been restored",
+                details={"slug": slug}) from e
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 def _refuse_a_non_session_destination(target: Path, slug: str, repo: SessionRepository,
@@ -747,29 +778,22 @@ def _cmd_session_import(a, client) -> None:
             else:
                 # `--force` was given against a session that is really there.
                 #
-                # **This swap deliberately does not hold `session_lock`, and the reason is
-                # structural rather than a preference.** The lock is an open handle on `.lock`
-                # *inside* the session directory, and Windows refuses to rename a directory that
-                # contains an open handle — `os.replace` returns `WinError 5`, on all four legs,
-                # every time. Taking the lock here does not serialise the swap; it makes the swap
-                # impossible on half the supported platforms. Holding it somewhere else instead
-                # would be a lock no other writer takes, which serialises nothing.
+                # **The swap holds `session_lock`**, which for one release it could not: the lock
+                # was an open handle on `.lock` inside the very directory being renamed, and Windows
+                # refuses that — `WinError 5` on all four legs (#112). Moving the lock out of the
+                # session (`lock_root()`) is what made the design #112 wanted available, and
+                # `_swap_in` carries the three consequences that closes (#113). Locking somewhere
+                # else *in addition* would have serialised nothing; this is the one lock every
+                # writer already takes.
                 #
-                # So what closes #111 is the arm above and the single decision it rests on, not a
-                # lock. What is no longer possible is losing a session the caller was never asked
-                # about.
+                # What closes #111 is still the arm above and the single decision it rests on, not
+                # this lock: losing a session the caller was never asked about is a question about
+                # which arm runs, and no amount of mutual exclusion answers it.
                 #
-                # **The residue is wider than "the concurrent writer loses its work", which is what
-                # this comment claimed for one release** (#113). `save_revision` resolves the session
-                # directory once and then writes by *pathname*, while `session_lock` holds an fd on
-                # an *inode*. So a writer sitting inside `save_revision` while the swap happens goes
-                # on writing into the newly imported directory — the import silently inherits another
-                # session's revision files and identity — and a third process then locks
-                # `target/.lock`, a different inode from the one that writer holds, and acquires it.
-                # Two writers hold the lock for one slug, which is invariant 9's own failure mode.
-                # Pre-existing, byte-identical at 1.0.0 and 0.11.0, and filed rather than fixed here
-                # because the fix is a change to the swap mechanism and not to this decision.
-                _swap_in(extracted, target, slug)
+                # What `--force` still means, deliberately: a concurrent writer's in-flight work is
+                # lost. It is now lost cleanly — the writer completes, and then the whole session is
+                # replaced — rather than half-landing in the imported directory.
+                _swap_in(extracted, target, slug, repo)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 

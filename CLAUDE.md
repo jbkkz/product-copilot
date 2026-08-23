@@ -93,7 +93,7 @@ all three reach the same services.
 
 ```
 requivo/
-  paths.py         ASSETS (read-only) + workspace_root()/session_root() + output_root() (retired out/)
+  paths.py         ASSETS (read-only) + workspace_root()/session_root()/lock_root() + output_root() (retired out/)
   streams.py       stdout/stderr encoding — one chokepoint, called once by cli.app() (see invariant 16)
   assets/          bundled data shipped in the wheel: prompts/ framework/ context/ demo/
   core/            the deterministic engine — no LLM, no provider, no argv/stdout
@@ -209,6 +209,21 @@ bug that looked like correct behaviour.
    providing none. Every compound mutation runs under `repo.lock(slug)`, taken by the service so the
    whole sequence is one unit. The lock is re-entrant per thread, and OS-held, so a crash releases it.
    Any new multi-step write goes inside it; any scratch file gets a unique name.
+
+   **A lock is a claim on an inode; the writes under it are by pathname, and a rename separates the
+   two.** The lock lived at `<slug>/.lock`, inside the directory `session import --force` renames.
+   So a writer inside `save_revision` went on writing into the *freshly imported* session, and a
+   third process opening the lock found a different inode and acquired it — the check reading as
+   protection while providing none, one layer below where this invariant first found it. Holding the
+   lock across the swap was not available either: an open handle inside a directory is exactly what
+   Windows refuses to rename (#112, four legs, every time). The lock is at
+   `.requivo/locks/<slug>.lock` now — outside every session — so the swap is an ordinary compound
+   write and `os.replace` sees no handle. The general form: **a lock that lives inside the thing it
+   guards guards nothing the moment that thing can be renamed.** Pinned by
+   `test_a_forced_import_serialises_against_a_concurrent_writer`; the cost, an older Requivo in the
+   same workspace locking a different file and not serialising against a newer one, is in
+   `docs/compatibility.md` rather than here, because that page is where every other "two versions,
+   one workspace" promise lives (#113).
 10. **A proposal is not a model, and silence is not deletion.** What a surface sends is a
     `ModelProposal`: the slots are complete (an apply *replaces*, so a partial one is refused, never
     merged), but `decisions`/`challenges`/`opportunities` are tri-state — absent means "not speaking
@@ -235,7 +250,10 @@ bug that looked like correct behaviour.
     session directory in order to put `.lock` inside it, so locking a slug with no session left a
     directory that `list_session_slugs` cannot see and the rename cannot win — a refusal naming a
     session nobody had created. It refuses such a slug now rather than materialising one, which is
-    also why a *failed* lock has to leave the store as it found it (#22).
+    also why a *failed* lock has to leave the store as it found it (#22). The refusal stays as
+    policy, and the structural hazard behind it is gone: since #113 the lock file is at
+    `.requivo/locks/<slug>.lock`, so `session_lock` cannot produce a directory under the session
+    root even in principle.
 
     **That stopped new ones and found none of the ones already on disk**, which nothing could see:
     `list_session_slugs` filters on `session.json`, and `doctor` and `session verify` both reason

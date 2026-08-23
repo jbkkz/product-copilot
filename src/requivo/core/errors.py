@@ -224,12 +224,20 @@ class UnsupportedSchemaVersionError(InvalidSessionError):
 
 
 class SessionUnreadableError(InvalidSessionError):
-    """`session.json` is absent-shaped, truncated, mis-encoded or not JSON. `details`: `{slug}`.
+    """`session.json` is absent-shaped, truncated, mis-encoded or not JSON — **or** the session's
+    write lock could not be opened at all. `details`: `{slug}`.
 
     A fact about the state of the store, not about what the caller sent — which is why it answers 500
     rather than 400. `changelog.d/62` put the raw message text into `session list --json`'s `error`
     field precisely because no code existed for this and *written by a newer Requivo, upgrade* is a
     remedy where a flattened `unreadable` is not. The text stays; a consumer can now branch instead.
+
+    The second condition arrived with #113, when the lock moved to `.requivo/locks/<slug>.lock`. It is
+    the same *kind* of fact — the store, not the request — and it deliberately does **not** answer
+    `session_not_found`: the old code mapped a failed `os.open` onto "no such session" because the
+    lock file lived inside the session, and repeating that mapping now would be a sentence about a
+    session naming a cause that is not the cause, which is the shape #114 exists to remove. A reader
+    who branches on this code must read the message: `docs/compatibility.md` lists both conditions.
     """
 
     code = "session_unreadable"

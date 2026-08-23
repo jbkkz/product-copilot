@@ -29,7 +29,7 @@ from requivo.core.errors import InvalidModelError
 from requivo.core.integrity import IntegrityProblem, check_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
-from requivo.paths import ASSETS, CONTEXT, session_root, user_context_dir, workspace_root
+from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
@@ -96,7 +96,16 @@ def doctor_report() -> dict:
             "version": provider_version,
             "api_key_present": bool(os.getenv("ANTHROPIC_API_KEY")),
         },
-        "workspace": {"root": str(workspace_root()), "sessions": str(session_root())},
+        # `locks` is here because a convention this verb does not report is a convention this verb
+        # answers about the wrong shape (#113). The write lock moved out of the session directory to
+        # `.requivo/locks/`, and it is the one path in the workspace every write touches and nothing
+        # else names: a permission fault there surfaces as `could not open the write lock for
+        # session '<slug>'` on every verb at once, with nothing telling the user which directory to
+        # look at. Additive, so a consumer reading `workspace["sessions"]` is unaffected (invariant 8).
+        # Path only, deliberately: whether it is writable is not probed, because probing means
+        # creating it, and this verb reports rather than makes.
+        "workspace": {"root": str(workspace_root()), "sessions": str(session_root()),
+                      "locks": str(lock_root())},
         # Sessions that no longer add up. Cheap (a session is a handful of small files) and this is
         # where a user asks "is anything wrong?" — a broken history is exactly that, and it otherwise
         # only surfaces later, as a refused artifact save with no obvious cause.
@@ -313,6 +322,7 @@ def _cmd_doctor(a, client) -> None:
         print("        Not needed for Claude Code mode.")
     print(f"  {ok} workspace       {r['workspace']['root']}")
     print(f"     sessions        {r['workspace']['sessions']}")
+    print(f"     locks           {r['workspace']['locks']}")
     h = r["sessions"]
     if not h["readable"]:
         # Not "0 sessions". We could not look, and saying nothing found is the failure this verb
