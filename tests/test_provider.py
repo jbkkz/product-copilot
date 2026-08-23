@@ -15,7 +15,7 @@ import httpx
 import pytest
 from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, full_slots, out, slot
 
-from requivo.core.contracts import PRD, Brief, EngineOutput, Stories
+from requivo.core.contracts import PRD, Brief, EngineOutput, Stories, Story
 from requivo.core.persistence import load_model
 from requivo.providers.anthropic import (
     CallRecord,
@@ -323,6 +323,24 @@ _GENERATOR_REPLIES = {
         {"name": "F", "scenarios": [{"id": "SC1", "title": "T", "when": "w", "then": ["t"]}]}]}),
     "epic": json.dumps({"title": "T", "issues": [{"id": "E1", "title": "T"}]}),
     "release": json.dumps({"title": "T"}),
+    "estimate": json.dumps({"items": [
+        {"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]}),
+}
+
+# What a generator takes beyond `(client, model)`. Keyed by generator so the fixture above stays one
+# reply per registry entry and the equality below can be exact.
+#
+# `estimate` is the only one, because it is the only registry entry that is not the plain
+# model → contract shape: it is a pipeline stage reading the *prior* stories, and it returns
+# `(draft, soft_slots, confidence)` rather than a document. It is nonetheless in `_GENERATORS` and
+# reached through the seam like every other operation — `cli.py:_cmd_estimate` calls
+# `disco.reason_from(snap, "estimate", stories=stories)`, and `AnthropicProvider.generate` dispatches
+# `fn(self.client, model, only=only, **kwargs)`. So `stories` is passed here as a keyword, the way
+# the real dispatch passes it. (Until #146 this file said the opposite in both clauses — that
+# `estimate` was outside `_GENERATORS` and that the CLI called it directly past the provider seam.
+# Both had been false since #77 and #135.)
+_GENERATOR_KWARGS = {
+    "estimate": {"stories": Stories(stories=[Story(id="S1", title="T")])},
 }
 
 
@@ -335,29 +353,28 @@ def test_every_generator_drives_a_real_call_without_a_cache_write(artifact_type)
     from requivo.providers.anthropic import _GENERATORS
 
     reply = _GENERATOR_REPLIES[artifact_type]
+    extra = _GENERATOR_KWARGS.get(artifact_type, {})
     model = out({"problem": slot(80, "explicit", "high")})
     fake = FakeClient(reply, reply)
-    _GENERATORS[artifact_type](fake, model)
-    _GENERATORS[artifact_type](fake, model, reuse_system=True)
+    _GENERATORS[artifact_type](fake, model, **extra)
+    _GENERATORS[artifact_type](fake, model, **extra, reuse_system=True)
     assert "cache_control" not in _system_block(fake, 0), f"{artifact_type} pays for a cache nothing reads"
     assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}, f"{artifact_type} lost its opt-in"
 
 
-def test_estimate_drives_a_real_call_without_a_cache_write():
-    # `estimate` is not in `_GENERATORS` — the CLI calls it directly, past the provider seam — so it
-    # needs its own case or it is the one single-call verb nothing covers.
-    from requivo.core.contracts import Story
-    from requivo.providers.anthropic import estimate
+def test_the_cache_fixture_covers_every_registered_generator():
+    # The parametrization above reads its cases off `_GENERATOR_REPLIES`, so an eighth generator
+    # registered tomorrow would ship with no cache assertion and nothing would go red — under a test
+    # whose name reads *every generator*. That is a guard that did not run and a guard that found
+    # nothing rendering identically, which is this repository's own recurring shape, and it had
+    # already happened once: `estimate` joined `_GENERATORS` in v1.1.0 and the fixture stayed at six
+    # (#146). Asserted in both directions, like the boundaries allowlist: a registry entry with no
+    # reply is an uncovered generator, and a reply for a name the registry does not hold is a case
+    # that stopped exercising anything.
+    from requivo.providers.anthropic import _GENERATORS
 
-    reply = json.dumps({"items": [
-        {"story_id": "S1", "title": "T", "complexity": "S", "days_low": 1, "days_high": 2}]})
-    model = out({"problem": slot(80, "explicit", "high")})
-    stories = Stories(stories=[Story(id="S1", title="T")])
-    fake = FakeClient(reply, reply)
-    estimate(fake, model, stories)
-    estimate(fake, model, stories, reuse_system=True)
-    assert "cache_control" not in _system_block(fake, 0)                     # must not fire
-    assert _system_block(fake, 1)["cache_control"] == {"type": "ephemeral"}  # must fire
+    assert set(_GENERATOR_REPLIES) == set(_GENERATORS)
+    assert set(_GENERATOR_KWARGS) <= set(_GENERATORS)
 
 
 def test_complete_still_defaults_to_caching_for_an_undeclared_caller():
