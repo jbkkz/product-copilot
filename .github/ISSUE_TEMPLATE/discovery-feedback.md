@@ -32,7 +32,7 @@ For each question, was it **useful**, **useless**, or **redundant**?
 
 - …
 
-**Did it challenge the right premise?** (from the solution assessment, if you ran it):
+**Did it challenge the right premise?** (from the decision brief, if you ran it):
 
 - …
 

@@ -44,7 +44,7 @@ the split, the legal basis, and the source-of-truth question, and everything dow
 Each command regenerates one view from the model — no discovery needed:
 
 ```bash
-requivo brief    examples/event-checkin-reconciliation/model.json   # the solution assessment
+requivo brief    examples/event-checkin-reconciliation/model.json   # the decision brief
 requivo epic     examples/event-checkin-reconciliation/model.json   # the delivery epic
 requivo criteria examples/event-checkin-reconciliation/model.json   # the acceptance criteria
 requivo estimate examples/event-checkin-reconciliation/model.json   # a day-range estimate (also: requivo stories, requivo prd)
