@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 
@@ -496,23 +497,37 @@ def test_a_lock_on_a_slug_with_no_session_leaves_no_trace(workspace):
     assert store.list_session_slugs() == ["real"]
 
 
-def test_a_session_deleted_between_the_check_and_the_open_is_refused_not_recreated(workspace,
-                                                                                    monkeypatch):
-    """The race the existence check cannot close, and the reason the fix is not that check alone. The
-    session is gone by the time `os.open` runs, and the old code would simply have made the directory
-    again. `session_exists` is forced rather than raced, so the arm is *executed* on every leg of the
-    matrix instead of being asserted about: the errno-to-exception mapping for opening a file whose
-    parent directory is missing is the platform-specific part of this, and a reasoned claim about
-    Windows is worth less than one CI can falsify."""
-    monkeypatch.setattr(store, "session_exists", lambda slug: True)
+def test_a_session_deleted_before_the_lock_is_granted_is_refused(workspace, monkeypatch):
+    """The race an existence check taken *before* the lock cannot close.
+
+    This used to be closed by accident: the lock file lived inside the session, so `os.open` raised
+    `FileNotFoundError` when the directory had gone and that arm mapped it onto "no such session".
+    #113 moved the lock out of the session directory, and with it that accident — opening
+    `.requivo/locks/<slug>.lock` says nothing at all about whether `<slug>` is a session. So the
+    check moved to where it is authoritative, *after* the lock is held, and this test moved with it.
+
+    The deletion is forced into the window rather than raced for, so the arm is executed on every leg
+    of the matrix instead of being reasoned about. Patching `_acquire` puts it exactly where the
+    check now is: the session exists when the fd is opened and is gone by the time the lock is
+    granted — the one ordering the old arm could not have caught."""
+    SessionService().create_session("A real request.", slug="vanishing")
+    real_acquire = store._acquire
+
+    def deleting_acquire(fd, slug):
+        shutil.rmtree(store.canonical_dir(slug))
+        return real_acquire(fd, slug)
+
+    monkeypatch.setattr(store, "_acquire", deleting_acquire)
 
     with pytest.raises(RequivoError) as ei:
-        with store.session_lock("vanished"):
+        with store.session_lock("vanishing"):
             pass                                    # pragma: no cover - the lock must not be granted
     assert ei.value.code == "session_not_found"
-    assert not store.canonical_dir("vanished").exists()
-    root = store.session_root()
-    assert not root.exists() or list(root.iterdir()) == []
+    assert not store.canonical_dir("vanishing").exists(), "the refusal must not recreate it"
+    assert store.list_session_slugs() == []
+    # And the lock file it left behind is outside the session root, so it takes no slug with it.
+    assert store.lock_path("vanishing").exists()
+    assert not store.lock_root().is_relative_to(store.session_root())
 
 
 def test_a_slug_a_failed_lock_touched_can_still_be_created(workspace):
@@ -549,14 +564,23 @@ def test_a_migration_onto_such_a_slug_is_performed_not_reported_as_skipped(works
 def test_the_lock_still_guards_a_session_that_exists(workspace):
     """The other direction, and the one a fix here can break silently. The lock's job is the compound
     mutations on sessions that *do* exist: `save_revision` and `save_session_artifact` write files
-    under a session directory while holding it, the service layer nests it around several core calls,
-    and `.lock` still belongs inside the session it locks (`session export` excludes it by name)."""
+    under a session directory while holding it, and the service layer nests it around several core
+    calls.
+
+    The lock file itself lives at `.requivo/locks/<slug>.lock` since #113, *outside* the session it
+    guards — that is what lets `session import --force` rename the directory while holding it. The
+    session directory is asserted to be clean of one, because "the lock still works" and "the lock
+    moved" have to be one test: a change that quietly put it back inside would pass either half
+    alone."""
     svc = SessionService()
     svc.create_session("A real request.", slug="live")
     svc.update_model("live", _full_model(**{"problem": _slot(80, "explicit", "high", "REAL")}))
 
-    lock_file = store.canonical_dir("live") / ".lock"
-    assert lock_file.exists(), "a writer that holds the lock leaves the lockfile in the session"
+    lock_file = store.lock_path("live")
+    assert lock_file.exists(), "a writer that holds the lock leaves the lockfile behind"
+    assert lock_file == store.lock_root() / "live.lock"
+    assert not (store.canonical_dir("live") / ".lock").exists(), (
+        "the lock is back inside the directory `session import --force` renames")
 
     with store.session_lock("live"):
         # Re-entrant within the thread: the service takes it around a whole update and every core

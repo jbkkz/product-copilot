@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import threading
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -508,17 +509,149 @@ def test_a_failed_forced_replacement_puts_the_original_back(workspace, tmp_path,
     assert _run_json(["session", "verify", "dup", "--json"])["ok"] is True
 
 
+# ── #113: a forced replacement is serialised against the writers of the session it replaces ─────
+#
+# `save_revision` resolves the session directory once and then writes by *pathname*; `session_lock`
+# holds an fd on an *inode*. Those two descriptions agree only while nothing renames the directory,
+# and `_swap_in` renames it. So a writer sitting inside `save_revision` while a forced import runs
+# goes on writing into the *newly imported* directory, and a third process opening the lock finds a
+# different inode and acquires immediately — two writers holding one slug's lock, which is invariant
+# 9's own failure mode.
+#
+# The guard is that the lock no longer lives inside the directory being renamed (`.requivo/locks/`),
+# so `_swap_in` holds it like every other compound write. A test asserting only that the import
+# succeeded passes on the defect; these two assertions do not.
+
+
+def _paused_between_the_writes(monkeypatch, slug: str, at_the_gate, release):
+    """Freeze `save_revision` on `slug` between its file writes and its metadata write.
+
+    That gap is where the damage lands: model.json and revisions/NNNN-model.json are already on
+    disk, `session.json` is about to be written through a freshly resolved `canonical_dir(slug)`,
+    and the lock is held across the whole of it. Patching `write_meta` rather than sleeping keeps
+    the window deterministic on every leg instead of timing-dependent on the slow ones."""
+    real_write_meta = store.write_meta
+
+    def paused(s, meta):
+        if s == slug and not at_the_gate.is_set():
+            at_the_gate.set()
+            assert release.wait(20), "the test never released the paused writer"
+        return real_write_meta(s, meta)
+
+    monkeypatch.setattr(store, "write_meta", paused)
+
+
+def test_a_forced_import_serialises_against_a_concurrent_writer(workspace, tmp_path, monkeypatch):
+    """#113, both halves.
+
+    **Contamination.** The imported `session.json` must still carry the *imported* identity. On the
+    defect the paused writer's `write_meta` resolves `<root>/dup` after the swap and stamps the
+    replaced session's `session_id` and revision log onto the import.
+
+    **Mutual exclusion.** The swap must not happen at all while a writer holds the lock, and no
+    third caller may hold it alongside that writer. On the defect the import runs straight through —
+    it takes no lock — and the swap then puts a *different inode* at the lock path, so a third
+    caller acquires at once while the writer still holds the old, now-unlinked one.
+
+    The two exclusion assertions are negative, so they carry their positive controls in the same
+    fixture: once the writer is released the import must complete **and** the probe must acquire. A
+    thread that died on its first line satisfies every "did not happen" assertion here, and nothing
+    else would notice.
+
+    The probe deliberately starts *after* the import's window has elapsed. Started alongside it, the
+    probe usually opens the old lock file before the swap and blocks on the writer, which is the
+    right answer reached for the wrong reason — measured: that ordering passed on the unfixed tree."""
+    _run(["session", "init", "The original.", "--slug", "dup", "--json"])
+    _run_stdin(["model", "apply", "dup", "-", "--json"], json.dumps(_full_model()), monkeypatch)
+    resident_id = store.read_meta("dup").session_id
+    _zip(tmp_path / "dup.zip", _good_entries("dup"))          # a different session, session_id "abc"
+    assert resident_id != "abc", "the two sessions must be distinguishable by identity"
+
+    at_the_gate, release = threading.Event(), threading.Event()
+    _paused_between_the_writes(monkeypatch, "dup", at_the_gate, release)
+
+    failures: list[BaseException] = []
+
+    def _capture(fn):
+        def run():
+            try:
+                fn()
+            except BaseException as e:                        # noqa: BLE001 - reported, not swallowed
+                failures.append(e)
+        return run
+
+    writer = threading.Thread(target=_capture(
+        lambda: store.save_revision("dup", _engine_output_for_dup())), daemon=True)
+    writer.start()
+    assert at_the_gate.wait(10), "the writer never reached the gap between its writes"
+
+    imported = threading.Event()
+
+    def _import_then_signal():
+        _run(["session", "import", str(tmp_path / "dup.zip"), "--force", "--json"])
+        imported.set()
+
+    importer = threading.Thread(target=_capture(_import_then_signal), daemon=True)
+    importer.start()
+
+    # Long enough for an unguarded import to have finished the whole swap; under the guard it is
+    # still blocked on the writer's lock. Measured at ~0.1s unguarded, so 1.5s is not a close call.
+    assert not imported.wait(1.5), (
+        "the forced import replaced the session while a writer held its lock")
+
+    probe_acquired = threading.Event()
+    probe = threading.Thread(target=_capture(
+        lambda: _take_the_lock("dup", probe_acquired)), daemon=True)
+    probe.start()
+    assert not probe_acquired.wait(0.5), (
+        "a third caller acquired the lock while a writer held it — the swap moved the lock away")
+
+    release.set()
+    for t in (writer, importer, probe):
+        t.join(timeout=20)
+    assert not [t for t in (writer, importer, probe) if t.is_alive()], "a thread did not finish"
+    assert failures == [], f"a worker raised: {failures}"
+    # The positive controls for the two negatives above: released, both must actually happen.
+    assert imported.is_set(), "the positive control failed: the import never completed at all"
+    assert probe_acquired.is_set(), "the positive control failed: the probe never took the lock at all"
+
+    meta = store.read_meta("dup")
+    assert meta.session_id == "abc", "the import inherited the replaced session's identity"
+    assert meta.current_revision == 0 and meta.revisions == []
+    assert store.list_session_slugs() == ["dup"]
+    assert _run_json(["session", "verify", "dup", "--json"])["ok"] is True
+
+
+def _take_the_lock(slug: str, acquired) -> None:
+    with store.session_lock(slug):
+        acquired.set()
+
+
+def _engine_output_for_dup():
+    from requivo.core.contracts import EngineOutput
+
+    return EngineOutput.model_validate(_full_model())
+
+
 def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_path, monkeypatch):
     """An export reads several files that must agree with each other. Read outside the lock, it can
     combine an old session.json with a new model.json — an archive that is internally inconsistent and
     only says so on import. And `.lock` is this machine's coordination, not part of the session: it
-    has no meaning in an archive and would import as a session component."""
-    import threading
+    has no meaning in an archive and would import as a session component.
+
+    Since #113 a live writer no longer leaves a `.lock` in the session at all — it is at
+    `.requivo/locks/<slug>.lock`, outside every session directory, and the export walks only the
+    session. The exclusion stays and is still asserted, for the residue: a session written by an
+    older Requivo carries one, and a hand-made archive can carry one too. So the fixture plants it
+    rather than waiting for a writer to, which is also the only way this half of the test can still
+    fail."""
     import time
 
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
     _run_stdin(["model", "apply", "s", "-", "--json"], json.dumps(_full_model()), monkeypatch)
-    assert (store.canonical_dir("s") / ".lock").exists()       # the writer left one behind
+    assert store.lock_path("s").exists(), "the writer left its lock outside the session"
+    assert not (store.canonical_dir("s") / ".lock").exists()
+    (store.canonical_dir("s") / ".lock").touch()               # legacy residue, as an older one left it
 
     held = threading.Event()
 

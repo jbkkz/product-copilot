@@ -47,6 +47,35 @@ def session_root() -> Path:
     return workspace_root() / ".requivo" / "sessions"
 
 
+def lock_root() -> Path:
+    """Where the per-session write locks live: `<workspace>/.requivo/locks/`.
+
+    **A sibling of `session_root()`, not a child of it, and not inside the session it locks** (#113).
+
+    The lock used to be `<slug>/.lock`. `flock` is held by the *open file description*, so it is a
+    claim on an **inode**, while every writer under it resolves `canonical_dir(slug)` and writes by
+    **pathname** — two descriptions that agree only while nothing renames the directory.
+    `session import --force` renames it. A writer inside `save_revision` therefore went on writing
+    into the *freshly imported* directory, and a third process opening the lock found a different
+    inode and acquired at once: two writers holding one slug's lock, which is invariant 9's own
+    failure mode. `_swap_in` could not simply take the lock either — an open handle inside a
+    directory is exactly what Windows refuses to rename, which is how #112's four Windows legs died.
+
+    Moving the file out of the renamed directory is what makes both true at once: the swap runs
+    under the same lock every writer takes, and `os.replace` sees no open handle. Pinned by
+    `test_a_forced_import_serialises_against_a_concurrent_writer`.
+
+    **A sibling rather than `session_root()/.locks/`**, which was the other candidate. The session
+    root's contract is that everything under it is a session or is reported as not being one —
+    `_scan_session_root` partitions exactly that, and its dot-prefix skip is justified there as
+    "`create_session`'s staging areas: a session in flight". A permanent dot directory is not a
+    session in flight, so putting locks there would make that sentence false and leave every future
+    change to the skip one step from exposing them. Out here there is no coupling to undo.
+
+    Evaluated per call, like every other root."""
+    return workspace_root() / ".requivo" / "locks"
+
+
 def output_root() -> Path:
     """The **retired** `./out` layout, from before the versioned `.requivo/sessions/` store.
 

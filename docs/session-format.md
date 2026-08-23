@@ -13,15 +13,16 @@ plugin and the Web app all read and write the same layout.
 
 ```text
 .requivo/
-└── sessions/
-    └── <slug>/
-        ├── session.json        metadata + provenance + artifact status
-        ├── request.md          the originating request
-        ├── model.json          the current model — the durable product
-        ├── revisions/
-        │   └── 0001-model.json  one frozen file per applied revision
-        ├── artifacts/           generated views (PRD, assessment, …)
-        └── .lock                the write lock (empty; safe to delete when nothing is running)
+├── sessions/
+│   └── <slug>/
+│       ├── session.json        metadata + provenance + artifact status
+│       ├── request.md          the originating request
+│       ├── model.json          the current model — the durable product
+│       ├── revisions/
+│       │   └── 0001-model.json  one frozen file per applied revision
+│       └── artifacts/           generated views (PRD, assessment, …)
+└── locks/
+    └── <slug>.lock             the write lock (empty; safe to delete when nothing is running)
 ```
 
 - **model.json** is the product; every artifact is regenerated from it.
@@ -29,11 +30,24 @@ plugin and the Web app all read and write the same layout.
   from a past point.
 - Every write is atomic (temp file + rename), so an interruption can't leave a half-written model. The
   temp file is unique per writer, so concurrent writers cannot collide on it.
-- **.lock** is an empty file held with an OS-level lock for the duration of a write. The kernel
-  releases it when the process ends, so a crash cannot leave a session permanently locked — there is
-  no stale-lock state to clean up, and no timeout to wait out. It only ever appears **inside a session
-  that already exists**: locking a name nothing has created is refused, not accommodated, so a
-  directory under `sessions/` is always a real session and never a lock file with nothing around it.
+- **`locks/<slug>.lock`** is an empty file held with an OS-level lock for the duration of a write. The
+  kernel releases it when the process ends, so a crash cannot leave a session permanently locked —
+  there is no stale-lock state to clean up, and no timeout to wait out.
+
+  It sits **beside** `sessions/` rather than inside the session it guards, and that is load-bearing
+  rather than tidy. An OS lock is a claim on an *inode*; every writer under it resolves the session
+  directory and writes by *pathname*. `session import --force` renames that directory, so the two
+  stopped describing the same thing: a writer mid-write went on writing into the freshly imported
+  session, and a third process opening the lock found a different file and acquired it. Keeping the
+  lock outside is what lets the import hold it — a directory containing an open handle is precisely
+  what Windows refuses to rename.
+
+  Nothing lists `locks/`, and a file there claims no slug: a session's name is claimed by the
+  `sessions/<slug>` directory alone.
+
+  **A session written by an earlier Requivo may still carry a `.lock` inside it.** Nothing
+  opens it, `session export` skips it, and `session verify` ignores it. Deleting it is safe;
+  leaving it costs nothing.
 
 ## Revisions and provenance
 

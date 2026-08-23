@@ -62,6 +62,25 @@ def _check_line(text: str, name: str) -> str:
                 if ln.startswith("  ") and not ln.startswith("   ") and name in ln)
 
 
+def test_doctor_reports_where_the_write_lock_lives(workspace):
+    """#113 moved the write lock out of the session directory, and a convention the diagnostic does
+    not report is one it answers about the wrong shape.
+
+    `.requivo/locks/` is the one path in a workspace that every write touches and that nothing else
+    names. When it is not writable, every verb fails at once with `could not open the write lock for
+    session '<slug>'` and no directory to look at, so `doctor` — the verb that answers for the
+    install rather than for a session — has to say where it is.
+
+    Additive, and the sibling key is asserted alongside it: `workspace.sessions` is published, and a
+    consumer reading it must be unaffected."""
+    r = _run_json(["doctor", "--json"])["workspace"]
+    assert r["locks"] == str(store.lock_root())
+    assert r["sessions"] == str(store.session_root()), "the published key must not have moved"
+    assert not store.lock_root().is_relative_to(store.session_root()), (
+        "a lock root under the session root would be a permanent non-session entry there")
+    assert "locks" in _run(["doctor"]), "the human rendering says it too, not only --json"
+
+
 def test_doctor_tells_a_loaded_context_dir_from_a_lost_one_and_from_an_unreadable_one(workspace):
     """Three states, three renderings. `available_cards()` failing used to be written into
     `schema["error"]` — a *different* check's field — with `schema["ok"]` left True and the message

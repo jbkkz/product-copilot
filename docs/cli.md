@@ -110,6 +110,11 @@ a directory it is handed, which nobody could hand it a name for. The commonest s
 Requivo: `session_lock` used to create the session directory in order to open `.lock` inside it, so
 locking a slug with no session left one behind (#22). Those are still on disk.
 
+Nothing in this version can produce one. The refusal #22 added stopped new ones, and the lock no
+longer lives inside a session at all — it is at `.requivo/locks/<slug>.lock` — so `session_lock`
+cannot create a directory under `sessions/` even in principle. What follows describes what is
+**found** on disk, not what Requivo makes.
+
 The symptom is not where the cause is. **The name is taken**, and `create_session`'s rename is the
 only claim on a slug — it loses to anything already occupying the name, after which the CLI falls
 through to its hash-suffixed candidate. Ask for `leave-approval` and you get `leave-approval-a1b2c3`,
@@ -476,7 +481,13 @@ refusal — it replaces a *session*, and the point of this code is that there is
 or delete the directory yourself; the import never removes something it cannot interpret.
 
 `session export` reads under the session's write lock, so an archive can never combine an old
-`session.json` with a newer `model.json`, and it excludes `.lock` and any scratch file.
+`session.json` with a newer `model.json`, and it excludes any dot-prefixed entry — a scratch file
+from an interrupted write, and a legacy `.lock` left inside a session by an earlier Requivo.
+The write lock itself now lives at `.requivo/locks/<slug>.lock`, outside every session directory, so
+a current session has nothing of the kind in it. See
+[session-format.md](session-format.md#layout) for why it is out there: `session import --force`
+renames the session directory, and a lock inside a directory being renamed is both meaningless
+(the writers under it resolve by pathname) and impossible on Windows.
 
 ## Sessions from the `out/` layout
 
