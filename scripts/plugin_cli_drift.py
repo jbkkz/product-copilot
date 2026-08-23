@@ -98,11 +98,13 @@ PROBE_TIMEOUT_S = 60
 # the working tree. A flag (`--json`), a placeholder (`<slug>`) and a bare stdin dash are therefore
 # never captured at all, and a bare word that turns out to be a positional argument is dropped later.
 #
-# The character classes are also what makes the annotations below safe. A SKILL.md is a file, and a
-# captured token is interpolated into a GitHub Actions `::warning` command; `[\w-]` admits no colon
-# and no newline, so a crafted skill cannot close the annotation and open an `::error` or a
-# `::set-output` of its own. Widening this pattern means revisiting `_annotate`, which otherwise
-# leans on a guarantee made here and not where it is relied on.
+# The character classes are also what makes the *captured token* safe to print. A SKILL.md is a
+# file, so its contents are untrusted, and a token is interpolated into a GitHub Actions `::warning`
+# command and into a bare `print` beside it. `[\w-]` admits no newline, no colon and no `#`, which
+# is one exclusion per thing that could go wrong: no newline means no line of its own, no colon
+# means no `::name::`, and no `#` means no `##[name]` -- and that last form needs neither of the
+# other two, which is the whole of #176. Widening this pattern means revisiting `_log_safe`, which
+# every other untrusted value in this file goes through and which a token deliberately does not.
 #
 # `re.ASCII` is load-bearing for the same reason. Python's `\w` is Unicode-aware by default, so
 # without the flag `requivo 日本語` captures a token, which is then printed -- and this script is
@@ -189,7 +191,21 @@ class Sources(NamedTuple):
 
 
 def parse_surface(payload: str) -> Surface | None:
-    """Read the probe's stdout. Returns None -- never an empty Surface -- for anything unreadable."""
+    """Read the probe's stdout. Returns None -- never an empty Surface -- for anything unreadable.
+
+    Every string that comes out of here is `_log_safe`d, because this is the OTHER door untrusted
+    text uses and it was open (#176 was reported about the first one only). The tree half of the
+    probe introspects `requivo.cli._build_parser()` in the WORKING TREE, which a fork pull request
+    edits as freely as it names a directory; those verb and subcommand names are interpolated into
+    `tree_typos`' reason and `compare`'s, both of which reach a bare `print`. A newline in one puts
+    the remainder at column 0, which reaches both of the runner's parsers rather than only the
+    unanchored one.
+
+    Sanitising the dict KEYS is free rather than lossy: the tokens they are matched against come out
+    of `INVOCATION_RE`, whose word-and-dash character class cannot produce whitespace, a colon or a
+    `#`, so a verb name this changes is one that could never have matched anything anyway.
+    `test_a_verb_name_from_the_probe_cannot_forge_a_line_of_its_own`.
+    """
     try:
         data = json.loads(payload)
     except (ValueError, TypeError):
@@ -201,8 +217,8 @@ def parse_surface(payload: str) -> Surface | None:
         return None
     verbs: dict[str, set[str] | None] = {}
     for name, subs in raw.items():
-        verbs[str(name)] = None if subs is None else {str(s) for s in subs}
-    return Surface(version=str(data.get("version") or "unknown"), verbs=verbs)
+        verbs[_log_safe(str(name))] = None if subs is None else {_log_safe(str(s)) for s in subs}
+    return Surface(version=_log_safe(str(data.get("version") or "unknown")), verbs=verbs)
 
 
 def cli_surface(python_executable: str) -> Surface | None:
@@ -218,19 +234,61 @@ def cli_surface(python_executable: str) -> Surface | None:
 
 
 def _one_line(text: str) -> str:
-    """Collapse every whitespace run to one space, at the point untrusted text enters this module.
+    """Collapse every whitespace run to one space. Half of `_log_safe`, and separately useful:
+    `scripts/golden_lib.py` and `scripts/golden_diff.py` each compare their own sink against this
+    one by name, and neither of them prints into a log that parses workflow commands.
 
-    A directory entry name is untrusted text: on POSIX a filename may legally contain a newline, and
-    everything below is printed at column 0 of a CI step's stdout, where GitHub Actions parses
-    `::command::` at the start of ANY line -- not only lines that went through `_annotate`. So an
-    entry named `plain<LF>::error::...` would forge a workflow command of its own. `_annotate`
-    squashes the message it sends and was never the hole; the bare `print` beside it was, and
-    `_label` was the same hole one function over. This repository has had exactly this defect before
-    -- invariant 14's #40, a stored card name forging a line at column 0 of `doctor`'s own output --
-    which is why the squash sits where the value enters rather than at each place it leaves:
-    `test_an_unreadable_path_cannot_forge_a_line_of_its_own`.
+    Pinned by `test_the_sanitiser_collapses_whitespace_and_breaks_both_command_forms`.
     """
     return " ".join(text.split())
+
+
+# The runner reads its own log twice, with two different anchors, and this file spent a release
+# modelling one of them. From `actions/runner`, `src/Runner.Common/ActionCommand.cs`, read via #175:
+#
+#   TryParseV2  `::name parameters::data`  calls `message.TrimStart()` BEFORE testing the prefix,
+#                                          so indenting contains nothing and a line start is what
+#                                          matters. Killing newlines defeats this form.
+#   TryParse    `##[name]data`             is `message.IndexOf("##[")`. No anchor at all: neither a
+#                                          line start nor a newline is required, so killing
+#                                          newlines defeats nothing here.
+#
+# That gap was #176: a skills entry named `brief##[error]title=...`, with no newline anywhere in it,
+# reached `_show`'s bare `print` and forged an annotation stating something no tool concluded.
+# `test_a_skill_directory_name_cannot_forge_the_legacy_command_form` is what goes red if this is
+# removed, and it needs no newline, so it runs on every platform in the matrix.
+_COMMAND_KEYS = (("##[", "## ["), ("::", ": :"))
+
+
+def _log_safe(text: str) -> str:
+    """Make one untrusted value unreadable as a workflow command by EITHER parser, wherever it lands.
+
+    Applied at the point untrusted text enters this module -- a directory entry name, a path in an
+    error, a verb name read back out of the probe -- rather than at each of the five places it
+    leaves, so a future consumer inherits the guarantee instead of having to remember it. This
+    repository has had exactly this defect before: invariant 14's #40, a stored card name forging a
+    line at column 0 of `doctor`'s own output.
+
+    Both keys are broken, and the second one is a deliberate widening of what `_one_line` alone
+    bought. Collapsing whitespace already means a value cannot *start* a line, which is all
+    `TryParseV2` needs -- but that is a guarantee about the layout of the five format strings below,
+    not about the value, and it evaporates the day one of them prints a label first. `##[` has no
+    such excuse at any column. So the property is put on the value: no result of this function is a
+    workflow command in either form, whatever precedes it.
+
+    Spaced apart rather than deleted, so the value still reads as what was on disk -- the same
+    spelling `.github/workflows/plugin-validate.yml` uses on `claude --version` (#147). A lone colon
+    is untouched, which matters because every path and every reason line here carries one.
+
+    `test_a_skill_directory_name_cannot_forge_the_legacy_command_form` is the end-to-end guard and
+    it runs on every platform, `test_a_verb_name_from_the_probe_cannot_forge_a_line_of_its_own` is
+    the same class on the other entry point, and
+    `test_an_unreadable_path_cannot_forge_a_line_of_its_own` is the newline-borne half.
+    """
+    out = _one_line(text)
+    for key, broken in _COMMAND_KEYS:
+        out = out.replace(key, broken)
+    return out
 
 
 def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> None:
@@ -247,7 +305,7 @@ def _collect_file(candidate: Path, paths: list[Path], unreadable: list[str]) -> 
     except (FileNotFoundError, NotADirectoryError):
         return
     except OSError as exc:
-        unreadable.append(_one_line(f"{candidate}: {exc.strerror or exc}"))
+        unreadable.append(_log_safe(f"{candidate}: {exc.strerror or exc}"))
 
 
 def invocation_sources(plugin_root) -> Sources:
@@ -284,7 +342,7 @@ def invocation_sources(plugin_root) -> Sources:
         entries = []                       # decided: this plugin root has no skills directory
     except OSError as exc:                 # EACCES on the directory itself, and every skill with it
         entries = []
-        unreadable.append(_one_line(f"{skills}: {exc.strerror or exc}"))
+        unreadable.append(_log_safe(f"{skills}: {exc.strerror or exc}"))
 
     for entry in entries:
         _collect_file(entry / "SKILL.md", paths, unreadable)
@@ -296,9 +354,9 @@ def _label(path: Path) -> str:
     """What a finding calls the file it came from. `skills/brief/SKILL.md` is "brief"; anything else
     is its own name, so `REASONING.md` reads as itself rather than as the directory above it.
 
-    Squashed, because this returns a *directory name* into every finding the script prints, and a
-    name is untrusted text -- see `_one_line`."""
-    return _one_line(path.parent.name if path.name == "SKILL.md" else path.name)
+    Sanitised, because this returns a *directory name* into every finding the script prints, and a
+    name is untrusted text -- see `_log_safe`."""
+    return _log_safe(path.parent.name if path.name == "SKILL.md" else path.name)
 
 
 def referenced_invocations(paths) -> dict[tuple[str, str | None], list[str]]:
@@ -406,9 +464,15 @@ def _harden_streams() -> None:
 
 
 def _annotate(github: bool, title: str, message: str) -> None:
-    """A GitHub Actions annotation is one line; a newline inside it truncates the message."""
+    """A GitHub Actions annotation is one line; a newline inside it truncates the message.
+
+    `_log_safe` rather than a bare squash, so this function's guarantee is self-contained instead of
+    leaning on every caller having sanitised what it composed. It is a backstop and not the defence:
+    the values inside `message` were already sanitised where they entered, and the reason this line
+    was never the hole is that the runner takes the whole line as the command we open here.
+    """
     if github:
-        print("::warning title={}::{}".format(title, " ".join(message.split())))
+        print(f"::warning title={title}::{_log_safe(message)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -432,8 +496,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _run(args)
     except Exception as exc:                       # noqa: BLE001 - the point is that it is total
+        # `_log_safe` on the exception text: it routinely carries a path, and this one is printed to
+        # stderr, which the runner parses exactly as it parses stdout.
         detail = (f"the drift check raised {type(exc).__name__} and could not complete, so nothing was compared. This "
-                  f"is not a clean result and it is not evidence of drift: {exc}")
+                  f"is not a clean result and it is not evidence of drift: {_log_safe(str(exc))}")
         print(detail, file=sys.stderr)
         _annotate(args.github, "Plugin/CLI drift check could not look", detail)
         return EXIT_COULD_NOT_LOOK
@@ -466,7 +532,9 @@ def _run(args) -> int:
     if state == RESOLVED and sources.unreadable:
         state = COULD_NOT_LOOK
 
-    print(f"plugin root   : {args.plugin}")
+    # Sanitised for the same reason as everything else printed here, even though this one arrives on
+    # argv rather than off disk: the value is still text this function did not author.
+    print(f"plugin root   : {_log_safe(str(args.plugin))}")
     print(f"files walked  : {len(sources.paths)}")
     # Printed even when it is zero, because a count that appears only when it is interesting cannot
     # be told from a check that stopped running.
@@ -489,9 +557,10 @@ def _run(args) -> int:
                   "everything below is a verdict over that subset rather than over the plugin: {}. That "
                   "is not a clean result and it is not evidence of drift either.").format(
                       len(sources.unreadable), "; ".join(sources.unreadable))
-        # A path is untrusted text reaching an annotation. `_annotate` squashes it to a single line,
-        # and a workflow command is only parsed at the start of one, so a `::` inside a filename
-        # cannot open a directive of its own -- the same guarantee `INVOCATION_RE` makes for tokens.
+        # A path is untrusted text reaching an annotation AND a bare print. Each path in the list was
+        # `_log_safe`d where it entered, which is what makes both safe: a squash alone would leave
+        # `##[` intact, and `TryParse` needs no line start to read it (#176). It is not enough that
+        # `_annotate` puts our own `::` first -- this `print` puts nothing first.
         print(detail)
         _annotate(args.github, "Plugin/CLI drift check could not look", detail)
 
@@ -505,6 +574,11 @@ def _run(args) -> int:
             return
         print(heading)
         for finding in findings:
+            # The two lines #176 was reported about. Nothing is sanitised here on purpose: the
+            # sources came through `_label`, the reason's verb names came through `parse_surface`,
+            # and `invocation` is built from `INVOCATION_RE` captures. Sanitising at the point of
+            # entry is what lets this stay a plain `print` -- but it also means a NEW value reaching
+            # this line has to have gone through `_log_safe` first.
             print("  {}   (referenced by: {})".format(finding.invocation, ", ".join(finding.sources)))
             print(f"      {finding.reason}")
         print("")
