@@ -158,14 +158,19 @@ jobs:
             exit 0
           fi
           latest="$(claude --version 2>/dev/null || echo 'unknown')"
-          # One line, always. This value is a third-party binary's stdout and it is interpolated into
-          # six lines below that begin at column 0, five of them workflow commands and all of them
-          # outside the fence -- so an embedded newline in it would start a line this file did not
-          # write. Squashing at capture is what makes every use site safe instead of each of the six
-          # having to remember. Inside an annotation the squashed value is inert: the parser has
-          # already taken the line as our command and everything past the second `::` is data.
+          # Both halves at capture, on one line, because this value is a third-party binary's stdout
+          # and it is interpolated into six lines below that begin at column 0 -- all of them outside
+          # the fence. Squashing here is what makes every use site safe instead of each of the six
+          # having to remember which of the two forms can reach it.
+          #
+          # The newline is what a `::` command needs: a `::` mid-line is data, and inside one of our
+          # own annotations it is doubly inert, since the parser has already taken the line as our
+          # command and everything past the second `::` is data. The `##[` is the other form and it
+          # is UNANCHORED -- `message.IndexOf("##[")`, no start-of-line test -- so squashing alone
+          # would leave `##[error]` parsed out of the middle of the plain `pinned=` echo below. It is
+          # spaced apart rather than deleted, so the value still reads as what the tool printed.
           # See test_removing_the_version_squash_lets_the_version_string_forge_one.
-          latest="$(printf '%s' "$latest" | tr '\t\r\n' '   ')"
+          latest="$(printf '%s' "$latest" | tr '\t\r\n' '   ' | sed 's/##\[/## [/g')"
           echo "pinned=${CLAUDE_CLI_VERSION}  latest=${latest}"
 
           # Everything the loop below prints was written by a third-party binary, and a CI log is

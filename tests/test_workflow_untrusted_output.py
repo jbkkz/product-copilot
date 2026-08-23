@@ -26,9 +26,12 @@ token again. It is also the only candidate that leaves the log exactly as readab
 matters here -- the step's own annotation tells a reader to go and read that output, so a hardening
 that squashed it would have traded a theoretical problem for a real one.
 
-`claude --version` is squashed at capture instead, because it is interpolated into lines emitted
-*outside* the fence, and because a squashed value inside an authored `::warning` is inert: the
-parser has already taken that line as our command and everything past the second `::` is data.
+`claude --version` cannot be fenced -- it is interpolated into six lines emitted *outside* the
+fence -- so it is sanitised at capture instead, and it needs both halves. The newline goes because a
+`::` mid-line is data (and inside an authored `::warning` it is doubly inert: the parser has already
+taken that line as our command and everything past the second `::` is data). The `##[` is spaced
+apart because that form needs no line start at all, and one of the six sites is the plain `pinned=`
+echo, which is not a command the parser can consume first.
 
 The test that can actually go red here is this one -- the pytest suite does not otherwise execute
 shell out of a workflow file, so the step is extracted from the YAML and run under `bash` against a
@@ -85,7 +88,7 @@ _FENCE_KEYS = ("::stop-commands::", "::${fence}::")
 _CLAUDE_STUB = """#!/bin/sh
 if [ "$1" = "--version" ]; then
 cat <<'VER'
-2.1.238 (Claude Code)
+2.1.238 ##[error]FORGED-VIA-VERSION-LEGACY in the middle of the first line
 ::error title=FORGED-VIA-VERSION::a version string that broke its own line
 VER
 exit 0
@@ -293,5 +296,10 @@ def test_removing_the_version_squash_lets_the_version_string_forge_one(tmp_path)
 
     acted_on, _ = _processed(_run(stripped, tmp_path))
     forged = _forged(acted_on)
-    assert any("FORGED-VIA-VERSION" in line for line in forged), \
-        f"the version string could not forge a line even unsquashed: {forged}"
+    # Both forms, because the one line this value reaches at column 0 unwrapped -- the `pinned=`
+    # echo -- can be forged by either: a newline gives the `::` form a line start of its own, and
+    # the `##[` form needs no line start at all.
+    assert any("FORGED-VIA-VERSION::" in line for line in forged), \
+        f"the version string could not forge a `::` line even unsquashed: {forged}"
+    assert any("FORGED-VIA-VERSION-LEGACY" in line for line in forged), \
+        f"the version string could not forge a `##[` line even unsquashed: {forged}"
