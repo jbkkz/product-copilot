@@ -221,8 +221,9 @@ bug that looked like correct behaviour.
    write and `os.replace` sees no handle. The general form: **a lock that lives inside the thing it
    guards guards nothing the moment that thing can be renamed.** Pinned by
    `test_a_forced_import_serialises_against_a_concurrent_writer`; the cost, an older Requivo in the
-   same workspace locking a different file and not serialising against a newer one, is in the
-   changelog rather than here (#113).
+   same workspace locking a different file and not serialising against a newer one, is in
+   `docs/compatibility.md` rather than here, because that page is where every other "two versions,
+   one workspace" promise lives (#113).
 10. **A proposal is not a model, and silence is not deletion.** What a surface sends is a
     `ModelProposal`: the slots are complete (an apply *replaces*, so a partial one is refused, never
     merged), but `decisions`/`challenges`/`opportunities` are tri-state — absent means "not speaking

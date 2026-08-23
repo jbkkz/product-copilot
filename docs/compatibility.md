@@ -412,7 +412,7 @@ is unaffected and no caller has to enumerate ten names. Each arm carries its own
 |---|---|---|---|
 | `unsupported_format_version` | `session.json` written by a newer Requivo | `{format_version, supported_format_version}` | 409 |
 | `unsupported_schema_version` | model authored against a newer slot schema | `{schema_version, supported_schema_version}` | 409 |
-| `session_unreadable` | `session.json` truncated, mis-encoded or not JSON | `{slug}` | 500 |
+| `session_unreadable` | `session.json` truncated, mis-encoded or not JSON, **or** the session's write lock could not be opened | `{slug}` | 500 |
 | `artifact_revision_out_of_range` | artifact recorded against a revision the session lacks | `{slug, source_revision, current_revision}` | 500 |
 | `unstated_source_revision` | `artifact save` stated no source revision | `{slug, type, source_revision, current_revision, cause}` | 400 |
 | `unreadable_source_revision` | the stated source revision cannot be read | the same five keys | 500 |
@@ -533,6 +533,41 @@ in-code producer leaves an empty directory at that path (`create_session` stages
 `session_lock` refuses rather than materialising one). Reaching this state takes a `mkdir` or a
 half-cleaned checkout, and the remedy is to move or remove that directory. `--force` does not lift
 it: `--force` replaces a *session*, and this code exists to say there is no session there.
+
+### The write lock moved out of the session directory (#113)
+
+The per-session write lock was `.requivo/sessions/<slug>/.lock`. It is now
+`.requivo/locks/<slug>.lock`.
+
+**Not a session-format change.** `.lock` was never part of a session: `session export` excludes it as
+this machine's coordination, an import never carried one, and nothing reads it as data. No
+`format_version` bump, no `migrate_session` entry, and a session directory written by any version
+opens unchanged in any other. A `.lock` left inside an existing session by an earlier Requivo is
+inert — nothing opens it, `session export` skips it, `session verify` ignores it — and is safe to
+delete.
+
+**One real limitation, and it belongs on this page rather than only in a changelog: two Requivo
+versions writing the same workspace at the same instant no longer serialise against each other.** An
+older one takes `<slug>/.lock` and this one takes `.requivo/locks/<slug>.lock`, and two different
+files do not contend. Every other cross-version promise on this page is about a *file* one version
+writes and another reads, and holds; this one is about a *lock*, which is not a file anybody reads,
+so nothing can carry it across the change. Mitigation is ordinary: finish or close the older process
+before running this one against the same workspace. Within one version, mutual exclusion is
+unchanged and is now strictly stronger — `session import --force` holds the lock it used to rename
+away.
+
+**Why it moved.** An OS lock is a claim on an *inode*; every writer under it resolves the session
+directory and writes by *pathname*. `session import --force` renames that directory, so the two
+stopped describing the same thing: a writer mid-write went on writing into the freshly imported
+session, and a third process opening the lock found a different file and acquired it. Keeping the
+lock inside and simply holding it across the swap was not available either — a directory containing
+an open handle is precisely what Windows refuses to rename.
+
+**Deleting a session by hand leaves its lock file behind.** There is no `session delete` verb, so
+removing a session means removing its directory, and its lock is no longer inside it. The residue is
+one empty file under `.requivo/locks/`, which claims no slug and is read by nothing; delete it or
+leave it. `requivo doctor` reports the lock root under `workspace.locks` so there is a directory to
+point at, and deliberately does not report orphans inside it — see the note in `session-format.md`.
 
 ## What a proposal means
 

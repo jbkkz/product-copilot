@@ -49,6 +49,14 @@ plugin and the Web app all read and write the same layout.
   opens it, `session export` skips it, and `session verify` ignores it. Deleting it is safe;
   leaving it costs nothing.
 
+  **And deleting a session leaves its lock file behind.** There is no `session delete` verb —
+  removing a session means removing `sessions/<slug>/`, and the lock is no longer inside it. What
+  stays is one empty file under `locks/` that claims no slug and is read by nothing. Delete it or
+  leave it. `doctor` prints where the directory is and does not enumerate what is in it, because
+  telling an orphan from a lock a live process is holding needs more evidence than the directory
+  carries — the same rule that keeps `doctor` from concluding what a non-session entry under
+  `sessions/` is.
+
 ## Revisions and provenance
 
 Each applied revision records **who produced it**, in a `revisions` log in `session.json`:
