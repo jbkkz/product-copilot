@@ -252,10 +252,12 @@ def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict
     # one path where a headline is the label, so it is the one path where `golden_diff`'s
     # `assessment + challenge(s) now raised: …` can be handed a newline and write what reads as a
     # second line of the readout at column 0. Squashed where the value enters rather than at each of
-    # the four prints it reaches, which is the reasoning `_one_line` in `scripts/plugin_cli_drift.py`
+    # the four prints it reaches, which is the reasoning `_log_safe` in `scripts/plugin_cli_drift.py`
     # applies to its own sink; `display_token` rather than that helper because a headline is judged
-    # on its exact wording here and returns byte-for-byte when it is safe, where `_one_line` is lossy
-    # by design and would silently rewrite the text the lens exists to compare.
+    # on its exact wording here and returns byte-for-byte when it is safe, where `_log_safe` is lossy
+    # by design and would silently rewrite the text the lens exists to compare. The name matters:
+    # `_one_line`, which that helper is built on, squashes whitespace and nothing else, and #176 is
+    # what happens when it is mistaken for the whole answer at a sink a CI runner parses.
     # `test_a_headline_used_as_a_theme_label_cannot_forge_a_line` is what fails if this is removed.
     return {display_token(c["label"]): len(c["runs"]) for c in clusters}
 

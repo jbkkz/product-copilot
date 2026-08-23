@@ -173,8 +173,10 @@ def test_a_headline_used_as_a_theme_label_cannot_forge_a_line():
     keys themes on the **challenge headline**, which is provider-written prose, and `golden_diff`
     prints those labels straight (`assessment + challenge(s) now raised: …`). Squashed here rather
     than at each print, because a label reaches four of them and a consumer should inherit the
-    guarantee instead of remembering it — which is the reasoning `_one_line` in
-    `scripts/plugin_cli_drift.py` already applies to its own sink.
+    guarantee instead of remembering it — which is the reasoning `_log_safe` in
+    `scripts/plugin_cli_drift.py` already applies to its own sink. `_log_safe` rather than the
+    `_one_line` it is built on: whitespace alone is not enough at a sink a CI runner parses, which
+    is #176.
     """
     forged = [_brief(["benign headline\n  assessment + challenge(s) now raised: FORGED"])] * 3
     ((label, _), ) = brief_consensus(forged)["all_themes"].items()

@@ -294,10 +294,11 @@ def questions_one(slug: str) -> None:
     stops going through it, and `test_an_ordinary_question_is_rendered_byte_for_byte` is the other
     half.
 
-    **Deliberately not `_one_line`, the sibling answer in `scripts/plugin_cli_drift.py` (#139).** Same
-    class, two sinks, and the sinks decide the remedy. That one prints into a GitHub Actions step,
-    where column 0 is *parsed* and a forged `::error::` becomes a real workflow command, and its value
-    is a directory name nobody reads for its wording — so a lossy whitespace squash at the point the
+    **Deliberately not `_log_safe`, the sibling answer in `scripts/plugin_cli_drift.py` (#139,
+    #176).** Same class, two sinks, and the sinks decide the remedy. That one prints into a GitHub
+    Actions step, where the log is *parsed* — at column 0 for `::name::`, and at any column at all
+    for the legacy `##[name]`, which is why a whitespace squash alone was not enough there — and its
+    value is a directory name nobody reads for its wording, so a lossy sanitise at the point the
     value enters is exactly right. This one prints into a maintainer's terminal, where column 0 is
     *read*, and the value is the engine's prose being judged on its exact wording: collapsing
     whitespace here would silently rewrite the text the harness exists to compare, which is a worse

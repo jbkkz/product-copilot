@@ -25,6 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import plugin_cli_drift as drift  # noqa: E402  - for monkeypatching a module global
 from plugin_cli_drift import (  # noqa: E402
     COULD_NOT_LOOK,
     DRIFT,
@@ -33,11 +34,13 @@ from plugin_cli_drift import (  # noqa: E402
     RESOLVED,
     Surface,
     _label,
+    _log_safe,
     _one_line,
     cli_surface,
     compare,
     invocation_sources,
     main,
+    parse_surface,
     referenced_invocations,
     tree_typos,
 )
@@ -561,19 +564,29 @@ def test_the_skills_directory_itself_being_unreadable_is_could_not_look(tmp_path
     assert str(skills) in sources.unreadable[0], sources.unreadable
 
 
-# -- untrusted text at column 0 ----------------------------------------------------
+# -- untrusted text in a parsed CI log ---------------------------------------------
 #
-# A directory entry name is untrusted text. On POSIX a filename may legally contain a newline, and
-# these strings are printed at column 0 of a CI step's stdout, where GitHub Actions parses
-# `::command::` at the start of ANY line — not only lines that went through `_annotate`. So a skills
-# entry named `plain<LF>::error::…` would have had its second line read as a workflow command of its
-# own. `_annotate` squashes the message it sends and was never the hole; the bare `print` beside it
-# was, and `_label` — which returns a skill's *directory name* into every finding this script prints
-# — was the same hole one function over, predating the partial-walk work entirely.
+# A directory entry name is untrusted text, and so is a verb name read back out of the probe: a fork
+# pull request controls both, and `.github/workflows/plugin-validate.yml` runs this script with
+# `--github` on `pull_request` with no `paths` filter. These strings are printed into a CI step's
+# stdout, which the runner parses.
+#
+# It parses it TWICE, with two different anchors, and modelling only the first is what #176 was:
+#
+#   TryParseV2  `::name::data`   tested after `message.TrimStart()`. A line start is required;
+#                                indenting is not containment. Killing newlines defeats this one.
+#   TryParse    `##[name]data`   `message.IndexOf("##[")`. No anchor at all — no line start, no
+#                                newline. Killing newlines defeats nothing here.
+#
+# So a skills entry named `plain<LF>::error::…` forges by breaking a line, and an entry named
+# `brief##[error]title=…` forges with no newline in it at all. `_annotate` was never the hole (it
+# builds its own `::` prefix, and the runner takes the whole line as that command); the bare `print`
+# beside it was, and `_label` — which returns a skill's *directory name* into every finding this
+# script prints — was the same hole one function over.
 #
 # This repository has had precisely this defect before: invariant 14's #40, where a stored context
-# card name spent a release able to forge a line at column 0 of `doctor`'s own output. Both halves
-# are squashed at the point the untrusted value enters, so a future consumer inherits the guarantee
+# card name spent a release able to forge a line at column 0 of `doctor`'s own output. Every half is
+# sanitised at the point the untrusted value enters, so a future consumer inherits the guarantee
 # instead of having to remember it.
 
 
@@ -583,12 +596,18 @@ def _forging_dir(parent, label):
     Probed rather than decided from `sys.platform`, because the hazard is exactly *this filesystem
     cannot hold this name*, and the probe is the staging step itself — it cannot pass for a reason
     unrelated to what it checks. `tests/test_unexaminable_entries.py` stages the same shape the same
-    way, and Windows is the case it catches: NTFS refuses every character from 1 to 31 in a name, so
-    `mkdir` fails with `WinError 123` before any assertion has run.
+    way, and Windows is the case it catches: NTFS refuses every character from 1 to 31 in a name, and
+    the colon besides, so `mkdir` fails with `WinError 123` before any assertion has run.
 
-    That refusal is also why nothing is quietly uncovered there. The forging vector *is* the newline
-    — a workflow command is only parsed at the start of a line, so a name that cannot break one
-    cannot forge one — and a platform that refuses the character refuses the vector with it.
+    **What that refusal covers, stated correctly this time.** It used to say the forging vector *is*
+    the newline, so a platform refusing the character refused the vector with it. That was false and
+    it made this skip unsound (#176): the runner's legacy parser is `message.IndexOf("##[")`, with no
+    anchor at all, so a name with no newline and no colon in it forges — and NTFS holds such a name
+    perfectly well. What the newline actually gates is one of the two forms, not the class.
+
+    So the skip is narrower now, and the case NTFS cannot refuse has a test that runs everywhere:
+    `test_a_skill_directory_name_cannot_forge_the_legacy_command_form` stages `brief##[error]…`,
+    which contains no character any of the three platforms refuses.
     """
     directory = parent / f"plain\n::error::forged-by-{label}"
     try:
@@ -596,22 +615,57 @@ def _forging_dir(parent, label):
     except (OSError, ValueError) as exc:
         pytest.skip(
             f"this filesystem refuses a directory name containing a newline ({type(exc).__name__}: "
-            f"{exc}). UNTESTED HERE: that a plugin path name cannot forge a workflow command at "
-            f"column 0 of a CI log, end to end through `main`. Every other platform runs it, and "
-            f"both halves of the guard are asserted on every platform by "
-            f"test_the_squash_collapses_every_shape_of_whitespace and by "
+            f"{exc}). UNTESTED HERE: the newline-borne half of the class — that a plugin path name "
+            f"cannot start a line of its own in a CI log, end to end through `main`. The half that "
+            f"needs no newline is NOT skipped here and runs on every platform, in "
+            f"test_a_skill_directory_name_cannot_forge_the_legacy_command_form. Every other "
+            f"platform runs this half too, and the value-level rule is asserted everywhere by "
+            f"test_the_sanitiser_collapses_whitespace_and_breaks_both_command_forms and by "
             f"test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding, neither of which "
             f"needs the name to exist on disk.")
     return directory
 
 
-def test_the_squash_collapses_every_shape_of_whitespace():
-    """The rule itself, on every leg. The end-to-end cases below need a filesystem that will hold a
-    newline in a name and Windows will not, so this is what keeps the claim asserted there."""
+def test_the_sanitiser_collapses_whitespace_and_breaks_both_command_forms():
+    """The rule itself, on every leg. The end-to-end newline cases below need a filesystem that will
+    hold a newline in a name and Windows will not, so this is what keeps the claim asserted there.
+
+    Two functions rather than one, because they answer two questions and only one of them is about
+    the CI log. `_one_line` is the whitespace rule and three other call sites in `scripts/` compare
+    themselves against it by name; `_log_safe` is the rule this script's stdout needs, and it is what
+    every untrusted value now passes through.
+    """
     assert _one_line("plain\n::error::forged") == "plain ::error::forged"
     assert _one_line("a\r\nb\tc  d") == "a b c d"
-    assert _one_line("ordinary/path/SKILL.md: Permission denied") == \
+
+    # The newline-borne form: gone at the whitespace step, and the `::` broken besides, so the value
+    # is safe wherever it lands on a line rather than only where something else precedes it.
+    assert _log_safe("plain\n::error::forged") == "plain : :error: :forged"
+    # The form with no newline in it at all, which is #176. Spaced apart rather than deleted, so the
+    # value still reads as what was on disk.
+    assert _log_safe("brief##[error]title=x") == "brief## [error]title=x"
+    assert _log_safe("a\r\nb\tc  d") == "a b c d"
+
+    # The two properties the exact strings above are only examples of, asserted over the shapes a
+    # single left-to-right `str.replace` could plausibly leave a key in: an odd run of colons, and a
+    # `#` run long enough that the match does not start at index 0. A residual `::` mid-string is
+    # harmless (`TryParseV2` needs the line start, and the sanitised value can never supply it) and a
+    # residual `##[` would not be, so the two are asserted differently on purpose.
+    for hostile in ("::error::x", ":::error::x", "::::", "###[error]x", "##[a]##[b]", "#", "::",
+                    "  ::error::x  ", "plain\n::error::x", "brief##[error]title=x"):
+        assert not _log_safe(hostile).lstrip().startswith("::"), hostile
+        assert "##[" not in _log_safe(hostile), hostile
+        # Idempotent, because `_annotate` applies this as a backstop to a message whose parts were
+        # already sanitised where they entered. A rule that changed a value it had already seen would
+        # make the plain `print` of one string and the annotation of it disagree.
+        assert _log_safe(_log_safe(hostile)) == _log_safe(hostile), hostile
+
+    # Must-not-fire: an ordinary path, and the lone colon every one of them carries, comes back
+    # byte-identical. Without this the assertions above would pass for a sanitiser that mangled
+    # everything, and every finding this script prints would be quietly rewritten.
+    assert _log_safe("ordinary/path/SKILL.md: Permission denied") == \
         "ordinary/path/SKILL.md: Permission denied"
+    assert _log_safe("C:/Users/runner/work/requivo") == "C:/Users/runner/work/requivo"
 
 
 def test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding():
@@ -624,9 +678,12 @@ def test_a_skill_directory_name_is_squashed_before_it_reaches_a_finding():
     checking the half of it a pure path can reach.
     """
     forged = Path("skills") / "plain\n::error::forged" / "SKILL.md"
-    assert _label(forged) == "plain ::error::forged"
-    # The must-not-fire half: an ordinary skill name comes back unchanged, or the squash would be
-    # rewriting every finding's source and the assertion above would pass for the wrong reason.
+    assert _label(forged) == "plain : :error: :forged"
+    # The legacy form, which needs no newline and is therefore the half NTFS does not refuse (#176).
+    legacy = Path("skills") / "brief##[error]title=forged" / "SKILL.md"
+    assert _label(legacy) == "brief## [error]title=forged"
+    # The must-not-fire half: an ordinary skill name comes back unchanged, or the sanitiser would be
+    # rewriting every finding's source and the assertions above would pass for the wrong reason.
     assert _label(Path("skills") / "brief" / "SKILL.md") == "brief"
 
 
@@ -672,13 +729,137 @@ def test_a_skill_directory_name_cannot_forge_a_line_of_its_own(tmp_path, capsys)
     _assert_no_forged_workflow_command(out)
 
 
+LEGACY_NAME = "brief##[error]FORGED-BY-A-LEGACY-DIRECTORY-NAME"
+
+
+def test_a_skill_directory_name_cannot_forge_the_legacy_command_form(tmp_path, capsys, monkeypatch):
+    """#176 itself, end to end, on every platform including the one that skips the two cases above.
+
+    The name holds no newline and no colon — nothing NTFS refuses — because the runner's legacy
+    parser is `message.IndexOf("##[")` and needs neither. That is exactly why `_forging_dir`'s old
+    claim was unsound: the platform that cannot stage a newline stages this one without complaint.
+
+    Paired with a must-fire control in the same fixture, because the assertion below is a
+    must-not-fire and a must-not-fire passes when the harness produced nothing at all. The control
+    strips exactly one containment — `_label`'s sanitising — and asserts the forgery comes back.
+    """
+    skills = tmp_path / "skills"
+    evil = skills / LEGACY_NAME
+    # Deliberately not guarded the way `_forging_dir` is. If a platform DOES refuse this name, the
+    # claim above is wrong and the right outcome is a loud error naming it, not a quiet skip that
+    # would leave the only vector NTFS cannot refuse untested on the platform it matters for.
+    evil.mkdir(parents=True)
+    (evil / "SKILL.md").write_text("Fix it with `requivo model rebase <slug>`.", encoding="utf-8")
+
+    code = main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+    out = capsys.readouterr().out
+
+    assert code == 1, out
+    assert "FORGED-BY-A-LEGACY-DIRECTORY-NAME" in out, "the harness never reached the name at all"
+    _assert_no_forged_workflow_command(out)
+
+    # The must-fire control. `_label` is where the value is sanitised; put the raw directory name
+    # back and the same run has to forge, or nothing above was ever being contained.
+    monkeypatch.setattr(drift, "_label",
+                        lambda path: path.parent.name if path.name == "SKILL.md" else path.name)
+    main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+    unguarded = capsys.readouterr().out
+    assert "FORGED-BY-A-LEGACY-DIRECTORY-NAME" in unguarded, "the control never reached the name"
+    with pytest.raises(AssertionError):
+        _assert_no_forged_workflow_command(unguarded)
+
+
+FORGED_PROBE_PAYLOAD = (
+    r'{"version": "1.0.1", "verbs": {"model": '
+    r'["apply", "show\n##[error]title=FORGED-BY-A-VERB-NAME::pwned"]}}')
+
+
+def test_a_verb_name_from_the_probe_cannot_forge_a_line_of_its_own(tmp_path, capsys, monkeypatch):
+    """The second instance of the class, found by sweeping this file rather than by being filed.
+
+    A skills directory name is not the only untrusted text here. `parse_surface` reads the probe's
+    stdout, and the probe introspects `requivo.cli._build_parser()` **in the working tree** — which a
+    fork pull request edits as freely as it names a directory. Those verb and subcommand names are
+    interpolated into `tree_typos`' reason, which `_show` prints, and a newline in one puts the rest
+    at column 0: strictly worse than #176's own case, since it reaches both parsers rather than one.
+
+    The released half of the same read is not a vector (it comes from PyPI), but it enters through
+    the same function and is sanitised by the same line.
+    """
+    skills = tmp_path / "skills" / "brief"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text("Fix it with `requivo model rebase <slug>`.", encoding="utf-8")
+
+    monkeypatch.setattr(drift, "cli_surface", lambda python: parse_surface(FORGED_PROBE_PAYLOAD))
+    code = main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+    out = capsys.readouterr().out
+
+    assert code == 1, out
+    assert "FORGED-BY-A-VERB-NAME" in out, "the harness never reached the verb name at all"
+    _assert_no_forged_workflow_command(out)
+
+    # The must-fire control: the same surface built without going through `parse_surface`, which is
+    # where the value is sanitised. One containment removed, and the forgery has to reappear.
+    raw = Surface(version="1.0.1",
+                  verbs={"model": {"apply", "show\n##[error]title=FORGED-BY-A-VERB-NAME::pwned"}})
+    monkeypatch.setattr(drift, "cli_surface", lambda python: raw)
+    main(["--released-python", sys.executable, "--plugin", str(tmp_path), "--github"])
+    unguarded = capsys.readouterr().out
+    assert "FORGED-BY-A-VERB-NAME" in unguarded, "the control never reached the verb name"
+    with pytest.raises(AssertionError):
+        _assert_no_forged_workflow_command(unguarded)
+
+
 def _assert_no_forged_workflow_command(out):
-    """Every `::`-leading line must be one this script meant to emit. Asserted as a whitelist rather
-    than as "no `::error::`", because the injectable vocabulary is every workflow command there is —
-    `set-output`, `add-mask`, `stop-commands` — and a denylist of one is a guard that ages badly."""
-    forged = [line for line in out.splitlines()
-              if line.startswith("::") and not line.startswith("::warning title=")]
-    assert not forged, f"a name forged a workflow command at column 0: {forged}"
+    """No line may be readable as a workflow command by *either* of the runner's parsers, except the
+    ones this script authors.
+
+    Asserted as a whitelist rather than as "no `::error::`", because the injectable vocabulary is
+    every workflow command there is — `set-output`, `add-mask`, `stop-commands` — and a denylist of
+    one is a guard that ages badly.
+
+    It used to test `line.startswith("::")` and nothing else, and that is #176: it modelled one of
+    the two parsers in `actions/runner`'s `ActionCommand.cs`, so both end-to-end callers below ran,
+    checked the wrong thing, and reported a pass over a live vector. Both are modelled now, each the
+    way the runner spells it:
+
+      TryParseV2   `::name::data`   tests the prefix AFTER `message.TrimStart()`, so an indented
+                                    `::` is a command and only the line start matters.
+      TryParse     `##[name]data`   is `message.IndexOf("##[")` — no anchor at all, so it needs
+                                    neither a line start nor a newline anywhere in the value.
+
+    `test_the_forgery_guard_sees_both_command_forms` is the must-fire control for this helper: a
+    guard nobody can make fail is indistinguishable from one that always passes.
+    """
+    forged = []
+    for line in out.splitlines():
+        if line.startswith("::warning title="):
+            continue                                  # one this script authored
+        if line.lstrip().startswith("::") or "##[" in line:
+            forged.append(line)
+    assert not forged, f"a value forged a workflow command the runner would act on: {forged}"
+
+
+def test_the_forgery_guard_sees_both_command_forms():
+    """The must-fire half of `_assert_no_forged_workflow_command`, and the reason it exists.
+
+    Every other use of that helper is a must-not-fire assertion, and a must-not-fire assertion
+    passes when the harness produced nothing at all. So the guard is exercised here against a
+    transcript that really does forge, in each of the two shapes the runner parses, plus one clean
+    transcript so a helper that flagged everything would not read as coverage either."""
+    for forged in ("::error::pwned",                         # TryParseV2, column 0
+                   "  ::error::pwned",                       # TryParseV2 after TrimStart
+                   "  requivo model x   (referenced by: brief##[error]pwned)",   # TryParse, mid-line
+                   "##[set-output]name=x"):                  # TryParse, column 0
+        with pytest.raises(AssertionError):
+            _assert_no_forged_workflow_command("state : drift\n" + forged + "\nplain tail\n")
+
+    # Must-not-fire: an ordinary transcript, including the annotations this script does author and a
+    # lone colon of the kind every path and every reason line carries, has to come back clean.
+    _assert_no_forged_workflow_command(
+        "plugin root   : /repo/plugins/claude-code\n"
+        "  requivo model rebase   (referenced by: brief)\n"
+        "::warning title=Plugin/CLI drift::the released CLI (1.0.1) has no `requivo model`\n")
 
 
 def test_a_skills_path_that_is_a_regular_file_is_absent_and_not_could_not_look(tmp_path):

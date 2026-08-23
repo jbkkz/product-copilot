@@ -3,10 +3,17 @@
 `.github/workflows/plugin-validate.yml`'s advisory step echoes the combined stdout and stderr of a
 third-party binary -- `claude plugin validate --strict`, over two manifests -- and interpolates
 `claude --version` into six lines that begin at column 0, five of them GitHub Actions workflow
-commands. `scripts/plugin_cli_drift.py` had already been hardened against exactly this class inside
+commands. `scripts/plugin_cli_drift.py` had been hardened against *one form* of this class inside
 the same feature (#96): `_annotate` squashes its message, and the module comment at `INVOCATION_RE`
 says why. The shell beside it did neither. One half of a change knew about the hazard and the other
 half did not, which is the finding rather than the specific hole.
+
+That "already hardened" read as *fully* hardened when this was written, and it was not: the script's
+own `_one_line` squashed whitespace, which is a defence against `TryParseV2` and none at all against
+the unanchored `TryParse` below, so a skills directory name forged through it with no newline in it.
+That was reported from this pull request rather than fixed in it, and is #176 -- where `_log_safe`
+now breaks both keys at the point the value enters. The sentence is corrected here because a
+neighbour claiming a guarantee its neighbour does not provide is how this hole survived a review.
 
 Two containments, because the runner's parser has two forms and the two obvious fixes cover neither
 of them fully. Read out of `actions/runner` at `src/Runner.Common/ActionCommand.cs` (main branch,
