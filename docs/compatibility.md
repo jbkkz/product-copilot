@@ -725,9 +725,12 @@ migrate` still converts them, and it is now the only thing that reads that layou
 - **Python internals.** `requivo.core`, `requivo.services`, `requivo.providers` and
   `requivo.deterministic` are importable and documented, but they are the engine's own structure, not
   a published API. A refactor can move them, and #73 moved `requivo.deterministic`, which is why it is
-  named here rather than left to silence. Its public job is the single `register(sub)` the CLI binds
-  through, so it is argparse wiring for the offline verbs rather than an interface. What those verbs
-  promise is on this page already: the CLI exit codes, the `--json` payloads and the session format.
+  named here rather than left to silence. Its `__all__` is three names, every one of them read from
+  inside this repository and none of them promised outside it: `register(sub)`, the argparse wiring
+  `cli.py` binds the offline verbs through; `read_user_text`, which `cli.py` also imports; and
+  `EXIT_DEGRADED`, which the suite imports to assert the code a degraded run exits with. That is
+  internal plumbing for the offline verbs rather than an interface. What those verbs promise is on
+  this page already: the CLI exit codes, the `--json` payloads and the session format.
   Those are promises about what the command does when you run it, not about names you can import. A
   downstream consumer that depends on any of these four deliberately tracks the repo.
 - **Prompt and context-card content.** These are tuned continuously — that is the point of the

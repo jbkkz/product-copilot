@@ -335,7 +335,9 @@ def test_the_degraded_exit_code_is_published_as_a_value_not_as_a_name():
     `deterministic/__init__.py` used to say the page published `EXIT_DEGRADED` "under this name", and
     it does not: the page carries a `4` row in its exit-code table, and it lists `requivo.deterministic`
     among the Python internals that are explicitly *not* stable — which #144 added on the argument that
-    the module's whole public job is the `register(sub)` the CLI binds through.
+    the module is internal plumbing for the offline verbs rather than an interface. (#144 put that as
+    the module's whole public job being the `register(sub)` the CLI binds through, which undercounted
+    its `__all__` by two; #148 corrected the page and this sentence with it.)
 
     **Publishing the name was refused, not merely left unchosen.** A promised import costs a major
     version to move, and it would buy a consumer nothing the documented exit code does not already
