@@ -43,6 +43,17 @@ replaced, so only a capture that runs deep says anything at all about that chang
   all-clear is the one failure mode a regression lens must not have.
 - **The assessment lens** (`--brief`) watches the deliverable instead of the discovery state: the
   complexity verdict and which premises the engine chose to contest.
+- **Every lens runs, and the verdict is the union of the ones that ran** — the strongest signal any
+  of them found. They are independent measurements of one capture rather than votes on one question,
+  so a flat slot consensus is never evidence that the assessment held still. The slot section's
+  *"no change above the noise floor"* line decides only whether that section is a dash; it used to
+  end the whole request, which made the assessment lens unreachable in exactly the case it exists
+  for, on the capture the maintainer had paid double for.
+- **A lens that could not look says so on its own line.** A request captured without `--brief` reads
+  `assessment · not captured — this lens did not look`, which is a different sentence from
+  `assessment · verdict and challenges unchanged`. A capture whose baseline *had* an assessment and
+  no longer does is louder still, and counts as a strong signal on its own: a lens going away reads
+  exactly like a lens going quiet.
 - **The interactive lens** watches turn 3 and beyond on an interactive request, in three measures —
   questions **re-asked** after the client had already answered them, early confirmations the model
   **lost** by the end, and completeness that **regressed** across a deep turn. Each is a way the
@@ -65,5 +76,6 @@ adjustment entry, or an override?"* — that's the read that matters.
 K calls per request, doubled under `--brief`. An **interactive** request costs K × `GOLDEN_TURNS`
 instead — 15 at the defaults — so capture it on its own rather than as part of a full-set run.
 Re-capture the targeted request first and the full set only before committing a baseline. The
-harness's own logic is unit-tested in `tests/test_golden_lib.py`, and its capture loop in
-`tests/test_golden_capture.py` (no API calls in either).
+harness's own logic is unit-tested in `tests/test_golden_lib.py`, its capture loop in
+`tests/test_golden_capture.py`, and what it prints — the per-lens states and the union verdict — in
+`tests/test_golden_readout.py` (no API calls in any of them).

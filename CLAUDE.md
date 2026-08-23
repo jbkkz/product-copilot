@@ -351,11 +351,21 @@ bug that looked like correct behaviour.
     still read as
     UTF-8, but refused by `read_user_text` with a structured error rather than a traceback.
     Output is the mirror image, and the ordering is the whole point: `streams.py` reconfigures stdout
-    and stderr once, from `cli.app()`, with `errors="backslashreplace"` — never `replace`, because a
-    reader cannot tell a substituted character from one that was never there. A glyph must not be able
-    to kill a process **after** the mutation it was reporting has landed; the `UnicodeEncodeError` arm
-    in `app()` exits `EXIT_RENDER_FAILED` (3) and says the work is done rather than letting a traceback
-    imply it is not (#11, #29).
+    and stderr once, from every entry point that prints, with `errors="backslashreplace"` — never
+    `replace`, because a reader cannot tell a substituted character from one that was never there.
+    *Every entry point* was `cli.app()` alone for a release, and the two scripts that **measure** the
+    product printed sixteen glyphs outside it (#164): `golden_run.py` spends real API calls and
+    writes its baseline before it reports on it, so a cp1252 console turned a completed capture into
+    a traceback standing where a result should be. `golden_lib.configure_output()` is the one call
+    both take, and it carries the third state rather than an exit code of its own — a stream
+    `configure_stream` could not reach is named on stderr, because that is exactly the stream that
+    can still crash. `test_a_harness_script_survives_a_console_that_cannot_encode_its_output` and
+    `test_a_strict_console_kills_a_harness_script_that_does_not_configure_its_streams` are the pair.
+    A glyph must not be able to kill a process **after** the mutation it was reporting has landed;
+    the `UnicodeEncodeError` arm in `app()` exits `EXIT_RENDER_FAILED` (3) and says the work is done
+    rather than letting a traceback imply it is not (#11, #29). The harness scripts deliberately have
+    no such arm: `golden_diff` neither calls nor writes anything, so a guard there could never fire,
+    and `golden_run` has already written each request's baseline by the time a summary could die.
 17. **A guard's verdict must not depend on transient filesystem state.** `_child_of` decided whether
     `root/slug` escaped the session root by comparing `d.resolve()` with `root.resolve()` — two
     independent resolutions, of paths where one is derived from the other, each reflecting the tree at
@@ -605,6 +615,17 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
   jitter as signal.
 - **A capture identical to HEAD reports "not re-captured", never "no change"** — a false all-clear is
   the one failure mode a regression lens must not have.
+- **Every lens runs, and the run's verdict is the union of the ones that ran** — the strongest signal
+  any of them found. They are independent measurements of one capture, not votes on one question, so
+  a null result from one is never evidence against a finding from another; the slot section's *no
+  change above the noise floor* line decides only whether **that section** is a dash. It used to end
+  the whole request, which made the assessment lens unreachable in exactly the case it exists for —
+  a `brief.md` edit that moves the verdict or the challenges without moving a slot — and `--brief`
+  doubles that request's calls, so whoever paid for the capture was the one told there was nothing to
+  see (#162). A lens that could not look says so on its own line and contributes nothing to the
+  verdict; a lens that *went away* between baselines is strong on its own, because a lens
+  disappearing reads exactly like a lens going quiet.
+  `test_the_assessment_lens_runs_when_the_slot_consensus_held_still` is the guard.
 - **The assessment lens** (`--brief`, doubles that request's calls) watches the deliverable: the
   complexity verdict and the challenges, grouped by the slots they contest. Grouping challenges by
   headline wording was tried and abandoned — the engine rephrases at the concept level, so two

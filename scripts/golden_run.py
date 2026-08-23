@@ -56,6 +56,7 @@ from golden_lib import (  # noqa: E402
     Turn,
     answers_for_turn,
     brief_consensus,
+    configure_output,
     dump_runs,
     dump_turn_runs,
     is_interactive,
@@ -158,6 +159,10 @@ def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # First, before anything can print: this script spends real API calls and writes each request's
+    # baseline before it reports on it, so a glyph the console cannot encode must not be able to kill
+    # it over work already paid for (invariant 16, #164).
+    configure_output()
     if not REQUESTS.exists():
         print(f"Missing request set: {REQUESTS}", file=sys.stderr)
         return 1

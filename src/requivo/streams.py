@@ -91,9 +91,10 @@ def configure_stream(stream, name: str) -> dict:
     `unchanged` (there was nothing to do) and `could-not` (with the reason). A stream this could not
     reach is the one that can still crash, so it must be nameable downstream.
 
-    **`could-not` keeps its hyphen because this report is not a `--json` output.** `cli.app()` is its
-    only consumer; `doctor` serializes `describe_stream`'s states, not these, which is why #88 could
-    respell `will-crash` and leave this alone. If this report is ever put into a payload — a plausible
+    **`could-not` keeps its hyphen because this report is not a `--json` output.** Its consumers are
+    `cli.app()` and `golden_lib.configure_output()` (#164), and both only *print* it; `doctor`
+    serializes `describe_stream`'s states, not these, which is why #88 could respell `will-crash` and
+    leave this alone. If this report is ever put into a payload — a plausible
     `doctor --json` addition, *what happened at startup* — it becomes a published enum value and the
     underscore rule in `test_the_published_stream_states_are_all_underscore_spelled` applies to it.
     Respell it in the same change; do not publish the hyphen and fix it after.
@@ -136,11 +137,13 @@ def configure_stream(stream, name: str) -> dict:
 
 
 def configure_streams() -> list:
-    """Configure stdout and stderr. Called once, first thing in `cli.app()`.
+    """Configure stdout and stderr. Called once, first thing in an entry point that prints.
 
     Deliberately not called at import time: importing `requivo` must not reconfigure the streams of
     a program that merely imported it. The Web surface never prints, and the library API has no
-    business touching a caller's stdout — so the CLI entry point is the only caller.
+    business touching a caller's stdout — so the callers are the entry points, and only those:
+    `cli.app()` for the product, and `golden_lib.configure_output()` for the two harness scripts
+    under `scripts/`, which print box rules and provider prose and reached none of this until #164.
     """
     return [configure_stream(sys.stdout, "stdout"), configure_stream(sys.stderr, "stderr")]
 

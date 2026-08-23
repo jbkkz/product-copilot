@@ -25,10 +25,47 @@ sys.path.insert(0, str(REPO / "src"))
 from requivo.core.analysis import _label, _state_of  # noqa: E402
 from requivo.core.contracts import Brief, EngineOutput  # noqa: E402
 from requivo.core.selectors import display_token  # noqa: E402
+from requivo.streams import configure_streams, safe_write  # noqa: E402
 
 GOLDEN = REPO / "fixtures" / "golden"
 REQUESTS = GOLDEN / "requests.md"
 K = int(os.getenv("GOLDEN_K", "3"))  # runs per request; 3 is the approved default
+
+
+def configure_output() -> None:
+    """Make this script's stdout and stderr unable to kill it on a character they cannot encode.
+
+    Invariant 16, in the scripts that measure the product (#164). Both harness scripts print box
+    rules, arrows, check marks and provider-written prose, and neither reached `streams.py` — which
+    runs only from `cli.app()`. On a cp1252 console that is a `UnicodeEncodeError` at the `print`,
+    **after** the work it was reporting has landed: `golden_run` spends real API calls, so a capture
+    that completes fifteen of them, writes its runs file and then dies rendering the summary leaves a
+    traceback standing where a result should be, over work already paid for.
+
+    The class, not the instances. Sweeping the glyphs out of the two files would fix today's strings
+    and leave the next print to reopen it, which is the argument `streams.py`'s own docstring makes at
+    length; this is one call, so the question is decided in one place — with
+    `errors="backslashreplace"` and never `replace`, because a reader cannot tell a substituted
+    character from one that was never there.
+
+    **No `EXIT_RENDER_FAILED` arm here, unlike `cli.app()`, and that is a decision.** That arm exists
+    to stop a *paid, mutating* command being misreported as failed. `golden_diff` neither calls nor
+    writes anything, so there is nothing for it to misreport and a guard that provably cannot fire is
+    worse than none; `golden_run` writes each request's baseline **before** any summary print and
+    already catches per-request failure, so its work is durable by the time a render could die. What
+    is left is `configure_stream`'s own third state — a stream it could not reach is exactly the one
+    that can still crash — and that is reported here as a line somebody can read, the way `doctor`
+    reports it for the product, rather than as an exit code nothing under `scripts/` consumes.
+    `test_a_harness_script_survives_a_console_that_cannot_encode_its_output` is what fails when a
+    script stops calling this, with
+    `test_a_strict_console_kills_a_harness_script_that_does_not_configure_its_streams` as the other
+    half.
+    """
+    for report in configure_streams():
+        if report["state"] == "could-not":
+            safe_write(sys.stderr,
+                       f"  ! {report['stream']} could not be configured ({report['reason']}) — a "
+                       f"character it cannot encode will still kill this script at the print\n")
 
 
 def parse_requests(path: Path) -> list[dict]:
