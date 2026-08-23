@@ -883,11 +883,15 @@ def test_the_usage_line_cannot_kill_a_run_that_already_paid_for_its_call(monkeyp
 
     Driven through `_render_usage_safely` with a real ledger and a real ascii encoder, so the
     exception under test is the encoder's."""
-    from requivo.providers.anthropic import CallRecord, UsageLedger
+    from requivo.providers.anthropic.pricing import price_call
+    from requivo.usage import CallRecord, UsageLedger
 
+    # Priced through `price_call`, the way the provider files a real call (#167): a bare CallRecord
+    # carries no rate, and an unpriced ledger renders the *other* branch -- so without this the test
+    # would still pass, on a line it was not written about.
     ledger = UsageLedger()
-    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=10, output_tokens=20,
-                             cache_read_tokens=0, cache_write_tokens=0, latency_ms=5))
+    ledger.record(price_call(CallRecord(model="claude-sonnet-5", input_tokens=10, output_tokens=20,
+                                        cache_read_tokens=0, cache_write_tokens=0, latency_ms=5)))
 
     stream = _unconfigurable_stdout()
     monkeypatch.setattr(sys, "stdout", stream)

@@ -22,17 +22,19 @@ from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
 
-# The only three names this surface takes from the provider, and each is a *surface* concern rather
-# than an orchestration one: `new_client` builds the SDK client that gets handed to DiscoveryService,
-# `track_usage` scopes the ledger `app()` prints when the command is over, and `EngineError` is an
-# exception type the top-level handler catches — none of them reasons about anything.
+# The only two names this surface takes from `requivo.providers`, and each is a *surface* concern
+# rather than an orchestration one: `new_client` builds the SDK client that gets handed to
+# DiscoveryService, and `EngineError` is an exception type the top-level handler catches — neither
+# reasons about anything. `track_usage` was a third until #167 and is no longer a provider name at
+# all: the ledger is provider-neutral and lives in `requivo.usage`.
 #
 # `run`, `advise` and `estimate` used to be here too, and that was #77: the interactive `discover`
 # branch drove two provider calls of its own before letting the service do the write, so the primary
 # surface held a second orchestration of discovery while CLAUDE.md, the README and
 # docs/architecture.md all said it did not. `tests/test_boundaries.py` guards the list now, in both
 # directions — an unexpected import fails, and so does an entry here that nothing imports.
-from requivo.providers.anthropic import EngineError, new_client, track_usage
+from requivo.providers.anthropic import new_client
+from requivo.providers.errors import EngineError
 from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import (
     render_brief,
@@ -48,6 +50,7 @@ from requivo.services.artifacts import ARTIFACT_FILENAMES
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.streams import configure_streams, safe_write
+from requivo.usage import track_usage
 
 load_dotenv()
 

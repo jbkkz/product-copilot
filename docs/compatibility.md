@@ -757,17 +757,24 @@ migrate` still converts them, and it is now the only thing that reads that layou
 
 ## What is explicitly *not* stable
 
-- **Python internals.** `requivo.core`, `requivo.services`, `requivo.providers` and
-  `requivo.deterministic` are importable and documented, but they are the engine's own structure, not
-  a published API. A refactor can move them, and #73 moved `requivo.deterministic`, which is why it is
-  named here rather than left to silence. Its `__all__` is three names, every one of them read from
+- **Python internals.** `requivo.core`, `requivo.services`, `requivo.providers`,
+  `requivo.deterministic` and `requivo.usage` are importable and documented, but they are the
+  engine's own structure, not a published API. A refactor can move them, and it has twice: #73 moved
+  `requivo.deterministic`, and #74/#167 turned `requivo.providers.anthropic` into a package while
+  moving two names out of it — the usage ledger to `requivo.usage` and `EngineError` to
+  `requivo.providers.errors`, neither of which was ever Anthropic-specific. That is why they are
+  named here rather than left to silence. The error *code* those moves carry, `provider_unavailable`,
+  is unaffected: it is published in the `--json` envelope and is promised above, independently of
+  which module defines the class.
+
+  `requivo.deterministic`'s `__all__` is three names, every one of them read from
   inside this repository and none of them promised outside it: `register(sub)`, the argparse wiring
   `cli.py` binds the offline verbs through; `read_user_text`, which `cli.py` also imports; and
   `EXIT_DEGRADED`, which the suite imports to assert the code a degraded run exits with. That is
   internal plumbing for the offline verbs rather than an interface. What those verbs promise is on
   this page already: the CLI exit codes, the `--json` payloads and the session format.
   Those are promises about what the command does when you run it, not about names you can import. A
-  downstream consumer that depends on any of these four deliberately tracks the repo.
+  downstream consumer that depends on any of these five deliberately tracks the repo.
 - **Prompt and context-card content.** These are tuned continuously — that is the point of the
   [golden harness](evaluations.md). Two versions can reason differently about the same request; the
   provenance recorded on each revision (model + prompt hash) is what makes that traceable.

@@ -4,7 +4,7 @@ import textwrap
 
 from requivo.core.analysis import _label, _readiness_blockers, _state_of
 from requivo.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
-from requivo.providers.anthropic import PRICING_AS_OF, UsageLedger
+from requivo.usage import UsageLedger
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),
@@ -87,10 +87,17 @@ def render_usage(ledger: UsageLedger) -> None:
     print(f"  {'Latency':<11} {ledger.latency_ms / 1000:.1f} s")
     cost = ledger.cost_usd()
     model = " · ".join(ledger.models)
-    if cost is not None:
-        print(f"  {'Est. cost':<11} ~${cost:.3f}   ({model} — estimate, rates as of {PRICING_AS_OF})")
-    else:
+    if cost is None:
         print(f"  {'Est. cost':<11} n/a — no price on file for {model} (tokens above are exact)")
+        return
+    # The rate date comes off the ledger, not off a vendor constant this module imports (#167): the
+    # renderer is told what the calls were priced at, it does not look the prices up. Third state on
+    # purpose — a priced call whose rate table has no date prints without the "rates as of" clause
+    # rather than borrowing a date from somewhere, because an undated estimate that reads as a dated
+    # one is the more expensive of the two mistakes.
+    as_of = " · ".join(ledger.priced_as_of)
+    stamp = f", rates as of {as_of}" if as_of else ""
+    print(f"  {'Est. cost':<11} ~${cost:.3f}   ({model} — estimate{stamp})")
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:
