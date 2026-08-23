@@ -132,45 +132,75 @@ _CLAUDE_STUB = _claude_stub()
 _NPM_STUB = "#!/bin/sh\nexit 0\n"
 
 
-def _all_run_steps():
-    """Every step in the workflow that carries a `run:`, as `(name, script)` pairs, in file order.
+# Every YAML block-scalar header a `run:` can carry: `|` or `>`, with an optional chomping
+# indicator and an optional explicit indentation indicator, in either order. Matching only the
+# exact string `run: |` was a hole, found by review of #177 and not by anything failing: `run: |-`
+# -- the ordinary way to drop a trailing newline -- fell through to the one-line branch, which took
+# `|-` as the whole command and threw the body away. A genuinely unfenced `claude` step written
+# that way was invisible to every check in this module, and the step count in
+# test_every_step_that_runs_the_cli_contains_what_it_prints did not move either, so the guard
+# against *a fourth step added later* reported nothing at all. Over-matching here is the safe
+# direction: an unparseable header read as a block still gets its body scanned.
+# See test_the_step_extractor_reads_every_run_form.
+_BLOCK_SCALAR = re.compile(r"^[|>][0-9+-]*$")
+
+
+def _run_steps(text):
+    """Every step in `text` that carries a `run:`, as `(name, script)` pairs, in file order.
 
     No YAML parser: PyYAML is not a dependency of this project and adding one to read a handful of
     shell blocks would be the larger change.
 
-    **Both forms of `run:`, and that is the point rather than completeness for its own sake.** A
+    **Every form of `run:`, and that is the point rather than completeness for its own sake.** A
     block scalar is what the advisory step uses; a plain one-line `run: claude plugin validate
     --strict .` is what the two gate steps were before #177. A scanner that understood only
     `run: |` would have reported the very defect this module exists to catch as absent, which is the
     empty-scan-set all-clear `tests/test_boundaries.py` refuses for the same reason.
+
+    Takes the text rather than reading the workflow, so the control below can put YAML in front of
+    it that the real file does not happen to contain.
     """
-    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
-    steps, name, i = [], None, 0
+    lines = text.splitlines()
+    steps, name, name_indent, i = [], None, -1, 0
     while i < len(lines):
         raw = lines[i]
         stripped = raw.strip()
+        indent = len(raw) - len(raw.lstrip())
         if stripped.startswith("- "):
-            # A new step begins here. Its name is known only if `name:` is the key it opens with.
-            name = stripped[len("- name:"):].strip() if stripped.startswith("- name:") else None
+            # A new step begins here -- unless this is a nested sequence *inside* one, which is why
+            # the indent is compared rather than every `- ` line clearing the name. A step carrying
+            # `with:` / `args:` / `- --flag` before its `run:` would otherwise file the block under
+            # `<unnamed>`, and `_step_script` would then fail under a name nobody wrote.
+            if name is None or indent <= name_indent:
+                name = (stripped[len("- name:"):].strip()
+                        if stripped.startswith("- name:") else None)
+                name_indent = indent
         key = stripped[2:].strip() if stripped.startswith("- ") else stripped
         label = name or f"<unnamed step at line {i + 1}>"
-        if key == "run: |":
-            indent = len(raw) - len(raw.lstrip())
-            body, k = [], i + 1
-            while k < len(lines):
-                if not lines[k].strip():
-                    body.append("")
-                elif len(lines[k]) - len(lines[k].lstrip()) <= indent:
-                    break
-                else:
-                    body.append(lines[k])
-                k += 1
-            steps.append((label, textwrap.dedent("\n".join(body)).rstrip() + "\n"))
-            i = k                     # past the block, so a `run:` inside a heredoc is not a step
+        if not key.startswith("run:"):
+            i += 1
             continue
-        if key.startswith("run: "):
-            steps.append((label, key[len("run: "):].strip() + "\n"))
-        i += 1
+        value = key[len("run:"):].strip().split(" #", 1)[0].strip()
+        if value and not _BLOCK_SCALAR.match(value):
+            steps.append((label, value + "\n"))
+            i += 1
+            continue
+        body, k = [], i + 1
+        while k < len(lines):
+            if not lines[k].strip():
+                body.append("")
+            elif len(lines[k]) - len(lines[k].lstrip()) <= indent:
+                break
+            else:
+                body.append(lines[k])
+            k += 1
+        steps.append((label, textwrap.dedent("\n".join(body)).rstrip() + "\n"))
+        i = k                         # past the block, so a `run:` inside a heredoc is not a step
+    return steps
+
+
+def _all_run_steps():
+    steps = _run_steps(WORKFLOW.read_text(encoding="utf-8"))
     if not steps:
         pytest.fail(f"no `run:` step found in {WORKFLOW} at all -- the extractor is broken, and an "
                     f"empty scan set is an all-clear nobody earned")
@@ -434,6 +464,67 @@ def _without_comments(script):
 def _steps_running_claude():
     return [(name, script) for name, script in _all_run_steps()
             if _CLAUDE_INVOCATION.search(_without_comments(script))]
+
+
+def test_the_step_extractor_reads_every_run_form():
+    """The extractor is what every check in this module rests on, so its blind spots become theirs.
+
+    Found by review of #177 rather than by anything going red, which is the point of writing it
+    down: `_run_steps` matched the block scalar only as the exact string `run: |`, so a step
+    written `run: |-` fell through to the one-line branch, which took `|-` as the whole command and
+    discarded the body. An unfenced `claude` step written that way reached neither
+    `_steps_running_claude` nor the step count below, so the guard against *a fourth step added
+    later* answered cleanly about a step it had never seen -- a test that passes when the code does
+    nothing, arrived at by a YAML spelling rather than by a missing assertion.
+
+    Every header form is read now, and a nested sequence inside a step no longer clears its name.
+    Both are asserted against text the real workflow does not contain, because a guard exercised
+    only on a file that happens not to use the form proves nothing about the form.
+    """
+    text = (
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - name: Literal\n"
+        "        run: |\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: Stripped\n"
+        "        run: |-\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: Kept\n"
+        "        run: |+\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: Folded\n"
+        "        run: >-\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: Explicit indent\n"
+        "        run: |2\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: Commented header\n"
+        "        run: | # why this is a block\n"
+        "          claude plugin validate --strict .\n"
+        "      - name: One line\n"
+        "        run: claude plugin validate --strict .\n"
+        "      - name: Nested sequence first\n"
+        "        with:\n"
+        "          args:\n"
+        "            - --strict\n"
+        "        run: |\n"
+        "          claude plugin validate --strict .\n"
+        "      - uses: actions/checkout@v7\n"
+    )
+    steps = _run_steps(text)
+    assert [name for name, _ in steps] == [
+        "Literal", "Stripped", "Kept", "Folded", "Explicit indent", "Commented header",
+        "One line", "Nested sequence first"], steps
+    for name, script in steps:
+        assert script.strip() == "claude plugin validate --strict .", (name, script)
+        assert _CLAUDE_INVOCATION.search(_without_comments(script)), (
+            f"{name}: the body was dropped, so every check in this module would look straight "
+            f"past an unfenced step written this way")
+
+    # And the must-not-fire half: a step that runs no CLI must not be conjured into the set.
+    assert _run_steps("      - name: Nothing\n        uses: actions/checkout@v7\n") == []
 
 
 def test_every_step_that_runs_the_cli_contains_what_it_prints():
