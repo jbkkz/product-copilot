@@ -216,24 +216,34 @@ def _show_assessment(old_briefs: list | None, new_briefs: list) -> str | None:
       It contributes nothing to the verdict, since it did not look.
     - **first capture** — nothing to compare against, so the consensus readout *is* the finding, the
       same shape the noise floor beside it already has.
-    - **lens lost** — HEAD has an assessment and this capture does not. Loud, and strong on its own:
-      the lens going away reads exactly like the lens going quiet.
+    - **baseline only** — HEAD has an assessment and this capture does not. Marked `!` rather than
+      `·`, because committing this capture would drop a lens the baseline had — but it contributes
+      **nothing** to the verdict, for the same reason the not-captured state does: there is nothing
+      to compare, so nothing was measured.
     - **compared** — both sides have one, and `brief_movements` grades it.
 
     A lost challenge theme counts as strong on its own: the engine used to contest that premise in a
     majority of runs and stopped. On the deliverable, losing a challenge is the regression that
     matters most — sharper questions are worth little if the pushback quietly disappears.
 
-    Deliberately *not* tallied in the summary line the way `stale` is. A request nobody captured an
-    assessment for is the ordinary case — `--brief` is meant for one or two representative requests,
-    not all six — so a counter for it would fire on nearly every run, and a counter that always fires
-    is one nobody reads. The per-request line is where this belongs.
+    **Why `baseline only` is not strong, unlike `_show_turns`' matching state.** It was, and that was
+    wrong. Interactivity is declared in `requests.md` and reproduced on every capture, so the turn
+    lens cannot vanish by accident and its disappearance really is a finding. `--brief` is a manual
+    per-invocation flag that no capture remembers, and **every** single-pass baseline in
+    `fixtures/golden/` currently carries one — so grading this strong turns the documented workflow
+    (`golden_run.py` with no `--brief`, to measure an `engine.md` or context-card change) into six
+    strong signals over a run where nothing moved. That is the noise this file exists to suppress,
+    manufactured by the lens meant to catch it, and it is the rule stated two bullets up: a lens that
+    could not look contributes nothing to the verdict.
+
+    Deliberately *not* tallied in the summary line the way `stale` is: the per-request line is where
+    a lens's own state belongs, and a counter that fires on nearly every run is one nobody reads.
     """
     if not new_briefs:
         if old_briefs:
-            print("  assessment ! the baseline has an assessment and this capture does not — the "
-                  "assessment lens is gone, which is not the same as clean")
-            return "strong"
+            print("  assessment ! the baseline has an assessment and this capture does not — nothing "
+                  "to compare (re-capture with --brief, or the committed baseline loses this lens)")
+            return None
         print("  assessment · not captured — this lens did not look "
               "(re-run golden_run.py with --brief to measure it)")
         return None

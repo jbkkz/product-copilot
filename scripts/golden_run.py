@@ -17,7 +17,10 @@ Workflow:
 ``--brief`` additionally captures the **assessment** for each run — the deliverable, not just the
 discovery state. It watches the complexity verdict and the challenge headlines (what the engine chose
 to contest), which is what a change to ``prompts/brief.md`` actually moves. It doubles the API calls
-for that request, so it is opt-in and meant for a couple of representative requests, not all six.
+for that request, so it is opt-in. It is *described* as being for a couple of representative
+requests; in practice all six single-pass baselines in ``fixtures/golden/`` carry one, and that gap
+matters because a lens's grading was once designed around the sentence rather than the fixtures
+(#162). Check the baselines before reasoning from this paragraph.
 
 A request carrying an **answer sheet** (``answer.<slot>:`` lines in ``requests.md``) is captured
 differently again: `capture_interactive` drives `DiscoveryService.draft_turn` for up to

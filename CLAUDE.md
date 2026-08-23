@@ -622,10 +622,16 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
   the whole request, which made the assessment lens unreachable in exactly the case it exists for —
   a `brief.md` edit that moves the verdict or the challenges without moving a slot — and `--brief`
   doubles that request's calls, so whoever paid for the capture was the one told there was nothing to
-  see (#162). A lens that could not look says so on its own line and contributes nothing to the
-  verdict; a lens that *went away* between baselines is strong on its own, because a lens
-  disappearing reads exactly like a lens going quiet.
-  `test_the_assessment_lens_runs_when_the_slot_consensus_held_still` is the guard.
+  see (#162). A lens that could not look says so on its own line and **contributes nothing to the
+  verdict** — including the case where the baseline has an assessment and the new capture does not,
+  which is marked `!` because committing it would drop a lens, and still measured nothing. That last
+  one was graded strong for one review round, by analogy with the turn lens, and the analogy fails:
+  interactivity is declared in `requests.md` and reproduced on every capture, while `--brief` is a
+  per-invocation flag no capture remembers and every single-pass baseline in `fixtures/golden/`
+  carries one — so the grading turned the documented no-`--brief` workflow into six strong signals
+  over a run where nothing moved, which is the noise the file exists to suppress, manufactured by the
+  lens meant to catch it. `test_the_assessment_lens_runs_when_the_slot_consensus_held_still` and
+  `test_a_capture_that_dropped_the_assessment_says_so_without_manufacturing_a_signal` are the guards.
 - **The assessment lens** (`--brief`, doubles that request's calls) watches the deliverable: the
   complexity verdict and the challenges, grouped by the slots they contest. Grouping challenges by
   headline wording was tried and abandoned — the engine rephrases at the concept level, so two

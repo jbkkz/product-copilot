@@ -49,11 +49,14 @@ replaced, so only a capture that runs deep says anything at all about that chang
   *"no change above the noise floor"* line decides only whether that section is a dash; it used to
   end the whole request, which made the assessment lens unreachable in exactly the case it exists
   for, on the capture the maintainer had paid double for.
-- **A lens that could not look says so on its own line.** A request captured without `--brief` reads
-  `assessment · not captured — this lens did not look`, which is a different sentence from
-  `assessment · verdict and challenges unchanged`. A capture whose baseline *had* an assessment and
-  no longer does is louder still, and counts as a strong signal on its own: a lens going away reads
-  exactly like a lens going quiet.
+- **A lens that could not look says so on its own line, and moves no verdict.** A request captured
+  without `--brief` reads `assessment · not captured — this lens did not look`, which is a different
+  sentence from `assessment · verdict and challenges unchanged`. A capture whose baseline *had* an
+  assessment and no longer does is louder — `assessment ! … nothing to compare`, because committing
+  it would drop a lens — and still grades as nothing measured, because nothing was. Re-capturing the
+  whole set without `--brief` is the documented workflow for an `engine.md` or context-card change,
+  and every single-pass baseline currently carries an assessment, so grading that state as a finding
+  would report six strong signals on a run where nothing moved.
 - **The interactive lens** watches turn 3 and beyond on an interactive request, in three measures —
   questions **re-asked** after the client had already answered them, early confirmations the model
   **lost** by the end, and completeness that **regressed** across a deep turn. Each is a way the

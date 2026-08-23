@@ -156,16 +156,25 @@ def test_an_assessment_nobody_captured_is_named_as_a_lens_that_did_not_look(diff
     assert verdict == "flat", lines
 
 
-def test_an_assessment_lens_that_went_away_is_loud_rather_than_clean(diff):
-    """HEAD has an assessment and this capture does not. The lens disappearing reads exactly like the
-    lens going quiet, so it is strong on its own -- the same call `_show_turns` already makes when an
-    interactive request stops being interactive."""
+def test_a_capture_that_dropped_the_assessment_says_so_without_manufacturing_a_signal(diff):
+    """HEAD has an assessment and this capture does not.
+
+    Marked `!` because committing this capture would drop a lens the baseline had — and graded as
+    *nothing measured*, not as a finding. This was `strong` when the change was first written, on the
+    analogy of `_show_turns`' matching state, and the analogy fails: interactivity is declared in
+    `requests.md` and reproduced on every capture, while `--brief` is a per-invocation flag no
+    capture remembers. Every single-pass baseline in `fixtures/golden/` carries one, so grading this
+    strong turned the documented no-`--brief` workflow into six strong signals over a run where
+    nothing moved. The assertion that matters is the second one."""
     verdict, lines = diff(_capture(completeness=80, briefs=_briefs(["problem"])),
                           _capture(completeness=70))
 
-    gone = _line(lines, "assessment lens is gone")
-    assert gone is not None, lines
-    assert verdict == "moved", lines
+    dropped = _line(lines, "nothing to compare")
+    assert dropped is not None, lines
+    assert dropped.lstrip().startswith("assessment !"), dropped
+    assert verdict == "flat", lines
+    # must not fire: this state is louder than the never-captured one and must not be the same line.
+    assert _line(lines, "did not look") is None, lines
 
 
 def test_a_first_capture_prints_the_assessment_it_has_nothing_to_compare_against(diff):
@@ -263,11 +272,14 @@ def test_a_harness_script_survives_a_console_that_cannot_encode_its_output(
         runner, request, ascii_console):
     """must not fire, and the escape is the evidence it ran rather than fell silent.
 
-    `backslashreplace`, never `replace`: a reader cannot tell a substituted character from one that
-    was never there, so a `?` in this output would be the quiet failure invariant 16 rejects."""
+    The handler is asserted directly rather than by hunting for a `?` in the bytes. `backslashreplace`
+    over `replace` is the decision that matters — a reader cannot tell a substituted character from
+    one that was never there — but scanning the output for `?` would couple this test to the claim
+    that no line of the harness ever legitimately prints a question mark, which is true today and is
+    not something this test is entitled to assume."""
     raw = ascii_console()
     assert request.getfixturevalue(runner)() == 0
     sys.stdout.flush()
     out = raw.getvalue()
     assert b"\\u" in out or b"\\x" in out, out
-    assert b"?" not in out, out
+    assert sys.stdout.errors == "backslashreplace", sys.stdout.errors
