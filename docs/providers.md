@@ -90,6 +90,21 @@ carrying the established reasoning forward instead of returning a model that app
 it. A provider that skips this step hands back a model with an empty reasoning layer, and the apply
 path will faithfully store it.
 
+Two things a second implementation needs are deliberately **not** in the Anthropic package, so
+nothing has to import a competitor's module to reach them (#167):
+
+| Need | Where |
+|---|---|
+| A transport failure the surfaces already catch (`provider_unavailable`, 502 on the web) | `providers/errors.py` — `EngineError`, no SDK behind it |
+| Recording what a call spent | `requivo.usage` — `CallRecord`, `UsageLedger`, `track_usage`, `record_call` |
+
+The ledger holds **no price table**. A record carries `rate_per_mtok` and `priced_as_of`, stamped by
+the provider as it files the call, and `cost_usd()` is arithmetic over those. So an implementation
+brings its own rates without registering them anywhere, and an estimate spanning a price change is
+right on both sides of it — the rate recorded is the one in force when the tokens were spent, not
+whichever is live when the total is printed. A provider that prices nothing leaves both fields
+absent; `cost_usd()` then returns `None` and the CLI says *no price on file* rather than guessing.
+
 `DiscoveryService` talks to the protocol and nothing else, so a second provider is a constructor
 argument rather than a fork of the orchestration:
 

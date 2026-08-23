@@ -6,11 +6,28 @@ import io
 from contextlib import redirect_stdout
 from datetime import date as _date
 
+import anthropic
+import httpx
 import pytest
 from _fakes import _ENGINE_REPLY, _FakeBlock, _model_in_out, _run_app
 
-from requivo.providers.anthropic import CallRecord, UsageLedger, run, track_usage
+from requivo.core.errors import RequivoError
+from requivo.providers.anthropic import run
+from requivo.providers.anthropic.pricing import PRICING_AS_OF, price_call, price_per_mtok
+from requivo.providers.errors import EngineError
 from requivo.render.terminal import render_usage
+from requivo.usage import CallRecord, UsageLedger, track_usage
+
+
+def priced(model: str, on: _date = _date(2026, 9, 1), **kw) -> CallRecord:
+    """A record carrying the rate it was billed at, the way a provider files one.
+
+    The ledger holds no price table since #167 — it is arithmetic over rates the provider stamped,
+    which is what lets it be provider-neutral without a registry. So a test that wants a *priced*
+    call has to price it, and `on` is where the calendar now lives: it defaults past the launch
+    window so an assertion states one rate rather than whichever is live when the suite runs.
+    """
+    return price_call(CallRecord(model=model, **kw), on)
 
 
 @pytest.fixture(autouse=True)
@@ -55,41 +72,60 @@ class UsageFakeClient:
 
 def test_usage_ledger_totals_and_cost():
     ledger = UsageLedger()
-    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000))
-    ledger.record(CallRecord(model="claude-sonnet-5", output_tokens=1_000_000))
+    ledger.record(priced("claude-sonnet-5", input_tokens=1_000_000))
+    ledger.record(priced("claude-sonnet-5", output_tokens=1_000_000))
     assert ledger.input_tokens == 1_000_000 and ledger.output_tokens == 1_000_000
-    # Standard rates: 1M input @ $3 + 1M output @ $15 = $18.00. Pinned to a day after the launch
-    # window so the assertion states one rate rather than whichever is live when the suite runs.
-    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - 18.0) < 1e-6
+    # Standard rates: 1M input @ $3 + 1M output @ $15 = $18.00.
+    assert abs(ledger.cost_usd() - 18.0) < 1e-6
 
 
-def test_usage_ledger_applies_launch_pricing_until_it_lapses():
+def test_launch_pricing_applies_until_it_lapses():
     # Sonnet 5 runs on launch pricing ($2/$10) through 2026-08-31, then reverts to $3/$15. A dated
     # table with no expiry gets exactly one of those two days right.
-    ledger = UsageLedger()
-    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000, output_tokens=1_000_000))
-    assert abs(ledger.cost_usd(on=_date(2026, 8, 31)) - 12.0) < 1e-6   # launch: 2 + 10
-    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - 18.0) < 1e-6    # standard: 3 + 15
+    assert price_per_mtok("claude-sonnet-5", _date(2026, 8, 31)) == (2.00, 10.00)
+    assert price_per_mtok("claude-sonnet-5", _date(2026, 9, 1)) == (3.00, 15.00)
+
+
+def test_a_call_is_priced_at_the_rate_in_force_when_it_was_made():
+    """The behaviour the stamp buys, and the reason the ledger no longer takes an `on` (#167).
+
+    A ledger that looked a rate up at *render* time would re-price a call made under the launch
+    window at whatever is live when the line is printed. Two identical calls, two days, two totals —
+    each right for its own day, and both readable from one ledger.
+    """
+    launch = UsageLedger()
+    launch.record(priced("claude-sonnet-5", _date(2026, 8, 31),
+                         input_tokens=1_000_000, output_tokens=1_000_000))
+    standard = UsageLedger()
+    standard.record(priced("claude-sonnet-5", _date(2026, 9, 1),
+                           input_tokens=1_000_000, output_tokens=1_000_000))
+    assert abs(launch.cost_usd() - 12.0) < 1e-6     # launch: 2 + 10
+    assert abs(standard.cost_usd() - 18.0) < 1e-6   # standard: 3 + 15
 
 
 def test_usage_ledger_cost_counts_cache_tiers():
     ledger = UsageLedger()
     # cache read ≈ 0.1× input rate, cache write ≈ 1.25× input rate (Sonnet standard input $3/Mtok)
-    ledger.record(CallRecord(model="claude-sonnet-5", cache_read_tokens=1_000_000,
-                             cache_write_tokens=1_000_000))
-    assert abs(ledger.cost_usd(on=_date(2026, 9, 1)) - (0.3 + 3.75)) < 1e-6
+    ledger.record(priced("claude-sonnet-5", cache_read_tokens=1_000_000, cache_write_tokens=1_000_000))
+    assert abs(ledger.cost_usd() - (0.3 + 3.75)) < 1e-6
 
 
 def test_usage_ledger_cost_is_none_for_unpriced_model():
     ledger = UsageLedger()
-    ledger.record(CallRecord(model="some-future-model", input_tokens=10))
+    rec = priced("some-future-model", input_tokens=10)
+    assert rec.rate_per_mtok is None and rec.priced_as_of is None, (
+        "an unknown model must leave both fields absent: a rate with no table date, or a date with "
+        "no rate, is provenance nobody measured (invariant 6)"
+    )
+    ledger.record(rec)
     assert ledger.cost_usd() is None
+    assert ledger.priced_as_of == []
 
 
 def test_render_usage_shows_tokens_cache_latency_and_estimate():
     ledger = UsageLedger()
-    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1000, output_tokens=200,
-                             cache_read_tokens=500, latency_ms=1500))
+    ledger.record(priced("claude-sonnet-5", input_tokens=1000, output_tokens=200,
+                         cache_read_tokens=500, latency_ms=1500))
     buf = io.StringIO()
     with redirect_stdout(buf):
         render_usage(ledger)
@@ -99,6 +135,27 @@ def test_render_usage_shows_tokens_cache_latency_and_estimate():
     assert "500 served from cache" in text
     assert "1.5 s" in text
     assert "Est. cost" in text and "estimate" in text
+    # The rate date comes off the ledger's records, not off a constant the renderer imported (#167).
+    assert f"rates as of {PRICING_AS_OF}" in text
+
+
+def test_render_usage_omits_the_rate_date_it_was_not_given():
+    """The third state, and the reason it is a state rather than a fallback.
+
+    A record can carry a rate with no table date — a caller building one by hand, a second provider
+    that prices without publishing a date. Printing a cost with no "rates as of" clause says exactly
+    that; borrowing a date from somewhere would print an undated estimate that reads as a dated one,
+    and nothing downstream could tell the two apart.
+    """
+    ledger = UsageLedger()
+    ledger.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000,
+                             rate_per_mtok=(3.0, 15.0)))
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        render_usage(ledger)
+    text = buf.getvalue()
+    assert "~$3.000" in text and "estimate)" in text   # the cost is still stated
+    assert "rates as of" not in text                   # the provenance is not invented
 
 
 def test_render_usage_silent_without_tokens():
@@ -112,7 +169,7 @@ def test_render_usage_silent_without_tokens():
 
 def test_render_usage_flags_unpriced_model_but_keeps_tokens():
     ledger = UsageLedger()
-    ledger.record(CallRecord(model="some-future-model", input_tokens=1000, output_tokens=200))
+    ledger.record(priced("some-future-model", input_tokens=1000, output_tokens=200))
     buf = io.StringIO()
     with redirect_stdout(buf):
         render_usage(ledger)
@@ -130,6 +187,103 @@ def test_complete_records_usage_into_the_active_ledger():
     assert ledger.input_tokens == 1000 and ledger.output_tokens == 200
     assert ledger.cache_read_tokens == 500
     assert ledger.cost_usd() is not None
+    # The provider stamps the rate as it files the call — the ledger holds no table to look one up in.
+    assert ledger.priced_as_of == [PRICING_AS_OF]
+
+
+# ── A failed call is still billed, on every exit ──────────────────────────────
+#
+# The constraint #74 named as the one most likely to break quietly in the split: `_complete` records
+# the spend *before* it surfaces a clean failure, because a failed call is still billed for whatever
+# it consumed. It used to be two adjacent lines in one module; it is now a call from
+# `providers/anthropic/completion.py` into `requivo.usage`, which is a contract nothing in the type
+# system holds. So it gets a test rather than a comment.
+#
+# The positive control is the success arm above: this file would pass with an empty `_record()` if it
+# only asserted the *failure* arms, since "nothing recorded" is what a broken harness produces too.
+# The assertions below are on the numbers — tokens and attempts — so a record filed with nothing in
+# it fails as loudly as no record at all.
+
+
+class _RaisingClient:
+    """Raises the SDK's transport error — the exit `_stop()` reaches from the `except APIError` arm."""
+
+    def __init__(self):
+        self.messages = self
+        self.calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        raise anthropic.APIConnectionError(
+            message="boom", request=httpx.Request("POST", "https://api.anthropic.com"))
+
+
+class _TruncatedUsageClient:
+    """A reply flagged as cut off at the ceiling whose JSON does not parse — the truncation exit."""
+
+    def __init__(self, usage):
+        self._usage = usage
+        self.messages = self
+
+    def create(self, **kwargs):
+        usage = self._usage
+
+        class _Resp:
+            stop_reason = "max_tokens"
+            content = [_FakeBlock('{"model": {"problem":')]
+        _Resp.usage = usage
+        return _Resp()
+
+
+class _NonconformingClient:
+    """Valid JSON that never satisfies the contract — the retry give-up exit, after `retries + 1`
+    attempts that all spent tokens."""
+
+    def __init__(self, usage):
+        self._usage = usage
+        self.messages = self
+        self.calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        return _UsageResponse('{"not": "an engine output"}', self._usage)
+
+
+def test_a_failed_call_is_still_recorded_on_every_exit():
+    """All three failure exits file the spend, and each is asserted on its numbers.
+
+    Delete `_record(rec)` from `_stop()` and the first two go red; delete the one on the give-up path
+    and the third does. That is the whole point of pinning it: the ordering is invisible at both
+    ends of a module boundary, and a ledger that silently forgets a failed call under-reports a run
+    in exactly the direction nobody checks.
+    """
+    # 1. Transport failure. The SDK raises before any usage is reported, so the record is empty of
+    #    tokens — but it exists, and it carries the attempt and a latency.
+    with track_usage() as ledger:
+        with pytest.raises(EngineError):
+            run(_RaisingClient(), [{"role": "user", "content": "x"}])
+    assert len(ledger.calls) == 1, "a transport failure was not recorded"
+    assert ledger.calls[0].attempts == 1
+
+    # 2. Truncation. Tokens were genuinely spent generating the reply that got cut off.
+    with track_usage() as ledger:
+        with pytest.raises(EngineError):
+            run(_TruncatedUsageClient(_FakeUsage(900, 16000)), [{"role": "user", "content": "x"}])
+    assert len(ledger.calls) == 1, "a truncated reply was not recorded"
+    assert ledger.input_tokens == 900 and ledger.output_tokens == 16000
+    assert ledger.cost_usd() is not None, "a recorded failure must still be priced"
+
+    # 3. Retry give-up. Three attempts, three replies, and the ledger must carry all of them.
+    client = _NonconformingClient(_FakeUsage(100, 50))
+    with track_usage() as ledger:
+        with pytest.raises(RequivoError):
+            run(client, [{"role": "user", "content": "x"}])
+    assert client.calls == 3, "the retry loop is not the shape this test thinks it is"
+    assert len(ledger.calls) == 1, "the give-up exit did not record"
+    assert ledger.calls[0].attempts == 3
+    assert ledger.input_tokens == 300 and ledger.output_tokens == 150, (
+        "a retry spends tokens too: the record sums every attempt, not just the last"
+    )
 
 
 def test_pc_status_reports_no_usage_offline():

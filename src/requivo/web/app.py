@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
 from requivo.core.errors import RequivoError
-from requivo.providers.anthropic import EngineError
+from requivo.providers.errors import EngineError
 from requivo.web.routes import artifacts, discovery, health, home, sessions
 from requivo.web.security import install_cross_site_guard
 from requivo.web.templating import STATIC_DIR, templates

@@ -13,8 +13,14 @@ imported `run`, `advise` and `estimate`, and the interactive `discover` branch d
 calls of its own before handing the result to `DiscoveryService` for the write, while CLAUDE.md, the
 README and docs/architecture.md all stated the opposite rule.
 
-The surface half of the *provider* rule is scoped to `cli.py`; `web/` and `deterministic/` are not
-guarded for that one, and that is stated rather than left to read as clean.
+The surface half of the *provider* rule covers `cli.py` and `render/`; `web/` and `deterministic/`
+are not guarded for that one, and that is stated rather than left to read as clean. `render/` joined
+with #167, and the reason it had to is the reason this sentence is worth keeping accurate: for a
+release it read "scoped to `cli.py`" and was correct, while `render/terminal.py` imported
+`PRICING_AS_OF` and `UsageLedger` from `providers.anthropic` and no test in this file could see it.
+The two still outside are the ones with a real claim -- `web/config.py` probes for the SDK by name,
+and `deterministic/` is the offline half that reaches no provider at all -- but "has a real claim"
+is what an allowlist entry is for, and neither has been written.
 
 The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
 `core.persistence` -- is #76, and it is guarded now, over all three surfaces. It needed a different
@@ -562,32 +568,62 @@ def test_the_process_guard_allows_what_core_legitimately_does(tmp_path):
 
 CLI = REPO_ROOT / "src" / "requivo" / "cli.py"
 CLI_PACKAGE = "requivo"
+RENDER = REPO_ROOT / "src" / "requivo" / "render"
+RENDER_PACKAGE = "requivo.render"
 
-# What `cli.py` may still pull out of `requivo.providers`, and why each one is a *surface* concern
-# rather than an orchestration one. Everything else is the CLI running a pipeline of its own, which
-# is what #77 was: `run`, `advise` and `estimate` all lived here, and the interactive `discover`
-# branch reasoned two provider calls itself before letting the service do the write.
+# What a surface may still pull out of `requivo.providers`, and why each one is a *surface* concern
+# rather than an orchestration one. Everything else is an interface running a pipeline of its own,
+# which is what #77 was: `run`, `advise` and `estimate` all lived in `cli.py`, and the interactive
+# `discover` branch reasoned two provider calls itself before letting the service do the write.
+#
+# Keyed by (file, name), not by name alone, for the reason `_SURFACE_STORAGE_ALLOWLIST` is: a global
+# name list lets a *second* file import a name already argued for in a first, and arrive green under
+# an argument nobody made about it.
+#
+# `render/` is in this scan set as of #167, and the asymmetry it closes is worth stating. The guard
+# watched `core/` from one end and `cli.py` from the other, so the layer with the *weakest* claim to
+# a provider import -- a renderer, which turns data into strings and reaches nothing -- was the one
+# layer with no guard at all. `render/terminal.py` imported `PRICING_AS_OF` and `UsageLedger` from
+# `providers.anthropic` through the entire hardening effort that produced this table, and no test in
+# this file could see it.
 #
 # Add an entry only with a reason a reader can argue with. The failure this guards is not a rewrite,
 # it is one more convenient import.
-_CLI_PROVIDER_ALLOWLIST = {
-    "new_client": (
+_SURFACE_PROVIDER_ALLOWLIST = {
+    ("cli.py", "new_client"): (
         "constructs the SDK client from the environment. Building a client is the surface's job -- it "
         "is handed to DiscoveryService, which is the layer that decides when to reason with it."
     ),
-    "track_usage": (
-        "scopes the per-run usage ledger that `app()` prints when the command is over. What a run "
-        "cost is a terminal report; nothing downstream reads it and no revision records it."
-    ),
-    "EngineError": (
+    ("cli.py", "EngineError"): (
         "an exception type, not a call. `app()` catches it (it is a RequivoError, so it surfaces "
         "without a traceback) and `_cmd_web` raises it. Importing a class the CLI never calls "
         "orchestrates nothing. The `_cmd_web` half was the weakest part of this entry and was "
         "examined rather than tidied in #135: its code, `provider_unavailable`, is published in the "
         "--json envelope, so moving it to a core error is a breaking change and not a rename. It "
-        "stays, and the call site now carries the argument."
+        "stays, and the call site now carries the argument. It comes from `providers.errors` since "
+        "#167 -- provider-neutral, SDK-free, and no longer a name only the Anthropic module has."
     ),
 }
+
+# `track_usage` was a third entry until #167, and its removal is the guard doing its job rather than
+# a relaxation. The ledger it scopes was never Anthropic's -- it counts calls, tokens, cache tiers
+# and latency -- so it moved to `requivo.usage` and stopped being a provider name. The stale half of
+# the assertion below is what made deleting this entry mandatory instead of optional.
+
+
+def provider_subjects() -> list[tuple[Path, str, str]]:
+    """Every surface the provider guard watches, as (path, package, label). The label is the
+    allowlist key.
+
+    `cli.py` is named individually and `render/` is walked, for the reason `surface_subjects()`
+    walks its trees: a renderer module added next year must arrive inside the scan set rather than
+    beside it. Both helpers refuse an absent or empty subject, so a renamed package is 'could not
+    look' here too (#10).
+    """
+    src = REPO_ROOT / "src" / "requivo"
+    subjects = [(subject_module(CLI), CLI_PACKAGE, "cli.py")]
+    subjects.extend((p, pkg, p.relative_to(src).as_posix()) for p, pkg in scan(RENDER, RENDER_PACKAGE))
+    return subjects
 
 # The marker a module import contributes instead of a name. Deliberately unspellable as an allowlist
 # key: it carries dots and spaces, and every key above is a bare identifier.
@@ -649,30 +685,51 @@ def provider_names(path: Path, package: str) -> set[str]:
     return names
 
 
-def test_the_cli_reaches_the_provider_only_through_the_named_surface_concerns():
-    """#77. The rule CLAUDE.md, the README and docs/architecture.md all state is that every interface
-    is a thin layer over the services and there is never a second implementation of a generation. It
-    was false on the primary surface: `cli.py` imported `run`, `advise` and `estimate`, so the
-    interactive `discover` path orchestrated the provider itself and would not inherit whatever
-    `DiscoveryService` gained next -- the revision-zero gate, the snapshot discipline -- without
-    someone remembering to add it in two places.
+def test_the_surfaces_reach_the_provider_only_through_the_named_surface_concerns():
+    """#77, and #167. The rule CLAUDE.md, the README and docs/architecture.md all state is that every
+    interface is a thin layer over the services and there is never a second implementation of a
+    generation. It was false on the primary surface: `cli.py` imported `run`, `advise` and
+    `estimate`, so the interactive `discover` path orchestrated the provider itself and would not
+    inherit whatever `DiscoveryService` gained next -- the revision-zero gate, the snapshot
+    discipline -- without someone remembering to add it in two places.
+
+    `render/` joined the scan set with #167. It is not a second rule, it is the same one applied to
+    the layer that had the weakest claim and no guard: `render/terminal.py` imported `PRICING_AS_OF`
+    and `UsageLedger` from `providers.anthropic`, so the purest view layer in the tree named a
+    vendor to print a cost line. A guard scoped to `cli.py` reads as covering the surfaces and
+    covered one of them.
 
     Both directions are asserted, and the second is what stops this from being a negative assertion
     over an empty set: an allowlist entry naming an import that is no longer there fails too. So a
-    `cli.py` that was emptied, truncated or renamed away goes red here rather than reading as a
-    surface that reaches nothing.
+    surface that was emptied, truncated or renamed away goes red here rather than reading as one
+    that reaches nothing.
     """
-    reached = provider_names(subject_module(CLI), CLI_PACKAGE)
-    unexpected = sorted(reached - set(_CLI_PROVIDER_ALLOWLIST))
+    reached = {(label, name)
+               for path, package, label in provider_subjects()
+               for name in provider_names(path, package)}
+    unexpected = sorted(reached - set(_SURFACE_PROVIDER_ALLOWLIST))
     assert not unexpected, (
-        f"{CLI.name} reaches past the service seam to {unexpected}. Route it through "
-        f"DiscoveryService, or add it to _CLI_PROVIDER_ALLOWLIST with the reason it is a surface "
-        f"concern. Currently allowed: {sorted(_CLI_PROVIDER_ALLOWLIST)}"
+        f"a surface reaches past the service seam to {unexpected}. Route it through "
+        f"DiscoveryService, or -- if what it needs is provider-neutral -- move that name out of "
+        f"`providers/` (`requivo.usage`, `providers.errors`), or add it to "
+        f"_SURFACE_PROVIDER_ALLOWLIST with the reason it is a surface concern. Currently allowed: "
+        f"{sorted(_SURFACE_PROVIDER_ALLOWLIST)}"
     )
-    stale = sorted(set(_CLI_PROVIDER_ALLOWLIST) - reached)
+    stale = sorted(set(_SURFACE_PROVIDER_ALLOWLIST) - reached)
     assert not stale, (
-        f"_CLI_PROVIDER_ALLOWLIST still names {stale}, which {CLI.name} no longer imports. Either "
-        f"the guard is reading the wrong file, or the entry is stale prose -- delete it."
+        f"_SURFACE_PROVIDER_ALLOWLIST still names {stale}, which no surface imports any more. "
+        f"Either the guard is reading the wrong files, or the entry is stale prose -- delete it."
+    )
+
+
+def test_the_provider_guard_names_what_it_scanned():
+    """The #10 rule, for this scan set. Everything above is a negative assertion, and `render/` is a
+    package rather than a module -- a walk that silently found nothing under it would be an
+    all-clear over exactly the layer #167 found unguarded."""
+    labels = sorted(label for _, _, label in provider_subjects())
+    assert "cli.py" in labels
+    assert "render/terminal.py" in labels, (
+        f"the provider guard did not scan render/terminal.py; it scanned {labels}"
     )
 
 
@@ -706,7 +763,8 @@ def test_a_whole_module_import_cannot_pass_as_a_named_surface_concern(tmp_path):
     path, package = scan(root, CLI_PACKAGE)[0]
     reached = provider_names(path, package)
     assert reached == {f"requivo.providers.anthropic {_WHOLE_MODULE}"}
-    assert reached - set(_CLI_PROVIDER_ALLOWLIST) == reached, (
+    allowed_names = {name for _, name in _SURFACE_PROVIDER_ALLOWLIST}
+    assert reached - allowed_names == reached, (
         "a whole-module import matched an allowlist key -- the marker no longer separates them"
     )
 

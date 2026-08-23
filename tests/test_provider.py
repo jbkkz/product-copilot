@@ -1,4 +1,4 @@
-"""The provider call: `providers/anthropic.py`, driven offline against a canned client.
+"""The provider call: the `providers/anthropic/` package, driven offline against a canned client.
 
 Split out of `test_engine.py` (#72). Everything here reaches the one place an LLM is called — the JSON
 extraction and retry loop, the discovery turn and its completeness self-heal, the generators, the
@@ -17,22 +17,13 @@ from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, full_slots, out, slot
 
 from requivo.core.contracts import PRD, Brief, EngineOutput, Stories, Story
 from requivo.core.persistence import load_model
-from requivo.providers.anthropic import (
-    CallRecord,
-    EngineError,
-    UsageLedger,
-    _complete,
-    _extract_json,
-    _response_text,
-    advise,
-    answer_turn,
-    current_model_name,
-    derive_stories,
-    generate_prd,
-    run,
-)
+from requivo.providers.anthropic import advise, answer_turn, current_model_name, derive_stories, generate_prd, run
+from requivo.providers.anthropic.completion import _complete, _extract_json, _response_text
+from requivo.providers.anthropic.pricing import price_call
+from requivo.providers.errors import EngineError
 from requivo.render.markdown import prd_markdown
 from requivo.render.terminal import render_stories
+from requivo.usage import CallRecord, UsageLedger
 
 # ── JSON extraction ──────────────────────────────────────────────────────────
 
@@ -350,7 +341,7 @@ def test_every_generator_drives_a_real_call_without_a_cache_write(artifact_type)
     # that takes `reuse_system` and drops it on the floor fails here. Both arms in one test: the
     # default must not carry the directive, and `reuse_system=True` must — so "deleted it everywhere"
     # fails too, per generator rather than only for `brief`.
-    from requivo.providers.anthropic import _GENERATORS
+    from requivo.providers.anthropic.generators import _GENERATORS
 
     reply = _GENERATOR_REPLIES[artifact_type]
     extra = _GENERATOR_KWARGS.get(artifact_type, {})
@@ -371,7 +362,7 @@ def test_the_cache_fixture_covers_every_registered_generator():
     # (#146). Asserted in both directions, like the boundaries allowlist: a registry entry with no
     # reply is an uncovered generator, and a reply for a name the registry does not hold is a case
     # that stopped exercising anything.
-    from requivo.providers.anthropic import _GENERATORS
+    from requivo.providers.anthropic.generators import _GENERATORS
 
     assert set(_GENERATOR_REPLIES) == set(_GENERATORS)
     assert set(_GENERATOR_KWARGS) <= set(_GENERATORS)
@@ -437,12 +428,12 @@ def test_cost_estimate_bills_a_write_premium_and_plain_input_differently():
 
     on = date(2026, 9, 1)  # past the sonnet-5 launch-price expiry, so the rate is the plain 3.00
     cached = UsageLedger()
-    cached.record(CallRecord(model="claude-sonnet-5", cache_write_tokens=1_000_000))
+    cached.record(price_call(CallRecord(model="claude-sonnet-5", cache_write_tokens=1_000_000), on))
     plain = UsageLedger()
-    plain.record(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000))
-    assert cached.cost_usd(on) == pytest.approx(3.75)
-    assert plain.cost_usd(on) == pytest.approx(3.00)
-    assert cached.cost_usd(on) > plain.cost_usd(on)
+    plain.record(price_call(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000), on))
+    assert cached.cost_usd() == pytest.approx(3.75)
+    assert plain.cost_usd() == pytest.approx(3.00)
+    assert cached.cost_usd() > plain.cost_usd()
 
 
 def test_current_model_name_reads_env_override(monkeypatch):

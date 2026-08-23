@@ -210,7 +210,7 @@ def test_a_provider_transport_failure_is_still_502():
     """The one allowlist entry that is about ordering: EngineError is classified by isinstance ahead
     of the table, so `provider_unavailable` deliberately has no row. If that branch were ever
     removed, this fails rather than the code quietly picking up the unclassified default."""
-    from requivo.providers.anthropic import EngineError
+    from requivo.providers.errors import EngineError
     from requivo.web.app import _STATUS_BY_CODE, _status_for
     assert _status_for(EngineError("upstream is down")) == 502
     assert "provider_unavailable" not in _STATUS_BY_CODE

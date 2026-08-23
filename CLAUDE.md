@@ -51,10 +51,11 @@ Python — and that call lives in a **provider**, never in the core. The layers 
 - **`core/`** — the deterministic engine. Never prints, never reads argv, **never calls an LLM, never
   imports a provider** (guarded by `tests/test_boundaries.py`). It validates, versions, and reasons
   over the model; it never *produces* one.
-- **`providers/`** — the only place an LLM is called. `base.py` is the `ReasoningProvider` protocol;
-  `anthropic.py` (behind the optional `requivo[anthropic]` extra) implements it. The Claude Code
-  surface is a *second* provider that lives outside Python: Claude reasons, the deterministic CLI
-  applies.
+- **`providers/`** — the only place an LLM is called. `base.py` is the `ReasoningProvider` protocol,
+  `errors.py` its failure type; the `anthropic/` package (behind the optional `requivo[anthropic]`
+  extra) implements it. The Claude Code surface is a *second* provider that lives outside Python:
+  Claude reasons, the deterministic CLI applies. What a run *cost* is not a provider concept and
+  lives outside this package in `requivo.usage` (#167).
 - **`services/`** — the application seam, and the only place the two meet. `SessionService.update_model`
   is the single validated apply path (validate → diff → propagate → revision → stale-flag);
   `DiscoveryService` is the single provider-backed orchestration (reason → apply → save), including
@@ -71,8 +72,16 @@ services. There is never a second implementation of an apply, a generation, or a
 That was stated in three places and enforced in none, which is how the CLI's interactive `discover`
 loop came to reason two provider calls of its own and use the service only for the write (#77).
 `tests/test_boundaries.py` guards it now, from both ends of the same arrow: `core/` may not import a
-provider, and `cli.py` may reach only the three provider names an allowlist there names as *surface*
+provider, and a surface may reach only the provider names an allowlist there names as *surface*
 concerns, each with its reason.
+
+**"A surface" meant `cli.py` alone for a release, and that was the hole (#167).** `render/` was in
+neither scan set, so the layer with the *weakest* claim to a provider import was the only one with
+no guard — and `render/terminal.py` imported `PRICING_AS_OF` and `UsageLedger` from
+`providers.anthropic` straight through the hardening effort that produced the allowlist. `render/`
+is in the scan set now, the allowlist is keyed by **(file, name)** rather than by name alone, and it
+reaches nothing: what it needed was never Anthropic's. The fix for a leak like that is to move the
+neutral concept out of `providers/`, not to write it an allowlist entry.
 
 The storage half — a surface reaching past `SessionRepository` to `core.persistence` — was #76, and
 it is guarded now too, over `cli.py`, `deterministic/` and `web/`. Twenty-seven direct calls became
@@ -108,9 +117,15 @@ requivo/
                      context card is an environment finding), and nothing inside aims a filesystem
                      call outside (a recorded artifact filename is untrusted input)
     adapters.py      epic_export + GitHub/GitLab tracker plans
+  usage.py         the provider-neutral API-spend ledger — records carry the rate they were billed at
   providers/       the only LLM callers
-    base.py          ReasoningProvider protocol
-    anthropic.py     client + _complete + generators + AnthropicProvider + usage ledger
+    base.py          ReasoningProvider protocol   errors.py  EngineError (no SDK, no vendor)
+    anthropic/       the one implementation, split by cohesion (#74)
+      client.py        the SDK handle + the optional-import guard + the model id
+      pricing.py       the dated rate tables + `price_call`, which stamps a rate onto a record
+      completion.py    _complete: the retry loop, JSON extraction, truncation check, usage recording
+      generators.py    the discovery turn, the seven generators, _GENERATORS / _OP_PROMPTS
+      provider.py      AnthropicProvider
   services/        the shared seam
     sessions.py      SessionService (create / update_model / diff / status)
     artifacts.py     ArtifactService (save with source revision / list / mark_stale)
@@ -528,8 +543,12 @@ is never possible to mistake a short list for the whole list.
    JSON **retry** loop re-sends the identical prompt and is no longer cached, paying 2.0x where it used
    to pay 1.35x — the better bet only while a retry is rarer than ~1 call in 4, which it is. Keep the
    prompt byte-identical per call or the cache is lost where it does pay. `_complete()` records per-call usage into a session-scoped
-   `UsageLedger`; `render_usage()` prints it (tokens are exact, cost is a labelled estimate from a
-   dated table with expiry-aware launch pricing).
+   `UsageLedger` (`requivo.usage`, provider-neutral); `render_usage()` prints it (tokens are exact,
+   cost is a labelled estimate). The rate table with its expiry-aware launch pricing stays in
+   `providers/anthropic/pricing.py`, and `price_call` stamps the rate **onto the record as the call
+   is filed** — so the ledger holds arithmetic rather than a price table, and an estimate spanning a
+   price change is right on both sides of it. Every exit of `_complete()` records before it raises:
+   a failed call is still billed (`test_a_failed_call_is_still_recorded_on_every_exit`).
 
 **Consequence for changes:** behaviour is tuned by editing the Markdown/JSON assets, not the Python.
 
@@ -583,7 +602,8 @@ Each generator is the same shape — **prompt + contract + generator fn + writer
 reaches them through `DiscoveryService.generate()`, which owns the revision lock, the provenance and
 the artifact write. `stories` and `estimate` are deliberately terminal-only analyses with no file
 (`DiscoveryService.reason()`). Adding a generator: prompt asset + contract + a function in
-`providers/anthropic.py` (registered in `_GENERATORS` and `_OP_PROMPTS`) + a writer in
+`providers/anthropic/generators.py` (registered in `_GENERATORS` and `_OP_PROMPTS`, which stay one
+table each) + a writer in
 `render/markdown.py` (registered in `_WRITERS`) + a subcommand in `cli.py`. Any generator whose text is
 user-facing carries the **Voice** rule: no slot ids, percentages or confidence labels in prose.
 

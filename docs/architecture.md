@@ -23,8 +23,11 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   writing files *is* core's job. It validates, versions and reasons over the model; it never *produces*
   one. Holds the Pydantic contracts, validation, readiness, the dependency graph, persistence and the
   structured error hierarchy.
-- **`providers/`** — the only place an LLM is called. `anthropic.py` (behind the optional
-  `requivo[anthropic]` extra) turns a request into a model and a model into an artifact.
+- **`providers/`** — the only place an LLM is called. The `anthropic/` package (behind the optional
+  `requivo[anthropic]` extra) turns a request into a model and a model into an artifact:
+  `client.py`, `pricing.py`, `completion.py`, `generators.py`, `provider.py`. `errors.py` beside it
+  is the seam's own failure type and holds no vendor code. What a run *cost* is not a provider
+  concept and lives outside this package entirely, in `requivo.usage`.
 - **`services/`** — the application seam shared by every interface. `SessionService.update_model` is
   the single validated apply path (validate → diff → propagate → revision → stale-flag).
   `DiscoveryService` is the provider-backed orchestration (start / answer / generate, plus
