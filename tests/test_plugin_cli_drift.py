@@ -1135,3 +1135,19 @@ def test_harden_streams_names_a_stream_it_could_not_reach(monkeypatch):
     written = sys.stderr.getvalue()
     assert "stdout" in written, written
     assert "stderr" in written, written
+
+
+def test_note_could_not_harden_survives_a_console_that_cannot_encode_its_own_reason(monkeypatch):
+    """must not fire (silently). `reason` is composed from an exception's own `str()`, so it can
+    itself carry a character stderr cannot encode -- the exact class this whole file is about,
+    reproduced one function inward, in the code that is supposed to REPORT that class. Without the
+    fallback this writes nothing at all: a reader of stderr cannot tell "both streams hardened fine"
+    from "hardening and the report of its own failure both failed silently". Auditor-found in the
+    #174 review."""
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(raw, encoding="ascii", errors="strict"))
+    drift._note_could_not_harden("stdout", "café could not be represented")
+    sys.stderr.flush()
+    out = raw.getvalue()
+    assert out, "the note went missing rather than surviving a reason it cannot encode"
+    assert b"\\u" in out or b"\\x" in out, out

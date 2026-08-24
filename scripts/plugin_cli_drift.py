@@ -491,13 +491,30 @@ def _harden_streams() -> None:
 
 
 def _note_could_not_harden(name: str, reason: str) -> None:
-    """`_harden_streams`'s third state, written defensively: the failure being reported could be
-    stderr's own encoding, so a plain `print` here could raise the very error this module exists to
-    survive."""
+    """`_harden_streams`'s third state, written defensively: `reason` is composed from an exception's
+    own `str()`, which can itself hold a character stderr cannot encode -- so the FIRST write can
+    raise `UnicodeEncodeError`, the exact class this whole module exists to survive, one function
+    inward. A bare `except: pass` there would make the note go missing with nothing to tell a reader
+    "both streams hardened fine" from "hardening AND the report of its own failure both failed
+    silently" -- so the fallback re-encodes with `backslashreplace` rather than giving up on the
+    first attempt, the same shape `requivo.streams.safe_write` uses for the product (not imported,
+    for the same stdlib-only reason `_harden_streams` gives).
+    `test_note_could_not_harden_survives_a_console_that_cannot_encode_its_own_reason` is the guard.
+    """
+    message = f"  ! {name} could not be hardened against a character it cannot encode ({reason})\n"
     try:
-        print(f"  ! {name} could not be hardened against a character it cannot encode ({reason})",
-              file=sys.stderr)
-    except (UnicodeEncodeError, OSError, ValueError):
+        sys.stderr.write(message)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+        try:
+            sys.stderr.write(message.encode(encoding, "backslashreplace").decode(encoding, "replace"))
+        except (ValueError, OSError, UnicodeError):
+            return
+    except (OSError, ValueError):
+        return
+    try:
+        sys.stderr.flush()
+    except (OSError, ValueError):
         pass
 
 
