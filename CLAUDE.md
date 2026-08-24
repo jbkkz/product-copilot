@@ -680,7 +680,12 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
   after the client already answered them, early confirmations the model **lost** by the end, and
   completeness that **regressed** across a deep turn. It carries its own third state — a single-pass
   baseline reports *not measured* rather than an empty finding set, and a run that converged before
-  five turns is flagged as shallow rather than counted as clean.
+  five turns is flagged as shallow rather than counted as clean. On a SHALLOW capture it also names
+  which answer-sheet layers no run ever reached (`AnswerSheet.remaining()`, wired back in as
+  `unreached_layers()` after being removed as dead in #137) — a layer counts only when *every* run
+  left it unused, so the sheet is implicated only when it, and not the engine, is why the capture
+  stayed shallow. Reported only below `MEASURABLE_DEPTH`: a healthy capture is deliberately authored
+  deeper than five turns, and its leftover layers are by design, not a finding (#163).
 
 Cost: K calls per request, doubled under `--brief` — a full six-request cycle is 18. An interactive
 request is K × `GOLDEN_TURNS` on its own (15 at the defaults), so capture it alone rather than as part

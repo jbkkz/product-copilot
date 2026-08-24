@@ -81,10 +81,33 @@ answer.business_objects: The envelope is an object too: an amount, a period and 
 answer.business_rules: Certifications outrank everything, then seniority within the department, then first come first served.
 answer.business_rules: Unused budget carries over one year for the regulated entities and is lost everywhere else.
 answer.business_rules: A mid-year joiner gets a pro-rata entitlement, and a leaver's committed but unspent amount returns to the envelope.
+answer.business_rules: A department that transfers headcount mid-year takes a pro-rata share of its old envelope with it, not a fresh allocation.
+answer.business_rules: Manager training is mandatory and sits outside the discretionary pool entirely -- it is never bumped, even by a certification.
+answer.business_rules: Two employees from the same department competing for the last seat are resolved by tenure, not by who asked first.
+answer.business_rules: A course that satisfies two certifications at once is charged to the envelope only once, whichever certification is checked first.
+answer.business_rules: Finance can freeze an entire department's envelope mid-year if that department is over budget elsewhere, and only finance can lift the freeze.
+answer.business_rules: A vendor discount for booking multiple seats has to be shared proportionally across the departments that booked into it, not credited to whichever department triggered the discount.
+answer.business_rules: Cross-charging a course to two departments splitting an employee's time is allowed, but only if both department heads sign off before the booking, not after.
 answer.workflow: Request, eligibility check, budget reservation, approval, booking, then invoice reconciliation.
 answer.workflow: A reservation has to be able to expire: if nobody has booked within thirty days the money goes back to the pool.
+answer.workflow: The eligibility check and the approval step can happen in either order -- a manager can approve in principle before HR has confirmed the employee is eligible, and the reservation only firms up once both have happened.
+answer.workflow: A rejected request does not disappear: it stays visible to the employee with the reason, and they can resubmit against a different course without restarting the whole intake.
+answer.workflow: Booking with the vendor is a separate step from reservation -- the reservation holds the money, the booking is the vendor confirming a seat exists, and the two can fail independently.
+answer.workflow: Invoice reconciliation happens per course, not per request: one invoice can cover ten employees' bookings, and the workflow has to split it back across their individual reservations.
+answer.workflow: Cancelling after the vendor has already confirmed the seat triggers a different path than cancelling before -- the first needs a refund negotiation, the second just releases the hold.
+answer.workflow: A compliance countersignature, where it applies, happens after the manager approves and before the reservation firms up -- it is a gate on the reservation, not a parallel step.
+answer.workflow: An expired reservation that gets renewed by the same employee for the same course does not restart eligibility -- only the budget reservation step runs again.
+answer.workflow: The workflow has to support a request being split into two bookings -- part of a course now, part deferred to next fiscal year -- without treating that as two separate requests.
 answer.permissions: A department head sees only their own envelope; HR and finance see all of them.
 answer.permissions: The compliance officer sees certification requests across every entity but must not see amounts.
+answer.permissions: A department head who also manages a second department temporarily -- covering a parental leave -- needs to see both envelopes for the duration, and that access has to expire on its own.
+answer.permissions: HR can see every envelope but can only approve eligibility, never override a budget decision -- that authority stops at finance.
+answer.permissions: An employee can see their own request's status and the reason for a rejection, but never the envelope balance behind it.
+answer.permissions: Finance's freeze power from the business rules has to be visible in an audit log to the compliance officer even though the officer cannot see amounts -- the freeze itself is not a financial figure.
+answer.permissions: A department head leaving the company loses envelope access immediately, but their historical approvals must stay attributed to them, not anonymised.
+answer.permissions: Two department heads sharing one envelope for a joint programme both need write access, and either one's approval alone is sufficient -- it is not a two-signature requirement.
+answer.permissions: The vendor-facing side of the tool, if it ever gets a login, must not see any envelope figures at all -- only which seats were confirmed.
+answer.permissions: An auditor brought in externally for the year-end review needs read access to every envelope's history, but only for a bounded date range, not indefinitely.
 answer.integrations: Bookings come back from the vendor portal as a CSV, and the invoices land in the accounting system.
 answer.integrations: We have not decided whether the tool pushes to accounting or accounting pulls from it.
 answer.constraints: The fiscal year is not the calendar year for two of the entities, and the tool has to close within five working days of year end.
@@ -92,6 +115,14 @@ answer.constraints: Everything has to work for a department head on a phone, bec
 answer.config_vs_custom: Every client we roll this out to orders the priorities differently, so that has to be configurable rather than coded.
 answer.edge_cases: A vendor can cancel a course after the money is committed, and the refund can land in the next fiscal year.
 answer.edge_cases: Two department heads can request the last remaining seat within the same minute.
+answer.edge_cases: An employee books through the tool and then the same course independently through the vendor portal, so the same seat is committed twice against two different reservations.
+answer.edge_cases: A certification renewal deadline falls inside the blackout week between fiscal years, when neither year's envelope is technically open yet.
+answer.edge_cases: A department is dissolved mid-year and its remaining envelope has to be redistributed, but two of its employees have reservations still pending.
+answer.edge_cases: A vendor changes the price of a course after a reservation was made but before the invoice arrives, and the committed amount no longer matches what gets billed.
+answer.edge_cases: An employee is on the list for a mandatory certification renewal and gets made redundant before the course runs -- the seat and the money are both now orphaned.
+answer.edge_cases: A course is cancelled and re-listed by the vendor under a new name and a new price, and the tool has no way to know it is the same commitment.
+answer.edge_cases: A compliance officer's countersignature is still pending when the reservation's thirty-day expiry hits -- does the expiry win, or does the pending signature hold it open.
+answer.edge_cases: A regulated entity's carried-over budget from last year and this year's fresh allocation both get spent against the same certification renewal, and nobody flagged the double-draw until the audit.
 answer.reporting: Finance needs committed versus spent versus remaining per envelope, and an audit trail of who overrode a priority.
 answer.reporting: The auditor asks for the state of an envelope as it stood on a given date, not just as it stands now.
 answer.acceptance: It is accepted when a full year can be replayed from the audit trail and matches the accounting system to the cent.

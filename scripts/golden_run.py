@@ -109,7 +109,7 @@ def capture_interactive(client: Anthropic, req: dict) -> None:
         runs.append(turns)
     dump_turn_runs(req["slug"], req["request"], req["answers"], runs)
 
-    lens = turn_lens(runs)
+    lens = turn_lens(runs, req["answers"])
     depth = "/".join(str(d) for d in lens["depths"])
     verdict = "deep enough" if lens["deep_enough"] else f"SHALLOW — under {MEASURABLE_DEPTH} turns"
     print(f"  ✓ {req['slug']:<20} interactive · turns {depth} across {lens['n']} runs · {verdict}")
@@ -122,6 +122,11 @@ def capture_interactive(client: Anthropic, req: dict) -> None:
         hits = lens[key]
         detail = ", ".join(f"{lab} ({c}/{lens['n']})" for lab, c in sorted(hits.items())) or "—"
         print(f"    {caption:<38} {detail}")
+    if not lens["deep_enough"] and lens.get("unreached_layers"):
+        # #163: right where the 15 API calls were just spent, name which slots the sheet still had
+        # a layer for — the diagnosis that used to require a second, separate golden_diff.py run.
+        detail = ", ".join(f"{lab} ({c})" for lab, c in sorted(lens["unreached_layers"].items()))
+        print(f"    {'sheet layers never reached':<38} {detail}")
 
 
 def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:

@@ -66,6 +66,11 @@ replaced, so only a capture that runs deep says anything at all about that chang
   warns when any of them came in under five turns, because a conversation that converged at turn 3
   never reached the question. And on a single-pass baseline it says *not measured* rather than
   printing an empty finding set, which would read exactly like a clean one.
+- **A SHALLOW capture names what the sheet still had to say.** `AnswerSheet.remaining()` is replayed
+  against each run's own record of what it answered, and a layer is only reported when *every* run
+  in the capture left it unused — one run reaching it means the sheet was not why the capture stayed
+  shallow. Reported only below `MEASURABLE_DEPTH`: a healthy capture is deliberately given more
+  layers than five turns can consume, and leftovers there are by design (#163).
 
 ## It measures movement, not improvement
 
