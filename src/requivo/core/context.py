@@ -193,8 +193,8 @@ def load_context(only: list[str] | None = None) -> str:
     `REQUIVO_CONTEXT_DIR` at wherever it now lives. There is deliberately no fallback to "then load
     nothing": that is the bug. The refusal is no longer *discovered* by the next paid turn either —
     `check_selection` asks this same guard as a question, and `doctor` and `session verify` both run
-    it. One gap remains and is out of scope here: no verb re-scopes a session's `context_cards` after
-    creation, so restoring the card is the only recovery.
+    it. Restoring the card is one recovery; `session rescope` (#168) is the other, and re-scopes a
+    session's `context_cards` without touching `session.json` by hand.
 
     `only=[]` is refused for the same reason: a selection that selects nothing is not the same thing
     as `None`, the explicit "no restriction" sentinel, and guessing which one was meant is how this

@@ -71,7 +71,8 @@ what decides which questions get asked, it is estimated from these cards, and a 
 them produces a plausible answer for a reason nothing on screen would have shown you.
 
 **To recover, put the card back** — restore the file, or point `REQUIVO_CONTEXT_DIR` at wherever it now
-lives — and the turn runs.
+lives — and the turn runs. Or re-scope away from it:
+[`session rescope`](#re-scoping-an-existing-sessions-cards) records a new selection instead.
 
 You do not have to wait for a paid turn to find out. Three offline checks answer it:
 
@@ -117,13 +118,43 @@ nothing rather than raising when a directory is denied: the card vocabulary came
 so a card sitting in that directory was reported as unknown and you were told to put back a file that
 was already there.
 
-One limit remains before you scope a session to a card that only exists on one machine: there is no
-verb that re-scopes an existing session's cards, so the alternative to restoring the file is editing
-the `context_cards` key in the session's `session.json` by hand — the layout is a published contract,
-see [session-format.md](session-format.md).
+## Re-scoping an existing session's cards
 
-If you do edit it by hand, a card name may not contain a control character — a newline, a tab, an
-escape sequence. One that does is refused as `unsafe_selector_token` rather than displayed, because
-a name rendered into a health receipt can otherwise end the line and write its own
+`requivo session rescope <slug> --context <cards>` changes an existing session's selection. It
+validates the selection the same way `session init` does — an unknown name is refused, not recorded
+— and it is the recovery for a card that only exists on one machine: re-scope away from it instead of
+restoring the file.
+
+```console
+$ requivo session rescope leave-approval --context b2b-platform
+✅ Re-scoped 'leave-approval' → revision 3
+  previous  acme-crm
+  now       b2b-platform
+  Turns already reasoned were reasoned under the previous selection and are untouched; the next
+  turn reasons against the new one.
+```
+
+Three things follow from what a re-scope is, and are not obvious from the command alone:
+
+- **It records a new revision, once the session has a model** — the model carries forward unchanged
+  (same content, same hash), and the revision's `surface` reads `session-rescope` rather than a
+  reasoning turn, so `session.json`'s own history shows exactly where the selection changed. Before
+  any model exists there is nothing yet whose provenance the old cards could describe, so re-scoping
+  a brand-new session only updates the metadata — no revision spent on content that was never there.
+- **Nothing already produced is touched.** Existing artifacts are not marked stale: they still
+  faithfully describe the model they were generated from, and context is not one of the dependency
+  edges that invalidate an artifact (see [session-format.md](session-format.md#artifacts-and-freshness)).
+  Only the *next* turn reasons against the new selection.
+- **`--context` is required.** Unlike `session init`, where leaving it off is the ordinary default
+  (every card), here the whole point of the command is a deliberate new selection — pass `--context
+  ""` to reset one explicitly back to every card.
+
+Hand-editing the `context_cards` key in `session.json` is no longer the documented path — the layout
+is still a published contract (see [session-format.md](session-format.md)), so it keeps working, but
+`session rescope` validates the selection for you and leaves a provenance record hand-editing does
+not. A card name may not contain a control character — a newline, a tab, an escape sequence — and one
+that does is refused as `unsafe_selector_token` rather than displayed, because a name rendered into a
+health receipt can otherwise end the line and write its own
 ([cli.md](cli.md#a-card-name-cannot-write-a-line-of-the-receipt), #40). Card stems are filenames, so
-no name you would actually type is affected.
+no name you would actually type is affected — the case worth knowing about is a `session.json` edited
+directly, since `session rescope` can never produce one.

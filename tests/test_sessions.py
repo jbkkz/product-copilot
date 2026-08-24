@@ -359,6 +359,154 @@ def test_the_same_request_under_different_cards_is_a_different_session(workspace
     assert svc.cards(other.slug) == ["event-ops"]         # and it got the cards it asked for
 
 
+# ── rescoping context cards (#168) ──────────────────────────────────────────────
+
+
+def test_rescope_before_any_model_only_mutates_metadata(workspace):
+    """Before any turn has reasoned against the old selection, there is no provenance to keep honest —
+    nothing describes a model produced under it. Revision 0 (no model yet) so a re-scope here is a
+    plain metadata write: no revision, no revisions-log entry."""
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+
+    result = svc.rescope("s", context_cards=["event-ops"])
+
+    assert result.changed is True
+    assert result.revision == 0
+    assert svc.cards("s") == ["event-ops"]
+    meta = store.read_meta("s")
+    assert meta.current_revision == 0
+    assert meta.revisions == []
+
+
+def test_rescope_after_a_model_records_a_new_revision_with_unchanged_content(workspace):
+    """Once a model exists, every revision already on disk was reasoned under the *old* selection.
+    A re-scope is recorded as its own revision — an unchanged model, a provenance entry naming the
+    surface as a context switch rather than a reasoning turn — so the history shows exactly where
+    the selection changed, instead of silently rewriting what revision 1 was reasoned against."""
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+    svc.update_model("s", _full_model())          # revision 1, reasoned under b2b-platform
+
+    result = svc.rescope("s", context_cards=["event-ops"])
+
+    assert result.changed is True
+    assert result.revision == 2
+    assert result.previous_context_cards == ["b2b-platform"]
+    assert result.context_cards == ["event-ops"]
+    meta = store.read_meta("s")
+    assert meta.current_revision == 2
+    assert meta.context_cards == ["event-ops"]
+    assert len(meta.revisions) == 2
+    new_rec = meta.revisions[-1]
+    assert new_rec.revision == 2
+    assert new_rec.surface == "session-rescope"
+    # the model itself did not move — same content, same hash as the revision it succeeds
+    assert new_rec.model_hash == meta.revisions[0].model_hash
+    assert store.load_revision_model("s", 2).model_dump() == store.load_revision_model("s", 1).model_dump()
+
+
+def test_rescope_resolves_and_normalizes_cards_like_creation(workspace):
+    """Invariant 14's second door: `create_session` resolves the caller's selection rather than
+    trusting it, and a re-scope is a second entrance onto the same persisted value — an unknown name
+    must be refused here too, not recorded and discovered on the next turn."""
+    from requivo.core.errors import UnknownContextCardError
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s")
+
+    with pytest.raises(UnknownContextCardError):
+        svc.rescope("s", context_cards=["made-up"])
+    assert svc.cards("s") is None  # refused before anything was written
+
+
+def test_rescope_to_the_current_selection_is_a_no_op(workspace):
+    """Re-scoping to the selection a session already has changes nothing — order aside, since the
+    selection is a set. No new revision, no rewritten metadata: repeating the command is safe."""
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform", "event-ops"])
+    svc.update_model("s", _full_model())           # revision 1
+
+    result = svc.rescope("s", context_cards=["event-ops", "b2b-platform"])  # same set, other order
+
+    assert result.changed is False
+    assert result.revision == 1
+    meta = store.read_meta("s")
+    assert meta.current_revision == 1
+    assert len(meta.revisions) == 1
+
+
+def test_rescope_to_every_card_resets_the_selection_to_none(workspace):
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+
+    result = svc.rescope("s", context_cards=None)
+
+    assert result.changed is True
+    assert result.context_cards is None
+    assert svc.cards("s") is None
+
+
+def test_rescope_does_not_mark_existing_artifacts_stale(workspace):
+    """Question 2, decided: context is not a fifth kind of dependency edge. An artifact already on
+    disk still faithfully describes the model it was generated from — nothing in `ARTIFACT_SLOTS` or
+    `REASONING_CONSUMERS` names context as an input, and the model itself has not moved."""
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+    svc.update_model("s", _full_model())                       # revision 1
+    art.save("s", "prd", "# PRD\n", source_revision=1)
+
+    svc.rescope("s", context_cards=["event-ops"])
+
+    assert art.list("s")["prd"]["stale"] is False
+
+
+def test_a_model_change_still_marks_the_same_artifact_stale(workspace):
+    """The positive control for the assertion above: proves the harness can observe staleness at
+    all, on the very same artifact, so "rescope leaves it fresh" is not passing on a fixture that
+    can never turn STALE regardless of what runs."""
+    svc, art = SessionService(), ArtifactService()
+    svc.create_session("Something.", slug="s")
+    svc.update_model("s", _full_model())                       # revision 1
+    art.save("s", "prd", "# PRD\n", source_revision=1)
+
+    svc.update_model("s", _full_model(**{"workflow": _slot(90, "explicit", "high", "new flow")}))
+
+    assert art.list("s")["prd"]["stale"] is True
+
+
+def test_rescope_does_not_re_run_anything_the_next_snapshot_reads_the_new_cards(workspace):
+    """Question 3, decided: a re-scope re-runs nothing. It only changes what the *next* provider call
+    reasons against — proven here without a provider at all, by reading the same snapshot every
+    discovery call reads from."""
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+    svc.update_model("s", _full_model())
+
+    svc.rescope("s", context_cards=["event-ops"])
+
+    assert svc.snapshot("s").context_cards == ["event-ops"]
+
+
+def test_a_rescoped_session_with_a_model_still_passes_its_own_integrity_check(workspace):
+    """The duplicated revision this produces is a real revision, not a shortcut: `check_session_dir`
+    is the same anti-tampering pass `session verify` runs, and it must find nothing wrong with one."""
+    from requivo.core.integrity import check_session_dir
+
+    svc = SessionService()
+    svc.create_session("Something.", slug="s", context_cards=["b2b-platform"])
+    svc.update_model("s", _full_model())
+    svc.rescope("s", context_cards=["event-ops"])
+
+    problems = check_session_dir(store.canonical_dir("s"), expected_slug="s")
+    assert problems == []
+
+
+def test_rescope_refuses_a_session_that_does_not_exist(workspace):
+    with pytest.raises(SessionNotFoundError):
+        SessionService().rescope("ghost", context_cards=["event-ops"])
+
+
 def test_a_fresh_discovery_refuses_to_replace_a_model_that_already_exists(workspace):
     """Session creation is idempotent, so re-running `discover` on the same request lands on the same
     session — and used to overwrite whatever it held, replacing a model refined over several turns

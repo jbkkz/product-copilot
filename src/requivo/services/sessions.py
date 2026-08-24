@@ -86,6 +86,20 @@ class SessionEntry:
         return self.meta is not None
 
 
+@dataclass(frozen=True)
+class RescopeResult:
+    """The structured outcome of `session rescope` — the payload of `session rescope [--json]`."""
+    slug: str
+    previous_context_cards: list[str] | None
+    context_cards: list[str] | None
+    revision: int
+    changed: bool                                  # False when the selection did not move
+
+    def to_dict(self) -> dict:
+        return {"slug": self.slug, "previous_context_cards": self.previous_context_cards,
+                "context_cards": self.context_cards, "revision": self.revision, "changed": self.changed}
+
+
 @dataclass
 class UpdateResult:
     """The structured outcome of applying a proposal — the payload of `model apply [--json]`."""
@@ -334,6 +348,66 @@ class SessionService:
                 request=self.repo.request_text(slug),
                 context_cards=meta.context_cards,
             )
+
+    def rescope(self, slug: str, context_cards: list[str] | None) -> RescopeResult:
+        """Re-scope an existing session's context-card selection (`session rescope`).
+
+        Argued out in #168, against the issue's own four questions, so the reasoning lives here
+        rather than only in the issue:
+
+        1. **New revision, or mutate in place?** Both, depending on what is on disk. Once a model
+           exists, every revision already there was reasoned under the *old* selection — silently
+           overwriting `context_cards` would leave the history claiming a switch never happened. So
+           this is recorded as its own revision: the model carries forward **unchanged** (same
+           content, same hash) and the provenance names the surface as a re-scope rather than a
+           reasoning turn (`surface="session-rescope"`), which is exactly what
+           `RevisionRecord.surface` exists to distinguish. Before any model exists (revision 0)
+           there is no provenance yet for the old selection to describe — nothing has been reasoned
+           against it — so this is a plain metadata write, no revision minted for content that was
+           never there.
+        2. **Does it mark existing artifacts stale?** No. Staleness is the dependency graph
+           (invariant 1), and `ARTIFACT_SLOTS`/`REASONING_CONSUMERS` — the only two edge sets that
+           feed it — know slots and reasoning, not context. Nothing an artifact already on disk
+           reads has moved: the model is unchanged, so every artifact still faithfully describes
+           what it was generated from. Inventing a context edge would be a real feature (a fifth
+           kind of dependency `core/dependencies.py` does not have), not a re-scope.
+        3. **Does it re-run anything?** No. `DiscoveryService` reads `context_cards` off a fresh
+           `SessionSnapshot` on every call (`snapshot().context_cards`, read straight from
+           `meta.context_cards`), so writing the new selection here is already the whole effect —
+           the *next* turn reasons against it, nothing already produced is touched or redone.
+        4. **Untrusted input, same as creation.** `resolve_cards` runs here exactly as it does in
+           `create_session` (invariant 14's second door): a persisted `context_cards` is untrusted
+           the moment it is read back, and a re-scope is a second entrance onto the same value, so
+           an unknown name is refused here rather than recorded and discovered on the next turn.
+
+        Re-scoping to the selection a session already has (order aside — this is a set) is a no-op:
+        `changed=False`, nothing written, no revision spent on a switch that is not one.
+        """
+        self._ensure_canonical(slug)
+        resolved = resolve_cards(context_cards) if context_cards else None
+        with self.repo.lock(slug):
+            meta = self.repo.read_meta(slug)
+            previous = meta.context_cards
+            same = ((sorted(previous) if previous else previous)
+                    == (sorted(resolved) if resolved else resolved))
+            if same:
+                return RescopeResult(slug=slug, previous_context_cards=previous,
+                                     context_cards=previous, revision=meta.current_revision,
+                                     changed=False)
+            if meta.current_revision > 0:
+                model = self.load_model(slug)
+                _, meta = self.repo.save_revision(slug, model,
+                                                  provenance={"surface": "session-rescope"})
+            else:
+                # No model yet — nothing was reasoned under `previous`, so there is no revision to
+                # mint. `save_revision` bumps `updated_at` for the branch above; this branch is the
+                # only writer here, so it has to stamp it itself. `store._now()` rather than a second
+                # implementation of "UTC, second precision, Z-suffixed" — one format, one place.
+                meta.updated_at = store._now()
+            meta.context_cards = resolved
+            self.repo.write_meta(slug, meta)
+        return RescopeResult(slug=slug, previous_context_cards=previous, context_cards=resolved,
+                             revision=meta.current_revision, changed=True)
 
     # ── the write path ──────────────────────────────────────────────────────────
     def diff(self, slug: str, proposal: dict | str, *, require_complete: bool = True) -> UpdateResult:

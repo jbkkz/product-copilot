@@ -69,7 +69,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo demo` | Replay a bundled run — no key, no network |
 | `requivo doctor [--json]` | Environment + install check (see [What `doctor` answers](#what-doctor-answers)) |
 | `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
-| `requivo session init\|list\|show\|verify\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `import --force` to replace a session of the same slug) |
+| `requivo session init\|list\|show\|verify\|rescope\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `rescope` re-scopes an existing session's context cards, see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards); `import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
 | `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` is required — the revision the content was reasoned from is the one fact only the caller holds) |
 

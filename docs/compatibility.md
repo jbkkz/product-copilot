@@ -76,7 +76,7 @@ the user never typed. An older `schema_version` keeps loading.
 
 ## The `--json` outputs are public
 
-**Every `--json` output is public — all fourteen of them, and the structured error envelope
+**Every `--json` output is public — all fifteen of them, and the structured error envelope
 (`{code, message, path?, details?}`).** They follow the same rule as the session format: fields get
 added, populated fields do not change meaning without a note in the changelog.
 
@@ -86,7 +86,7 @@ added, populated fields do not change meaning without a note in the changelog.
 | `requivo doctor` | `requivo session verify` | `requivo model apply` |
 | `requivo session init` | `requivo session export` | `requivo model diff` |
 | `requivo session list` | `requivo session import` | `requivo artifact save` |
-| `requivo session migrate` | | `requivo artifact list` |
+| `requivo session migrate` | `requivo session rescope` | `requivo artifact list` |
 
 Written out in full rather than abbreviated, because the guard below compares this table against the
 parser literally, and an abbreviation is a fragment a test can match by accident.
@@ -109,7 +109,7 @@ what drifts.
 
 The promise is additive, not a freeze: nothing here says an output may never gain a field. What it
 says is that a populated field will not quietly change meaning, and that a change of shape is
-announced. That is cheap to keep for fourteen outputs and was never the expensive half.
+announced. That is cheap to keep for fifteen outputs and was never the expensive half.
 
 **A code carries one fact, and one `details` shape.** That is what makes the advice above safe to
 follow: matching a code and then reading a key out of `details` has to work for every payload

@@ -1,4 +1,4 @@
-"""`requivo session`: create, list, show, migrate, export, verify and import sessions.
+"""`requivo session`: create, list, show, migrate, export, verify, rescope and import sessions.
 
 The session directory is the interface between every surface and it is public at `format_version` 1
 (invariant 8), so this is the largest of the deterministic modules and the one whose output shape is
@@ -503,6 +503,40 @@ def _cmd_session_verify(a, client) -> None:
         raise SystemExit(exit_code)
 
 
+def _cmd_session_rescope(a, client) -> None:
+    """Re-scope an existing session's context-card selection (#168). The reasoning behind what this
+    does and does not do (a new revision only once a model exists, existing artifacts left alone,
+    nothing re-run) lives on `SessionService.rescope`, which is the single place it is decided.
+
+    `--context` is **required**, unlike `session init`'s optional flag: there the omission is the
+    ordinary default (every card), but here the whole point of the command is a deliberate new
+    selection, and silently resetting to every card because the flag was left off is exactly the
+    accident a re-scope should not be able to cause. Its empty-string spelling still means "every
+    card", the same as everywhere else `--context` is read — so resetting a narrowed session back
+    to no restriction is `--context ""`, spelled out rather than left implicit."""
+    svc = SessionService()
+    slug = svc.resolve_slug(a.session)
+    cards = _resolve_cards(a.context)
+    result = svc.rescope(slug, cards)
+    if a.json:
+        _print_json(result.to_dict())
+        return
+    previous = (", ".join(display_token(c) for c in result.previous_context_cards)
+               if result.previous_context_cards else "all cards")
+    now = (", ".join(display_token(c) for c in result.context_cards)
+          if result.context_cards else "all cards")
+    if not result.changed:
+        print(f"Session '{display_token(slug)}' is already scoped to these cards — nothing changed.")
+        print(f"  context  {now}")
+        return
+    print(f"✅ Re-scoped '{display_token(slug)}' → revision {result.revision}")
+    print(f"  previous  {previous}")
+    print(f"  now       {now}")
+    if result.revision > 0:
+        print("  Turns already reasoned were reasoned under the previous selection and are "
+             "untouched; the next turn reasons against the new one.")
+
+
 # Ceilings for an imported archive. A session is a handful of small JSON and Markdown files; anything
 # near these is not one. They exist so a hostile or corrupt archive fails on a bound rather than on the
 # filesystem filling up, and so decompression cannot be used as an amplifier.
@@ -821,7 +855,8 @@ def _cmd_session_import(a, client) -> None:
 def register_sessions(sub) -> None:
     """Attach the `session` verb group to the main `requivo` subparser."""
     # session
-    sp = sub.add_parser("session", help="create, list, show, verify, migrate, export/import sessions")
+    sp = sub.add_parser("session",
+                        help="create, list, show, verify, rescope, migrate, export/import sessions")
     ss = sp.add_subparsers(dest="subcommand", required=True, metavar="<action>")
 
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
@@ -856,6 +891,14 @@ def register_sessions(sub) -> None:
     sv.add_argument("session", help="session slug or path")
     sv.add_argument("--json", action="store_true")
     sv.set_defaults(func=_cmd_session_verify)
+
+    sr = ss.add_parser("rescope", help="re-scope an existing session's context cards")
+    sr.add_argument("session", help="session slug or path")
+    sr.add_argument("--context", "--cards", metavar="CARDS", dest="context", required=True,
+                    help="comma-separated context cards to switch to, or '' for every card. "
+                         "Alias: --cards. Required — unlike `init`, omitting it is not a default.")
+    sr.add_argument("--json", action="store_true")
+    sr.set_defaults(func=_cmd_session_rescope)
 
     sig = ss.add_parser("import", help="import a session archive into the workspace")
     sig.add_argument("archive", help="path to a .zip produced by `session export`")
