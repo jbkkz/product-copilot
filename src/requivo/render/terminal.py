@@ -12,6 +12,12 @@ STATE_ROWS = [
     ("unknown", "⚪ Unknown"),
 ]
 
+# The static note under the draft banner, pulled out as a constant rather than an inline literal so
+# `test_the_browsable_examples_deterministic_half_matches_the_renderer` (tests/test_cli.py) can
+# import and compare it instead of duplicating the string by hand -- a hand-copied literal drifts
+# silently the same way the banner prefix and the readiness block already had (#172).
+DRAFT_NOTE = "(blocking decisions remain — see Unknowns below)"
+
 
 def _wrap(text: str, indent: str = "  ", width: int = 80) -> str:
     return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
@@ -113,7 +119,7 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     print("\n" + "═" * 64)
     print("DRAFT DECISION BRIEF" if draft else "DECISION BRIEF")
     if draft:
-        print("(blocking decisions remain — see Unknowns below)")
+        print(DRAFT_NOTE)
     print("═" * 64)
 
     # ── Executive summary (what a PM reads first) ──

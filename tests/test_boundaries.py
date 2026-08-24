@@ -13,14 +13,18 @@ imported `run`, `advise` and `estimate`, and the interactive `discover` branch d
 calls of its own before handing the result to `DiscoveryService` for the write, while CLAUDE.md, the
 README and docs/architecture.md all stated the opposite rule.
 
-The surface half of the *provider* rule covers `cli.py` and `render/`; `web/` and `deterministic/`
-are not guarded for that one, and that is stated rather than left to read as clean. `render/` joined
-with #167, and the reason it had to is the reason this sentence is worth keeping accurate: for a
-release it read "scoped to `cli.py`" and was correct, while `render/terminal.py` imported
-`PRICING_AS_OF` and `UsageLedger` from `providers.anthropic` and no test in this file could see it.
-The two still outside are the ones with a real claim -- `web/config.py` probes for the SDK by name,
-and `deterministic/` is the offline half that reaches no provider at all -- but "has a real claim"
-is what an allowlist entry is for, and neither has been written.
+The surface half of the *provider* rule covers `cli.py`, `render/`, `web/` and `deterministic/` --
+every layer outside `providers/` that touches argv, stdout or HTTP, the same reading the storage
+guard below already uses for `SURFACE_TREES`. `render/` joined with #167, and the reason it had to is
+the reason this sentence is worth keeping accurate: for a release it read "scoped to `cli.py`" and
+was correct, while `render/terminal.py` imported `PRICING_AS_OF` and `UsageLedger` from
+`providers.anthropic` and no test in this file could see it. `web/` joined with #183, on the same
+argument: `web/config.py` probes for the SDK by name and `web/app.py` imports `EngineError`, both
+legitimate per #167, and both were unguarded until this scan set caught up with the storage guard's.
+`deterministic/` joined at the same time even though it reaches no provider today -- the narrower
+reading ("only the layers a violation has already been found in") is exactly the reasoning that let
+`render/` go unguarded through an entire hardening effort; a layer with zero current imports is the
+cheapest one to scan and the one a narrower rule would leave out again next time.
 
 The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
 `core.persistence` -- is #76, and it is guarded now, over all three surfaces. It needed a different
@@ -603,6 +607,17 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "stays, and the call site now carries the argument. It comes from `providers.errors` since "
         "#167 -- provider-neutral, SDK-free, and no longer a name only the Anthropic module has."
     ),
+    ("web/config.py", "Anthropic"): (
+        "the SDK handle, probed inside a try/except to answer one boolean -- is the SDK installed? "
+        "-- that crosses to the template as `ProviderStatus.sdk_installed`, never as a client. "
+        "Building a client and reasoning with it both stay behind DiscoveryService; this call site "
+        "never does either."
+    ),
+    ("web/app.py", "EngineError"): (
+        "an exception type, not a call, same as the cli.py entry above -- caught at the HTTP "
+        "boundary and turned into an error response. Importing a class the app never calls "
+        "orchestrates nothing."
+    ),
 }
 
 # `track_usage` was a third entry until #167, and its removal is the guard doing its job rather than
@@ -611,18 +626,26 @@ _SURFACE_PROVIDER_ALLOWLIST = {
 # the assertion below is what made deleting this entry mandatory instead of optional.
 
 
+PROVIDER_TREES = (
+    (RENDER, RENDER_PACKAGE),
+    (REPO_ROOT / "src" / "requivo" / "web", "requivo.web"),
+    (REPO_ROOT / "src" / "requivo" / "deterministic", "requivo.deterministic"),
+)
+
+
 def provider_subjects() -> list[tuple[Path, str, str]]:
     """Every surface the provider guard watches, as (path, package, label). The label is the
     allowlist key.
 
-    `cli.py` is named individually and `render/` is walked, for the reason `surface_subjects()`
-    walks its trees: a renderer module added next year must arrive inside the scan set rather than
-    beside it. Both helpers refuse an absent or empty subject, so a renamed package is 'could not
-    look' here too (#10).
+    `cli.py` is named individually and the rest are walked, for the reason `surface_subjects()`
+    walks its trees: a module added next year must arrive inside the scan set rather than beside
+    it. Both helpers refuse an absent or empty subject, so a renamed package is 'could not look'
+    here too (#10).
     """
     src = REPO_ROOT / "src" / "requivo"
     subjects = [(subject_module(CLI), CLI_PACKAGE, "cli.py")]
-    subjects.extend((p, pkg, p.relative_to(src).as_posix()) for p, pkg in scan(RENDER, RENDER_PACKAGE))
+    for root, package in PROVIDER_TREES:
+        subjects.extend((p, pkg, p.relative_to(src).as_posix()) for p, pkg in scan(root, package))
     return subjects
 
 # The marker a module import contributes instead of a name. Deliberately unspellable as an allowlist
@@ -723,14 +746,14 @@ def test_the_surfaces_reach_the_provider_only_through_the_named_surface_concerns
 
 
 def test_the_provider_guard_names_what_it_scanned():
-    """The #10 rule, for this scan set. Everything above is a negative assertion, and `render/` is a
-    package rather than a module -- a walk that silently found nothing under it would be an
-    all-clear over exactly the layer #167 found unguarded."""
+    """The #10 rule, for this scan set. Everything above is a negative assertion, and `render/`,
+    `web/` and `deterministic/` are packages rather than modules -- a walk that silently found
+    nothing under one of them would be an all-clear over exactly the layer #167 (render/) and #183
+    (web/, deterministic/) found unguarded."""
     labels = sorted(label for _, _, label in provider_subjects())
     assert "cli.py" in labels
-    assert "render/terminal.py" in labels, (
-        f"the provider guard did not scan render/terminal.py; it scanned {labels}"
-    )
+    for expected in ("render/terminal.py", "web/config.py", "deterministic/sessions.py"):
+        assert expected in labels, f"the provider guard did not scan {expected}; it scanned {labels}"
 
 
 _SURFACE_PROVIDER_IMPORTS = {
