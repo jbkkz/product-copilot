@@ -97,6 +97,59 @@ def test_demo_payload_matches_the_browsable_example():
         assert f.read_text(encoding="utf-8") == (browsable / f.name).read_text(encoding="utf-8"), f"demo payload drifted from examples/: {f.name}"
 
 
+def test_the_browsable_examples_deterministic_half_matches_the_renderer():
+    # #172: the test above compares the browsable example to its bundled twin -- two copies of each
+    # other, so both can drift from what the renderer actually produces, together, and stay green.
+    # This is the missing relationship: the readiness block and the draft banner are rendered by
+    # code from the example's own model.json, not authored by the LLM, so they can be re-derived and
+    # compared with no API call. The prose sections (challenges, risks, opportunities, next steps)
+    # come from a `Brief` the provider writes and are NOT re-derived here -- regenerating those is a
+    # spend decision, tracked separately (#172's "what is wanted" part 2).
+    import io
+    from contextlib import redirect_stdout
+
+    from requivo.cli import _fenced_text
+    from requivo.core.analysis import _readiness_blockers
+    from requivo.core.persistence import load_model
+    from requivo.paths import DEMO
+    from requivo.render.terminal import DRAFT_NOTE, render_readiness
+
+    repo_root = DEMO.parents[3]
+    example_dir = repo_root / "examples" / "event-checkin-reconciliation"
+    out = load_model(example_dir / "model.json")
+    assessment = _fenced_text((example_dir / "solution-assessment.md").read_text(encoding="utf-8"))
+    lines = assessment.splitlines()
+
+    draft = bool(_readiness_blockers(out))
+    expected_banner = "DRAFT DECISION BRIEF" if draft else "DECISION BRIEF"
+    actual_banner = lines[1].strip()
+    assert actual_banner == expected_banner, (
+        f"the captured example's banner ({actual_banner!r}) disagrees with what render_brief would "
+        f"print for this model.json today ({expected_banner!r}) -- the example is stale"
+    )
+    # The sub-line under the banner is static and unconditioned on any LLM content -- it is
+    # `DRAFT_NOTE` verbatim whenever draft, and absent otherwise -- so it is checked too, imported
+    # from the renderer rather than duplicated as a literal here (found in review: the first version
+    # of this test checked the banner text but not its sub-line, which could drift unnoticed).
+    actual_note = lines[2].strip() if draft else None
+    expected_note = DRAFT_NOTE if draft else None
+    assert actual_note == expected_note, (
+        f"the captured example's draft sub-line ({actual_note!r}) disagrees with DRAFT_NOTE "
+        f"({expected_note!r}) -- the example is stale"
+    )
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        render_readiness(out)
+    expected_readiness = buf.getvalue().rstrip("\n")
+    actual_readiness = "ARE WE READY?" + assessment.split("ARE WE READY?", 1)[1]
+    actual_readiness = actual_readiness.rstrip("\n")
+    assert actual_readiness == expected_readiness, (
+        "the captured example's readiness block disagrees with render_readiness() over the same "
+        f"model.json.\n--- captured ---\n{actual_readiness}\n--- live ---\n{expected_readiness}"
+    )
+
+
 def test_pc_brief_persists_reasoning_into_model():
     # Keystone: advise()'s reasoning is absorbed into the model and saved (backfill),
     # so downstream generators inherit it instead of it being regenerated and discarded.

@@ -4,7 +4,8 @@
 
 ```text
 ════════════════════════════════════════════════════════════════
-DECISION BRIEF
+DRAFT DECISION BRIEF
+(blocking decisions remain — see Unknowns below)
 ════════════════════════════════════════════════════════════════
 
 EXECUTIVE SUMMARY
@@ -157,9 +158,9 @@ RECOMMENDED NEXT STEPS
 
 ARE WE READY?
   Status               Not ready
-  Blocking decision    Confirm actors & roles, business rules, workflow /
-                       lifecycle, permissions, reporting & visibility, risks &
-                       rollout
+  Blocking decision    Confirm success criteria, actors & roles, business rules,
+                       workflow / lifecycle, permissions, constraints, reporting
+                       & visibility, risks & rollout
   Remaining gaps       Business objects, Integrations & notifications, Config vs
                        customization, Edge cases, Acceptance criteria
 ```

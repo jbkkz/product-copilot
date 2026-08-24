@@ -42,11 +42,41 @@ TESTS = REPO_ROOT / "tests"
 # wheel, which is why it was missed, and that is irrelevant to the convention: a reference is read by
 # a maintainer with a grep, and the harness scripts are read by exactly that person.
 SCRIPTS = REPO_ROOT / "scripts"
+# `docs/` is the third place CLAUDE.md's own "Where a bug narrative lives" section names as
+# narrative's right home, alongside this file and the invariant list -- and until #156 it was the
+# one of the three the guard never opened. Measured before adding it: 8 references, all resolving,
+# none wrapped, so there is no false-positive cost to weigh against the gap.
+DOCS = REPO_ROOT / "docs"
 
 # Files that may carry a reference. `.md` is in here for CLAUDE.md, which names two tests in its
-# invariants and is read more often than any module.
-SUBJECT_SUFFIXES = (".py", ".html", ".md")
+# invariants and is read more often than any module. `.js` joined with #156: `tests/web/busy_harness.js`
+# is the file the motivating instance for this whole issue sat in, and a `.js` file under `src/` or
+# `scripts/` is exactly as readable-by-grep as a `.py` one. Measured before adding it: zero references
+# in either vendored or first-party `.js` under those two roots, so widening the suffix costs nothing
+# where it is applied.
+SUBJECT_SUFFIXES = (".py", ".html", ".md", ".js")
 EXTRA_SUBJECTS = (REPO_ROOT / "CLAUDE.md",)
+
+# The *resolution* check's roots. `tests/` is deliberately not one of them -- see `wrap_subjects()`
+# below, which is. Measured: extending resolution to `tests/*.py` and `tests/*.md` today finds
+# eleven apparent dangling references and every one is a false positive -- nine are historical
+# mentions naming `test_cli_deterministic.py`, a module that no longer exists on purpose, to recount
+# what happened rather than to point a reader at it (eight read "Split out of
+# `test_cli_deterministic.py` by #141" in the split-out files themselves; the ninth is this very
+# module's own docstring, a few lines above) -- and two are this guard's own fixture strings, which
+# have to look like broken references for `test_the_wrap_detector_*` to mean anything. Resolving
+# those needs a rule that tells a pointer from a mention, which is a deliverable of its own and out
+# of scope here -- filed rather than attempted. `CHANGELOG.md` is excluded from every root below for
+# the same reason stated where it is declared: released history's dead pointers are correct, not
+# stale.
+RESOLUTION_ROOTS = (SRC, SCRIPTS, DOCS)
+
+# The wrap check has no pointer-versus-mention problem -- it is purely mechanical, so it can run over
+# a wider tree than the resolution check without inheriting its false-positive cost. `tests/` is here
+# for that reason: it is where the motivating instance for #156 actually sat (`busy_harness.js`,
+# truncated mid-identifier since the day it was written, invisible on both counts of being a `.js`
+# file under `tests/`). Measured clean today across every suffix in `SUBJECT_SUFFIXES`.
+WRAP_ROOTS = (SRC, SCRIPTS, DOCS, TESTS)
 
 # A reference is a `test_`-prefixed identifier. The length floor keeps `test_x` in an example snippet
 # from being read as a claim about the suite; every real reference in this repo is far longer.
@@ -63,22 +93,33 @@ DECISIONS = REPO_ROOT / "docs" / "decisions"
 _WRAPPED = re.compile(r"\btest_[a-z0-9_]*_$", re.MULTILINE)
 
 
-def subjects() -> list[Path]:
-    """Every file that may carry a reference.
+def _scan_subjects(roots: tuple[Path, ...], extra: tuple[Path, ...] = ()) -> list[Path]:
+    """Every file under `roots` that may carry a reference, plus `extra`.
 
     An empty result is an error rather than an answer, which is `test_boundaries.py`'s rule (#10) and
     it applies with more force here: this guard's whole job is a negative assertion, and a rename of
     `src/requivo` would turn it into a green test over nothing.
     """
-    found = [p for root in (SRC, SCRIPTS) for p in sorted(root.rglob("*"))
+    found = [p for root in roots for p in sorted(root.rglob("*"))
              if p.suffix in SUBJECT_SUFFIXES and p.is_file() and "__pycache__" not in p.parts]
-    found.extend(p for p in EXTRA_SUBJECTS if p.is_file())
+    found.extend(p for p in extra if p.is_file())
     if not found:
         raise AssertionError(
-            f"the narrative-reference guard found no files under {SRC} or {SCRIPTS}. This is 'could "
-            f"not look', not 'looked and found nothing' — fix the path, never the assertion."
+            f"the narrative-reference guard found no files under {roots}. This is 'could not look', "
+            f"not 'looked and found nothing' — fix the path, never the assertion."
         )
     return found
+
+
+def subjects() -> list[Path]:
+    """Every file the *resolution* check reads. See `RESOLUTION_ROOTS` for what is deliberately not
+    in here and why."""
+    return _scan_subjects(RESOLUTION_ROOTS, EXTRA_SUBJECTS)
+
+
+def wrap_subjects() -> list[Path]:
+    """Every file the *wrap* check reads — wider than `subjects()` on purpose. See `WRAP_ROOTS`."""
+    return _scan_subjects(WRAP_ROOTS, EXTRA_SUBJECTS)
 
 
 def declared_test_names() -> set[str]:
@@ -122,7 +163,35 @@ def test_the_guard_reads_the_real_tree():
         "scripts/ is not in the scan, and it carries references — this guard would report them clean"
     )
     assert any(p.name == "CLAUDE.md" for p in files)
+    # `docs/` joined with #156, the third place CLAUDE.md names as narrative's right home.
+    assert any(p.suffix == ".md" and "docs" in p.parts for p in files), (
+        "docs/ is not in the resolution scan, and CLAUDE.md names it as narrative's right home"
+    )
+    assert not any(p.name == "CHANGELOG.md" for p in files), (
+        "CHANGELOG.md is released history — its dead pointers are correct, not stale, and it must "
+        "never be swept"
+    )
     assert len(declared_test_names()) > 100
+
+
+def test_the_wrap_scan_reaches_further_than_the_resolution_scan():
+    """The decision this issue makes, pinned rather than left as something only the comment above
+    `RESOLUTION_ROOTS`/`WRAP_ROOTS` states. `tests/` carries the motivating instance for #156
+    (`busy_harness.js`) and is deliberately outside the resolution scan's false-positive cost."""
+    resolution_files = set(subjects())
+    wrap_files = set(wrap_subjects())
+    assert resolution_files < wrap_files, "the wrap scan must be a strict superset of the resolution scan"
+    assert any(p.name == "busy_harness.js" for p in wrap_files), (
+        "tests/web/busy_harness.js is not in the wrap scan — the motivating instance for #156 would "
+        "still be invisible"
+    )
+    assert not any(p.name == "busy_harness.js" for p in resolution_files), (
+        "tests/*.js reached the resolution scan too — that widening was deliberately not made (see "
+        "RESOLUTION_ROOTS) and needs the pointer-versus-mention rule first"
+    )
+    assert not any(p.name == "CHANGELOG.md" for p in wrap_files), (
+        "CHANGELOG.md must never be swept, wrap check included"
+    )
 
 
 def test_every_named_test_reference_resolves():
@@ -156,7 +225,7 @@ def test_no_reference_is_split_across_a_line():
     split = sorted(
         f"{path.relative_to(REPO_ROOT).as_posix()}:{path.read_text(encoding='utf-8')[:m.start()].count(chr(10)) + 1} "
         f"-> {m.group(0)}…"
-        for path in subjects()
+        for path in wrap_subjects()
         for m in _WRAPPED.finditer(path.read_text(encoding="utf-8"))
     )
     assert not split, (
