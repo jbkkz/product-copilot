@@ -22,6 +22,7 @@ from golden_lib import (  # noqa: E402
     brief_movements,
     consensus,
     is_interactive,
+    load_answers,
     load_runs,
     load_turns,
     movements,
@@ -30,6 +31,7 @@ from golden_lib import (  # noqa: E402
     turn_envelope,
     turn_lens,
     turn_movements,
+    unreached_layers,
 )
 
 from requivo.core.contracts import (  # noqa: E402
@@ -393,3 +395,56 @@ def test_turn_movements_reports_a_re_ask_the_engine_gained_or_dropped():
     assert m["measured"] is True
     assert m["reasked_added"] == ["Actors & roles"]
     assert m["reasked_removed"] == ["Real problem"]
+
+
+# -- #163: the sheet a SHALLOW capture never got to --------------------------------------------
+#
+# `AnswerSheet.remaining()` was removed as dead in #137 and the diagnosis it would have powered had
+# to be run by hand: which of the sheet's authored layers a capture's runs never reached. Wired back
+# in as `unreached_layers`, replayed off each run's own `answered` record rather than kept as live
+# state, so it can be measured from a capture already on disk and not only during a live run.
+
+def test_the_answer_sheet_reports_what_it_still_has_to_say():
+    sheet = AnswerSheet({"problem": ["first", "second"], "actors": ["who"]})
+    assert sheet.remaining() == {"problem": 2, "actors": 1}
+    sheet.reply_for("problem")
+    assert sheet.remaining() == {"problem": 1, "actors": 1}
+    sheet.reply_for("problem")
+    sheet.reply_for("actors")
+    assert sheet.remaining() == {}   # exhausted slots drop out, rather than reporting a bare 0
+
+
+def test_unreached_layers_reports_what_no_run_in_the_capture_ever_got_to():
+    """The #163 diagnosis. A layer counts as unreached only when *every* run left it on the sheet --
+    if even one run's conversation got that far, the layer was reachable and the sheet is not why
+    the capture stayed shallow."""
+    layers = {"problem": ["first", "second", "third"]}
+    deeper = [_turn(1, ["problem"], asks=("problem",)), _turn(2, ["problem"], asks=("problem",))]
+    shallower = [_turn(1, ["problem"], asks=("problem",))]
+    assert unreached_layers(layers, [deeper, shallower]) == {"Real problem": 1}
+
+
+def test_a_layer_reached_by_even_one_run_is_not_reported_as_unreached():
+    """must not fire: the positive control's twin. Every layer was used by at least one run, so
+    nothing here is a defect of the sheet."""
+    layers = {"problem": ["first", "second"]}
+    deeper = [_turn(1, ["problem"], asks=("problem",)), _turn(2, ["problem"], asks=("problem",))]
+    shallower = [_turn(1, ["problem"], asks=("problem",))]
+    assert unreached_layers(layers, [deeper, shallower]) == {}
+
+
+def test_turn_lens_carries_unreached_layers_only_when_given_a_sheet():
+    run = [_turn(1, ["problem"], asks=("problem",)), _turn(2, [])]
+    assert "unreached_layers" not in turn_lens([run])
+    lens = turn_lens([run], layers={"problem": ["first", "second"]})
+    assert lens["unreached_layers"] == {"Real problem": 1}
+
+
+def test_load_answers_reads_the_persisted_sheet():
+    text = turn_envelope("r", {"problem": ["p1", "p2"]}, [[_turn(1, ["problem"])]])
+    assert load_answers(text) == {"problem": ["p1", "p2"]}
+
+
+def test_load_answers_is_empty_for_a_single_pass_capture():
+    text = json.dumps({"request": "r", "runs": [_model(problem=Impact.high).model_dump()]})
+    assert load_answers(text) == {}

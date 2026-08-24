@@ -145,6 +145,16 @@ def load_briefs(text: str) -> list[Brief]:
     return [Brief.model_validate(b) for b in payload.get("briefs", [])]
 
 
+def load_answers(text: str) -> dict[str, list[str]]:
+    """The answer sheet a capture was taken with, or `{}` for a single-pass capture that never had
+    one. Persisted alongside the turns (`turn_envelope`) because it is *input*, not output — the
+    #163 diagnosis needs to know what the fixture client could still have said, not only what the
+    engine went on to ask."""
+    import json
+    payload = json.loads(text)
+    return {sid: list(vals) for sid, vals in payload.get("answers", {}).items()}
+
+
 def _mode(values: list) -> tuple[object, int]:
     """Most common value and how many of the K runs agree on it."""
     return Counter(values).most_common(1)[0]
@@ -440,6 +450,16 @@ class AnswerSheet:
         queue = self._layers.get(slot)
         return queue.pop(0) if queue else None
 
+    def remaining(self) -> dict[str, int]:
+        """Layers this client still had something further to say about, keyed by slot.
+
+        The #163 diagnosis for a run that stopped early: it may have converged because the sheet
+        ran dry, or it may have stopped for want of a question the engine never came back to ask,
+        in which case the sheet still holds ground unreached. A slot the sheet has fully spoken
+        about does not appear at all — an unreached count of zero and "the sheet was never asked
+        about this slot" would otherwise read the same way, and neither is a finding."""
+        return {sid: len(queue) for sid, queue in self._layers.items() if queue}
+
 
 def answer_line(slot: str, question: str, reply: str) -> str:
     """One answered question, in the exact words `converse()` sends.
@@ -541,12 +561,46 @@ def _regressed_in(run: list[Turn]) -> set[str]:
     return out
 
 
-def turn_lens(runs: list[list[Turn]] | None) -> dict:
+def unreached_layers(layers: dict[str, list[str]], runs: list[list[Turn]]) -> dict[str, int]:
+    """How much of the answer sheet this capture's K runs never got to, per slot, labeled.
+
+    The #163 diagnosis for a capture that stayed SHALLOW: a run that converged early may have done
+    so because the sheet ran dry, or it may have stopped for want of a question the engine never
+    came back to ask, in which case the sheet still holds unreached ground -- the diagnosis that had
+    to be run by hand to explain the 4/5/4 depths.
+
+    A layer only counts as unreached when *every* run in the capture left it on the sheet: if even
+    one run's conversation got that far, the layer was reachable and the sheet is not why the
+    capture stayed shallow -- some other run simply took a different path through the questions.
+    Replayed through a fresh `AnswerSheet` per run, consuming exactly the slots that run's own
+    `Turn.answered` record says it consumed, rather than re-deriving the arithmetic separately, so
+    this can never disagree with what the capture actually asked and answered."""
+    per_run: list[dict[str, int]] = []
+    for run in runs:
+        sheet = AnswerSheet(layers)
+        for turn in run:
+            for slot in turn.answered:
+                sheet.reply_for(slot)
+        per_run.append(sheet.remaining())
+    out: dict[str, int] = {}
+    for sid in layers:
+        left = min(r.get(sid, 0) for r in per_run) if per_run else 0
+        if left:
+            out[_label(sid)] = left
+    return out
+
+
+def turn_lens(runs: list[list[Turn]] | None, layers: dict[str, list[str]] | None = None) -> dict:
     """What the K captured conversations say about grounding from `DEEP_TURN` onward.
 
     With nothing to read it returns `{"measured": False, "reason": …}` and **no finding keys at
     all** — deliberately, so a caller cannot iterate an empty `reasked` and print a clean bill of
-    health for a capture that was never looked at."""
+    health for a capture that was never looked at.
+
+    `layers` is the answer sheet this capture was taken with, and it is optional: pass it and the
+    result carries `unreached_layers` (#163); omit it and the lens reads exactly as it always has.
+    A caller with no sheet on hand (a synthetic fixture, or a caller that never needed this before)
+    changes nothing by not passing it."""
     if not runs:
         return {"measured": False,
                 "reason": "single-pass capture — no turns to read, so nothing here speaks to the "
@@ -558,7 +612,7 @@ def turn_lens(runs: list[list[Turn]] | None) -> dict:
         for key, fn in (("reasked", _reasked_in), ("lost", _lost_in), ("regressed", _regressed_in)):
             for label in fn(run):
                 found[key][label] += 1
-    return {
+    out = {
         "measured": True,
         "n": n,
         "depths": depths,
@@ -571,6 +625,9 @@ def turn_lens(runs: list[list[Turn]] | None) -> dict:
         "unanimous": {key: sorted(lab for lab, c in counter.items() if c == n)
                       for key, counter in found.items()},
     }
+    if layers:
+        out["unreached_layers"] = unreached_layers(layers, runs)
+    return out
 
 
 def turn_movements(old: list[list[Turn]] | None, new: list[list[Turn]] | None) -> dict:

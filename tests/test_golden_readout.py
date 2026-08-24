@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import golden_diff  # noqa: E402
 import golden_lib  # noqa: E402
 import golden_run  # noqa: E402
+from golden_lib import Turn  # noqa: E402
 
 from requivo.core.analysis import _label  # noqa: E402
 from requivo.core.contracts import (  # noqa: E402
@@ -44,6 +45,7 @@ from requivo.core.contracts import (  # noqa: E402
     EngineOutput,
     Impact,
     Level,
+    Question,
     Slot,
     Summary,
 )
@@ -205,6 +207,58 @@ def test_the_verdict_is_the_union_of_the_lenses_that_ran(diff):
                           _capture(completeness=70, briefs=split))
     assert verdict == "weak", lines
     assert _line(lines, "assessment weak complexity") is not None, lines
+
+
+# ── #163: the sheet a SHALLOW capture never got to ───────────────────────────────────────────────
+#
+# `_show_turns` prints `unreached_layers` from `turn_lens` only when a run stopped short of
+# `MEASURABLE_DEPTH` -- a healthy capture is deliberately given a sheet deeper than five turns so it
+# never runs dry before the loop's own cap, and leftover layers there are by design, not a finding.
+
+def _q(slot: str) -> Question:
+    return Question(q=f"tell me about {slot}", slot=slot, why="drives the shape")
+
+
+def _iturn(index: int, answered: list[str], *, asks: tuple = ()) -> Turn:
+    return Turn(index=index, answered=list(answered),
+                model=EngineOutput(model={}, questions=[_q(s) for s in asks], summary=Summary()))
+
+
+def test_a_shallow_capture_reports_which_sheet_layers_went_unused():
+    """The #163 finding. A run that converged at turn 2 with two of three `business_rules` layers
+    still on the sheet has to say so -- that is exactly the diagnosis that had to be run by hand to
+    explain the 4/5/4 depths."""
+    layers = {"business_rules": ["l1", "l2", "l3"]}
+    run = [_iturn(1, ["business_rules"], asks=("business_rules",)), _iturn(2, [])]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        golden_diff._show_turns(None, [run], layers)
+    unused = _line(buf.getvalue().splitlines(), "sheet layers never reached")
+    assert unused is not None, buf.getvalue()
+    assert "Business rules" in unused and "2" in unused, unused
+
+
+def test_a_deep_capture_with_layers_left_over_does_not_report_them():
+    """must not fire: leftover layers on a run that reached `MEASURABLE_DEPTH` are by design -- the
+    sheet is deliberately authored deeper than five turns so a run doesn't go dry before the loop's
+    own cap. Reporting them here would be noise on every healthy capture."""
+    layers = {"business_rules": [f"l{i}" for i in range(1, 11)]}
+    run = [_iturn(i, ["business_rules"], asks=("business_rules",)) for i in range(1, 6)]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        golden_diff._show_turns(None, [run], layers)
+    assert _line(buf.getvalue().splitlines(), "sheet layers never reached") is None, buf.getvalue()
+
+
+def test_a_shallow_capture_with_nothing_left_on_the_sheet_reports_nothing():
+    """must not fire, the other control: a run can converge early because the engine genuinely
+    moved on, with the sheet fully spent. That is not this diagnosis and must not print as one."""
+    layers = {"business_rules": ["l1"]}
+    run = [_iturn(1, ["business_rules"], asks=("business_rules",)), _iturn(2, [])]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        golden_diff._show_turns(None, [run], layers)
+    assert _line(buf.getvalue().splitlines(), "sheet layers never reached") is None, buf.getvalue()
 
 
 # ── #164: a glyph must not be able to kill a script after the work has landed ────────────────────

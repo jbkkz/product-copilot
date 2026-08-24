@@ -47,6 +47,7 @@ from golden_lib import (  # noqa: E402
     brief_consensus,
     brief_movements,
     configure_output,
+    load_answers,
     load_briefs,
     load_runs,
     load_turns,
@@ -91,7 +92,7 @@ def diff_one(slug: str) -> str:
         # On a first capture these readouts *are* the finding — there is nothing to diff against,
         # and what the deep turns did is the whole reason an interactive request exists (#137). The
         # assessment gets the same treatment for the same reason (#162).
-        _show_turns(None, load_turns(new_text))
+        _show_turns(None, load_turns(new_text), load_answers(new_text))
         _show_assessment(None, load_briefs(new_text))
         return "moved"
 
@@ -119,7 +120,7 @@ def diff_one(slug: str) -> str:
     # `test_the_assessment_lens_runs_when_the_slot_consensus_held_still` is what fails if the
     # short-circuit comes back.
     signals = [
-        _show_turns(load_turns(old_text), load_turns(new_text)),
+        _show_turns(load_turns(old_text), load_turns(new_text), load_answers(new_text)),
         _show_slots(m),
         _show_assessment(load_briefs(old_text), load_briefs(new_text)),
     ]
@@ -154,7 +155,7 @@ def _show_slots(m: dict) -> str | None:
     return "strong" if m["strong"] else "weak"
 
 
-def _show_turns(old_turns, new_turns) -> str | None:
+def _show_turns(old_turns, new_turns, layers: dict[str, list[str]] | None = None) -> str | None:
     """Print what the interactive capture says about turn 3 and beyond. Returns its tier — `strong`
     for a finding every run agrees on, None for no signal or no measurement.
 
@@ -168,6 +169,11 @@ def _show_turns(old_turns, new_turns) -> str | None:
     - **lens lost** — HEAD had turns and the working tree does not. That is a request that stopped
       being interactive, and it has to be loud: the deep-turn lens went away, which reads exactly like
       it went quiet.
+
+    `layers` is this capture's answer sheet (#163). It only ever adds a line, and only when the
+    capture is SHALLOW: a healthy run's leftover layers are by design — the sheet is deliberately
+    authored deeper than `MEASURABLE_DEPTH` so it doesn't run dry before the loop's own cap — and
+    reporting them there would be noise on every clean capture.
     """
     if new_turns is None and old_turns is None:
         return None
@@ -176,7 +182,7 @@ def _show_turns(old_turns, new_turns) -> str | None:
               "lens is gone, which is not the same as clean")
         return "strong"
 
-    lens = turn_lens(new_turns)
+    lens = turn_lens(new_turns, layers)
     depth = "/".join(str(d) for d in lens["depths"])
     print(f"  interactive  turns {depth} across {lens['n']} run(s)"
           + ("" if lens["deep_enough"]
@@ -186,6 +192,11 @@ def _show_turns(old_turns, new_turns) -> str | None:
                          ("regressed", "completeness fell back")):
         detail = ", ".join(f"{lab} ({c}/{lens['n']})" for lab, c in sorted(lens[key].items()))
         print(f"               {caption:<38} {detail or '—'}")
+    if not lens["deep_enough"] and lens.get("unreached_layers"):
+        # The #163 diagnosis: the sheet, not the engine, may be why this run stopped short — it
+        # still had a layer to give on a slot the conversation never came back to.
+        detail = ", ".join(f"{lab} ({c})" for lab, c in sorted(lens["unreached_layers"].items()))
+        print(f"               {'sheet layers never reached':<38} {detail}")
 
     move = turn_movements(old_turns, new_turns)
     if not move["measured"]:
