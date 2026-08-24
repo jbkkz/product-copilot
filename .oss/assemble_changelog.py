@@ -592,7 +592,7 @@ _SELF_REF = r"(?:#|/(?:issues|pull)/){0}(?![0-9])"
 def self_reference_finding(name: str, text: str) -> Optional[str]:
     """One finding if the body never names the issue in its own filename.
 
-    `changelog.d/<issue>.<section>.md` holds the number in exactly one
+    `changelog.d/<issue>.<section>[.<slug>].md` holds the number in exactly one
     structural place, and assembly writes the *body* and deletes the file. So
     the number survives the release only when the author typed it into the
     prose, which made findability a property of author habit: measured on the
@@ -2119,8 +2119,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         No `--dir`/`--changelog` given, and no `.git` found above this script
         to derive a default from: say so, rather than composing a path out of
         a guess and failing on that instead.
+
+        An empty string is treated the same as absent, not as `Path('')` --
+        which `pathlib` reads as `.`. `--dir ''` is what a caller gets when
+        it captures a directory resolver's refusal without checking its exit
+        status (a shell `FRAGMENTS_DIR="$(...)"` with no exit-status check is
+        exactly that shape) -- present, but not a directory anyone named.
+        Falling back to the derived default here matches the existing choice
+        for a declared directory that names nothing usable: a read-only mode
+        never writes, so falling back costs a read of the wrong tree at
+        worst, and refusing here would break the read-only modes in every
+        managed repo whose caller happens to emit an empty value.
         """
-        if value is not None:
+        if value:
             return Path(value)
         if derived is None:
             _receipt("skipped",
@@ -2129,6 +2140,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                      "for {1}; pass it explicitly"
                      .format(Path(__file__).resolve(), flag))
             return None
+        if value == "":
+            # Distinct from `value is None` -- the caller said *something*,
+            # and what it said was unusable. A receipt that only ever names
+            # fragment filenames or a bare basename gives no way to tell
+            # "your flag was honoured" from "your flag was empty and
+            # silently replaced", so this is loud exactly where the ordinary
+            # absent-flag case (covered below with no message at all) must
+            # stay quiet: a note on every default-using run would stop
+            # meaning anything.
+            print("note: {0} was empty -- using the derived default {1}"
+                  .format(flag, derived), file=sys.stderr)
         return derived
 
     def _fold_target() -> Optional[Tuple[Path, Path]]:
@@ -2140,10 +2162,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         tell whether those are the same. A refusal that only reported
         something missing would turn a wrong-target write into a dead end, so
         this prints the flags and a whole invocation.
+
+        An empty string counts as missing, the same as `None`. `Path('')` is
+        `Path('.')`, so without this an empty `--dir` or `--changelog` would
+        fold the current working directory silently -- the one arm the fold
+        can least afford to guess, since it is the arm that deletes
+        fragments. This is deliberately not a check keyed to `REPO`: that
+        would also refuse this repository's own out-of-tree test fixtures
+        and any legitimate scratch-directory fold, which nothing on disk can
+        tell apart from a hostile one. Closing the empty-value gap instead
+        protects every caller, in-tree or out, without assuming anything
+        about where a legitimately-named directory lives.
         """
         missing = [flag for flag, value in (("--dir", args.directory),
                                             ("--changelog", args.changelog))
-                   if value is None]
+                   if not value]
         if not missing:
             return Path(args.changelog), Path(args.directory)
         _receipt("refused",
