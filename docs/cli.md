@@ -17,9 +17,10 @@ Most verbs take a session **slug** or a path to a saved `model.json`.
 | `requivo status <slug>` | Understanding checklist + readiness (`--json` for a machine snapshot). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
 
-The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init` and
-on `context`. `--cards` is a permanent alias of it on all three, kept because `context` spelled it that
-way first (#85); the two are one option, so they can never mean different things.
+The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init`,
+on `session rescope` and on `context`. `--cards` is a permanent alias of it on all four, kept because
+`context` spelled it that way first (#85); the two are one option, so they can never mean different
+things.
 
 A selector — `--context a,b`, or the slot names given to `impact` — is checked rather than best-guessed.
 An **empty** name is refused: `requivo impact <slug> ""`, which is what an unset shell variable expands
