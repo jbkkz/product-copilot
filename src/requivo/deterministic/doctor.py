@@ -263,7 +263,11 @@ def _lock_health() -> dict:
       *current* session list, which is a second read of a second root. When that read itself fails,
       `unmatched` is `None` rather than `[]` — an empty list here would claim every lock was checked
       and none were residue, which is exactly the conflation `_session_health`'s own `cards_checked`
-      flag exists to keep apart from a genuinely clean check.
+      flag exists to keep apart from a genuinely clean check. "Currently exists" also has to include
+      a session `list_slugs()` cannot confirm — a name in `list_unexaminable()` (#80) is not
+      confirmed absent, and folding it into `unmatched` told the false story `sessions.unexaminable`
+      exists to refuse about that exact name (found by review; see
+      `test_a_lock_for_a_session_that_exists_but_is_unexaminable_is_not_claimed_as_unmatched`).
     - `unexpected` — names under this root that are not a `<slug>.lock` file `session_lock` could
       have produced, from `scan_lock_root`. Reported, not absorbed into `total`.
     - `unexaminable` — entries whose examination itself raised (#80's third bucket, one root over).
@@ -280,7 +284,16 @@ def _lock_health() -> dict:
         # `deterministic/sessions.py`). `scan_lock_root()` above has no such equivalent to route
         # through -- a lock-root scan is a fact about the file backing, the same way `canonical_dir`
         # is, and it is allowlisted in `tests/test_boundaries.py` on those terms.
-        known = set(SessionService().repo.list_slugs())
+        repo = SessionService().repo
+        known = set(repo.list_slugs())
+        # `list_slugs()` answers *confirmed* sessions alone -- a directory whose `session.json`
+        # probe itself raised (EACCES, most often) is `list_unexaminable()`'s, not this one (#80).
+        # Folding that name into `unmatched` would tell the exact false story `sessions.unexaminable`
+        # exists to refuse about the identical name: "no session currently named that" about a slug
+        # the workspace could not confirm is empty. Excluded here rather than surfaced as its own
+        # state -- the sessions check already names it, and this check's only obligation is not to
+        # repeat the half of it that is false. Found by review.
+        known |= {e.name for e in repo.list_unexaminable()}
     except Exception:  # noqa: BLE001 - "could not check" must not read as "none matched"
         known = None
     unmatched = None if known is None else sorted(s for s in lock_slugs if s not in known)

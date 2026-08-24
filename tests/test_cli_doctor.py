@@ -772,6 +772,35 @@ def test_the_lock_root_being_unlistable_is_not_reported_as_no_residue(workspace)
     assert "unreadable" in broken_text
 
 
+def test_a_lock_for_a_session_that_exists_but_is_unexaminable_is_not_claimed_as_unmatched(workspace):
+    """`list_slugs()` answers *confirmed sessions* alone (#80's own distinction): a directory whose
+    `session.json` probe raised EACCES lands in `list_unexaminable()`, not there. `_lock_health`
+    used to check only `list_slugs()`, so a session sitting right there but merely unreadable told
+    the identical false story the `sessions` check next to it exists to refuse: "no session
+    currently named that" about a slug the workspace cannot confirm is empty. Found by review."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny reads on Windows")
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _take_lock("s")
+    d = store.canonical_dir("s")
+    d.chmod(0o000)
+    try:
+        r = _run_json(["doctor", "--json"])
+        text = _run(["doctor"])
+    finally:
+        d.chmod(0o755)
+
+    assert r["sessions"]["unexaminable"] and r["sessions"]["unexaminable"][0]["name"] == "s", (
+        "the must-fire control: the sessions check really does see this as unexaminable"
+    )
+    assert r["locks"]["unmatched"] == [], (
+        "a session the workspace could not examine is not confirmed absent, so its lock must not "
+        "be reported as residue from one that no longer exists"
+    )
+    assert "no matching session" not in text
+    assert "✅" in _check_line(text, "locks")
+
+
 def test_lock_matching_is_not_claimed_when_the_session_list_itself_could_not_be_read(workspace):
     """`unmatched` answers a question that needs the current session list, and a failure to read
     *that* is a third state of its own: not `readable: False` (the lock root scan itself worked) and
