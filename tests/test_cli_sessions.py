@@ -244,3 +244,94 @@ def test_session_verify_exits_one_when_the_cards_were_checked_and_are_broken(wor
     report = json.loads(buf.getvalue())
     assert report["context_cards"]["checked"] is True
     assert report["context_cards"]["problem"]["code"] == "unknown_context_card"
+
+
+# ── session rescope (#168) ───────────────────────────────────────────────────
+# The verb `docs/context-cards.md` used to say did not exist: re-scoping a session's context cards
+# without hand-editing `session.json`.
+
+
+def test_session_rescope_records_a_new_revision(workspace, tmp_path):
+    _run(["session", "init", "Something.", "--slug", "s", "--context", "b2b-platform"])
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps(_full_model()))
+    _run(["model", "apply", "s", str(p)])                 # revision 1
+
+    r = _run_json(["session", "rescope", "s", "--context", "event-ops", "--json"])
+    assert r == {"slug": "s", "previous_context_cards": ["b2b-platform"],
+                "context_cards": ["event-ops"], "revision": 2, "changed": True}
+    assert store.read_meta("s").current_revision == 2
+    assert store.read_meta("s").context_cards == ["event-ops"]
+
+    shown = _run_json(["session", "show", "s", "--json"])
+    assert shown["context_cards"] == ["event-ops"]
+
+
+def test_session_rescope_before_any_model_stays_at_revision_zero(workspace):
+    _run(["session", "init", "Something.", "--slug", "s"])
+
+    r = _run_json(["session", "rescope", "s", "--context", "event-ops", "--json"])
+    assert r["revision"] == 0
+    assert r["changed"] is True
+    assert store.read_meta("s").revisions == []
+
+
+def test_session_rescope_rejects_an_unknown_card(workspace):
+    _run(["session", "init", "Something.", "--slug", "s"])
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "rescope", "s", "--context", "made-up", "--json"], client=None)
+    assert e.value.code == 1
+    report = json.loads(buf.getvalue())
+    assert report["code"] == "unknown_context_card"
+    assert store.read_meta("s").context_cards is None  # refused before anything was written
+
+
+def test_session_rescope_requires_context(workspace):
+    _run(["session", "init", "Something.", "--slug", "s"])
+
+    with pytest.raises(SystemExit) as e:
+        app(["session", "rescope", "s"], client=None)
+    assert e.value.code == 2  # argparse: a required argument is missing
+
+
+def test_session_rescope_to_all_cards_reports_none(workspace):
+    _run(["session", "init", "Something.", "--slug", "s", "--context", "b2b-platform"])
+
+    r = _run_json(["session", "rescope", "s", "--context", "", "--json"])
+    assert r["context_cards"] is None
+    assert store.read_meta("s").context_cards is None
+
+
+def test_session_rescope_reports_when_nothing_changed(workspace):
+    _run(["session", "init", "Something.", "--slug", "s", "--context", "event-ops"])
+
+    out = _run(["session", "rescope", "s", "--context", "event-ops"])
+    assert "nothing changed" in out.lower()
+    r = _run_json(["session", "rescope", "s", "--context", "event-ops", "--json"])
+    assert r["changed"] is False
+
+
+def test_session_rescope_recovers_a_session_whose_card_no_longer_resolves_here(workspace, tmp_path):
+    """The scenario the issue was filed about: a card that only exists on one machine. Before this
+    verb the documented recovery was hand-editing `session.json`; now `session verify` fails loudly,
+    `session rescope` fixes it without touching a file directly, and `session verify` passes again."""
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "lost-domain.md").write_text("# Lost domain\n", encoding="utf-8")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("REQUIVO_CONTEXT_DIR", str(cards))
+        _run(["session", "init", "Something.", "--slug", "s", "--context", "lost-domain"])
+        (cards / "lost-domain.md").unlink()  # simulate: this card does not exist here anymore
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), pytest.raises(SystemExit):
+            app(["session", "verify", "s", "--json"], client=None)
+        assert json.loads(buf.getvalue())["ok"] is False
+
+        _run(["session", "rescope", "s", "--context", "b2b-platform"])
+
+        assert _run_json(["session", "verify", "s", "--json"])["ok"] is True
+        assert store.read_meta("s").context_cards == ["b2b-platform"]

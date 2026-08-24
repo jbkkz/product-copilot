@@ -17,9 +17,10 @@ Most verbs take a session **slug** or a path to a saved `model.json`.
 | `requivo status <slug>` | Understanding checklist + readiness (`--json` for a machine snapshot). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
 
-The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init` and
-on `context`. `--cards` is a permanent alias of it on all three, kept because `context` spelled it that
-way first (#85); the two are one option, so they can never mean different things.
+The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init`,
+on `session rescope` and on `context`. `--cards` is a permanent alias of it on all four, kept because
+`context` spelled it that way first (#85); the two are one option, so they can never mean different
+things.
 
 A selector — `--context a,b`, or the slot names given to `impact` — is checked rather than best-guessed.
 An **empty** name is refused: `requivo impact <slug> ""`, which is what an unset shell variable expands
@@ -69,7 +70,7 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo demo` | Replay a bundled run — no key, no network |
 | `requivo doctor [--json]` | Environment + install check (see [What `doctor` answers](#what-doctor-answers)) |
 | `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
-| `requivo session init\|list\|show\|verify\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `import --force` to replace a session of the same slug) |
+| `requivo session init\|list\|show\|verify\|rescope\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `rescope` re-scopes an existing session's context cards, see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards); `import --force` to replace a session of the same slug) |
 | `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
 | `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` is required — the revision the content was reasoned from is the one fact only the caller holds) |
 

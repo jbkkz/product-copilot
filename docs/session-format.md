@@ -71,7 +71,7 @@ Each applied revision records **who produced it**, in a `revisions` log in `sess
 |---|---|
 | `provider`, `model_name` | which engine reasoned |
 | `prompt_version` | `sha256:…` of the exact system prompt — prompt file + schema + the context cards actually selected |
-| `surface` | which interface asked (`cli-discover`, `web-answer`, `cli-brief`, a Claude Code turn…) |
+| `surface` | which interface asked (`cli-discover`, `web-answer`, `cli-brief`, a Claude Code turn, `session-rescope`…) |
 | `previous_revision`, `created_at` | where it sits in the history |
 | `model_hash` | content identity of the model that was written |
 
@@ -92,6 +92,16 @@ have to be held together: checked and then acted on with a gap in between, two w
 the same check and the second silently overwrites the first. Two Requivo processes on one session
 therefore serialise; the loser gets `revision_conflict`, which is a real answer, and never a
 half-applied session.
+
+**Not every revision changes the model.** `requivo session rescope <slug> --context <cards>`
+(see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards)) records a new
+revision whose `model_hash` is identical to the one it succeeds — the model carries forward
+unchanged, and `surface: "session-rescope"` is what tells the two apart on inspection. `context_cards`
+itself lives on `session.json`, not per revision: it is the session's live setting, read fresh at the
+start of every turn, so a re-scope changes what the *next* turn reasons against and nothing else.
+Before any model exists (revision 0) there is nothing yet whose provenance the old selection could
+describe, so re-scoping a session with no model does not mint a revision at all — it only updates
+`context_cards`.
 
 ## Artifacts and freshness
 

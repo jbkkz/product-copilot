@@ -233,7 +233,7 @@ def test_the_card_selector_is_one_action_not_two():
     for verb, actions in seen.items():
         assert actions == [["--cards", "--context"]], (
             f"{verb}: --context/--cards must be two option strings on one action, got {actions}")
-    assert set(seen) == {"discover", "session init", "context"}, seen
+    assert set(seen) == {"discover", "session init", "context", "session rescope"}, seen
 
 
 def test_the_context_verb_prints_the_same_cards_under_either_spelling():
