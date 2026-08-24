@@ -57,3 +57,16 @@ supertool
 # contract, declared in pyproject.toml. A lock here would pin what a consumer
 # resolves against and is not what a library ships.
 uv.lock
+# The agent identity file, wherever it is dropped. It describes the AGENT -- its name,
+# voice and values on one machine -- and is per-user by construction, so committing one
+# publishes a single developer's setup to everyone who clones. It was tracked at
+# .claude/remember/identity.md for a release before anybody noticed.
+#
+# Both paths are listed on purpose. The remember plugin writes a `.gitignore` holding `*`
+# into the store it creates, so a store it made is untracked already; but the store's
+# location depends on the mode. In external mode -- `data_dir` in ~/.remember/config.json,
+# which is what this machine runs -- the store is OUTSIDE the repository entirely and
+# neither of these directories is created by the plugin at all. A file dropped in one by
+# hand is then protected by nothing, which is exactly what these two lines are for.
+.claude/remember/
+.remember/
