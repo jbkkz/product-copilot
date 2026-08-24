@@ -452,22 +452,70 @@ def compare(referenced: dict[tuple[str, str | None], list[str]], tree: Surface |
 
 
 def _harden_streams() -> None:
-    """What `requivo/streams.py` does for the product, for a script that cannot import it.
+    """What `requivo/streams.py` does for the product, for a script that cannot import it (#174).
 
-    A plugin path or a version string can hold a character the console's codepage cannot encode --
-    on Windows that is typically cp1252 -- and an unhandled `UnicodeEncodeError` would kill this
-    process at a `print`, after the comparison it was reporting had already been made.
-    `backslashreplace` and never `replace`, because a reader cannot tell a substituted character
-    from one that was never there.
+    A plugin path, a directory name a fork controls, or a released version string can hold a
+    character the console's codepage cannot encode -- on Windows that is typically cp1252 -- and an
+    unhandled `UnicodeEncodeError` would kill this process at a `print`, after the comparison it was
+    reporting had already been made. `backslashreplace` and never `replace`, because a reader cannot
+    tell a substituted character from one that was never there.
+
+    Not `golden_lib.configure_output()`, on purpose. That function reaches `requivo.streams`, and
+    `golden_lib` itself imports `requivo.core.analysis` and friends -- so importing either would give
+    this module a dependency on `requivo` being installed. The module docstring's "stdlib only" is
+    load-bearing for exactly this call site: the workflow's tree-side `pip install -e .` step is
+    `continue-on-error`, and when it fails this script still has to run far enough to report
+    could-not-look in those words. An import-time `ModuleNotFoundError` would crash before `main()`
+    ever got there, which is worse than the bug this function exists to fix.
+    `test_the_module_stays_stdlib_only` pins that.
+
+    The third state -- a stream this cannot reach -- is named on stderr rather than swallowed, the
+    same rule `requivo.streams.configure_stream` follows for the product: a stream that could not be
+    hardened is exactly the one that can still crash later, so staying silent about it would be this
+    function's own instance of the class it exists to fix.
+    `test_harden_streams_names_a_stream_it_could_not_reach` is the guard, with
+    `test_a_strict_console_reports_a_real_finding_as_could_not_look_when_streams_are_not_hardened` as
+    the positive control showing what this call site prevents: without it, a real drift finding is
+    overwritten by the crash that happens while printing it, and the exit code describes the crash
+    rather than the walk (see the module docstring's "Advisory by design" section).
     """
-    for stream in (sys.stdout, sys.stderr):
+    for stream, name in ((sys.stdout, "stdout"), (sys.stderr, "stderr")):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:          # a stream someone replaced with a plain object
+            _note_could_not_harden(name, f"{type(stream).__name__} has no reconfigure()")
             continue
         try:
             reconfigure(errors="backslashreplace")
-        except (OSError, ValueError):    # already detached, or a stream that refuses
-            pass
+        except (OSError, ValueError) as exc:    # already detached, or a stream that refuses
+            _note_could_not_harden(name, f"{type(exc).__name__}: {exc}")
+
+
+def _note_could_not_harden(name: str, reason: str) -> None:
+    """`_harden_streams`'s third state, written defensively: `reason` is composed from an exception's
+    own `str()`, which can itself hold a character stderr cannot encode -- so the FIRST write can
+    raise `UnicodeEncodeError`, the exact class this whole module exists to survive, one function
+    inward. A bare `except: pass` there would make the note go missing with nothing to tell a reader
+    "both streams hardened fine" from "hardening AND the report of its own failure both failed
+    silently" -- so the fallback re-encodes with `backslashreplace` rather than giving up on the
+    first attempt, the same shape `requivo.streams.safe_write` uses for the product (not imported,
+    for the same stdlib-only reason `_harden_streams` gives).
+    `test_note_could_not_harden_survives_a_console_that_cannot_encode_its_own_reason` is the guard.
+    """
+    message = f"  ! {name} could not be hardened against a character it cannot encode ({reason})\n"
+    try:
+        sys.stderr.write(message)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+        try:
+            sys.stderr.write(message.encode(encoding, "backslashreplace").decode(encoding, "replace"))
+        except (ValueError, OSError, UnicodeError):
+            return
+    except (OSError, ValueError):
+        return
+    try:
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def _annotate(github: bool, title: str, message: str) -> None:
