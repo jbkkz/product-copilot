@@ -133,7 +133,13 @@ def derive_stories(client, out: EngineOutput, only: list[str] | None = None, *,
 
 def advise(client, out: EngineOutput, only: list[str] | None = None, *,
            reuse_system: bool = False) -> Brief:
-    """Finalization stage: a completed model → design considerations, risks, opportunities."""
+    """Finalization stage: a completed model → design considerations, risks, opportunities.
+
+    `brief.md` still says "solution assessment", not "Decision brief" — deliberately, not missed
+    (#166): it is fed into the system prompt verbatim, so renaming it is a `scripts/golden_run.py`
+    spend decision, not a caption fix. See
+    `test_the_declared_exception_records_its_reason_at_the_call_site` in
+    tests/test_vocabulary_boundary.py for the guard and the full reasoning."""
     system = build_prompt("brief.md", only)
     user = "Completed requirements model to advise on:\n" + out.model_dump_json(indent=2)
     return _complete(client, system, [{"role": "user", "content": user}], Brief,
