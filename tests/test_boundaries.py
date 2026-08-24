@@ -896,6 +896,11 @@ _SURFACE_STORAGE_ALLOWLIST = {
         "and two scans are two instants -- a `session.json` landing between them lands in no answer "
         "at all, which is the invisible state this key exists to end."
     ),
+    ("deterministic/doctor.py", "scan_lock_root"): (
+        "the lock-root residue check (#180). A lock-root scan is a fact about the file backing the "
+        "same way `canonical_dir` is -- a Postgres backing has no lock files to enumerate -- so "
+        "there is no backing-neutral form to route it through."
+    ),
     ("deterministic/artifacts.py", "artifact_path"): (
         "prints where `artifact save` put the file. See the cli.py entry."
     ),

@@ -1082,6 +1082,56 @@ def list_unexaminable_entries() -> list[UnexaminableEntry]:
     return scan_session_root()[2]
 
 
+def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
+    """Partition `lock_root()` three ways, for `doctor`'s lock-residue check (#180): the slugs a
+    `<slug>.lock` file names, the entries that are not a lock file `session_lock` could have
+    produced, and the entries whose examination raised. The session-root sibling of
+    `_scan_session_root`, one root over.
+
+    **A `<slug>.lock` regular file is the only thing this store ever writes here.** `lock_path`
+    joins `lock_root()` with `validate_slug(slug) + ".lock"`, so anything else under this root —
+    a stray file with a different name, a directory, a symlink at a `.lock` name — did not come
+    from `session_lock` and is reported as `unexpected` rather than folded into the lock count.
+    Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
+    symlink's target would read another file into a report about this workspace.
+
+    **What a matching slug means is left to the caller, deliberately.** This function answers only
+    *is there a `<slug>.lock` file*, never *is `slug` still a session* — that needs the session
+    root's own listing, a second read a moment apart, and conflating the two here would make this
+    function's own answer depend on an argument it does not take. `doctor._lock_health` is where the
+    two lists meet.
+
+    Three outcomes on each entry, because the same predicate that decides *session or not* in
+    `_scan_session_root` can fail here too: `p.is_symlink()` / `p.is_file()` raise on the errnos
+    `Path.exists()` does not swallow (EACCES chief among them), and a name that failed that probe is
+    neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
+    reasoning `_scan_session_root` gives for its own third bucket (#80).
+
+    A root that does not exist is an empty lock directory and returns nothing, matching
+    `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same
+    claim and is left to raise, for the caller to report as `readable: False` rather than as a clean
+    scan of nothing — the whole-root-versus-per-entry distinction `_scan_session_root`'s docstring
+    already makes."""
+    root = lock_root()
+    if not root.exists():
+        return [], [], []
+    lock_slugs: list[str] = []
+    unexpected: list[str] = []
+    unexaminable: list[UnexaminableEntry] = []
+    for p in sorted(root.iterdir(), key=lambda p: p.name):
+        try:
+            is_ordinary_file = p.is_file() and not p.is_symlink()
+        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
+            unexaminable.append(UnexaminableEntry(p.name, str(e)))
+            continue
+        slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
+        if is_ordinary_file and slug and is_slug(slug):
+            lock_slugs.append(slug)
+        else:
+            unexpected.append(p.name)
+    return lock_slugs, unexpected, unexaminable
+
+
 def list_non_session_entries() -> list[NonSessionEntry]:
     """Everything else under the session root, described — `_scan_session_root`'s second part.
 
