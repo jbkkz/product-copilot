@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -652,3 +653,144 @@ def test_context_can_be_asked_for_by_session(workspace):
 
     with pytest.raises(SystemExit):         # the two selectors are alternatives
         _run(["context", "--session", "narrow", "--cards", "b2b-platform"])
+
+
+# ── lock-root residue (#180) ──────────────────────────────────────────────────
+#
+# #113/#179 moved the write lock outside the session directory to
+# `.requivo/locks/<slug>.lock`. There is no `session delete` verb — removing a session means
+# removing its directory by hand, which leaves the lock file behind, empty, claiming a slug nobody
+# has any more. `doctor` reports that residue the same way #67 reports a non-session entry under the
+# session root: what is there, in three states, and never a conclusion the directory alone cannot
+# support. `session_lock` only ever creates `<slug>.lock` for a slug that had a session *at that
+# instant*, so a lock whose slug currently names no session is candidate residue — never printed as
+# "orphan", because the lock scan and the session scan run a moment apart and a session created or
+# removed in that gap would read the same way for a tick without being residue at all.
+
+
+def _take_lock(slug: str) -> None:
+    """Materialise `<slug>.lock` on disk the way `session_lock` actually does: enter and leave the
+    context manager once. Nothing inside it ever deletes the file it created."""
+    with store.session_lock(slug):
+        pass
+
+
+def test_a_clean_workspace_reports_no_lock_residue(workspace):
+    """The must-not-fire control: no lock files at all, so the check ticks and nothing is named."""
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r == {"readable": True, "error": None, "total": 0, "sessions_checked": True,
+                 "unmatched": [], "unexpected": [], "unexaminable": []}
+    text = _run(["doctor"])
+    assert "✅" in _check_line(text, "locks")
+    assert "no matching session" not in text
+    assert "orphan" not in text.lower()
+
+
+def test_a_lock_whose_session_still_exists_is_not_flagged(workspace):
+    """The must-fire harness's positive control on the *matched* side: a lock for a live session is
+    ordinary, not residue, even though it is the identical file shape as an abandoned one."""
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _take_lock("s")
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 1 and r["unmatched"] == []
+    assert "✅" in _check_line(_run(["doctor"]), "locks")
+
+
+def test_a_lock_whose_session_was_deleted_by_hand_is_named_but_not_concluded(workspace):
+    """The ordinary way this residue arises, since there is no `session delete` verb: the session
+    directory goes, and the lock file — outside it since #113 — does not."""
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _take_lock("s")
+    shutil.rmtree(store.canonical_dir("s"))
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 1 and r["unmatched"] == ["s"]
+    assert r["unexpected"] == [] and r["unexaminable"] == []
+
+    text = _run(["doctor"])
+    assert "🟡" in _check_line(text, "locks")
+    assert "s" in text and "no matching session" in text
+    # The load-bearing refusal (#180): this report never draws the conclusion the directory alone
+    # cannot support.
+    assert "orphan" not in text.lower()
+    assert "leftover" not in text.lower()
+
+
+def test_an_entry_under_lock_root_that_is_not_a_lock_file_is_named_as_unexpected(workspace):
+    """Nothing but `session_lock` writes here, so anything else — a stray file, a subdirectory, a
+    misnamed lock — is reported and never silently absorbed into the count of real locks."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "not-a-lock.txt").write_text("stray\n", encoding="utf-8")
+    (store.lock_root() / "sub").mkdir()
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 0
+    assert sorted(r["unexpected"]) == ["not-a-lock.txt", "sub"]
+
+    text = _run(["doctor"])
+    assert "🟡" in _check_line(text, "locks")
+    assert "not-a-lock.txt" in text and "sub" in text
+
+
+def test_a_symlink_at_a_lock_name_is_reported_and_not_followed(workspace):
+    """The same symlink care `_scan_session_root`'s non-session partition carries (invariant 17): a
+    symlink is named as one and its target is never read into this report."""
+    if os.name == "nt":
+        pytest.skip("os.symlink needs elevated privileges on Windows by default")
+    store.lock_root().mkdir(parents=True)
+    target = workspace / "elsewhere.txt"
+    target.write_text("not a lock\n", encoding="utf-8")
+    (store.lock_root() / "sneaky.lock").symlink_to(target)
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 0
+    assert r["unexpected"] == ["sneaky.lock"]
+
+
+def test_the_lock_root_being_unlistable_is_not_reported_as_no_residue(workspace):
+    """The same third state every other check in this report has: could-not-look must not render
+    like looked-and-found-nothing."""
+    from requivo.deterministic import doctor as det
+
+    clean = _run_json(["doctor", "--json"])["locks"]
+    assert clean["readable"] is True and clean["total"] == 0
+    clean_text = _run(["doctor"])
+
+    def _unreadable():
+        raise PermissionError("Permission denied")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(det.store, "scan_lock_root", _unreadable)
+        broken = _run_json(["doctor", "--json"])["locks"]
+        broken_text = _run(["doctor"])
+
+    assert broken["readable"] is False
+    assert broken["total"] is None and broken["unmatched"] is None
+    assert "Permission denied" in (broken["error"] or "")
+    assert "✅" in _check_line(clean_text, "locks")
+    assert "✅" not in _check_line(broken_text, "locks")
+    assert "unreadable" in broken_text
+
+
+def test_lock_matching_is_not_claimed_when_the_session_list_itself_could_not_be_read(workspace):
+    """`unmatched` answers a question that needs the current session list, and a failure to read
+    *that* is a third state of its own: not `readable: False` (the lock root scan itself worked) and
+    not an empty `unmatched` (which would claim every lock was checked and matched)."""
+    from requivo.deterministic import doctor as det
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _take_lock("s")
+
+    def _unreadable():
+        raise PermissionError("Permission denied")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(det.store, "list_session_slugs", _unreadable)
+        r = _run_json(["doctor", "--json"])["locks"]
+        text = _run(["doctor"])
+
+    assert r["readable"] is True and r["total"] == 1
+    assert r["sessions_checked"] is False
+    assert r["unmatched"] is None, "0 or [] here would claim the lock was checked against sessions"
+    assert "🟡" in _check_line(text, "locks")
+    assert "not checked" in text

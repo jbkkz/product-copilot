@@ -110,6 +110,12 @@ def doctor_report() -> dict:
         # where a user asks "is anything wrong?" — a broken history is exactly that, and it otherwise
         # only surfaces later, as a refused artifact save with no obvious cause.
         "sessions": _session_health(cards_readable=cards_err is None),
+        # Candidate residue under the write-lock root (#180). #113 moved the lock outside the
+        # session it guards; there is no `session delete` verb, so a hand-deleted session — the
+        # ordinary way one goes here — leaves its lock file behind. Reported the way #67 reports a
+        # non-session entry: what is there, in three states, never a conclusion the directory alone
+        # cannot support.
+        "locks": _lock_health(),
     }
 
 
@@ -236,6 +242,53 @@ def _session_health(*, cards_readable: bool = True) -> dict:
             "unexaminable": unexaminable}
 
 
+def _lock_health() -> dict:
+    """Candidate residue under `lock_root()` — the sibling of `_session_health`, one root over.
+
+    `session_lock` only ever creates `<slug>.lock` for a slug that had a session directory *at that
+    instant* (`session_lock` refuses before opening the file if there is none). So a lock file whose
+    slug currently names no session is candidate residue from a deleted one — the ordinary way a
+    session goes here, since there is no `session delete` verb (#180). It is never reported as
+    *orphan*: this scan and the session scan it is checked against run a moment apart, and a session
+    created or removed in that gap reads exactly the same way for a tick without being residue at
+    all — the same caution `list_non_session_entries` states for its own bucket, applied to the root
+    #113 created.
+
+    Three questions, each with its own third state:
+
+    - `readable` / `total` / `error` — could `lock_root()` be listed at all? `False` with `total`
+      `None`, never `0`, on the same reasoning `_session_health` gives for its own root: `0` is a
+      claim about the workspace, and a directory nobody could open into does not support one.
+    - `sessions_checked` / `unmatched` — a lock only counts as candidate residue relative to the
+      *current* session list, which is a second read of a second root. When that read itself fails,
+      `unmatched` is `None` rather than `[]` — an empty list here would claim every lock was checked
+      and none were residue, which is exactly the conflation `_session_health`'s own `cards_checked`
+      flag exists to keep apart from a genuinely clean check.
+    - `unexpected` — names under this root that are not a `<slug>.lock` file `session_lock` could
+      have produced, from `scan_lock_root`. Reported, not absorbed into `total`.
+    - `unexaminable` — entries whose examination itself raised (#80's third bucket, one root over).
+    """
+    try:
+        lock_slugs, unexpected, unexaminable = store.scan_lock_root()
+    except Exception as e:  # noqa: BLE001 - doctor reports any failure rather than raising
+        return {"readable": False, "error": str(e), "total": None, "sessions_checked": False,
+                "unmatched": None, "unexpected": None, "unexaminable": None}
+    try:
+        # `SessionService().repo.list_slugs()`, not `store.list_session_slugs()`: this is *which
+        # slugs currently exist*, and `SessionRepository.list_slugs()` is the backing-neutral
+        # primitive for exactly that question (invariant 14's own reasoning for `svc.repo.lock` in
+        # `deterministic/sessions.py`). `scan_lock_root()` above has no such equivalent to route
+        # through -- a lock-root scan is a fact about the file backing, the same way `canonical_dir`
+        # is, and it is allowlisted in `tests/test_boundaries.py` on those terms.
+        known = set(SessionService().repo.list_slugs())
+    except Exception:  # noqa: BLE001 - "could not check" must not read as "none matched"
+        known = None
+    unmatched = None if known is None else sorted(s for s in lock_slugs if s not in known)
+    return {"readable": True, "error": None, "total": len(lock_slugs),
+            "sessions_checked": known is not None, "unmatched": unmatched,
+            "unexpected": sorted(unexpected), "unexaminable": [e.to_dict() for e in unexaminable]}
+
+
 def _cmd_schema(a, client) -> None:
     """Print the slot schema (and optionally the human framework spec) so a reasoning caller — Claude
     Code, above all — has the exact slot vocabulary + driver rule to produce a valid proposal offline."""
@@ -323,6 +376,7 @@ def _cmd_doctor(a, client) -> None:
     print(f"  {ok} workspace       {r['workspace']['root']}")
     print(f"     sessions        {r['workspace']['sessions']}")
     print(f"     locks           {r['workspace']['locks']}")
+    _print_locks(r["locks"])
     h = r["sessions"]
     if not h["readable"]:
         # Not "0 sessions". We could not look, and saying nothing found is the failure this verb
@@ -381,6 +435,54 @@ def _cmd_doctor(a, client) -> None:
               "whether these sessions' product context still loads.")
     _print_unexaminable(blind, h["total"])
     _print_non_sessions(h["non_sessions"])
+
+
+def _print_locks(entries: dict) -> None:
+    """The `locks` check: candidate residue under `lock_root()`, in the same three-state discipline
+    as `sessions`/`other entries` above it and for the identical reason (#180) — a check that could
+    not look must not render like one that looked and found nothing.
+
+    **Never prints the word "orphan".** `session_lock` only ever creates `<slug>.lock` for a slug
+    that had a session at that instant, so a lock whose slug currently names no session is a real
+    finding — but the scan that produced `unmatched` and the scan of the current session list ran a
+    moment apart, and a session created or deleted in that gap reads exactly the same way for a tick
+    without being residue at all. The rendering says what was found and leaves the reader to draw the
+    conclusion the directory itself cannot support, on `_non_session_detail`'s own terms."""
+    if not entries["readable"]:
+        print(f"  ❌ locks           unreadable — {display_token(entries['error'])}")
+        print("     └─ this could not be listed. This is not the same thing as having no residue.")
+        return
+    total = entries["total"]
+    unmatched = entries["unmatched"] or []
+    unexpected = entries["unexpected"] or []
+    unexaminable = entries["unexaminable"] or []
+    unchecked = not entries["sessions_checked"] and bool(total)
+    notes = ([f"{len(unmatched)} with no matching session"] if unmatched else []) \
+        + (["not checked against current sessions"] if unchecked else []) \
+        + ([f"{len(unexpected)} unexpected entr{'y' if len(unexpected) == 1 else 'ies'}"]
+           if unexpected else []) \
+        + ([f"{len(unexaminable)} that could not be examined"] if unexaminable else [])
+    glyph = "🟡" if (unmatched or unchecked or unexpected or unexaminable) else "✅"
+    print(f"  {glyph} locks           {total} lock file{'s' if total != 1 else ''}"
+          + (f" · {' · '.join(notes)}" if notes else ""))
+    for slug in unmatched:
+        print(f"     └─ {display_token(slug)} — no session currently named that")
+    if unmatched:
+        print("     No session claims these slugs right now. A hand-deleted session is the "
+              "ordinary way that happens — there is no `session delete` verb — and a session "
+              "created or removed between this scan and the one above reads the same way for a "
+              "moment without being residue. Requivo has not opened or removed any of these; a "
+              "lock file costs nothing to leave and nothing to delete once nothing is running.")
+    if unchecked:
+        print("     └─ the current session list could not be read (see above), so nothing is known "
+              "about which of these locks still match a session.")
+    for name in unexpected:
+        print(f"     └─ {display_token(name)} — not a lock file Requivo recognises")
+    if unexpected:
+        print("     Requivo does not read these; a name here did not come from `session_lock`.")
+    for entry in unexaminable:
+        print(f"     └─ {display_token(entry['name'])} — could not be examined: "
+              f"{display_token(entry['error'] or _NO_DETAIL)}")
 
 
 def _print_unexaminable(entries: list[dict], total: int | None) -> None:

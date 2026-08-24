@@ -567,7 +567,10 @@ an open handle is precisely what Windows refuses to rename.
 removing a session means removing its directory, and its lock is no longer inside it. The residue is
 one empty file under `.requivo/locks/`, which claims no slug and is read by nothing; delete it or
 leave it. `requivo doctor` reports the lock root under `workspace.locks` so there is a directory to
-point at, and deliberately does not report orphans inside it — see the note in `session-format.md`.
+point at, and — since #180 — its `locks` check walks it: which slugs a `<slug>.lock` file names no
+longer have a session, reported as candidate residue and never as a verdict, since the lock scan and
+the current session list it is checked against are two reads a moment apart — see the note in
+`session-format.md`.
 
 ## What a proposal means
 

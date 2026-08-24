@@ -42,8 +42,8 @@ plugin and the Web app all read and write the same layout.
   lock outside is what lets the import hold it — a directory containing an open handle is precisely
   what Windows refuses to rename.
 
-  Nothing lists `locks/`, and a file there claims no slug: a session's name is claimed by the
-  `sessions/<slug>` directory alone.
+  A lock file claims no slug on its own: a session's name is claimed by the `sessions/<slug>`
+  directory alone, and a file here never reserves one.
 
   **A session written by an earlier Requivo may still carry a `.lock` inside it.** Nothing
   opens it, `session export` skips it, and `session verify` ignores it. Deleting it is safe;
@@ -52,10 +52,16 @@ plugin and the Web app all read and write the same layout.
   **And deleting a session leaves its lock file behind.** There is no `session delete` verb —
   removing a session means removing `sessions/<slug>/`, and the lock is no longer inside it. What
   stays is one empty file under `locks/` that claims no slug and is read by nothing. Delete it or
-  leave it. `doctor` prints where the directory is and does not enumerate what is in it, because
-  telling an orphan from a lock a live process is holding needs more evidence than the directory
-  carries — the same rule that keeps `doctor` from concluding what a non-session entry under
-  `sessions/` is.
+  leave it.
+
+  **`requivo doctor` names this now (#180), and still stops short of concluding what it is.** Its
+  `locks` check reports the total lock-file count and, of those, which slugs currently name no
+  session — the ordinary shape this residue takes, since there is no `session delete` verb — beside
+  anything under this root that is not a `<slug>.lock` file `session_lock` could have written. It
+  never prints the word "orphan": the lock scan and the scan of current sessions it is checked
+  against run a moment apart, and a session created or removed in that gap reads exactly the same
+  way for a tick without being residue at all — the same rule that keeps `doctor` from concluding
+  what a non-session entry under `sessions/` is.
 
 ## Revisions and provenance
 
