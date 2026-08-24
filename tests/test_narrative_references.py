@@ -57,25 +57,57 @@ DOCS = REPO_ROOT / "docs"
 SUBJECT_SUFFIXES = (".py", ".html", ".md", ".js")
 EXTRA_SUBJECTS = (REPO_ROOT / "CLAUDE.md",)
 
-# The *resolution* check's roots. `tests/` is deliberately not one of them -- see `wrap_subjects()`
-# below, which is. Measured: extending resolution to `tests/*.py` and `tests/*.md` today finds
-# eleven apparent dangling references and every one is a false positive -- nine are historical
-# mentions naming `test_cli_deterministic.py`, a module that no longer exists on purpose, to recount
-# what happened rather than to point a reader at it (eight read "Split out of
-# `test_cli_deterministic.py` by #141" in the split-out files themselves; the ninth is this very
-# module's own docstring, a few lines above) -- and two are this guard's own fixture strings, which
-# have to look like broken references for `test_the_wrap_detector_*` to mean anything. Resolving
-# those needs a rule that tells a pointer from a mention, which is a deliverable of its own and out
-# of scope here -- filed rather than attempted. `CHANGELOG.md` is excluded from every root below for
-# the same reason stated where it is declared: released history's dead pointers are correct, not
-# stale.
-RESOLUTION_ROOTS = (SRC, SCRIPTS, DOCS)
+# The *resolution* check's roots -- `tests/` joined them in #190, closing the gap #156 opened and
+# #188 measured but declined to close. Widening this glob alone produced eleven apparent dangling
+# references (measured on the tree at #190's own base commit) and every one was a false positive, of
+# exactly two distinguishable kinds -- not a spectrum, which is what makes a mechanical rule possible
+# rather than a judgement call repeated by hand on every future one:
+#
+# * **Eight files read "Split out of `test_cli_deterministic.py` by #141"**, naming a module #141
+#   deleted on purpose, to recount what happened to *that file* rather than to point a reader at a
+#   guard to go read. `_HISTORICAL_MENTION` recognizes this exact idiom -- already the established
+#   phrasing for provenance, not invented for this guard -- and `resolvable_references()` blanks the
+#   name it captures before resolution ever sees it. The rule is narrow on purpose: "Renamed from
+#   `X.py`" or a bare mid-sentence "`X.py` used to hold this" does *not* match and stays checked, so a
+#   future rename that skips the idiom is exactly as loud as a broken pointer -- see
+#   `test_a_similarly_shaped_mention_that_is_not_the_idiom_still_dangles`. And the exemption only
+#   blanks the matched span, not every occurrence of the name in the file -- see
+#   `test_the_same_dangling_name_outside_the_idiom_still_dangles` -- so a file that both recounts a
+#   split *and* separately points at the same dead name the ordinary way still goes red on the second
+#   half.
+# * **This guard's own file supplies the other three** (`test_cli_deterministic` in its own prose
+#   quoting the idiom above to explain it, plus two of its own wrap-detector fixture strings, which
+#   *have* to look like broken references for `test_the_wrap_detector_*`'s positive control to mean
+#   anything). A file cannot be a trustworthy resolver of its own examples -- that is a structural
+#   fact about self-reference, not a prose-parsing problem, so `RESOLUTION_EXEMPT_FILES` excludes this
+#   module by identity rather than by pattern-matching its own docstring. It stays fully in the wrap
+#   scan, which has no such hazard.
+#
+# `CHANGELOG.md` is excluded from every root below for the same reason stated where it is declared:
+# released history's dead pointers are correct, not stale.
+RESOLUTION_ROOTS = (SRC, SCRIPTS, DOCS, TESTS)
 
-# The wrap check has no pointer-versus-mention problem -- it is purely mechanical, so it can run over
-# a wider tree than the resolution check without inheriting its false-positive cost. `tests/` is here
-# for that reason: it is where the motivating instance for #156 actually sat (`busy_harness.js`,
-# truncated mid-identifier since the day it was written, invisible on both counts of being a `.js`
-# file under `tests/`). Measured clean today across every suffix in `SUBJECT_SUFFIXES`.
+# A reference inside this exact idiom recounts what a file *used to be*, never what currently guards
+# anything -- it is a historical mention wearing the same `` `name.py` `` shape a live pointer would.
+# Matching on the fixed phrase means the rule cannot be gamed by simply avoiding a marker nobody was
+# ever asked to add -- it recognizes an idiom this repository already used twenty times before this
+# guard existed, not a new convention invented for it.
+_HISTORICAL_MENTION = re.compile(r"[Ss]plit out of `(test_[a-z0-9_]+)\.py`")
+
+# This guard's own file necessarily contains broken-looking references by design: a truncated
+# fixture proving the wrap detector fires, an intact one proving it does not, and prose that quotes
+# both shapes (and the split-history idiom above) to explain why the guard exists at all. None of
+# that is a pointer for a reader to follow. Excluded from *resolution* by identity, never from *wrap*,
+# which stays mechanical and applies to this file exactly like every other.
+RESOLUTION_EXEMPT_FILES = (Path(__file__).resolve(),)
+
+# The wrap check has no pointer-versus-mention problem -- it is purely mechanical, so `tests/` was
+# already here before #190 widened `RESOLUTION_ROOTS` to match it: it is where the motivating
+# instance for #156 actually sat (`busy_harness.js`, truncated mid-identifier since the day it was
+# written, invisible on both counts of being a `.js` file under `tests/`). The two root tuples are
+# the same four directories now; they differ only by `RESOLUTION_EXEMPT_FILES`, this guard's own
+# module, which the wrap check has no reason to skip -- see
+# `test_the_wrap_scan_still_reaches_one_file_further_than_the_resolution_scan`.
 WRAP_ROOTS = (SRC, SCRIPTS, DOCS, TESTS)
 
 # A reference is a `test_`-prefixed identifier. The length floor keeps `test_x` in an example snippet
@@ -112,9 +144,11 @@ def _scan_subjects(roots: tuple[Path, ...], extra: tuple[Path, ...] = ()) -> lis
 
 
 def subjects() -> list[Path]:
-    """Every file the *resolution* check reads. See `RESOLUTION_ROOTS` for what is deliberately not
-    in here and why."""
-    return _scan_subjects(RESOLUTION_ROOTS, EXTRA_SUBJECTS)
+    """Every file the *resolution* check reads. See `RESOLUTION_ROOTS` for the roots and
+    `RESOLUTION_EXEMPT_FILES` for the one file excluded from this list by identity rather than by
+    root."""
+    return [p for p in _scan_subjects(RESOLUTION_ROOTS, EXTRA_SUBJECTS)
+            if p.resolve() not in RESOLUTION_EXEMPT_FILES]
 
 
 def wrap_subjects() -> list[Path]:
@@ -145,8 +179,27 @@ def declared_test_names() -> set[str]:
 
 
 def references(path: Path) -> set[str]:
-    """Every test reference in one file."""
+    """Every test reference in one file, as a plain reader would see it -- including one inside the
+    "Split out of `X.py`" historical-mention idiom. Resolution has its own narrower view; see
+    `resolvable_references()`."""
     return set(_REFERENCE.findall(path.read_text(encoding="utf-8")))
+
+
+def resolvable_references(path: Path) -> set[str]:
+    """Every reference this file makes that the *resolution* check actually holds it to --
+    `references()` minus the name captured inside a recognized historical-mention idiom.
+
+    Blanking the matched span (rather than removing it, or discarding the whole match's name
+    wherever it occurs) keeps every other offset in the string stable and, more importantly, keeps
+    the exemption scoped to that one occurrence: a file that names the same dead test both inside the
+    idiom and again as an ordinary pointer still has to answer for the second one. See
+    `test_the_same_dangling_name_outside_the_idiom_still_dangles`.
+    """
+    text = path.read_text(encoding="utf-8")
+    stripped = _HISTORICAL_MENTION.sub(
+        lambda m: m.group(0).replace(m.group(1), "x" * len(m.group(1))), text
+    )
+    return set(_REFERENCE.findall(stripped))
 
 
 def test_the_guard_reads_the_real_tree():
@@ -174,20 +227,27 @@ def test_the_guard_reads_the_real_tree():
     assert len(declared_test_names()) > 100
 
 
-def test_the_wrap_scan_reaches_further_than_the_resolution_scan():
-    """The decision this issue makes, pinned rather than left as something only the comment above
-    `RESOLUTION_ROOTS`/`WRAP_ROOTS` states. `tests/` carries the motivating instance for #156
-    (`busy_harness.js`) and is deliberately outside the resolution scan's false-positive cost."""
+def test_the_wrap_scan_still_reaches_one_file_further_than_the_resolution_scan():
+    """#190's decision, pinned rather than left as something only the comments above `RESOLUTION_ROOTS`
+    and `WRAP_ROOTS` state. `tests/` is now in *both* roots -- `busy_harness.js`, the motivating
+    instance for #156, resolves cleanly today and belongs in the resolution scan exactly like any
+    other file, not exempted by directory or suffix. The one remaining gap between the two scans is
+    this guard's own module, excluded from resolution by identity via `RESOLUTION_EXEMPT_FILES` --
+    see `test_this_guards_own_file_is_wrap_checked_but_not_resolution_checked` for that half."""
     resolution_files = set(subjects())
     wrap_files = set(wrap_subjects())
     assert resolution_files < wrap_files, "the wrap scan must be a strict superset of the resolution scan"
+    assert wrap_files - resolution_files == set(RESOLUTION_EXEMPT_FILES), (
+        "the only file the wrap scan reaches and the resolution scan does not should be this guard's "
+        "own module -- anything else means a root or an exemption drifted from what the comments claim"
+    )
     assert any(p.name == "busy_harness.js" for p in wrap_files), (
         "tests/web/busy_harness.js is not in the wrap scan — the motivating instance for #156 would "
         "still be invisible"
     )
-    assert not any(p.name == "busy_harness.js" for p in resolution_files), (
-        "tests/*.js reached the resolution scan too — that widening was deliberately not made (see "
-        "RESOLUTION_ROOTS) and needs the pointer-versus-mention rule first"
+    assert any(p.name == "busy_harness.js" for p in resolution_files), (
+        "tests/web/busy_harness.js dropped out of the resolution scan — #190 widened RESOLUTION_ROOTS "
+        "to cover tests/*.js exactly like every other suffix, and this file resolves cleanly today"
     )
     assert not any(p.name == "CHANGELOG.md" for p in wrap_files), (
         "CHANGELOG.md must never be swept, wrap check included"
@@ -204,7 +264,7 @@ def test_every_named_test_reference_resolves():
     dangling = sorted(
         f"{path.relative_to(REPO_ROOT).as_posix()} -> {name}"
         for path in subjects()
-        for name in references(path)
+        for name in resolvable_references(path)
         if name not in known
     )
     assert not dangling, (
@@ -303,6 +363,60 @@ def test_the_extractor_sees_a_reference_and_only_a_reference(tmp_path, source, e
     p = tmp_path / "sample.py"
     p.write_text(source, encoding="utf-8")
     assert references(p) == expected
+
+
+@pytest.mark.parametrize("source, blanked_name", [
+    ("Split out of `test_cli_deterministic.py` by #141; the shared harness is elsewhere.",
+     "test_cli_deterministic"),
+    ("Split out of `test_engine_wide_reasoning_paths.py` (#72). One file rather than two.",
+     "test_engine_wide_reasoning_paths"),
+])
+def test_the_historical_mention_idiom_is_excluded_from_resolvable_references(tmp_path, source, blanked_name):
+    """The must-not-fire half of #190's rule: a name that appears only inside the recognized
+    "Split out of `X.py`" idiom -- in either citation style actually used in this repository -- is a
+    historical mention, not a pointer, and must not reach `resolvable_references()`. `references()`
+    still sees it, because a plain reader does too; only resolution is meant to look away."""
+    p = tmp_path / "sample.py"
+    p.write_text(source, encoding="utf-8")
+    assert blanked_name in references(p)
+    assert blanked_name not in resolvable_references(p)
+
+
+def test_a_similarly_shaped_mention_that_is_not_the_idiom_still_dangles(tmp_path):
+    """The must-fire complement: the exemption is the exact phrase, not "any `.py`-suffixed name in a
+    sentence about the past". A rename that does not use the recognized idiom is exactly as loud as
+    any other broken pointer -- which is the point, since a marker nobody is asked to use cannot be
+    relied on to appear tomorrow."""
+    p = tmp_path / "sample.py"
+    p.write_text(
+        "Renamed from `test_cli_deterministic_and_then_some.py`, which used to hold this.\n",
+        encoding="utf-8",
+    )
+    assert "test_cli_deterministic_and_then_some" in resolvable_references(p)
+
+
+def test_the_same_dangling_name_outside_the_idiom_still_dangles(tmp_path):
+    """The exemption blanks the matched span, not every occurrence of the captured name in the file.
+    A file that both recounts a split *and* separately points at the same dead name the ordinary way
+    still has to answer for the second one."""
+    p = tmp_path / "sample.py"
+    p.write_text(
+        "Split out of `test_cli_deterministic_once_more.py` by #141.\n"
+        "See `test_cli_deterministic_once_more` for the original discussion.\n",
+        encoding="utf-8",
+    )
+    assert "test_cli_deterministic_once_more" in resolvable_references(p)
+
+
+def test_this_guards_own_file_is_wrap_checked_but_not_resolution_checked():
+    """The other half of #190's rule, and the one with no parsing in it at all: this module is
+    excluded from `subjects()` by identity, not by pattern, because it necessarily contains
+    broken-looking references by design and cannot be a trustworthy resolver of its own examples. It
+    stays in `wrap_subjects()`, which has no such hazard."""
+    here = Path(__file__).resolve()
+    assert here in RESOLUTION_EXEMPT_FILES
+    assert here not in {p.resolve() for p in subjects()}
+    assert here in {p.resolve() for p in wrap_subjects()}
 
 
 def test_the_wrap_detector_sees_the_shape_it_was_written_for(tmp_path):
