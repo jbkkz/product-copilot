@@ -1,15 +1,133 @@
 {
-  "presets": ["git", "github", "watch"],
+  "defaults": {
+    "github_repo": "jbkkz/requivo"
+  },
+  "presets": [
+    "git",
+    "github",
+    "watch"
+  ],
   "ops": {
-    "channel": { "watch_name": "jbkkz-requivo" },
-    "watch":   { "watch_name": "jbkkz-requivo" },
-    "unwatch": { "watch_name": "jbkkz-requivo" },
-    "watches": { "watch_name": "jbkkz-requivo" },
+    "channel": {
+      "watch_name": "jbkkz-requivo"
+    },
+    "watch": {
+      "watch_name": "jbkkz-requivo"
+    },
+    "unwatch": {
+      "watch_name": "jbkkz-requivo"
+    },
+    "watches": {
+      "watch_name": "jbkkz-requivo"
+    },
     "radar": {
       "watch_name": "jbkkz-requivo",
       "radar_tiers": {
         "gh-prs": {}
       }
+    }
+  },
+  "validators": {
+    "ruff": {
+      "cmd": "{python} {supertool_dir}/validators/ruff/ruff.py {file}",
+      "match": "*.py",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": false,
+      "timeout": 30
+    },
+    "changelog-fragment": {
+      "cmd": "{python} {supertool_dir}/validators/changelog-fragment/changelog-fragment.py {file}",
+      "match": "*changelog.d/*.md",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": false,
+      "timeout": 15,
+      "env": {
+        "SUPERTOOL_CHANGELOG_ASSEMBLER": ".oss/assemble_changelog.py"
+      }
+    },
+    "actionlint": {
+      "cmd": "{python} {supertool_dir}/validators/actionlint/actionlint.py {file}",
+      "match": ".github/workflows/*.{yml,yaml}",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": true,
+      "timeout": 30
+    },
+    "jsonlint": {
+      "cmd": "{python} {supertool_dir}/validators/jsonlint/jsonlint.py {file}",
+      "match": "*.json",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": true,
+      "timeout": 10
+    },
+    "tomllint": {
+      "cmd": "{python} {supertool_dir}/validators/tomllint/tomllint.py {file}",
+      "match": "*.toml",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": true,
+      "timeout": 10
+    },
+    "yaml-check": {
+      "cmd": "{python} {supertool_dir}/validators/yaml-check/yaml-check.py {file}",
+      "match": "*.yml",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": true,
+      "timeout": 10
+    },
+    "jit-index": {
+      "cmd": "{python} {supertool_dir}/validators/jit-index/jit-index.py {file}",
+      "match": "*00-index.tsv",
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
+      "rollback_on_fail": true,
+      "timeout": 20
     }
   }
 }
