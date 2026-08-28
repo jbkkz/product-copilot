@@ -112,7 +112,7 @@ def _version_tuple(text):
     return tuple(parts) if parts else None
 
 
-def version_status(installed, latest):
+def version_status(installed, latest, stale=False):
     """Compare an installed version against the latest published one.
 
     Four states, and two of them are not findings: ``current``, ``behind``, ``ahead``
@@ -120,10 +120,20 @@ def version_status(installed, latest):
     checkout) and ``unknown``. ``unknown`` covers either half of the comparison being
     missing, and it must never render as ``current`` -- nobody asked the forge is not the
     same answer as the forge saying yes.
+
+    ``stale`` marks the comparison itself untrustworthy rather than either side of it
+    (#550): a `latest` reading correct when it was taken and false before its own
+    refresh interval expires renders identically to a fresh one unless its age
+    travels with it to this call. Folded into ``unknown`` -- the same bucket a
+    comparison nobody could make already uses -- rather than inventing new
+    vocabulary, per the issue's own suggested direction. This does NOT catch a
+    reading that is fresh by its own rule and simply wrong, which is what the
+    incident this was filed from actually was; that gap belongs to #549, which
+    invalidates the cache at the moment a publish falsifies it.
     """
     mine = _version_tuple(installed)
     theirs = _version_tuple(latest)
-    if mine is None or theirs is None:
+    if stale or mine is None or theirs is None:
         state = "unknown"
     elif mine == theirs:
         state = "current"
@@ -566,7 +576,17 @@ def _symbols(ascii_only):
         "sep": " | ",
         "dot": " · ",
         "current": " ✓",
-        "behind": " ⇡",
+        # Distinct shapes, not just distinct colour (#550): these two markers print
+        # different fields -- `behind` names the latest published version, `ahead`
+        # names what is installed -- and `⇡`/`↑`, one codepoint apart, were told
+        # apart reliably only by colour. Measured: this was the proximate cause of
+        # a maintainer reading a correct 0.13.0 install as "not on 0.13.0" (#549).
+        # `↥` (arrow from bar) and `↑` differ in silhouette at terminal size even in
+        # monochrome. Both still fail to encode under cp1252 exactly as the pair
+        # they replace did, so the ASCII fallback below (already unambiguous, `>`
+        # vs `+`) is unaffected and this changes nothing about which platforms take
+        # that branch.
+        "behind": " ↥",
         "ahead": " ↑",
         "ok": "✓",
         "bad": "✗",
@@ -588,7 +608,10 @@ def _duration(seconds):
 def _tick_field(tick):
     state = (tick or {}).get("state")
     if state == "armed":
-        return "tick " + _duration(tick.get("seconds") or 0)
+        seconds = tick.get("seconds")
+        if not isinstance(seconds, (int, float)):
+            seconds = 0
+        return "tick " + _duration(seconds)
     if state == "due":
         return "tick due"
     if state == "stopped":
@@ -642,10 +665,10 @@ def _board_field(board, symbols, color=False):
     else:
         groups = symbols["unk"]
     return "{}pr {}{}{}is".format(
-        "?" if prs is None else prs,
+        "?" if not isinstance(prs, int) else prs,
         groups,
         symbols["dot"],
-        "?" if issues is None else issues,
+        "?" if not isinstance(issues, int) else issues,
     )
 
 
@@ -795,7 +818,7 @@ def render(facts, ascii_only=False, color=False):
     """
     symbols = _symbols(ascii_only)
     percent = facts.get("percent")
-    if percent is None:
+    if not isinstance(percent, (int, float)):
         context = "ctx ?"
     else:
         context = "{}%".format(int(percent))
@@ -897,35 +920,86 @@ def _run(command, timeout=5):
     return result.stdout.decode("utf-8", "replace").strip()
 
 
-def plugins_root():
+def plugins_root_default():
     return Path(os.path.expanduser("~")) / ".claude" / "plugins"
 
 
-def installed_plugins(root=None):
-    """``{plugin name: {"version": ..., "repository": ...}}`` from the installed set.
+def _normalized_path(path):
+    """Best-effort canonical form for comparing an installed-plugin ``projectPath``
+    against the project actually being reported on. ``resolve()`` can raise on some
+    platforms for a path with a permission problem partway up it -- fall back to a
+    plain normalisation rather than letting a project-match check crash the caller.
+
+    Passed through ``os.path.normcase`` on the way out: on Windows, whose filesystem is
+    case-insensitive, the same directory can be named with two different cases -- an
+    installed-plugin record and the path this session resolves are not guaranteed to
+    agree on which -- and comparing case-sensitively would silently answer "no entry
+    applies here" about a project whose entry is sitting right there. `normcase` folds
+    case only on Windows (`ntpath`); on POSIX (`posixpath`, including macOS, whose
+    default filesystem is also case-insensitive-but-preserving) it is the identity
+    function, so this closes the gap measured on Windows and leaves the macOS one open
+    -- worth a second pass, not claimed fixed here.
+    """
+    try:
+        text = str(Path(path).resolve())
+    except OSError:
+        text = os.path.normpath(str(path))
+    return os.path.normcase(text)
+
+
+def _entry_applies(entry, project):
+    """Does this ``installed_plugins.json`` entry govern ``project`` (#521)?
+
+    ``scope`` of ``user`` (or, defensively, absent) applies everywhere this machine
+    runs Claude Code. Anything else -- ``project``, ``local`` -- is restricted to the
+    ``projectPath`` it names; with no ``project`` to compare against, or no
+    ``projectPath`` on a restrictively-scoped entry, it matches nothing rather than
+    being assumed to apply broadly, which is the collapse this fix exists to remove.
+    """
+    scope = entry.get("scope")
+    if scope in (None, "user"):
+        return True
+    if project is None:
+        return False
+    entry_project = entry.get("projectPath")
+    if not entry_project:
+        return False
+    return _normalized_path(entry_project) == project
+
+
+def installed_plugins(project_root, plugins_root=None):
+    """``{plugin name: {"version": ..., "repository": ...}}`` from the installed set,
+    resolved for THIS project (#521).
 
     Derived from each plugin's own installed manifest rather than from a name-to-repo
     table here: a hardcoded map is a per-repo fact in shared code and is wrong the first
     time a plugin moves. Same derivation ``doctor.dependency_repositories`` uses.
+
+    ``installed_plugins.json`` is one file shared by every project on this machine. One
+    plugin has many entries -- one per scope and one per project that ever installed it
+    -- and they carry different versions, because an old project's entry is never
+    rewritten when a newer copy is installed elsewhere. The version this function used
+    to report was the newest recorded *anywhere*, across every project -- which answers
+    a question nobody asked: `max()` over the whole table can only ever report a version
+    at or above the one actually resolved for this project, so a project pinned behind a
+    sibling project's newer pin silently read as current (#521). Only entries that apply
+    to ``project_root`` -- see `_entry_applies` -- are considered now; a project with no
+    matching entry reports no version for that plugin, never the newest one lying
+    around on the machine.
     """
-    root = plugins_root() if root is None else Path(root)
+    root = Path(plugins_root) if plugins_root is not None else plugins_root_default()
     try:
         doc = json.loads((root / "installed_plugins.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    project = _normalized_path(project_root) if project_root is not None else None
     found = {}
     for key, entries in (doc.get("plugins") or {}).items():
         name = key.split("@", 1)[0]
         for entry in entries or []:
+            if not _entry_applies(entry, project):
+                continue
             record = found.setdefault(name, {"version": None, "repository": None})
-            # One plugin has many entries -- one per scope and one per project that
-            # ever installed it -- and they carry different versions, because an old
-            # project entry is never rewritten when a newer copy is installed
-            # elsewhere. Measured on this machine: `oss` had 0.1.0, 0.5.0, 0.9.0 and
-            # 0.10.0 all recorded at once. Taking whichever came last reports a version
-            # chosen by dict order, which read as "a release behind" against a machine
-            # that had the current one. The newest recorded version is the one this
-            # session can actually resolve, so that is the answer.
             version = entry.get("version")
             if version and version != "unknown":
                 current = _version_tuple(record["version"])
@@ -959,7 +1033,7 @@ def repo_from_url(url):
     return "/".join(parts[-2:])
 
 
-def plugin_facts(loop_name, installed, latest_by_repo):
+def plugin_facts(loop_name, installed, latest_by_repo, stale=False):
     """The loop's own plugin and every dependency it declares, rendered alike.
 
     All of them, always, in one shape -- the set comes from the loop plugin's own
@@ -970,13 +1044,19 @@ def plugin_facts(loop_name, installed, latest_by_repo):
     identically, and only the second is a problem. Shown uniformly, the marker carries
     the difference -- current, behind (in the colour that means *update this*), ahead,
     or `?` for a comparison nobody could make.
+
+    ``stale`` is one fact about the whole cached `latest_by_repo` reading -- it was
+    fetched in one pass and carries one stamp (#550) -- so it applies uniformly to
+    every plugin compared here rather than being asked per name.
     """
     mine = installed.get(loop_name) or {}
 
     def status_for(name):
         record = installed.get(name) or {}
         return version_status(
-            record.get("version"), latest_by_repo.get(repo_from_url(record.get("repository")))
+            record.get("version"),
+            latest_by_repo.get(repo_from_url(record.get("repository"))),
+            stale=stale,
         )
 
     facts = [(loop_name, status_for(loop_name))]
@@ -1127,7 +1207,7 @@ def refresh(root, now=None):
     else:
         latest = {}
         answered = False
-        for record in installed_plugins().values():
+        for record in installed_plugins(root).values():
             slug = repo_from_url(record.get("repository"))
             if slug and slug not in latest:
                 tag = _latest_release(slug)
@@ -1149,6 +1229,135 @@ def refresh(root, now=None):
     tmp.write_text(json.dumps(document), encoding="utf-8")
     os.replace(str(tmp), str(path))
     return document
+
+
+def invalidate_latest_cache(repo, now=None):
+    """Clear the cached `latest` reading for `repo`, because something just made it
+    false (#549). `/oss:release` calls this immediately after the Release it just
+    created makes the cached manifest-version reading stale -- the falsifying
+    event, known at the moment it happens, rather than waited out on a clock that
+    cannot see it (#550 covers the render side of the same incident; neither
+    substitutes for the other).
+
+    Three states, because a cache this could not reach and a cache with nothing to
+    clear must not render alike:
+
+    * ``invalidated`` -- a `latest` (or `latest_fetched_at`) entry existed and is
+      now `{}` / a stamp one second past due, rather than absent. The next
+      render or refresh starts from "nobody has asked yet" rather than from the
+      value that was just falsified.
+    * ``nothing-to-invalidate`` -- no cache file at this path, or one that carries
+      no `latest` reading at all. There was nothing to falsify.
+    * ``could-not-invalidate`` -- the file exists and could not be read, could not
+      be parsed, is not a JSON object, or could not be written back. An absent
+      directory, an unreadable file, or a different `XDG_CACHE_HOME` than the
+      rendering session uses all land here rather than passing as either state
+      above.
+
+    **`latest`/`latest_fetched_at` are set to `{}`/well in the past, never
+    deleted** -- this was a bare `pop()` of both keys and it was wrong (self-review
+    finding on this same issue): `latest_is_due` reads a document with no
+    `latest_fetched_at` at all as a legacy, pre-#515 cache and falls back to
+    comparing `now` against `fetched_at` -- the BOARD's own stamp, refreshed on
+    nearly every render. A document with both keys simply gone therefore reads as
+    "recently fetched" the instant the next board refresh runs, and `refresh()`
+    carries the (empty) `latest` forward under that fresh-looking stamp instead of
+    re-asking, in an active session effectively forever.
+
+    `latest_fetched_at` is stamped `now - LATEST_REFRESH_AFTER - 1` -- one second
+    past due, relative to the moment of invalidation, rather than a fixed absolute
+    sentinel like `0`. Anchoring to an absolute epoch would only be reliably "due"
+    against a real wall clock (`now` several billion seconds past `0`), and this
+    module's own test suite drives `now` with small synthetic values throughout
+    (e.g. `1_000.0`); an absolute sentinel would be correct in production and
+    silently wrong under exactly the convention this repository tests with. The
+    relative stamp is due under `latest_is_due` regardless of what `now` means.
+
+    ``now`` defaults to `time.time()`, matching `refresh()`'s own parameter, so a
+    test can drive it without a real clock.
+
+    Read-modify-write on the same file `refresh()` writes, with the same
+    write-to-temp-then-`os.replace` -- a concurrent renderer's own read either sees
+    the old document or the new one, never a half-written one. This never touches
+    the `prs`/`issues`/`pr_checks` board half of the document; only the two
+    `latest*` keys are the concern here.
+    """
+    now = time.time() if now is None else now
+    path = cache_path(repo)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # The ordinary case: no cache has been written for this repo yet, or the
+        # rendering session uses a different `XDG_CACHE_HOME` and this process
+        # cannot see what it wrote. `read_text` is asked directly rather than
+        # `path.exists()` first -- `Path.exists()` swallows a version-dependent
+        # set of `OSError` subclasses (this repo's own CLAUDE.md), so a genuine
+        # miss and an unreadable path could otherwise fold into the same branch.
+        # `FileNotFoundError` is the one exception this call can raise that means
+        # "absent", unambiguously, on every supported version.
+        return {"state": "nothing-to-invalidate", "detail": "no cache file at {0}".format(path)}
+    except OSError as exc:
+        return {
+            "state": "could-not-invalidate",
+            "detail": "{0} could not be read -- {1}: {2}".format(path, type(exc).__name__, exc),
+        }
+    try:
+        document = json.loads(raw)
+    except ValueError as exc:
+        return {
+            "state": "could-not-invalidate",
+            "detail": "{0} did not parse -- {1}: {2}".format(path, type(exc).__name__, exc),
+        }
+    if not isinstance(document, dict):
+        return {
+            "state": "could-not-invalidate",
+            "detail": "{0} is not a JSON object".format(path),
+        }
+    if "latest" not in document and "latest_fetched_at" not in document:
+        return {
+            "state": "nothing-to-invalidate",
+            "detail": "{0} carries no `latest` reading".format(path),
+        }
+    # NOT a bare delete of both keys (self-review finding on this issue's own
+    # implementation): `latest_is_due` reads a document with no `latest_fetched_at`
+    # as a legacy, pre-#515 cache and falls back to comparing `now` against
+    # `fetched_at` -- the BOARD's own stamp, refreshed on nearly every render. A
+    # document produced by simply popping both keys therefore reads as "recently
+    # fetched" the moment the next board refresh runs, and `refresh()` then carries
+    # the (now-empty) `latest` forward under that fresh-looking stamp instead of
+    # re-asking -- invalidation silently undoing its own purpose for up to another
+    # full `LATEST_REFRESH_AFTER`, and in an active session (board refreshing
+    # continuously) effectively indefinitely. Measured directly: with
+    # `fetched_at` re-bumped every few hundred seconds and `latest_fetched_at`
+    # deleted, `latest_is_due` returned `False` from ten seconds after invalidation
+    # onward.
+    #
+    # Setting `latest_fetched_at` to `now - LATEST_REFRESH_AFTER - 1` -- one
+    # second past due, relative to this call's own `now` -- rather than deleting
+    # it keeps `isinstance(..., (int, float))` true, so `latest_is_due` takes its
+    # ordinary (non-legacy) branch and compares against a stamp that is due by
+    # construction, regardless of what the board's own `fetched_at` says. A fixed
+    # absolute sentinel (`0`) was tried and rejected: it is due against a real
+    # wall clock but not against the small synthetic `now` values this module's
+    # own tests use throughout, which would make the fix correct in production and
+    # silently untested (and untestable in the small-`now` convention) at once.
+    # `latest` is set to `{}` rather than removed for the same reason: presence,
+    # not absence, is what a reader (this module's own `gather()`, and #551's
+    # `check_latest_skew`) should see as "nothing here yet", so the state is
+    # explicit rather than inferred from a missing key two different callers
+    # could read two different ways.
+    document["latest"] = {}
+    document["latest_fetched_at"] = now - LATEST_REFRESH_AFTER - 1
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(document), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except OSError as exc:
+        return {
+            "state": "could-not-invalidate",
+            "detail": "{0} could not be written -- {1}: {2}".format(path, type(exc).__name__, exc),
+        }
+    return {"state": "invalidated", "detail": "cleared cached `latest` at {0}".format(path)}
 
 
 def _lock_path(repo):
@@ -1192,6 +1401,15 @@ def gather(payload, root, now=None):
     if board_is_due(cache, now):
         _fork_refresh(root, config.get("repo"))
     latest = (cache or {}).get("latest") or {}
+    # `latest_fetched_at` used to be read here and dropped, so `plugin_facts` decided
+    # `current`/`behind`/`ahead` with no knowledge of the reading's own age -- the
+    # same defect `refresh()`'s docstring warns against, one function later (#550).
+    # `latest_is_due` is the same threshold `refresh()` itself uses to decide whether
+    # a reading needs asking again; a comparison this old is folded into `unknown`
+    # rather than rendered as a real answer. It does NOT catch a reading that is
+    # fresh by that same rule and simply wrong -- #549 closes that gap by
+    # invalidating the cache at the moment a publish falsifies it.
+    stale_latest = latest_is_due(cache, now)
     loop_name = os.environ.get("OSS_STATUSLINE_PLUGIN", "oss")
 
     # One tail read shared by both transcript-derived facts (#504) -- a render
@@ -1214,8 +1432,20 @@ def gather(payload, root, now=None):
         "release": git_release_progress(root),
         "tick": tick,
         "last": _render_stamp(now),
-        "plugins": plugin_facts(loop_name, installed_plugins(), latest),
+        "plugins": plugin_facts(loop_name, installed_plugins(root), latest, stale=stale_latest),
     }
+
+
+def _console_sample():
+    """Every symbol `render` can put on the line, concatenated once.
+
+    Built from `_symbols(False)` rather than written out here (#535): the probe used to
+    hardcode four of the seven symbols that set renders, so a symbol added to `_symbols`
+    later -- as #508's two CI-group glyphs were -- was never probed at all. A codepage
+    that encodes the old four but not the new ones would reach `sys.stdout.write` and
+    raise `UnicodeEncodeError` after the line's work was already done.
+    """
+    return "".join(_symbols(False).values())
 
 
 def _ascii_only(stream):
@@ -1227,7 +1457,7 @@ def _ascii_only(stream):
     """
     encoding = getattr(stream, "encoding", None) or "ascii"
     try:
-        "·✓⇡↑".encode(encoding)
+        _console_sample().encode(encoding)
     except (UnicodeEncodeError, LookupError):
         return True
     return False
