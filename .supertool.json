@@ -1,7 +1,12 @@
 {
   "presets": ["git", "github", "watch"],
   "ops": {
+    "channel": { "watch_name": "jbkkz-requivo" },
+    "watch":   { "watch_name": "jbkkz-requivo" },
+    "unwatch": { "watch_name": "jbkkz-requivo" },
+    "watches": { "watch_name": "jbkkz-requivo" },
     "radar": {
+      "watch_name": "jbkkz-requivo",
       "radar_tiers": {
         "gh-prs": {}
       }
