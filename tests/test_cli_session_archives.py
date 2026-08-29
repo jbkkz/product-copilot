@@ -864,3 +864,22 @@ def test_the_occupied_destination_is_a_conflict_with_the_store_and_not_a_malform
     assert issubclass(ImportDestinationOccupiedError, RequivoError)
     assert not issubclass(ImportDestinationOccupiedError, InvalidSessionError)
     assert not issubclass(ImportDestinationOccupiedError, SessionExistsError)
+
+
+def test_import_into_a_fresh_workspace_writes_the_privacy_gitignore(workspace, tmp_path):
+    """#211's second door. `create_session` is the call that normally brings `.requivo/` into
+    existence, and it is not the only one: `session import` reaches a workspace that may have none,
+    creates the session root, and moves an archive into it. A guarantee written at creation alone
+    would be absent for exactly the user who received a colleague's session before running one of
+    their own -- and that archive holds *their* client's request text verbatim, which is the whole
+    point of the ignore file.
+
+    Invariant 14's sentence, one directory up: creation is not the only door."""
+    marker = workspace / ".requivo" / ".gitignore"
+    assert not marker.exists()
+
+    _zip(tmp_path / "s.zip", _good_entries("s"))
+    _run(["session", "import", str(tmp_path / "s.zip"), "--json"])
+
+    assert store.list_session_slugs() == ["s"]
+    assert marker.exists(), "session import created .requivo/ without the privacy marker"

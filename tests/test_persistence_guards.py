@@ -824,3 +824,96 @@ def test_a_missing_model_is_not_reported_as_a_corrupt_one(workspace):
     SessionService().create_session("A leave approval system.", slug="no-model-yet")
     with pytest.raises(SessionNotFoundError):
         store.load_session_model("no-model-yet")   # revision 0: no model.json has been written
+
+
+# --- The store's privacy .gitignore (#211) -------------------------------------------------------
+
+
+def test_the_privacy_gitignore_is_written_once_and_never_restored(workspace):
+    """`.requivo/` lands in the caller's workspace, which defaults to cwd -- for the Claude Code
+    plugin that is the user's project repository by construction -- and `create_session` writes the
+    client's request there verbatim. A routine `git add .` published it, silently, against the
+    local-first confidentiality this product states as its wedge. This repository's own `.gitignore`
+    covers `.requivo/`, which is why the maintainer was the one person who could not experience it.
+
+    Two halves, and the second is the one that is easy to get wrong. The file is written on the call
+    that brings the store root into existence, and *never again* -- because the trigger is the root
+    being absent, not the marker being absent. A team that deletes it in order to commit sessions
+    deliberately must stay committed; recreating it on the next session write would silently overrule
+    them, which is the same disrespect in the other direction.
+    """
+    marker = workspace / ".requivo" / ".gitignore"
+    assert not marker.exists()
+
+    svc = SessionService()
+    svc.create_session("A leave approval system", slug="first")
+
+    assert marker.exists(), "creating the first session did not write the privacy .gitignore"
+    assert marker.read_text(encoding="utf-8").splitlines()[-1] == "*", (
+        "the ignore pattern must be the self-ignoring `*`, so nothing has to be added to the user's "
+        "own .gitignore -- a file Requivo has no business editing"
+    )
+
+    # Deleted on purpose: the team wants these sessions committed. Nothing may bring it back.
+    marker.unlink()
+    svc.create_session("A room booking tool", slug="second")
+    svc.update_model("second", _full_model())
+    assert not marker.exists(), "a later session operation restored an ignore file the user deleted"
+
+    # Edited on purpose: same branch, and the edit survives byte for byte.
+    marker.write_text("sessions/secret-*\n", encoding="utf-8")
+    svc.create_session("A third thing", slug="third")
+    assert marker.read_text(encoding="utf-8") == "sessions/secret-*\n"
+
+
+def test_no_store_directory_is_created_outside_ensure_store_dir():
+    """The guard behind the sentence above, because six fixed call sites leave the seventh.
+
+    A bare `mkdir(parents=True)` on a store path re-opens #211 for whichever verb reaches a fresh
+    workspace first, and it does so silently -- the session write succeeds, and only the absent
+    ignore file says anything. So the rule is mechanical: under `core/persistence.py` and the
+    surfaces that write to the store, `parents=True` belongs to `ensure_store_dir` alone.
+
+    One exemption, by name and with its reason, rather than a loosened pattern."""
+    import ast
+    from pathlib import Path
+
+    _SRC = Path(__file__).resolve().parent.parent / "src" / "requivo"
+
+    exempt = {
+        # Creates the staging tree for a session in flight. Its parent is `session_root()`, which the
+        # line above it has already ensured, so this cannot be the call that creates the store root.
+        ("core/persistence.py", "create_session"),
+    }
+    seen: set[tuple[str, str]] = set()
+    offenders: list[str] = []
+    for rel in ("core/persistence.py", "deterministic/sessions.py", "services/repository.py"):
+        path = _SRC / rel
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "mkdir"):
+                    continue
+                if not any(k.arg == "parents" for k in node.keywords):
+                    continue
+                if fn.name == "ensure_store_dir":
+                    continue
+                if (rel, fn.name) in exempt:
+                    seen.add((rel, fn.name))
+                    continue
+                offenders.append(f"{rel}:{node.lineno} in {fn.name}()")
+
+    assert not offenders, (
+        "these create a store directory without going through `ensure_store_dir`, so on a fresh "
+        "workspace they can bring `.requivo/` into existence with no privacy .gitignore (#211):\n  "
+        + "\n  ".join(offenders)
+    )
+    assert seen == exempt, (
+        "an exemption above no longer names a real call site, so it is unchecked prose: "
+        f"{sorted(exempt - seen)}"
+    )

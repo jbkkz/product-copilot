@@ -32,7 +32,7 @@ from requivo.core.errors import (
     UnsupportedFormatVersionError,
     UnsupportedSchemaVersionError,
 )
-from requivo.paths import lock_root, output_root, session_root
+from requivo.paths import lock_root, output_root, session_root, store_root
 
 try:  # POSIX
     import fcntl
@@ -136,6 +136,65 @@ def _release(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
+# What `.requivo/.gitignore` is written with. `*` ignores the directory's whole contents including
+# the ignore file itself -- the self-ignoring pattern `uv` writes into `.venv/` and terraform into
+# `.terraform/`, chosen so nothing has to be added to the *user's* `.gitignore`, which is a file
+# Requivo has no business editing.
+_STORE_GITIGNORE = """\
+# Written by Requivo the first time this directory was created, and never rewritten.
+# Sessions hold your request text verbatim -- for most users that is client-confidential
+# material sitting inside a git repository. Delete this file to commit sessions deliberately;
+# it will not come back. To share one session instead, use `requivo session export`.
+*
+"""
+
+
+def ensure_store_dir(path: Path) -> Path:
+    """`mkdir(parents=True, exist_ok=True)` for anything under `.requivo/`, writing the privacy
+    `.gitignore` on the call that brings the store root into existence.
+
+    **Every directory creation under the store goes through here, and that is the point** (#211).
+    `.requivo/` lands in the caller's *workspace*, which defaults to cwd — for the Claude Code plugin
+    that is the user's project repository by construction — and `create_session` writes the client's
+    request there verbatim. A routine `git add .` then publishes confidential requirements to whatever
+    remote that project pushes to, silently, against the local-first confidentiality this product
+    states as its wedge. This repository's own `.gitignore` covers `.requivo/`, so the maintainer was
+    the one person who could not experience it.
+
+    The issue proposed writing the file at "the one place `.requivo` is first created". There is no
+    such place: six call sites create it as a `parents=True` ancestor — the lock directory, the
+    session root in `create_session`, `write_meta`, `save_revision`, `save_artifact`, and
+    `session import`. Whichever of them a given workspace happens to reach first is the one that
+    creates the root, so guarding one guards nothing. Hence a single ensure function rather than a
+    single call site, with `test_no_store_directory_is_created_outside_ensure_store_dir` failing on a
+    seventh that goes around it.
+
+    **Written once, on creation, and never recreated.** The trigger is the store root *not existing
+    before this call* — not the ignore file being absent. So a user who deletes it to commit sessions
+    deliberately stays committed, and a user who edits it keeps their edit: both are the same
+    "the root already exists" branch, which writes nothing. Pinned by
+    `test_the_privacy_gitignore_is_written_once_and_never_restored`.
+
+    A failure to write it is *not* swallowed. It would leave the store in exactly the state the
+    guarantee is about — present, and unignored — and the directory we could not write into is the
+    one a session is about to be written into anyway, so a silent pass would trade a visible error
+    for the confidentiality hole this exists to close.
+    """
+    root = store_root()
+    fresh = not root.exists()
+    path.mkdir(parents=True, exist_ok=True)
+    if fresh:
+        marker = root / ".gitignore"
+        try:
+            # `x` rather than a plain write: two processes can both find the root missing, and the
+            # loser must not truncate the winner's file. Losing the race is success here.
+            with open(marker, "x", encoding="utf-8") as fh:
+                fh.write(_STORE_GITIGNORE)
+        except FileExistsError:
+            pass
+    return path
+
+
 def _no_session(slug: str) -> SessionNotFoundError:
     """The one refusal for "there is no such session", so the lock and the metadata read cannot drift
     into telling a caller two different stories about the same absence."""
@@ -220,7 +279,7 @@ def session_lock(slug: str) -> Iterator[None]:
         raise _no_session(slug)
     p = lock_path(slug)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
+        ensure_store_dir(p.parent)
         fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as e:
         # Not `SessionNotFoundError`: the session's existence is not what this failed to establish.
@@ -686,7 +745,7 @@ def legacy_exists(slug: str) -> bool:
 
 def write_meta(slug: str, meta: SessionMeta) -> Path:
     d = canonical_dir(slug)
-    d.mkdir(parents=True, exist_ok=True)
+    ensure_store_dir(d)
     return _atomic_write(d / "session.json", meta.model_dump_json(indent=2))
 
 
@@ -753,7 +812,7 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
         request_hash=content_hash(request),
     )
     d = canonical_dir(slug)
-    d.parent.mkdir(parents=True, exist_ok=True)
+    ensure_store_dir(d.parent)
     # Dot-prefixed, so a staging directory can never be mistaken for a session: slugs are validated and
     # cannot start with a dot, and `list_session_slugs` skips them.
     staging = d.with_name(f".{d.name}.new-{os.getpid()}-{uuid.uuid4().hex[:8]}")
@@ -797,7 +856,7 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
                 details={"slug": slug, "expected": expected_revision,
                          "actual": meta.current_revision})
         d = canonical_dir(slug)
-        (d / "revisions").mkdir(parents=True, exist_ok=True)
+        ensure_store_dir(d / "revisions")
         rev = meta.current_revision + 1
         payload = model.model_dump_json(indent=2)
         _atomic_write(d / "model.json", payload)
@@ -866,7 +925,7 @@ def save_session_artifact(slug: str, artifact_type: str, filename: str, content:
                 f"has revisions 1..{meta.current_revision or 0}",
                 details={"slug": slug, "source_revision": source_revision,
                          "current_revision": meta.current_revision})
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_store_dir(path.parent)
         _atomic_write(path, content)
         st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=stale)
         meta.artifact_status[artifact_type] = st
@@ -883,7 +942,7 @@ def write_artifact_file(slug: str, filename: str, content: str) -> Path:
     not the filename beside it, so `write_artifact_file(slug, '../../../x.md', …)` wrote outside the
     session entirely."""
     path = artifact_path(slug, filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_store_dir(path.parent)
     return _atomic_write(path, content)
 
 
