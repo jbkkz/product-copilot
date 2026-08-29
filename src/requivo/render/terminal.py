@@ -4,6 +4,7 @@ import textwrap
 
 from requivo.core.analysis import _label, _readiness_blockers, _state_of
 from requivo.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
+from requivo.core.selectors import display_text
 from requivo.usage import UsageLedger
 
 STATE_ROWS = [
@@ -19,19 +20,41 @@ STATE_ROWS = [
 DRAFT_NOTE = "(blocking decisions remain — see Unknowns below)"
 
 
+# Everything below renders **LLM-authored prose**, and a client request is untrusted business data
+# by SECURITY.md's own framing — so a steered reply can carry an embedded newline into a question or
+# a challenge and write the line after it, at column 0, in Requivo's own voice. `display_text` is the
+# neutralizer, the prose sibling of the `display_token` every diagnostic verb already calls (#40).
+#
+# It is applied in two places and both are deliberate. **These three helpers escape their `text`
+# argument**, because they are what most untrusted prose passes through and a call site cannot
+# forget them. **The bare f-strings below call it explicitly**, because there is no chokepoint that
+# covers them: `streams.py` cannot help (ESC encodes fine in UTF-8, so `backslashreplace` never
+# fires), and a module-wide `print` shim would escape this module's *own* newlines — the layout — as
+# readily as an injected one.
+#
+# So the call sites are a discipline, and a discipline needs a guard rather than a promise:
+# `test_every_llm_authored_string_the_terminal_renders_is_neutralized` forges every field at once
+# and runs every renderer, so a field added later and printed raw goes red under its renderer's name.
+#
+# The label, marker and indent arguments are this module's own literals and are left alone.
+
+
 def _wrap(text: str, indent: str = "  ", width: int = 80) -> str:
-    return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
+    return textwrap.fill(display_text(text), width=width, initial_indent=indent,
+                         subsequent_indent=indent)
 
 
 def _bullet(text: str, marker: str = "•", indent: str = "  ", width: int = 80) -> str:
     return textwrap.fill(
-        text, width=width, initial_indent=f"{indent}{marker} ", subsequent_indent=f"{indent}  "
+        display_text(text), width=width, initial_indent=f"{indent}{marker} ",
+        subsequent_indent=f"{indent}  "
     )
 
 
 def _labeled(label: str, text: str, lw: int = 9, width: int = 80, indent: str = "  ") -> str:
     prefix = f"{indent}{label:<{lw}} "
-    return textwrap.fill(text, width=width, initial_indent=prefix, subsequent_indent=" " * len(prefix))
+    return textwrap.fill(display_text(text), width=width, initial_indent=prefix,
+                         subsequent_indent=" " * len(prefix))
 
 
 def render_understanding(out: EngineOutput) -> None:
@@ -75,8 +98,56 @@ def render_turn(out: EngineOutput) -> None:
     if out.questions:
         print("\nPRIORITY QUESTIONS")
         for i, q in enumerate(out.questions, 1):
-            print(f"  {i}. {q.q}")
-            print(f"     → {_label(q.slot)}")
+            print(f"  {i}. {display_text(q.q)}")
+            print(f"     → {_label(q.slot)}")   # a schema-validated slot id, not free text
+
+
+def next_command(payload: dict) -> str | None:
+    """The single next step for a status view, or None when there is not one (#246).
+
+    `status` is the verb a user runs on coming back to a session, and it stopped at the question
+    list. Every other surface here points at the next step once and says so — `discover` closes with
+    `requivo answer`, `answer` closes with either `requivo brief` or "keep going", and the plugin's
+    status skill states the rule outright. This is the CLI's implementation of it.
+
+    **The order is a judgment, not the order the states were listed in.** Open questions outrank a
+    stale artifact, because regenerating a brief against a model that is about to move is a paid call
+    thrown away; a stale artifact outranks the missing-brief case, because something on disk is
+    already wrong. Pinned by `test_open_questions_point_at_answer`.
+
+    Returns `None` rather than always a string, and that third state is the whole discipline. A
+    converged session with a fresh brief has no single next step — `prd`? `epic`? `criteria`? — and
+    printing all three is the menu `status` already was. It is also what a bare `model.json` gets,
+    since it has no session to name and a pointer at a slug that does not exist is worse than none.
+
+    A projection over the payload, not a second computation of it: readiness, questions and artifact
+    staleness are all already decided by the time this runs. Pure, and returns the command without
+    its arrow, so the caller owns the presentation.
+    """
+    slug = payload.get("slug")
+    artifacts = payload.get("artifacts")
+    if not slug or artifacts is None:
+        return None                      # a bare model.json — no session behind it to point at
+    if payload.get("questions"):
+        return f'requivo answer {slug} "<your answers>"'
+    # `stale` is the explicit flag and never a revision comparison — invariant 1. Schema order is
+    # whatever the metadata carries; the first stale artifact is named and `impact` covers the rest,
+    # which is what keeps this one line instead of a list.
+    for artifact_type, status in artifacts.items():
+        if status.get("stale"):
+            return (f"requivo {artifact_type} {slug}   (regenerates {status['filename']}; "
+                    f"requivo impact {slug} shows what else moved)")
+    if "brief" not in artifacts:
+        return f"requivo brief {slug}"
+    return None
+
+
+def render_next_command(payload: dict) -> None:
+    """Print `next_command`'s answer, once, or nothing. The arrow matches `_cmd_discover`'s and
+    `_cmd_answer`'s closing lines, so the three read as one convention rather than three."""
+    line = next_command(payload)
+    if line:
+        print(f"\n→ {line}")
 
 
 def render_usage(ledger: UsageLedger) -> None:
@@ -189,7 +260,8 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
                 for o in group:
                     print(_bullet(o.text, marker="◆", indent="    "))
                     if o.modules:
-                        print(f"        ↳ reaches: {', '.join(o.modules)}")
+                        # A free `list[str]` the model fills — no schema behind it, unlike a slot id.
+                        print(f"        ↳ reaches: {', '.join(display_text(m) for m in o.modules)}")
 
     if brief.next_steps:
         print("\nRECOMMENDED NEXT STEPS")
@@ -201,13 +273,16 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
 
 
 def render_stories(s: Stories) -> None:
+    # Every field here is the model's own text except `slots`, which `Story` validates against the
+    # schema — so it is the one that needs nothing (#213).
     print("\n=== USER STORIES ===")
     for st in s.stories:
-        print(f"\n[{st.id}] {st.title}")
+        print(f"\n[{display_text(st.id)}] {display_text(st.title)}")
         if st.as_a or st.i_want or st.so_that:
-            print(f"  As a {st.as_a}, I want {st.i_want}, so that {st.so_that}.")
+            print(f"  As a {display_text(st.as_a)}, I want {display_text(st.i_want)}, "
+                  f"so that {display_text(st.so_that)}.")
         for ac in st.acceptance:
-            print(f"  ✓ {ac}")
+            print(f"  ✓ {display_text(ac)}")
         if st.slots:
             print(f"  ↳ from: {', '.join(st.slots)}")
 
@@ -219,7 +294,12 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
     print(f"{'Task':<44} {'Cplx':<5} {'Estimate':<11} Drives")
     for i in draft.items:
         est = f"{i.days_low:g}–{i.days_high:g} d"
-        print(f"{i.title[:43]:<44} {i.complexity.value:<5} {est:<11} {', '.join(i.drives)}")
+        # Escaped *before* the 43-character cut, so the column stays 43 wide — escaping after would
+        # let one control character push the row out of the table. Either order is equally safe;
+        # only this one keeps the alignment. `drives` is a free list the model fills too (#213).
+        title = display_text(i.title)[:43]
+        print(f"{title:<44} {i.complexity.value:<5} {est:<11} "
+              f"{', '.join(display_text(d) for d in i.drives)}")
     print(f"{'─' * 43:<44} {'':<5} {'─' * 9:<11}")
     print(f"{'TOTAL':<44} {'':<5} {total_low:g}–{total_high:g} d")
     if soft:
@@ -227,7 +307,7 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
     if draft.risks:
         print("Risks / unknowns:")
         for r in draft.risks:
-            print(f"  - {r}")
+            print(f"  - {display_text(r)}")
 
 
 def render_impact(report) -> None:
@@ -262,7 +342,10 @@ def render_impact(report) -> None:
 
 
 def render_dependency_map(out: EngineOutput) -> None:
-    """No-args overview: for every slot that can still move, what it would invalidate."""
+    """No-args overview: for every slot that can still move, what it would invalidate.
+
+    The decision and challenge text is the model's own, so it goes through `display_text` (#213);
+    the slot labels and artifact names either side of it are this repo's tables."""
     from requivo.core.dependencies import propagate
     print("\n" + "═" * 64)
     print("DEPENDENCY MAP — change a slot, see the blast radius")
@@ -273,9 +356,9 @@ def render_dependency_map(out: EngineOutput) -> None:
             continue
         print(f"\n{_label(sid)}")
         if rep.decisions:
-            print(f"  decisions: {'; '.join(d.decision for d in rep.decisions)}")
+            print(f"  decisions: {'; '.join(display_text(d.decision) for d in rep.decisions)}")
         if rep.challenges:
-            print(f"  challenges: {'; '.join(c.headline for c in rep.challenges)}")
+            print(f"  challenges: {'; '.join(display_text(c.headline) for c in rep.challenges)}")
         if rep.artifacts:
             print(f"  artifacts: {', '.join(rep.artifacts)}")
 

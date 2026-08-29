@@ -181,6 +181,28 @@ class SessionService:
         """True if a usable session exists (the repository decides what backs it)."""
         return self.repo.exists(slug)
 
+    @staticmethod
+    def no_session(ref: str, *, what: str = "session",
+                   details: dict | None = None) -> SessionNotFoundError:
+        """The refusal for "there is no such session" — the surface's route to it (#243).
+
+        The sentence itself is `store.no_session_message`, because it names the sessions root and
+        that is the store's fact to state. What this method exists for is the *seam*: `cli.py` and
+        `deterministic/sessions.py` raise this at six sites, and reaching into `core.persistence`
+        for it would put a copy concern in the allowlist of justified **filesystem** concerns —
+        which is the one thing that list must not start meaning (#76). A message is not a path, even
+        when it contains one, so it comes through the service like everything else a surface needs.
+
+        `what` widens the noun for `_resolve_ref`, the one caller whose absence is genuinely wider:
+        it accepts a path to a `model.json` as well as a slug. `details` is explicit for the same
+        caller and for a harder reason: its published key is `ref`, not `slug`, because what it was
+        handed may be a path — and `details` is a **contract** (`docs/compatibility.md`), so a
+        rewording of the message must not be able to move it. Defaulting it here rather than letting
+        each site build one is what keeps the other five identical.
+        """
+        return SessionNotFoundError(store.no_session_message(ref, what=what),
+                                    details=details if details is not None else {"slug": ref})
+
     def _ensure_canonical(self, slug: str) -> None:
         """Before any mutation, make sure the session is in the mutation-backed store — for a file
         backing this migrates a legacy `out/<slug>/` session in place on first write."""
@@ -338,7 +360,7 @@ class SessionService:
         must be in the mutation-backed store; call `ensure_canonical` first for one that may still be
         legacy, which is what every provider-backed operation does anyway before it writes."""
         if not self.repo.has_meta(slug):
-            raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+            raise SessionNotFoundError(store.no_session_message(slug), details={"slug": slug})
         with self.repo.lock(slug):
             meta = self.repo.read_meta(slug)
             return SessionSnapshot(

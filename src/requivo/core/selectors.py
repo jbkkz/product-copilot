@@ -79,6 +79,36 @@ def display_token(value: str) -> str:
     return value if not _CONTROL_CHARS.search(value) else repr(value)
 
 
+def display_text(value: str) -> str:
+    """Untrusted **prose**, rendered so it cannot write a line of its own (#213).
+
+    The sibling of `display_token`, and they differ because their subjects do. A token is one word
+    and is shown as one line, so quoting the whole of it when anything is wrong costs nothing and
+    keeps the reader's model simple. Prose is a paragraph a user has to *read*: `repr()`-ing a
+    two-hundred-character challenge because it carries one stray character would be a worse outcome
+    than the injection, and would ship green, because nobody re-reads output that looks busy. So
+    this escapes **per character** and leaves everything else exactly as written.
+
+    Same class as `display_token` and `normalize_tokens`, from the same regex, and deliberately no
+    wider: what is neutralized is what can move a cursor or end a line. Same escape vocabulary too --
+    `repr()` of the single character, so a newline reads as a backslash-n and an escape introducer as
+    a backslash-x-1-b, exactly as the token sites already spell them.
+
+    **What it does not do, said here rather than assumed at the call site.** It makes a *value* safe;
+    it does not make a renderer safe. There is no mechanism that reaches an f-string somebody writes
+    next, which is why `tests/test_render_untrusted_output.py` sweeps every renderer with every field
+    forged at once rather than trusting the fifteen call sites to stay complete.
+
+    The threat this exists for is not a hostile model. A client request is untrusted business data by
+    SECURITY.md's own framing, the engine turns it into prose, and the prose is printed. `streams.py`
+    is no help: `backslashreplace` acts on what a console cannot *encode*, and ESC encodes fine in
+    UTF-8.
+
+    Pure, like everything else here.
+    """
+    return _CONTROL_CHARS.sub(lambda m: repr(m.group())[1:-1], value)
+
+
 def normalize_tokens(tokens: Iterable[str], *, what: str) -> list[str]:
     """Strip and lower-case caller-supplied selector tokens; refuse an empty one, and refuse one
     carrying a control character.

@@ -735,8 +735,70 @@ def test_neither_display_site_can_be_made_to_print_a_path_outside_the_session(wo
 
 
 def test_slug_is_first_five_word_tokens():
-    assert derive_slug("We'd like an invoice created automatically when signed") == "we-d-like-an-invoice"
+    # The five-token rule survives #245; what changed is *which* five, because the tokens a request
+    # opens with are almost never the ones that identify it. Here "we", "d", "like", "an" and "when"
+    # go and the four words that name the thing stay.
+    assert derive_slug("We'd like an invoice created automatically when signed") == (
+        "invoice-created-automatically-signed")
     assert derive_slug("!!!") == "discovery"
+
+
+def test_a_slug_carries_content_words_rather_than_the_request_opening():
+    """#245. The slug is the handle a user retypes into `answer`, `status`, `brief` and `prd`, so a
+    handle built from the phrase every request opens with is both unmemorable and collision-prone:
+    two unrelated "We need a way to ..." requests differ only in a hash suffix. Filtering a fixed
+    function-word list before taking five tokens is what makes the handle name its subject."""
+    assert derive_slug("We need a way to track vendor invoices.") == "track-vendor-invoices"
+    assert derive_slug("We need a leave approval system.") == "leave-approval-system"
+    # Two requests that used to share the whole slug now describe themselves.
+    assert derive_slug("We need a way to track vendor invoices") != derive_slug(
+        "We need a way to archive old contracts")
+
+
+def test_a_slug_folds_diacritics_rather_than_splitting_the_word():
+    """#245. `[a-z0-9]+` treats an accented letter as a separator, so it does not merely drop the
+    accent -- it cuts the word in half. 'systeme' arrived as 'syst' + 'me' and the slug read
+    'nous-aimerions-un-syst-me'. Folding first keeps the word whole, and the emitted alphabet is
+    unchanged, so `validate_slug` and every session already on disk stay valid."""
+    fr = derive_slug("Nous aimerions un système d'approbation des congés payés").split("-")
+    assert "systeme" in fr and "conges" in fr
+    assert "syst" not in fr and "me" not in fr
+
+    assert derive_slug("Podríamos automatizar la aprobación de vacaciones").split("-") == [
+        "automatizar", "aprobacion", "vacaciones"]
+    assert derive_slug("Ein Genehmigungssystem für Urlaubsanträge").split("-") == [
+        "genehmigungssystem", "urlaubsantrage"]
+
+
+def test_folding_expands_a_latin_letter_that_carries_no_combining_mark():
+    """#245. NFKD decomposes a letter into base + mark and the ASCII fold then drops the mark. A
+    letter with no mark to strip -- eszett, the ligatures, the stroked letters -- decomposes to
+    itself, so the fold *deletes* it and mangles the word exactly the way the accents did, one
+    letter along: 'strassenverkehr' would have arrived as 'straenverkehr'. They are spelled out
+    first, so the fold never has a letter it can only discard."""
+    assert "strassenverkehr" in derive_slug("Straßenverkehr melden").split("-")
+    assert "oekosystem" in derive_slug("Œkosystem pflegen").split("-")
+
+
+def test_a_request_of_nothing_but_stopwords_still_derives_a_usable_slug():
+    """#245. Filtering can empty the token list, and an empty list means the `discovery` fallback --
+    which is the collision case this change exists to reduce, reintroduced by the fix for it. Below
+    two survivors the words as typed are used instead, so a terse request keeps a handle that says
+    something and stays a valid slug."""
+    assert derive_slug("We need it") == "we-need-it"
+    assert derive_slug("We need a way to") == "we-need-a-way-to"
+    from requivo.core.persistence import validate_slug
+    validate_slug(derive_slug("We need it"))
+
+
+def test_a_non_latin_request_still_derives_the_documented_discovery_fallback():
+    """#245, and the residual limit stated rather than fixed. A script the ASCII fold cannot
+    romanize leaves no tokens at all, so the slug is `discovery` and the second such session lands
+    on `discovery-<hash>` -- two handles a user cannot tell apart. That is documented behaviour
+    rather than an accident, which is why `derive_slug`'s own docstring says so; a transliterating
+    dependency is the fix and it is not one this change takes on."""
+    assert derive_slug("休暇承認システムが必要です") == "discovery"
+    assert derive_slug("Нам нужна система одобрения отпусков") == "discovery"
 
 
 def test_invalid_slug_is_rejected_before_touching_the_filesystem():

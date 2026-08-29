@@ -782,6 +782,24 @@ migrate` still converts them, and it is now the only thing that reads that layou
   this page already: the CLI exit codes, the `--json` payloads and the session format.
   Those are promises about what the command does when you run it, not about names you can import. A
   downstream consumer that depends on any of these five deliberately tracks the repo.
+- **The slug derived from a request.** `derive_slug` turns request text into a session directory
+  name, and what it derives is tuning rather than a promise. #245 changed it: accents are
+  folded before tokenizing and a fixed list of function words is dropped, so *"We need a way to track
+  vendor invoices"* lands on `track-vendor-invoices` where it used to land on `we-need-a-way-to`, and
+  *"Nous aimerions un système…"* keeps `systeme` whole instead of splitting it into `syst` and `me`.
+  The emitted alphabet is unchanged, so every slug that was valid still is.
+
+  **Sessions already on disk keep their names.** Nothing re-derives a slug for a session that exists;
+  the derivation runs only when one is created, and an explicit `--slug` is never derived at all.
+
+  What does change is **idempotent re-discovery**, and it is worth knowing before it surprises you.
+  `create_session` is idempotent on the request *keyed by the slug it derives*, so re-running
+  `requivo discover` on a request first analysed under an older Requivo now derives a different base
+  and creates a **second** session at revision 0 rather than resolving to the first. Under the older
+  version that same command resolved to the existing session and was then refused by the
+  revision-zero gate, before paying for anything; now it proceeds, and it is a paid discovery. Use
+  `requivo session list` to find the original and `requivo answer <slug>` to continue it — which is
+  what you wanted in both versions, and what the refusal used to say.
 - **Prompt and context-card content.** These are tuned continuously — that is the point of the
   [golden harness](evaluations.md). Two versions can reason differently about the same request; the
   provenance recorded on each revision (model + prompt hash) is what makes that traceable.

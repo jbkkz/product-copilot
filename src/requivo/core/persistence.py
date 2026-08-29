@@ -7,6 +7,7 @@ import re
 import shutil
 import threading
 import time
+import unicodedata
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -32,6 +33,7 @@ from requivo.core.errors import (
     UnsupportedFormatVersionError,
     UnsupportedSchemaVersionError,
 )
+from requivo.core.selectors import display_token
 from requivo.paths import lock_root, output_root, session_root, store_root
 
 try:  # POSIX
@@ -228,10 +230,50 @@ def ensure_store_dir(path: Path) -> Path:
     return path
 
 
+def no_session_message(ref: str, *, what: str = "session") -> str:
+    """The one sentence for "there is no such session" — every CLI-facing site builds it here (#243).
+
+    Three facts, and the two that were missing are the ones that end the trap. **Where Requivo
+    looked**, because the way a session actually goes missing is a user running from a different
+    directory — the plugin README calls it a failure with no visible symptom — and a root printed at
+    the moment of the refusal is what makes that visible. **How to see what is really there**, so a
+    typo'd slug is a step rather than a dead end. The third is the reference itself, which was the
+    only one all five previous wordings carried.
+
+    It is a function rather than a constant because `session_root()` is workspace-dependent and must
+    be read when the refusal happens, not at import.
+
+    `what` exists for the one caller whose absence is genuinely wider: `_resolve_ref` accepts a
+    *path* to a `model.json` as well as a slug, so "no session" would name half of what it looked
+    for. Everything else takes the default.
+
+    The word `canonical` is deliberately gone. It distinguished this layout from the retired `out/`
+    one — a fact about the store's history that a user cannot act on, and it appeared only in the
+    three sites reachable from none of the main verbs, so the jargon and the missing help arrived
+    together.
+
+    `display_token` for the same reason every other render of an untrusted string calls it (#40):
+    the reference is raw argv, a newline in it ends the line, and everything after that point reads
+    as a sentence Requivo is saying. **On every current CLI route it cannot fire**, because
+    `validate_slug` refuses a control character first — it is here as the second line of defence
+    invariant 14 asks for, since this function is public and an external consumer calls this layer
+    rather than a careful surface. Pinned as such, against the builder, by
+    `test_the_shared_builder_escapes_a_reference_it_could_be_handed_directly`; a test routed through
+    a verb would have been green whether or not this call escaped anything.
+
+    The whole set is pinned by `tests/test_session_not_found.py`, which sweeps the *verbs* rather
+    than the sites, because the builder this replaced was itself correct and reached by nothing a
+    user runs.
+    """
+    return (f"no {what} named {display_token(ref)} under {session_root()}. "
+            "`requivo session list` shows the sessions in this workspace; a different --workspace "
+            "(or REQUIVO_WORKSPACE) changes where Requivo looks.")
+
+
 def _no_session(slug: str) -> SessionNotFoundError:
     """The one refusal for "there is no such session", so the lock and the metadata read cannot drift
     into telling a caller two different stories about the same absence."""
-    return SessionNotFoundError(f"no session '{slug}' under {session_root()}", details={"slug": slug})
+    return SessionNotFoundError(no_session_message(slug), details={"slug": slug})
 
 
 def lock_path(slug: str) -> Path:
@@ -349,13 +391,87 @@ MAX_SLUG_LENGTH = 80
 _SLUG_BASE_LENGTH = 64
 
 
+# Latin letters NFKD cannot decompose, spelled out before the fold runs. NFKD splits a letter into a
+# base plus a combining mark and the ASCII fold then drops the mark; a letter carrying no mark
+# decomposes to *itself*, so the fold has nothing to do but delete it — 'Straßenverkehr' arrived as
+# `stra-enverkehr`, which is the same mid-word mangling as `syst-me` one letter along. Lower-case
+# only, because the fold runs after `.lower()`. Pinned by
+# `test_folding_expands_a_latin_letter_that_carries_no_combining_mark`.
+_LATIN_EXPANSIONS = str.maketrans({
+    "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i",
+})
+
+# Function words dropped before the five tokens are taken (#245). English plus the three other Latin
+# languages this project's users actually write requests in — the slug is a handle in whatever
+# language the request arrived in, and folding accents without also dropping `nous`/`un`/`des` just
+# moves the junk one character along.
+#
+# Two rules kept this list from becoming a general-purpose stoplist. A word is in it only if it is a
+# function word in *some* in-scope language and not a content word in *any* of them — which is why
+# `son`, `hay`, `sin`, `man`, `war`, `bin` and `hat` are deliberately absent despite being ordinary
+# function words in French, Spanish or German. And nothing is here for being *common*: `system`,
+# `data`, `report` and `user` open a great many requests and are exactly what the handle should say.
+#
+# One accepted cost, stated rather than discovered: `die` is the German article and an English verb,
+# so "the service must not die quietly" loses a word it would have liked. The German article is far
+# the more frequent of the two in a request opening, and the fallback below covers the degenerate
+# case, so the trade is taken knowingly.
+_SLUG_STOPWORDS = frozenset("""
+    a an and are as at be been being but by can could d did do does for from had has have i if in
+    into is it its like ll m me my need needed needs of on or our ours ourselves please re s should
+    so some t that the their them then there these they this those to us ve want wanted wants was
+    way ways we were what when where which who whose will with would you your
+    au aux avec avoir avons besoin ce ces cet cette dans de des du elle elles en est et etaient
+    etait ete etre faut ils je la le les leur leurs ne nos notre nous ou par pas plus pour qui quoi
+    sa se ses sommes sont sur tu un une vos votre vous y aimerions aimerait souhaitons souhaiterions
+    voudrais voudrions voulons
+    al como con del el ella ellos es esta estas este esto estos la las lo los mi necesita necesitamos
+    necesito nuestra nuestro para podemos podria podriamos por que queremos quiero se ser son su sus
+    tiene tenemos un una unas unos deberiamos
+    aber alle als am auch auf aus bei benotigen benotigt brauche brauchen braucht das dass dem den
+    der des die dies diese ein eine einem einen einer eines er es fur haben ich ihr ihre im ist kein
+    keine mit mochte mochten nach nicht oder sein sich sie sind uber um und von vor wenn wie wir
+    wollen wurde wurden zu zum zur
+""".split())
+
+
 def derive_slug(text: str) -> str:
     """Derive a session directory name from arbitrary text — the one producer of the canonical shape.
 
     Public because it is consumed outside this module: `SessionService.slug_hint` is the surface's
     route to it, and `validate_slug` below is written against exactly what this emits.
+
+    Three steps, and the order between the first two is load-bearing (#245). **Fold, then filter,
+    then take five.** The slug is the handle a user retypes into `answer`, `status`, `brief` and
+    `prd`, and taking five tokens verbatim off the front of a request produced handles that named
+    the greeting rather than the subject — `we-need-a-way-to`, from "We need a way to track vendor
+    invoices" — so two unrelated requests differed only by the collision hash. Filtering first and
+    folding after would leave `syst`/`me` in the token stream as two words neither list can match.
+
+    Below two survivors the *unfiltered* words are used. An all-function-word request is a real
+    shape ("We need it"), and an empty token list falls through to `discovery`, which is the
+    indistinguishable-handle problem this function exists to reduce, reintroduced by its own fix.
+
+    **The residual limit, documented because it is not fixed here:** the ASCII fold romanizes Latin
+    scripts and deletes everything else, so a Japanese or Cyrillic request still leaves no tokens and
+    still lands on `discovery`, then `discovery-<hash>`. Transliteration needs a dependency this
+    package does not carry. Pinned by
+    `test_a_non_latin_request_still_derives_the_documented_discovery_fallback`.
+
+    Nothing re-derives a slug for a session that already exists — `slug_hint` is reached only from
+    `create_session` and from `discover`'s filename hint — so a session on disk keeps the name it was
+    created with. What *did* change is idempotent re-discovery: re-running the same request under a
+    newer Requivo derives a different base and creates a second session. `docs/compatibility.md`
+    carries that, where the other "two versions, one workspace" promises live.
+
+    Emits the same alphabet as before (`[a-z0-9-]`), so `validate_slug`, `_SLUG_RE` and every
+    existing session stay valid.
     """
-    words = re.findall(r"[a-z0-9]+", text.lower())[:5]
+    folded = unicodedata.normalize(
+        "NFKD", text.lower().translate(_LATIN_EXPANSIONS)).encode("ascii", "ignore").decode("ascii")
+    tokens = re.findall(r"[a-z0-9]+", folded)
+    content = [w for w in tokens if w not in _SLUG_STOPWORDS]
+    words = (content if len(content) >= 2 else tokens)[:5]
     base = "-".join(words) or "discovery"
     if len(base) <= _SLUG_BASE_LENGTH:
         return base
