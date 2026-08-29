@@ -64,9 +64,21 @@
     applyBusy();
   }
 
+  // **A notice outlives the thing it was about unless something clears it** (#320). `#flash` is
+  // written by every retargeted error and by nothing else, so after an artifact generation 409 the
+  // reader can go on to submit the answers form successfully, watch `#session-body` swap, and still
+  // be looking at the old error — "still broken" and "already fixed" rendering identically, which is
+  // the failure this app is careful about everywhere else. Only a full page navigation cleared it,
+  // and the htmx paths never navigate. Clearing on `beforeRequest` is the narrow fix: a new request
+  // supersedes the last one's complaint, and a fresh error re-fills the region a moment later.
+  function clearFlash() {
+    var flash = document.getElementById("flash");
+    if (flash) flash.innerHTML = "";
+  }
+
   // HTMX partial requests (answers, artifact generation).
   document.body.addEventListener("htmx:beforeRequest", function (e) {
-    start(); markLoading(e.detail.elt, true); setBusy(true);
+    clearFlash(); start(); markLoading(e.detail.elt, true); setBusy(true);
   });
   document.body.addEventListener("htmx:afterRequest", function (e) {
     done(); markLoading(e.detail.elt, false); setBusy(false);

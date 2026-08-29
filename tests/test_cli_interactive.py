@@ -530,3 +530,59 @@ def test_an_interrupt_inside_a_draft_turn_is_not_a_traceback(monkeypatch, capsys
     assert [m.current_revision for m in sessions] == [1], "the interrupt discarded a paid turn"
     err = capsys.readouterr().err
     assert "Interrupted." in err and sessions[0].slug in err
+
+
+def test_an_interrupt_during_the_brief_reports_the_saved_session(monkeypatch, capsys):
+    """#320. #202's changelog promised that a Ctrl-C inside a provider call is no longer a traceback,
+    and delivered it only for `draft_turn`.
+
+    The decision-brief call was wrapped in `except RequivoError`, which cannot catch a
+    `KeyboardInterrupt` — so the one remaining multi-second call in the verb, the very call #202
+    moved *because* it is the expensive one to land on, was still a raw traceback. The claim was in
+    the changelog and the guard was not in the code.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(DiscoveryService, "generate",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ENGINE_REPLY))
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], "the interrupt discarded the drafted turn"
+    err = capsys.readouterr().err
+    assert f"requivo brief {sessions[0].slug}" in err
+    assert "interrupted" in err.lower(), (
+        f"a KeyboardInterrupt stringifies to '', so the message trailed off into nothing: {err!r}"
+    )
+
+
+def test_a_rescue_that_cannot_save_says_so_and_still_names_the_original_failure(monkeypatch, capsys):
+    """#320. The rescue's own save was unguarded, in the code path whose entire job is keeping the
+    work.
+
+    `finalize_discovery` re-runs the revision-zero gate and then writes; either can fail. Unguarded,
+    that exception propagated *before* the "turns saved" lines ran — so the user was shown whatever
+    the save raised instead of the provider failure that actually stopped them, and was told nothing
+    about whether their turns survived. A rescue that fails silently about its own failure is worse
+    than no rescue.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, EngineError("API unavailable (529)."))
+    monkeypatch.setattr(DiscoveryService, "finalize_discovery",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(
+                            EngineError("the disk is full")))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 1
+    err = capsys.readouterr().err
+    assert "could NOT be saved" in err, "the failed save was reported as a success"
+    assert "the disk is full" in err, "the save's own failure was swallowed"
+    assert "529" in err, (
+        f"the original provider failure was masked by the save's, so the user cannot tell what "
+        f"stopped the run: {err!r}"
+    )

@@ -430,7 +430,10 @@ def _swap_decisions() -> dict[int, dict]:
     proc = subprocess.run([node, str(_ERROR_SWAP_HARNESS), str(app_js)], capture_output=True,
                           text=True, encoding="utf-8", errors="replace", timeout=60)
     assert proc.returncode == 0, "the harness itself failed, so nothing was observed:\n" + proc.stderr
-    return {row["status"]: row for row in json.loads(proc.stdout)}
+    out = json.loads(proc.stdout)
+    result = {row["status"]: row for row in out["decisions"]}
+    result["flash_cleared"] = out["flashClearedOnNewRequest"]
+    return result
 
 
 def test_error_responses_are_swapped_into_the_page_rather_than_dropped():
@@ -475,6 +478,16 @@ def test_error_responses_are_swapped_into_the_page_rather_than_dropped():
     assert d[204]["swapped"] is False, (
         "204 means 'nothing to render' and htmx is right to skip it; the opt-in must not reach below "
         "400 and turn it into a swap of an empty body"
+    )
+
+    # #320: making errors visible is only half of it. `#flash` is written by every retargeted error
+    # and by nothing else, so without this a 409 from an artifact generation stays on screen through
+    # a *successful* answers turn — "still broken" and "already fixed" rendering identically, which
+    # is the class this whole page is careful about. Only a full page navigation cleared it, and the
+    # htmx paths never navigate.
+    assert d["flash_cleared"] is True, (
+        "a new request did not clear the previous error notice, so a resolved failure goes on being "
+        "displayed as a current one"
     )
 
 

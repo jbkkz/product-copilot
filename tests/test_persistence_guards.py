@@ -18,10 +18,12 @@ accepting — a test of the guard and a test of what feeds it read better togeth
 """
 from __future__ import annotations
 
+import builtins
 import io
 import json
 import shutil
 from contextlib import redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -867,49 +869,66 @@ def test_the_privacy_gitignore_is_written_once_and_never_restored(workspace):
 
 
 def test_no_store_directory_is_created_outside_ensure_store_dir():
-    """The guard behind the sentence above, because six fixed call sites leave the seventh.
+    """The guard behind #211, because fixing every call site leaves the next one.
 
-    A bare `mkdir(parents=True)` on a store path re-opens #211 for whichever verb reaches a fresh
-    workspace first, and it does so silently -- the session write succeeds, and only the absent
-    ignore file says anything. So the rule is mechanical: under `core/persistence.py` and the
-    surfaces that write to the store, `parents=True` belongs to `ensure_store_dir` alone.
+    A bare `mkdir(parents=True)` (or an `os.makedirs`) on a store path re-opens #211 for whichever
+    verb reaches a fresh workspace first, and it does so silently — the session write succeeds, and
+    only the absent ignore file says anything. So the rule is mechanical: under `src/requivo/`,
+    creating a directory tree belongs to `ensure_store_dir` alone.
 
-    One exemption, by name and with its reason, rather than a loosened pattern."""
+    **It walks the package, and fails when the walk finds nothing** (#320). It first scanned a
+    hardcoded three-file list with a `continue` for a missing path — so a renamed file dropped out
+    in silence and a store write added anywhere else was invisible, which is exactly what invariant
+    7 says not to do: "a glob over a directory that no longer exists returns `[]`, and `assert not
+    []` is an all-clear nobody earned". Both sibling guards in this repo already fail loudly on an
+    empty scan set; this one now does too, and it recognises `os.makedirs`, which the name check let
+    straight through.
+
+    Exemptions are by (file, function) and asserted in both directions, so one whose call site is
+    gone goes red as unchecked prose.
+    """
     import ast
-    from pathlib import Path
 
-    _SRC = Path(__file__).resolve().parent.parent / "src" / "requivo"
-
+    src = Path(__file__).resolve().parent.parent / "src" / "requivo"
     exempt = {
         # Creates the staging tree for a session in flight. Its parent is `session_root()`, which the
         # line above it has already ensured, so this cannot be the call that creates the store root.
         ("core/persistence.py", "create_session"),
+        # `ensure_store_dir` is the one place allowed to do it — that is the whole rule.
+        ("core/persistence.py", "ensure_store_dir"),
     }
     seen: set[tuple[str, str]] = set()
     offenders: list[str] = []
-    for rel in ("core/persistence.py", "deterministic/sessions.py", "services/repository.py"):
-        path = _SRC / rel
-        if not path.exists():
-            continue
+    scanned = 0
+    for path in sorted(src.rglob("*.py")):
+        rel = path.relative_to(src).as_posix()
+        scanned += 1
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for node in ast.walk(fn):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "mkdir"):
+                if not isinstance(node, ast.Call):
                     continue
-                if not any(k.arg == "parents" for k in node.keywords):
-                    continue
-                if fn.name == "ensure_store_dir":
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else (
+                    node.func.id if isinstance(node.func, ast.Name) else "")
+                if name == "mkdir" and any(k.arg == "parents" for k in node.keywords):
+                    pass
+                elif name == "makedirs":
+                    pass
+                else:
                     continue
                 if (rel, fn.name) in exempt:
                     seen.add((rel, fn.name))
                     continue
                 offenders.append(f"{rel}:{node.lineno} in {fn.name}()")
 
+    assert scanned > 20, (
+        f"the scan found only {scanned} modules under {src} — a guard that cannot see the package "
+        f"reports no offenders for the wrong reason"
+    )
     assert not offenders, (
-        "these create a store directory without going through `ensure_store_dir`, so on a fresh "
+        "these create a directory tree without going through `ensure_store_dir`, so on a fresh "
         "workspace they can bring `.requivo/` into existence with no privacy .gitignore (#211):\n  "
         + "\n  ".join(offenders)
     )
@@ -917,3 +936,68 @@ def test_no_store_directory_is_created_outside_ensure_store_dir():
         "an exemption above no longer names a real call site, so it is unchecked prose: "
         f"{sorted(exempt - seen)}"
     )
+
+
+def test_a_failed_marker_write_leaves_no_root_behind_to_suppress_the_next_attempt(workspace,
+                                                                                 monkeypatch):
+    """#320. The guarantee could be switched off permanently by one transient error.
+
+    `ensure_store_dir` used to read `not root.exists()` before creating anything. So when `mkdir`
+    succeeded and the marker write then failed — a full disk, an EACCES, a Windows scanner holding a
+    handle, which invariant 18 already documents as real for a structurally identical operation —
+    the call failed loudly but left `.requivo/` present and unignored. Every later call then read
+    `fresh = False` and never tried again, and the resulting state was indistinguishable from a user
+    who had deleted the file on purpose: the one state this design means to be irreversible.
+
+    So the two states are now "root and marker" or "neither". A failure removes the root this call
+    made, and the next attempt starts clean.
+    """
+    real_open = builtins.open
+
+    def refuse_the_marker(path, mode="r", *a, **kw):
+        if str(path).endswith(".gitignore") and "x" in mode:
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, mode, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", refuse_the_marker)
+    with pytest.raises(RequivoError) as ei:
+        SessionService().create_session("A confidential client request.", slug="one")
+    assert ei.value.code != "", "the failure must be structured, not a bare OSError"
+    assert not (workspace / ".requivo").exists(), (
+        "the store root outlived the failed marker write, so every later call takes the "
+        "'already exists' branch and the privacy guarantee is off for good"
+    )
+
+    monkeypatch.setattr(builtins, "open", real_open)
+    SessionService().create_session("A confidential client request.", slug="one")
+    assert (workspace / ".requivo" / ".gitignore").exists(), (
+        "the retry after a transient failure did not write the marker"
+    )
+
+
+def test_the_store_root_is_created_without_probing_whether_it_exists(workspace, monkeypatch):
+    """The other half of #320, and the reason `exists()` had to go rather than be wrapped.
+
+    `Path.exists()` re-raises `EACCES` instead of swallowing it — invariant 15's #80, one function
+    along — and `PermissionError` is not a `RequivoError`, so `cli.app()` let it out as a traceback:
+    the very first command run in such a workspace crashed instead of refusing. `mkdir` with no
+    `exist_ok` answers the question that actually matters ("did *I* create it?") atomically, and
+    probes nothing.
+
+    The assertion is that no `exists()` call decides this, because wrapping the probe would have
+    passed a test that only checked the error type.
+    """
+    called: list[str] = []
+    real_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda self, *a, **kw: (called.append(str(self)),
+                                                               real_exists(self, *a, **kw))[1])
+    SessionService().create_session("Something.", slug="probe")
+    assert not any(c.endswith(".requivo") for c in called), (
+        f"the store root is still decided by an exists() probe, which can raise EACCES: {called}"
+    )
+
+    # And an OSError from the store is a structured refusal, not a traceback.
+    monkeypatch.setattr(Path, "mkdir", lambda self, *a, **kw: (_ for _ in ()).throw(
+        PermissionError(13, "Permission denied")))
+    with pytest.raises(RequivoError):
+        store.ensure_store_dir(workspace / ".requivo" / "sessions")

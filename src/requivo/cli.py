@@ -160,9 +160,12 @@ class DraftingFailed(Exception):
         self.turn = turn
 
 
-def converse(disco: DiscoveryService, request: str, only: list[str] | None = None) -> EngineOutput | None:
+def converse(disco: DiscoveryService, request: str, only: list[str] | None = None) -> Drafted:
     """Fill the model, ask, feed answers back, until no high-value question remains.
-    Returns the final model (None if the user stopped early). Finalization (brief, save) is
+    Returns a `Drafted`: the model, and whether the *user* ended the loop. Never `None` and never a
+    bare model — a caller has to read `.stopped`, because a stop must not go on to buy a decision
+    brief nobody asked for, and a `Drafted` is truthy either way so the old `if not converse(...)`
+    idiom would be silently wrong (#320). Finalization (brief, save) is
     handled by the caller so the interactive and --from paths share it. `only` restricts the context
     cards for every turn — held constant across the loop so the cached system prefix survives.
 
@@ -239,6 +242,13 @@ def _is_file_arg(arg: str) -> bool:
         return False
 
 
+def _why(e: BaseException) -> str:
+    """What to print for a failure that may be a structured error or a bare interrupt. A
+    `KeyboardInterrupt` stringifies to the empty string, so it needs a word of its own rather than a
+    sentence that trails off into nothing (#320)."""
+    return "interrupted" if isinstance(e, KeyboardInterrupt) else str(e)
+
+
 def _say_saved(slug: str) -> None:
     """Where the session landed. `canonical_dir` direct, and justified (#76): the path *is* the
     answer, and `SessionRepository` exposes none because a non-file backing has none. Same at the
@@ -263,8 +273,22 @@ def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str)
               "again.", file=sys.stderr)
     else:
         kept = e.turn - 1
-        slug = disco.finalize_discovery(request, e.last, cards=cards, slug=slug,
-                                        brief=None, surface="cli-discover")
+        # **The save is guarded, because this is the code path whose entire job is keeping the work**
+        # (#320). `finalize_discovery` re-runs the revision-zero gate and then writes; either can
+        # fail, and unguarded it propagated *before* the lines below ran — so the user was shown a
+        # revision conflict instead of the provider error that actually stopped them, and was told
+        # nothing about whether their turns had been kept. A rescue that fails silently about its own
+        # failure is worse than no rescue. Pinned by
+        # `test_a_rescue_that_cannot_save_says_so_and_still_names_the_original_failure`.
+        try:
+            slug = disco.finalize_discovery(request, e.last, cards=cards, slug=slug,
+                                            brief=None, surface="cli-discover")
+        except (RequivoError, OSError) as save_failed:
+            print(f"\nTurn {e.turn} failed, and the {kept} turn(s) before it could NOT be saved: "
+                  f"{save_failed}", file=sys.stderr)
+            print(f"The request is still captured at {store.canonical_dir(slug)}.", file=sys.stderr)
+            print(f"The failure that stopped the run was: {_why(e.cause)}", file=sys.stderr)
+            raise SystemExit(1) from save_failed
         print(f"\nTurn {e.turn} failed, so the {kept} turn(s) before it were saved rather than "
               f"discarded.", file=sys.stderr)
         print(f"Saved session → {store.canonical_dir(slug)}", file=sys.stderr)
@@ -360,8 +384,14 @@ def _cmd_discover(a, client) -> None:
     print("\nGenerating the decision brief…")
     try:
         gen = disco.generate(slug, "brief", surface="cli-discover")
-    except RequivoError as e:
-        print(f"\nThe decision brief failed: {e}", file=sys.stderr)
+    except (RequivoError, KeyboardInterrupt) as e:
+        # **`KeyboardInterrupt` belongs here and was missing** (#320). `except RequivoError` cannot
+        # catch it, and this is the one remaining multi-second provider call in the verb — the very
+        # call #202 moved *because* it is the expensive one to land on. So the fix that made an
+        # interrupt survivable inside `converse` left it a raw traceback on the call most likely to
+        # be interrupted, while the changelog said otherwise. Pinned by
+        # `test_an_interrupt_during_the_brief_reports_the_saved_session`.
+        print(f"\nThe decision brief did not complete: {_why(e)}", file=sys.stderr)
         print(f"Your discovery is saved and nothing was lost — retry just this step with:\n"
               f"  requivo brief {slug}", file=sys.stderr)
         raise SystemExit(1) from e

@@ -39,11 +39,13 @@ consequences, and both are the point:
   (`revision_conflict`) **before any API call**, not after the turns you paid for — a fresh discovery
   reasons from the request alone, so it would replace that work rather than refine it. Use
   `requivo answer <slug> "…"` to refine, or a different slug for a genuinely separate discovery.
-- Stopping an interactive discovery early — `q`, an empty answer, Ctrl-C — leaves the session on disk
-  at revision 0 with your request captured, and the command says where. That is the same state
-  `requivo session init` produces; nothing was reasoned and nothing was written to the model. A
-  provider failure part-way through the loop leaves that same state, reported as the error rather
-  than as that line.
+- **Nothing you pay for is discarded after the session is claimed.** Stopping an interactive
+  discovery early — `q`, an empty answer, Ctrl-C — keeps the turns that already ran: the session
+  lands at revision 1 with its questions still open, which is exactly what `--once` produces, and the
+  command names the `requivo answer <slug> "…"` that continues it. A provider failure part-way
+  through the loop does the same, reporting the error alongside what was saved. Only a failure on the
+  *first* turn leaves revision 0, because there is nothing to keep — that is the state
+  `requivo session init` produces, and there `discover` is still the right retry.
 
 ## Artifact generators (provider-backed)
 
