@@ -7,6 +7,7 @@ import re
 import sys
 import textwrap
 from pathlib import Path
+from typing import NamedTuple
 
 from dotenv import load_dotenv
 
@@ -121,6 +122,21 @@ _RENDER_FAILED_TAIL = (
 )
 
 
+class Drafted(NamedTuple):
+    """What the drafting loop came back with: the model, and whether the *user* ended it.
+
+    Two outcomes that used to be one value and must not be. A loop that converged (no more questions)
+    or hit the turn limit should go on to the decision brief; a loop the user stopped should not,
+    because the brief is a paid call they did not ask for. Returning `None` for the second collapsed
+    them into "nothing to do" and discarded the turns as well (#202).
+
+    `model` is None only when the very first turn produced nothing to stop *from*.
+    """
+
+    model: EngineOutput | None
+    stopped: bool
+
+
 class DraftingFailed(Exception):
     """A provider failure (or a Ctrl-C) *during* a draft turn, carrying the work that survived it.
 
@@ -184,22 +200,22 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
                 ans = input(f"  {i}. {q.q}\n     > ").strip()
                 if ans.lower() == "q":
                     print("Stopped.")
-                    return None
+                    return Drafted(out, stopped=True)
                 if ans:
                     replies.append(f"[slot: {q.slot}] Q: {q.q} → A: {ans}")
         except (EOFError, KeyboardInterrupt):
             print("\nStopped.")
-            return None
+            return Drafted(out, stopped=True)
 
         if not replies:
             print("No answer provided — stopping.")
-            return None
+            return Drafted(out, stopped=True)
 
         answers = "\n".join(replies)
     else:
         print(f"\n⚠️  Reached the {MAX_TURNS}-turn limit.")
 
-    return out
+    return Drafted(out, stopped=False)
 
 
 # ── Subcommand CLI (`pc`) ─────────────────────────────────────────────────────
@@ -302,14 +318,33 @@ def _cmd_discover(a, client) -> None:
     # `test_both_discover_entry_points_refuse_a_refined_session_before_paying`.
     slug = disco.claim_session(request, cards=only, slug=slug_hint).slug
     try:
-        out = converse(disco, request, only=only)
+        drafted = converse(disco, request, only=only)
     except DraftingFailed as e:
         _rescue_drafted(disco, request, e, cards=only, slug=slug)
-    if not out:
-        # Claiming first means an abandoned discovery leaves the request captured at revision 0
-        # rather than nothing, so say where it went — see
-        # `test_stopping_early_leaves_the_claimed_session_and_says_where`.
+    out = drafted.model
+    if out is None:
+        # Unreachable while `MAX_TURNS >= 1`, because the loop drafts before it ever prompts: a stop
+        # always has a turn to stop *from*, and a turn that failed leaves through `DraftingFailed`
+        # instead. It is here as the narrowing rather than as a user path — so that lowering the
+        # bound, or adding an earlier exit, cannot hand `finalize_discovery` a None. Claiming first
+        # means the request is captured at revision 0 either way, so it still says where it went.
         print(f"\nSaved request → {store.canonical_dir(slug)}")
+        return
+    if drafted.stopped:
+        # **A deliberate stop keeps what it paid for, and does not buy a brief nobody asked for**
+        # (#202). Stopping used to discard every drafted turn and leave revision 0, which is the same
+        # loss as a failed turn wearing a friendlier word: the model is what the loop carries, so one
+        # `q` at turn 5 threw away four billed calls and every answer typed into them.
+        #
+        # What this lands is exactly what `--once` lands — revision 1, questions still open, and
+        # `requivo answer` named — so the two entry points now leave the same shape of session rather
+        # than two. Re-running `discover` on the request is then refused by invariant 13's gate, and
+        # that refusal already names both ways on: refine with `answer`, or use another slug.
+        # Pinned by `test_stopping_early_keeps_the_turns_it_paid_for`.
+        slug = disco.finalize_discovery(request, out, cards=only, slug=slug,
+                                        brief=None, surface="cli-discover")
+        _say_saved(slug)
+        print(f'\n→ Answer and refine: requivo answer {slug} "<your answers>"')
         return
 
     # **The write comes before the last paid call, and that ordering is the fix** (#202). The

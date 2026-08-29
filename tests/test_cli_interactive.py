@@ -168,7 +168,7 @@ def test_the_loop_reasons_through_the_service_and_carries_the_model_not_a_transc
     second = _model(objective="two")
     provider = StubProvider(first, second)
 
-    out, _ = _converse(_service(provider), "a leave approval system", ["the line manager"])
+    out = _converse(_service(provider), "a leave approval system", ["the line manager"])[0].model
 
     assert out is second
     assert len(provider.analyze_calls) == 2
@@ -227,17 +227,23 @@ def test_the_assessment_is_reasoned_through_the_service_too():
     (["q"], "Stopped."),   # the user quits at the first question
     ([""], "No answer provided"),   # every question skipped -- nothing to feed back
 ])
-def test_stopping_early_returns_nothing_and_makes_no_further_call(answers, expected):
-    """A stop is a stop: the loop returns None and `_cmd_discover` returns before finalizing. The
-    call count is asserted because "returned None" would also be true of a loop that kept reasoning
-    and then threw the result away -- and that one costs money.
+def test_stopping_early_stops_reasoning_and_says_so(answers, expected):
+    """A stop is a stop: the loop makes no further call and flags itself as stopped, so
+    `_cmd_discover` knows not to buy a decision brief the user did not ask for.
 
-    This used to say "and no session is claimed", which stopped being true in #133: the revision-zero
-    gate now claims the slug *before* the loop, so an abandoned discovery leaves the request captured
-    at revision 0. `test_stopping_early_leaves_the_claimed_session_and_says_where` pins that half."""
+    The call count is the assertion that matters, because "it stopped" would also be true of a loop
+    that kept reasoning and threw the result away -- and that one costs money.
+
+    What it returns changed in #202: the model the user paid for comes back rather than `None`, so
+    stopping keeps the turn instead of discarding it. `test_stopping_early_keeps_the_turns_it_paid_for`
+    pins that half; this one pins that stopping still *stops*.
+
+    This used to also say "and no session is claimed", which stopped being true in #133: the
+    revision-zero gate claims the slug *before* the loop."""
     provider = StubProvider(_model(objective="one", questions=[_question()]))
-    out, printed = _converse(_service(provider), "a request", answers)
-    assert out is None
+    drafted, printed = _converse(_service(provider), "a request", answers)
+    assert drafted.stopped is True
+    assert drafted.model is not None, "the turn the user paid for was discarded"
     assert len(provider.analyze_calls) == 1
     assert expected in printed
 
@@ -247,9 +253,10 @@ def test_the_turn_limit_still_bounds_the_loop():
     spend. Every scripted turn carries a question, so nothing but the limit can end this."""
     asking = [_model(objective=f"turn {i}", questions=[_question()]) for i in range(MAX_TURNS)]
     provider = StubProvider(*asking)
-    out, printed = _converse(_service(provider), "a request", ["an answer"] * MAX_TURNS)
+    drafted, printed = _converse(_service(provider), "a request", ["an answer"] * MAX_TURNS)
     assert len(provider.analyze_calls) == MAX_TURNS
-    assert out is asking[-1]
+    assert drafted.model is asking[-1]
+    assert drafted.stopped is False, "the turn limit is not the user stopping — the brief still runs"
     assert f"{MAX_TURNS}-turn limit" in printed
 
 
@@ -265,10 +272,11 @@ def test_an_interrupt_at_the_prompt_stops_rather_than_traces_back(interrupt):
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
-            out = converse(_service(provider), "a request")
+            drafted = converse(_service(provider), "a request")
     finally:
         builtins.input = real_input
-    assert out is None, f"{interrupt.__name__} did not stop the loop"
+    assert drafted.stopped is True, f"{interrupt.__name__} did not stop the loop"
+    assert drafted.model is not None, "the turn the user paid for was discarded"
     assert "Stopped." in buf.getvalue()
 
 # ── the entry-point gate, driven through `app()` (#133) ────────────────────────────────────────────
@@ -345,16 +353,23 @@ def test_a_first_discovery_still_reaches_the_provider_on_both_paths(monkeypatch,
     assert [m.current_revision for m in SessionService().list_sessions()] == [1 if argv_tail else 2]
 
 
-def test_stopping_early_leaves_the_claimed_session_and_says_where(monkeypatch, capsys):
-    """The cost of taking the gate first, stated as a test rather than left to be discovered.
+def test_stopping_early_keeps_the_turns_it_paid_for(monkeypatch, capsys):
+    """Stopping is not a reason to lose what you already bought (#202).
 
-    Claiming the slug before the loop means a discovery the user abandons leaves the request captured
-    at revision 0 instead of nothing at all. That is not a new state — it is exactly what
-    `create_only` persists on the "capture the request now, discover later" path, and it is what
-    `--once` already leaves behind when the provider call fails after the claim.
+    `q` at the first question used to discard the drafted turn and leave the session at revision 0 —
+    the same loss as a failed turn wearing a friendlier word, since the model is what this loop
+    carries. One `q` at turn 5 threw away four billed calls and every answer typed into them.
 
-    It is *printed* because the alternative is a session directory appearing with no line accounting
-    for it, and a directory nobody was told about is a directory nobody deletes.
+    What it now lands is exactly what `--once` lands: revision 1, questions still open, and
+    `requivo answer` named. The two entry points leave the same shape of session rather than two,
+    which is the real argument for the change — not kindness, consistency.
+
+    Re-running `discover` on that request is then refused by invariant 13's gate, and that is the
+    accepted cost: the refusal already names both ways on (refine with `answer`, or another slug), so
+    it is a signpost rather than a dead end.
+
+    The claimed session is still *printed*, for the reason the old version of this test gave: a
+    session directory appearing with no line accounting for it is a directory nobody deletes.
     """
     _at_a_terminal(monkeypatch)
     monkeypatch.setattr(builtins, "input", lambda _prompt="": "q")
@@ -363,12 +378,15 @@ def test_stopping_early_leaves_the_claimed_session_and_says_where(monkeypatch, c
     printed = _run_app(["discover", _REQUEST], client=fake)
 
     sessions = SessionService().list_sessions()
-    assert [m.current_revision for m in sessions] == [0], "the abandoned discovery wrote a model"
-    assert len(fake.calls) == 1, "the loop kept reasoning after the user stopped"
-    assert "Stopped." in printed
-    assert sessions[0].slug in printed, (
-        "the claimed session is on disk and nothing said so — see this test's docstring"
+    assert [m.current_revision for m in sessions] == [1], (
+        "the stop discarded the turn the user had already paid for"
     )
+    assert len(fake.calls) == 1, (
+        "the loop kept reasoning after the user stopped, or bought a decision brief nobody asked for"
+    )
+    assert "Stopped." in printed
+    assert sessions[0].slug in printed, "the claimed session is on disk and nothing said so"
+    assert "requivo answer" in printed, "kept the work and did not say how to continue it"
 
 
 def test_the_golden_harness_answers_a_turn_in_exactly_the_words_this_loop_does():

@@ -308,9 +308,15 @@ bug that looked like correct behaviour.
     calls — eight turns plus the assessment — all of them thrown away by a refusal that was correct
     and in the wrong place. This is the same shape as the sentence above it: a rule the documenting
     path takes and the used path does not is not enforced either. `claim_session` is public for that
-    reason — a surface that owns its own loop has to be able to take the gate itself — and the cost is
-    that an abandoned interactive discovery leaves the request captured at revision 0, which is said
-    out loud rather than left as a directory nobody was told about. Pinned by
+    reason — a surface that owns its own loop has to be able to take the gate itself.
+
+    The cost used to be that an abandoned interactive discovery left the request captured at
+    revision 0 — better than nothing, and still a discarded paid turn every time. Since #202 a stop
+    keeps what it bought: the loop hands back the model it had drafted, `_cmd_discover` applies it,
+    and the session lands where `--once` already landed, at revision 1 with its questions open. So
+    the gate now *fires* on a re-run of that request, which is the accepted cost in its place, and
+    the refusal is a signpost rather than a dead end because it already names both ways on — refine
+    with `requivo answer`, or discover under another slug. Pinned by
     `test_both_discover_entry_points_refuse_a_refined_session_before_paying`, whose assertion is the
     *call count*: a test asserting only the refusal was green on the defect.
 14. **The service layer is the integrity boundary, not the interfaces.** Context cards are resolved in
