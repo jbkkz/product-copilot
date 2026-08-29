@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -43,11 +43,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
-anthropic = ["anthropic>=0.40.0,<1"]
+anthropic = ["anthropic>=1.0.0,<2"]
 # Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
-web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
+web = ["fastapi>=0.141.1,<1", "uvicorn>=0.52.4,<1", "jinja2>=3.1.6,<4", "python-multipart>=0.0.32,<1"]
 # `tomli` is `tomllib` backported, for `scripts/dependency_floor.py` on the 3.9/3.10 legs — the same
 # library under its pre-stdlib name, not a second TOML reader. `packaging` is what lets that script
 # compare `0.110` with the `0.110.0` pip actually installs as versions rather than as strings. Both
@@ -63,11 +63,11 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # Self-referential rather than restating the five pins from `anthropic` and `web`: a duplicated
 # ceiling is one that can move on one side only, and CI would then test a dependency set no user
 # can install -- invisible until somebody hits the gap, which is the failure shape the floor leg
-# exists to prevent for versions. Needs pip>=21.2 / setuptools>=64, both already floors of this
+# exists to prevent for versions. Needs pip>=21.2 / setuptools>=84.0.0, both already floors of this
 # repo's documented install paths.
-dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx",
-       "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
-       "pyright>=1.1.400,<2"]
+dev = ["requivo[anthropic,web]", "pytest>=9.1.1", "ruff>=0.16.4", "httpx",
+       "tomli>=1.1.0; python_version < '3.11'", "packaging>=26.3",
+       "pyright>=1.1.411,<2"]
 
 [tool.pyright]
 # #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
