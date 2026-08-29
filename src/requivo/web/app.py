@@ -59,6 +59,10 @@ _STATUS_BY_CODE = {
     "unsupported_format_version": 409,
     "unsupported_schema_version": 409,
     "session_unreadable": 500,        # the store, not the request
+    # 500 for the same reason, and a row of its own because the remedy differs: an unreadable
+    # `session.json` cannot be recovered from anything on disk, while an unreadable `model.json`
+    # leaves the session openable and every applied model sitting in `revisions/` (#204).
+    "model_unreadable": 500,
     "artifact_revision_out_of_range": 500,
     "unreadable_source_revision": 500,  # a real revision was stated; the history is what is incomplete
     "inconsistent_archive": 400,      # the caller handed us this archive

@@ -916,8 +916,9 @@ def test_every_arm_of_the_family_names_a_distinct_fact():
     codes = {a.code for a in arms(InvalidSessionError)}
     assert codes == {
         "unsupported_format_version", "unsupported_schema_version", "session_unreadable",
-        "artifact_revision_out_of_range", "unstated_source_revision", "unreadable_source_revision",
-        "inconsistent_archive", "unreadable_archive", "invalid_archive", "import_move_failed",
+        "model_unreadable", "artifact_revision_out_of_range", "unstated_source_revision",
+        "unreadable_source_revision", "inconsistent_archive", "unreadable_archive",
+        "invalid_archive", "import_move_failed",
     }
     assert "invalid_session" not in codes, "the base is the family, not an arm"
 
