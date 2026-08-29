@@ -2,7 +2,7 @@
   "repo": "jbkkz/requivo",
   "default_branch": "main",
   "branch_pattern": "fix/{issue}",
-  "test_command": "uv run --extra dev pytest -q",
+  "test_command": "uv run --extra dev pytest tests/ -q -rs",
   "version_sites": [
     "pyproject.toml",
     "src/requivo/__init__.py",
