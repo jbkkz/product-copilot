@@ -4,3 +4,33 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Grouped for the reason oss-changelog.yml's own header records: dependabot applies its labels
+    # the instant it opens a pull request, and a `labeled` trigger turns each one into a burst of
+    # workflow runs (#293). Fewer pull requests is fewer bursts, and an actions bump is reviewed as
+    # one decision anyway.
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Python was watched by nothing. Every runtime and extra ceiling here -- pydantic<3, anthropic<1,
+  # fastapi<1, uvicorn<1, jinja2<4, python-multipart<1, pyright<2 -- moved only when a human
+  # remembered, and jinja2 and python-multipart both have CVEs fixed above the floors this project
+  # declares. pyproject.toml's own rationale for capping pyright said "dependabot moves both where a
+  # maintainer can review the move", which was half false while pip was unconfigured: a capped tool
+  # with no bump mechanism is a pin that only ever goes stale (#297).
+  #
+  # Version updates are what this file configures. Dependabot *security* alerts are a repository
+  # setting and are not turned on by anything written here.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Two groups rather than one: a dev-tooling bump is a change to how the repo is checked and a
+      # runtime bump is a change to what a user installs, and they are not reviewed the same way.
+      dev-tooling:
+        dependency-type: development
+        patterns: ["*"]
+      runtime:
+        dependency-type: production
+        patterns: ["*"]

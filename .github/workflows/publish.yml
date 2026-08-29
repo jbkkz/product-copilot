@@ -12,6 +12,22 @@ name: Publish to PyPI
 # gates run *before* the upload. Each one is a thing that has shipped wrong in a Python project at
 # least once: a version that disagrees with its tag, a failing test suite nobody re-ran, a lint error
 # waved through, a wheel that imports fine from the checkout and not outside it.
+#
+# Every `uses:` here is pinned to a **commit SHA**, and this is the one workflow in the repository
+# where that is worth the friction. This job holds `id-token: write` — it mints the short-lived OIDC
+# identity PyPI trusts in place of a stored token — so whatever runs inside it can publish `requivo`
+# irreversibly. A tag is a mutable pointer and a branch is more mutable still, and the publish step
+# consumed a *branch* (`@release/v1`); repointing any of the three upstream would put attacker code
+# next to that identity. The rest of the chain is reasoned about carefully so that this step can be
+# trusted, which is precisely why the mutable ref here was its weakest link (#214).
+#
+# The cost, stated rather than discovered: this workflow no longer follows an upstream fix on its
+# own. Dependabot's github-actions ecosystem does move SHA pins, opening a reviewable PR with the
+# version comment rewritten, which is the intended maintenance path — and against `pypa`'s branch ref
+# it now tracks releases rather than whatever that branch last pointed at.
+#
+# The version comment beside each SHA is documentation, not a constraint: GitHub resolves the SHA and
+# never reads the comment. If the two disagree, the SHA is what ran.
 on:
   release:
     types: [published]
@@ -41,13 +57,13 @@ jobs:
       contents: read    # `actions/checkout` reads the tag this publishes; nothing here writes
       id-token: write   # mint the OIDC token Trusted Publishing uses — this is what replaces a token
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Publish exactly the tagged commit, never whatever happens to be on the default branch.
           ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
 
@@ -100,4 +116,4 @@ jobs:
           "
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
