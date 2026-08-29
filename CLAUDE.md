@@ -59,8 +59,8 @@ Python — and that call lives in a **provider**, never in the core. The layers 
 - **`services/`** — the application seam, and the only place the two meet. `SessionService.update_model`
   is the single validated apply path (validate → diff → propagate → revision → stale-flag);
   `DiscoveryService` is the single provider-backed orchestration (reason → apply → save), including
-  the un-persisted `draft_turn`/`draft_assessment` an interactive surface loops over — a surface owns
-  the loop, never a client.
+  the un-persisted `draft_turn` an interactive surface loops over — a surface owns the loop, never a
+  client.
   Both storage (`SessionRepository`) and reasoning (`ReasoningProvider`) are injected, so the
   orchestration is backing-agnostic — a Postgres repository reuses it verbatim.
 - **`render/`** turns data into strings; **`cli.py`**, **`deterministic/`** and **`web/`** are the
@@ -316,9 +316,13 @@ bug that looked like correct behaviour.
     and the session lands where `--once` already landed, at revision 1 with its questions open. So
     the gate now *fires* on a re-run of that request, which is the accepted cost in its place, and
     the refusal is a signpost rather than a dead end because it already names both ways on — refine
-    with `requivo answer`, or discover under another slug. Pinned by
+    with `requivo answer`, or discover under another slug. That half is pinned by
+    `test_stopping_early_keeps_the_turns_it_paid_for`; the gate's own position is pinned by
     `test_both_discover_entry_points_refuse_a_refined_session_before_paying`, whose assertion is the
-    *call count*: a test asserting only the refusal was green on the defect.
+    *call count*, since a test asserting only the refusal was green on the defect. Two claims, two
+    tests, and citing the second for the first was #320: it passes against the un-fixed code, so the
+    sentence had a reference that resolved and guarded nothing — which `test_narrative_references.py`
+    cannot see, because it checks that a name exists and not that it fires.
 14. **The service layer is the integrity boundary, not the interfaces.** Context cards are resolved in
     `create_session`, not trusted from the caller, because the CLI and the Web being careful is not a
     guarantee — an external consumer can call the service directly. For the same reason `DiscoveryService`'s

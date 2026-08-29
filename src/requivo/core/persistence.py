@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,36 +162,69 @@ def ensure_store_dir(path: Path) -> Path:
     the one person who could not experience it.
 
     The issue proposed writing the file at "the one place `.requivo` is first created". There is no
-    such place: six call sites create it as a `parents=True` ancestor — the lock directory, the
-    session root in `create_session`, `write_meta`, `save_revision`, `save_artifact`, and
-    `session import`. Whichever of them a given workspace happens to reach first is the one that
-    creates the root, so guarding one guards nothing. Hence a single ensure function rather than a
-    single call site, with `test_no_store_directory_is_created_outside_ensure_store_dir` failing on a
-    seventh that goes around it.
+    such place: every call site creates it as a `parents=True` ancestor — the lock directory, the
+    session root in `create_session`, `write_meta`, `save_revision`, `save_session_artifact`,
+    `write_artifact_file`, and `session import`. Whichever of them a given workspace happens to reach
+    first is the one that creates the root, so guarding one guards nothing. Hence a single ensure
+    function rather than a single call site, with
+    `test_no_store_directory_is_created_outside_ensure_store_dir` failing on one that goes around it.
 
-    **Written once, on creation, and never recreated.** The trigger is the store root *not existing
-    before this call* — not the ignore file being absent. So a user who deletes it to commit sessions
-    deliberately stays committed, and a user who edits it keeps their edit: both are the same
-    "the root already exists" branch, which writes nothing. Pinned by
+    **Written once, on creation, and never recreated.** A user who deletes it to commit sessions
+    deliberately stays committed, and a user who edits it keeps their edit. Pinned by
     `test_the_privacy_gitignore_is_written_once_and_never_restored`.
 
-    A failure to write it is *not* swallowed. It would leave the store in exactly the state the
-    guarantee is about — present, and unignored — and the directory we could not write into is the
-    one a session is about to be written into anyway, so a silent pass would trade a visible error
-    for the confidentiality hole this exists to close.
+    **The trigger is `mkdir` winning, not `exists()` answering, and that is the whole of #320.** This
+    first read `not root.exists()` before creating anything, which broke in two directions at once.
+    `Path.exists()` re-raises `EACCES` rather than swallowing it — invariant 15's #80, one function
+    along — and `PermissionError` is not a `RequivoError`, so the first command run in a workspace
+    whose parent denies stat ended in a traceback instead of a refusal. And the answer it gave was
+    the wrong question: *does the root exist* is not *did I create the root*, so a marker write that
+    failed once left `.requivo/` present and unignored, after which every later call read
+    `fresh = False` and never tried again. One transient error switched the confidentiality
+    guarantee off for the life of that workspace, silently, and left the result indistinguishable
+    from a user who had deleted the file on purpose — the one state this design means to be
+    irreversible.
+
+    `mkdir(parents=True)` with **no** `exist_ok` answers the real question atomically and probes
+    nothing: it either creates the root or raises `FileExistsError`, and only the winner writes.
+    Pinned by `test_a_failed_marker_write_leaves_no_root_behind_to_suppress_the_next_attempt`.
+
+    **All-or-nothing, so a failure is retryable.** If the marker cannot be written, the root this
+    call just made is removed again before the error surfaces. That keeps the store's two possible
+    states to "root and marker" or "neither" — the alternative is the silent hole above. `rmdir`
+    only removes an empty directory, so a concurrent creator's work is never destroyed; if it cannot
+    be removed the error still surfaces, because a visible failure is the point.
     """
     root = store_root()
-    fresh = not root.exists()
-    path.mkdir(parents=True, exist_ok=True)
+    fresh = True
+    try:
+        root.mkdir(parents=True)
+    except FileExistsError:
+        # Somebody else owns the root — this process, an earlier run, or a concurrent creator whose
+        # marker decision already stands. Losing this race is success.
+        fresh = False
+    except OSError as e:
+        raise SessionUnreadableError(
+            f"could not create the session store at {root}: {e}", details={"path": str(root)}) from e
     if fresh:
         marker = root / ".gitignore"
         try:
-            # `x` rather than a plain write: two processes can both find the root missing, and the
-            # loser must not truncate the winner's file. Losing the race is success here.
+            # `x` rather than a plain write: the loser of a race must not truncate the winner's file.
             with open(marker, "x", encoding="utf-8") as fh:
                 fh.write(_STORE_GITIGNORE)
         except FileExistsError:
             pass
+        except OSError as e:
+            with suppress(OSError):
+                root.rmdir()
+            raise SessionUnreadableError(
+                f"could not write the privacy marker at {marker}: {e}",
+                details={"path": str(marker)}) from e
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SessionUnreadableError(
+            f"could not create {path}: {e}", details={"path": str(path)}) from e
     return path
 
 
@@ -278,8 +311,12 @@ def session_lock(slug: str) -> Iterator[None]:
     if not session_exists(slug):     # cheap, non-authoritative — see above
         raise _no_session(slug)
     p = lock_path(slug)
+    # Outside the `try` on purpose (#320). That handler says "could not open the write lock", and
+    # `ensure_store_dir` fails about the store root or the privacy marker — reporting one operation's
+    # failure under the other's name sends the reader to the wrong file. It raises a structured error
+    # of its own, so nothing is swallowed by moving it out.
+    ensure_store_dir(p.parent)
     try:
-        ensure_store_dir(p.parent)
         fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as e:
         # Not `SessionNotFoundError`: the session's existence is not what this failed to establish.

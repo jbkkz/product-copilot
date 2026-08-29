@@ -41,12 +41,16 @@ function fire(type, ev) {
   return ev;
 }
 
+// A stand-in for the `#flash` region `base.html` carries, so the harness can watch whether a new
+// request clears the last one's notice (#320).
+var flash = { innerHTML: "" };
+
 var documentStub = {
   body: {
     classList: { toggle: function () {} },
     addEventListener: on
   },
-  getElementById: function () { return null; },
+  getElementById: function (id) { return id === "flash" ? flash : null; },
   querySelectorAll: function (sel) {
     if (sel !== SUBMIT_SELECTOR) {
       throw new Error("the harness only models " + SUBMIT_SELECTOR + ", got: " + sel);
@@ -89,4 +93,14 @@ function swapDecision(status) {
 var statuses = [200, 204, 400, 403, 409, 413, 500, 502];
 var log = statuses.map(swapDecision);
 
-process.stdout.write(JSON.stringify(log));
+// A notice must not outlive the thing it was about. An error lands in `#flash`; the reader then
+// starts an unrelated request that succeeds, and the stale complaint has to be gone by the time
+// they are looking at the result (#320).
+flash.innerHTML = "<div class='notice danger'>a 409 from a moment ago</div>";
+fire("htmx:beforeRequest", { detail: { elt: buttons[0] } });
+var flashAfterNewRequest = flash.innerHTML;
+
+process.stdout.write(JSON.stringify({
+  decisions: log,
+  flashClearedOnNewRequest: flashAfterNewRequest === ""
+}));
