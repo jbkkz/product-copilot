@@ -31,14 +31,14 @@ classifiers = [
 # cannot correlate with anything they did. The floors say what we need; the ceilings say what we have
 # actually been run against.
 dependencies = [
-    "python-dotenv>=1.0.0,<2",
+    "python-dotenv>=1.2.3,<2",
     # 2.11, not 2.0, and the difference is eleven minor versions of a promise nothing tested (#91).
     # The Dependency floor leg found it on its first run: on 2.0.x the package does not import at all
     # — `SerializeAsAny` inside an `Optional[...]` is unhashable under 3.9's `typing`, so every model
     # in `contracts.py` fails to build — and from 2.0.3 up to 2.10 the two guards that pin invariant
     # 8's permissive-mirror graph fail. The v0.11.0 audit checked that `SerializeAsAny` is exported by
     # 2.0.0 and stopped there, which is the whole lesson: a symbol existing is not the symbol working.
-    "pydantic>=2.11,<3",
+    "pydantic>=2.13.4,<3",
 ]
 
 [project.optional-dependencies]
