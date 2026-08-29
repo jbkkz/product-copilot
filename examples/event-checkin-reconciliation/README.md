@@ -41,14 +41,27 @@ the split, the legal basis, and the source-of-truth question, and everything dow
 
 ## Reproduce it
 
-Each command regenerates one view from the model — no discovery needed:
+The generators write back into a session, so put this model into one first. Both commands are offline
+— no API key, and no discovery re-run:
 
 ```bash
-requivo brief    examples/event-checkin-reconciliation/model.json   # the decision brief
-requivo epic     examples/event-checkin-reconciliation/model.json   # the delivery epic
-requivo criteria examples/event-checkin-reconciliation/model.json   # the acceptance criteria
-requivo estimate examples/event-checkin-reconciliation/model.json   # a day-range estimate (also: requivo stories, requivo prd)
+requivo session init examples/event-checkin-reconciliation/request.md --slug event-checkin-reconciliation
+requivo model apply  event-checkin-reconciliation examples/event-checkin-reconciliation/model.json --expected-revision 0
 ```
+
+Then read it, or regenerate any view of it. `impact` costs nothing; each generator is one provider
+call and needs `ANTHROPIC_API_KEY`:
+
+```bash
+requivo impact   event-checkin-reconciliation constraints   # what the deadline holds up — no provider call
+requivo brief    event-checkin-reconciliation               # the decision brief
+requivo epic     event-checkin-reconciliation               # the delivery epic
+requivo criteria event-checkin-reconciliation               # the acceptance criteria
+requivo estimate event-checkin-reconciliation               # a day-range estimate (also: requivo stories, requivo prd)
+```
+
+Documents land in `.requivo/sessions/event-checkin-reconciliation/artifacts/`, under whichever
+directory you ran from — the files you are reading here are never written to.
 
 The `model.json` here was produced by a single discovery pass from `request.md`. The engine is
 non-deterministic, so a fresh run phrases things differently — the shape of the pushback is what's stable.
