@@ -25,6 +25,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only touch a requirement that cannot already accept the new version. The default rewrites the
+    # *floor* of every range, and on this project a floor is not housekeeping -- it is the promise
+    # `pip install requivo` makes, and the one thing scripts/dependency_floor.py exists to measure
+    # (#91). Left on the default, the first run proposed exactly the damage that promise forbids:
+    # `anthropic>=0.40.0,<1` -> `>=1.0.0,<2`, straight through a major ceiling this repo sets on
+    # purpose; `fastapi>=0.110,<1` -> `>=0.141.1,<1`, cutting off every user between those two;
+    # `python-dotenv>=1.0.0` -> `>=1.2.3`, whose releases require Python >=3.10 while this package
+    # declares >=3.9, so three py3.9 legs went red; and `setuptools>=64` -> `>=84.0.0` rewritten
+    # inside the prose comment that explained why 64 was the number. A ceiling bump is a statement
+    # that we have run against the new major, which is a person's judgement and not a bot's.
+    versioning-strategy: increase-if-necessary
     groups:
       # Two groups rather than one: a dev-tooling bump is a change to how the repo is checked and a
       # runtime bump is a change to what a user installs, and they are not reviewed the same way.
