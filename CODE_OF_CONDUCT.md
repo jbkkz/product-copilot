@@ -19,6 +19,8 @@ point underneath it was correct.
 
 ## Enforcement
 
-Report a problem to the maintainers through the repository's private channels. Reports
-are handled discreetly. Maintainers may edit, remove or reject contributions and may
+Report a problem privately, through
+[GitHub private vulnerability reporting](https://github.com/jbkkz/requivo/security/advisories/new) --
+the same private channel SECURITY.md names, and the only one this repository has. Reports are
+handled discreetly. Maintainers may edit, remove or reject contributions and may
 block accounts, and will say why.

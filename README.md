@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/requivo)](https://pypi.org/project/requivo/)
 [![Python](https://img.shields.io/pypi/pyversions/requivo)](https://pypi.org/project/requivo/)
 [![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml?query=branch%3Amain)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)][license]
 
 > Find what could change the solution before you commit to the scope.
 
@@ -30,27 +30,27 @@ uvx --from "requivo[web,anthropic]" requivo web    # opens http://127.0.0.1:8765
 One command, nothing installed — [uv](https://docs.astral.sh/uv/) fetches Requivo into a temporary
 environment and runs it (`curl -LsSf https://astral.sh/uv/install.sh | sh` if you don't have uv). To
 keep it around, `uv tool install "requivo[web,anthropic]"` and then just `requivo web`; `pipx install`
-works the same way. Prefer plain pip? [`docs/getting-started.md`](docs/getting-started.md) has the
+works the same way. Prefer plain pip? [`docs/getting-started.md`][getting-started] has the
 virtualenv route — avoid `pip install --user`, which succeeds while leaving `requivo` off your PATH.
 
 Set `ANTHROPIC_API_KEY` in your environment or a `.env` file to analyse and generate. Without it the
 interface still opens and reads existing sessions, and tells you what is missing.
 
 Sessions stay on your machine, the server binds to localhost, and nothing leaves your workspace — no
-accounts, no database, no remote storage. See [`docs/web.md`](docs/web.md).
+accounts, no database, no remote storage. See [`docs/web.md`][web].
 
 Two other ways in, on the same local sessions — nothing is locked to the interface you start in:
 
-- **[Claude Code](plugins/claude-code/)** — an integration. `/plugin marketplace add jbkkz/requivo`,
-  then `/requivo:discover <request>`. Reasoning goes through your own Claude session, so there is no
+- **[Claude Code][claude-code]** — an integration. `/plugin marketplace add jbkkz/requivo`,
+  `/plugin install requivo@requivo`, `/reload-plugins`, then `/requivo:discover <request>`. Reasoning goes through your own Claude session, so there is no
   extra API key — but the skills drive the `requivo` CLI, so it still has to be installed (above) and
   on your PATH. If it is not, every skill says so and how to fix it, rather than failing at the shell.
   On native Windows it also needs [Git for Windows](https://git-scm.com/downloads/win), which is what
   gives Claude Code the Bash tool the skills run through.
-- **[CLI](docs/cli.md)** — infrastructure. `requivo discover | status | brief …`, for automation and
+- **[CLI][cli]** — infrastructure. `requivo discover | status | brief …`, for automation and
   anything you drive from a script or a pipeline.
 
-Install and first run in depth: [`docs/getting-started.md`](docs/getting-started.md).
+Install and first run in depth: [`docs/getting-started.md`][getting-started].
 
 ---
 
@@ -77,10 +77,10 @@ Requivo:
 
 That is the part a chat transcript cannot do.
 
-**The canonical example is [`examples/leave-approval/`](examples/leave-approval/)** — one line of
+**The canonical example is [`examples/leave-approval/`][leave-approval]** — one line of
 request, taken through the questions, the brief, and a changed answer that moves the scope. A harder,
 messy multi-feature one lives in
-[`examples/event-checkin-reconciliation/`](examples/event-checkin-reconciliation/), and is what
+[`examples/event-checkin-reconciliation/`][event-checkin-reconciliation], and is what
 `requivo demo` replays.
 
 ---
@@ -103,7 +103,7 @@ criteria, an uncertainty-aware estimate, a delivery epic with GitHub/GitLab issu
 notes all generate from the same understanding, without redoing the discovery.
 
 The vocabulary — what we know, what we are assuming, open question, needs updating, are we ready — and
-the model underneath it: [`docs/requirements-model.md`](docs/requirements-model.md).
+the model underneath it: [`docs/requirements-model.md`][requirements-model].
 
 ---
 
@@ -120,7 +120,7 @@ the model underneath it: [`docs/requirements-model.md`](docs/requirements-model.
 Every interface uses the same session format and the same validated apply path — there is no fork, and
 no interface holds business logic of its own. The three differ in weight, not in what they can reach.
 The Core is provider-independent: no LLM, no network. More:
-[`docs/architecture.md`](docs/architecture.md).
+[`docs/architecture.md`][architecture].
 
 ---
 
@@ -130,7 +130,7 @@ The Core is provider-independent: no LLM, no network. More:
 analytics — Requivo never phones home. When a provider is used, each turn sends your request, answers,
 prompts, schema and loaded context cards to the Anthropic API, and to no other server; in Claude Code
 mode, reasoning goes through your own Claude session. Treat anything you type as content sent to a
-model provider. Full notes: [SECURITY.md](SECURITY.md).
+model provider. Full notes: [SECURITY.md][security].
 
 ---
 
@@ -138,14 +138,14 @@ model provider. Full notes: [SECURITY.md](SECURITY.md).
 
 | Doc | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install and first run for each interface |
-| [Web](docs/web.md) | The primary interface — the local browser workspace |
-| [CLI reference](docs/cli.md) | Every command and flag |
-| [Requirements model](docs/requirements-model.md) | The vocabulary, readiness, dependencies |
-| [Architecture](docs/architecture.md) | Core, services, surfaces |
+| [Getting started][getting-started] | Install and first run for each interface |
+| [Web][web] | The primary interface — the local browser workspace |
+| [CLI reference][cli] | Every command and flag |
+| [Requirements model][requirements-model] | The vocabulary, readiness, dependencies |
+| [Architecture][architecture] | Core, services, surfaces |
 
 Everything else — session format, providers, context cards, evaluations, product validation, roadmap,
-open-source strategy — is indexed in [`docs/`](docs/README.md).
+open-source strategy — is indexed in [`docs/`][docs-index].
 
 ---
 
@@ -167,7 +167,7 @@ thirteenth. Differences in the language itself show on the Linux axis, which run
 Those legs test the `requivo` **package**. Nothing in CI exercises the Claude Code plugin, which runs
 inside Claude Code rather than inside Python, and on native Windows that plugin carries a prerequisite
 of its own: [Git for Windows](https://git-scm.com/downloads/win), for the reason the
-[plugin README](plugins/claude-code/) gives.
+[plugin README][claude-code] gives.
 
 Requivo reads and writes **UTF-8 everywhere**, regardless of the machine's locale or the console's
 codepage. A session written on one machine reads back byte-identically on another. Where a console
@@ -180,22 +180,42 @@ refused by name rather than silently decoded into something that reads like pros
 
 ## Status
 
-Actively developed, and at **1.0**. The Core, CLI, Claude Code plugin and local Web interface are usable
-today. The **session format is a published contract** — versioned, forward-compatible, and shared by
+Actively developed and stable on the 1.x line. The Core, CLI, Claude Code plugin and local Web
+interface are usable today. The **session format is a published contract** — versioned, forward-compatible, and shared by
 every interface; what is guaranteed and what is deprecated is written down in
-[compatibility](docs/compatibility.md). Output is non-deterministic — treat the decision brief as a
+[compatibility][compatibility]. Output is non-deterministic — treat the decision brief as a
 senior colleague's read, not an oracle, and get expert review for any legal/tax/compliance flag it
 raises.
-See the [roadmap](docs/roadmap.md).
+See the [roadmap][roadmap].
 
 ---
 
 ## Contributing and license
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The Core, CLI and Claude Code
-integration are open source under [MIT](LICENSE). The Requivo **name and identity** are separate from
-the code license — see [TRADEMARKS.md](TRADEMARKS.md).
+Contributions are welcome — see [CONTRIBUTING.md][contributing]. The Core, CLI and Claude Code
+integration are open source under [MIT][license]. The Requivo **name and identity** are separate from
+the code license — see [TRADEMARKS.md][trademarks].
 
-[MIT](LICENSE) © jbkkz
+[MIT][license] © jbkkz
 
 > _Requivo was previously named Product Copilot._
+
+<!-- Repo-relative links are written as references and resolved absolutely, because pyproject
+     sets `readme = README.md`: PyPI renders this whole file as the project page and does not
+     rewrite relative hrefs, so every one of them 404s there. Keeping the URLs in one block is
+     what stops that from costing the prose its line width. -->
+[license]: https://github.com/jbkkz/requivo/blob/main/LICENSE
+[getting-started]: https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md
+[web]: https://github.com/jbkkz/requivo/blob/main/docs/web.md
+[claude-code]: https://github.com/jbkkz/requivo/tree/main/plugins/claude-code/
+[cli]: https://github.com/jbkkz/requivo/blob/main/docs/cli.md
+[leave-approval]: https://github.com/jbkkz/requivo/tree/main/examples/leave-approval/
+[event-checkin-reconciliation]: https://github.com/jbkkz/requivo/tree/main/examples/event-checkin-reconciliation/
+[requirements-model]: https://github.com/jbkkz/requivo/blob/main/docs/requirements-model.md
+[architecture]: https://github.com/jbkkz/requivo/blob/main/docs/architecture.md
+[security]: https://github.com/jbkkz/requivo/blob/main/SECURITY.md
+[docs-index]: https://github.com/jbkkz/requivo/blob/main/docs/README.md
+[compatibility]: https://github.com/jbkkz/requivo/blob/main/docs/compatibility.md
+[roadmap]: https://github.com/jbkkz/requivo/blob/main/docs/roadmap.md
+[contributing]: https://github.com/jbkkz/requivo/blob/main/CONTRIBUTING.md
+[trademarks]: https://github.com/jbkkz/requivo/blob/main/TRADEMARKS.md

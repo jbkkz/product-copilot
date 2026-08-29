@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "requivo"
 version = "1.2.0"
-description = "An open-source requirements reasoning engine for turning vague product requests into validated, traceable decisions."
+description = "Turn a vague product request into a versioned requirements model: ask only the questions that change the solution, generate the brief and PRD from it, and compute exactly what a changed answer invalidates."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 keywords = ["requirements", "product", "llm", "anthropic", "claude", "prd", "discovery", "elicitation"]
 authors = [{ name = "jbkkz" }]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -59,8 +59,13 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # on a *blocking* leg that turns an unrelated upstream release into a red `main`. The floor is where
 # `pythonPlatform: "All"` and the config keys below it are known to behave; dependabot moves both
 # where a maintainer can review the move.
-dev = ["pytest>=8.0", "ruff>=0.6", "anthropic>=0.40.0,<1", "httpx",
-       "fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1",
+#
+# Self-referential rather than restating the five pins from `anthropic` and `web`: a duplicated
+# ceiling is one that can move on one side only, and CI would then test a dependency set no user
+# can install -- invisible until somebody hits the gap, which is the failure shape the floor leg
+# exists to prevent for versions. Needs pip>=21.2 / setuptools>=64, both already floors of this
+# repo's documented install paths.
+dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
        "pyright>=1.1.400,<2"]
 
@@ -159,8 +164,3 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Form", "fastapi.Query", "f
 # Keep the codebase's compact import style: pack sorted members onto as few lines as fit the width,
 # instead of exploding one-per-line on a trailing comma.
 split-on-trailing-comma = false
-
-[tool.ruff.lint.per-file-ignores]
-# Backward-compat shim: it re-exports the package surface (F401) after load_dotenv() (E402), both
-# on purpose. See the module docstring.
-"src/engine.py" = ["F401", "E402"]

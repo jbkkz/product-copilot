@@ -1,10 +1,10 @@
 """What the runtime dependency floor *is*, and whether the environment is actually at it.
 
-`pyproject.toml`'s lower bounds are a promise to whoever runs `pip install requivo`, and across
-fourteen CI legs nothing installed one of them (#91). Every job runs `pip install -e ".[dev]"`,
-which resolves to the newest satisfying release -- so the floors were measured nowhere, and the
-first import that postdates a declared minimum would ship a package that fails at import for anyone
-whose resolver lands early, with all fourteen legs green.
+`pyproject.toml`'s lower bounds are a promise to whoever runs `pip install requivo`, and not one CI
+leg installed a single one of them (#91). Every job runs `pip install -e ".[dev]"`, which resolves to
+the newest satisfying release -- so the floors were measured nowhere, and the first import that
+postdates a declared minimum would ship a package that fails at import for anyone whose resolver
+lands early, with every leg on the board green.
 
 That was not hypothetical. `pydantic>=2.0` was false by eleven minor versions when this script was
 written: on 2.0.x the package does not import at all, and up to 2.10 the two guards pinning

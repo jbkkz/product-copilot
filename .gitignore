@@ -7,6 +7,11 @@ CLAUDE.local.md
 # local sessions & generated output
 out/
 .requivo/
+# The demo capture workspace: video, poster frames and a nested session store, none of it referenced
+# by src/, scripts/ or docs/. It is the one output root that postdates this block, and it was the
+# only untracked entry in `git status` -- one `git add .` away from committing multi-megabyte media
+# into a library repo, permanently.
+demo-out/
 
 # python
 __pycache__/

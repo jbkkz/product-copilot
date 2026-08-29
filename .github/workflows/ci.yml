@@ -119,14 +119,15 @@ jobs:
     # **Blocking rather than advisory, because it is clean.** The issue proposed advisory first and
     # promote once the scoped layers are green; they are green now, and a permanently-advisory leg is
     # one people learn to scroll past. Scope and the reason for every config key are in
-    # pyrightconfig.json, next to the keys.
+    # pyproject.toml's [tool.pyright], next to the keys -- and deliberately not in a standalone
+    # pyright config file, which the checker would prefer over them if one existed.
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-      # A `.venv` rather than the runner's interpreter, and it is not ceremony: pyrightconfig.json
+      # A `.venv` rather than the runner's interpreter, and it is not ceremony: [tool.pyright]
       # names `venvPath`/`venv` so the checker resolves `pydantic` instead of reporting it as an
       # unresolved import — and building the same layout here means the command a maintainer types
       # locally is the command this leg runs. A check only its own leg can run is verified by
