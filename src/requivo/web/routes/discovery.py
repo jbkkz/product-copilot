@@ -12,10 +12,12 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
 from requivo.core.errors import InputTooLargeError
+from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
+from requivo.web.routes.sessions import analysis_failed
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 from requivo.web.viewmodels.status import impact_view
@@ -26,8 +28,16 @@ router = APIRouter()
 @router.post("/sessions/{slug}/discover")
 def run_discovery(slug: str = Depends(safe_slug),
                   discovery: DiscoveryService = Depends(get_discovery)):
-    """Run the first discovery turn on a 'create session only' session, then show the result."""
-    discovery.run_discovery(slug, surface="web-discover")
+    """Run the first discovery turn on a 'create session only' session, then show the result.
+
+    The failure is handled the same way the create route handles it (#207): this session already
+    exists and this page already carries the retry button, so a transient provider error goes back to
+    it with the cause stated, rather than to a 500 page that hides both.
+    """
+    try:
+        discovery.run_discovery(slug, surface="web-discover")
+    except EngineError as e:
+        return analysis_failed(slug, e)
     return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
 
 

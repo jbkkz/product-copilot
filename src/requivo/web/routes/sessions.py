@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from requivo.core.context import resolve_cards
 from requivo.core.errors import InputTooLargeError, InvalidSlugError, SessionNotFoundError
 from requivo.core.persistence import validate_slug
+from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS, MAX_SLUG_CHARS, provider_status
@@ -17,6 +20,27 @@ from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 
 router = APIRouter()
+
+
+# How long a provider's own words may be when they ride back on a URL. Not a security boundary --
+# Jinja escapes the value and this server is local, single-user and says so in its own footer -- but a
+# redirect is not the place for an unbounded string, and a message this long has stopped being a
+# message.
+_MAX_NOTICE_CHARS = 300
+
+
+def analysis_failed(slug: str, exc: EngineError) -> RedirectResponse:
+    """Send the reader to the session that *was* saved, carrying why the analysis was not (#207).
+
+    Public, and shared with `routes/discovery.py`: both doors onto a first analysis can fail the same
+    way and must land the reader in the same place. A second copy is a second wording.
+
+    A redirect rather than a rendered page, so a refresh cannot re-POST a paid call. The cause travels
+    as a query parameter because it is the actionable half -- "API unavailable" and "the key was
+    rejected" need different things from the reader, and a generic notice makes them identical.
+    """
+    notice = quote(exc.message[:_MAX_NOTICE_CHARS])
+    return RedirectResponse(url=f"/sessions/{slug}?analysis_failed={notice}", status_code=303)
 
 
 @router.post("/sessions")
@@ -99,8 +123,23 @@ def create_session(
     if provider == "auto":
         provider = "anthropic" if provider_status().available else "create_only"
     if provider == "anthropic":
-        new_slug = discovery.start(text, cards=picked, slug=chosen_slug, finalize=False,
-                                   surface="web-discover")
+        # Claim, then reason — two service operations rather than `start()`, because the route needs
+        # the slug in its hands *before* the paid call can fail (#207). `claim_session` is public for
+        # exactly this: a surface that owns its own flow takes invariant 13's gate itself. Nothing is
+        # reimplemented here; `run_discovery` is the same operation the pending page's own button
+        # already posts to.
+        new_slug = discovery.claim_session(text, cards=picked, slug=chosen_slug).slug
+        try:
+            discovery.run_discovery(new_slug, surface="web-discover")
+        except EngineError as e:
+            # The request is already safely captured at revision 0, and the page we are about to send
+            # them to *already* offers the retry button. Letting this propagate mapped it to a 502 and
+            # `errors/500.html` — "Something went wrong… check the server logs. Back to sessions." —
+            # which says nothing about the pasted email having been saved, so a first-time user on a
+            # transient API error reasonably concludes the product ate their request. The good outcome
+            # was one redirect away the whole time. Pinned by
+            # `test_a_failed_first_analysis_lands_on_the_session_that_was_saved`.
+            return analysis_failed(new_slug, e)
     else:
         new_slug = discovery.create_only(text, cards=picked, slug=chosen_slug)
     return RedirectResponse(url=f"/sessions/{new_slug}", status_code=303)
@@ -118,6 +157,10 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
             "pending": True, "slug": slug,
             "request_text": sessions.request_text(slug), "context_cards": meta.context_cards,
             "provider": provider_status(),
+            # Set only by `_analysis_failed`'s redirect. Anyone can put it in a URL by hand, which on a
+            # local single-user server with no authentication is not a boundary worth defending -- and
+            # Jinja escapes it either way.
+            "analysis_failed": request.query_params.get("analysis_failed"),
         })
     return templates.TemplateResponse(request, "sessions/detail.html", {
         "pending": False, "s": session_detail(sessions, slug),

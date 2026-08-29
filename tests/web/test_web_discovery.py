@@ -21,6 +21,10 @@ from pathlib import Path
 
 import pytest
 
+from requivo.providers.errors import EngineError
+from requivo.services.discovery import DiscoveryService
+from requivo.services.sessions import SessionService
+from requivo.web.config import MAX_ANSWERS_CHARS
 from requivo.web.templating import TEMPLATES_DIR
 from tests.web.conftest import (
     BRIEF_REPLY,
@@ -285,6 +289,7 @@ def test_a_resolved_session_can_still_be_refined(client, with_provider):
 # ── one generation at a time (#50) ────────────────────────────────────────────
 
 _BUSY_HARNESS = Path(__file__).parent / "busy_harness.js"
+_ERROR_SWAP_HARNESS = Path(__file__).parent / "error_swap_harness.js"
 
 
 def _busy_timeline() -> dict[str, dict]:
@@ -404,3 +409,202 @@ def test_every_rendered_button_is_reachable_by_the_page_wide_busy_rule(client, m
             assert 'type="submit"' in tag, (
                 f'{path} renders a button with no explicit type="submit", so the page-wide busy rule '
                 f"in static/js/app.js cannot reach it and it can still buy a provider call: {tag}")
+
+
+# ── error responses reach the eye (#203) ─────────────────────────────────────
+
+
+def _swap_decisions() -> dict[int, dict]:
+    """Execute the real `static/js/app.js` against htmx's own swap gate and report, per status,
+    whether the page would render the response.
+
+    Skips loudly without node, for the reason `_busy_timeline` gives: a green run must not imply
+    coverage of browser behaviour nothing in this suite can otherwise see.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH, so the error-swap opt-in in static/js/app.js was NOT "
+                    "asserted in this run — it is browser behaviour and nothing else in this suite "
+                    "can see it (#203)")
+    app_js = TEMPLATES_DIR.parent / "static" / "js" / "app.js"
+    proc = subprocess.run([node, str(_ERROR_SWAP_HARNESS), str(app_js)], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 0, "the harness itself failed, so nothing was observed:\n" + proc.stderr
+    return {row["status"]: row for row in json.loads(proc.stdout)}
+
+
+def test_error_responses_are_swapped_into_the_page_rather_than_dropped():
+    """Every 4xx/5xx fragment this app builds was invisible in a real browser (#203).
+
+    The vendored htmx swaps only 200-399, and nothing opted in. So a revision conflict from a second
+    tab, the 413 that #30 built to keep the reader's typed answers, and a 502 after a minutes-long
+    *paid* generation all produced the same thing: the progress bar completed, the buttons came back,
+    the page did not change, and nothing was said. On the paid one the natural next move is to click
+    again and pay again. The entire server-side error architecture — the status table, the fragments,
+    #30's keep-your-work region — was dead code past the network boundary, and `TestClient` runs no
+    JavaScript, so the Python suite was asserting bodies the browser never rendered.
+
+    **The control is the `htmxWouldSwap` column**, and it is what makes this test mean anything: it
+    records htmx's own decision before our listener runs. Without it, a harness that swapped
+    everything by construction would pass while proving nothing about the fix.
+    """
+    d = _swap_decisions()
+
+    # must fire: the defect, still present in the vendored library, is that htmx drops all of these.
+    # If this ever goes green on its own the harness has stopped modelling htmx and every row below
+    # is measuring itself.
+    assert not any(d[s]["htmxWouldSwap"] for s in (400, 403, 409, 413, 500, 502)), (
+        "the harness no longer reproduces htmx's swap gate, so the rows below assert nothing"
+    )
+
+    for status in (409, 413, 502):
+        assert d[status]["swapped"] is True, (
+            f"a {status} response is still dropped, so the reader sees a completed progress bar and "
+            f"an unchanged page — for 502 that is an invitation to buy the same call twice"
+        )
+    for status in (400, 403, 500):
+        assert d[status]["swapped"] is True, f"a {status} response is still invisible"
+
+    assert all(d[s]["isError"] is False for s in (409, 413, 502)), (
+        "a handled, rendered response should stop logging as an uncaught one"
+    )
+
+    # The other direction, which a blanket `shouldSwap = true` would quietly break: a success must
+    # still swap, and htmx's own 204 "no content, change nothing" must still be honoured.
+    assert d[200]["swapped"] is True, "the opt-in broke ordinary successful swaps"
+    assert d[204]["swapped"] is False, (
+        "204 means 'nothing to render' and htmx is right to skip it; the opt-in must not reach below "
+        "400 and turn it into a swap of an empty body"
+    )
+
+
+# ── a failed first analysis is not a dead end (#207) ─────────────────────────
+
+
+@pytest.fixture
+def failing_analysis(monkeypatch):
+    """A provider that claims the session fine and then fails the paid call — the transient-529 shape.
+
+    `claim_session` stays real on purpose, because the whole point of #207 is that the request *is*
+    already safely on disk when the call fails. A fake that failed earlier would test a different bug.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    def boom(self, slug, *, surface="discover"):
+        raise EngineError("Anthropic API unavailable (529).")
+
+    monkeypatch.setattr(DiscoveryService, "run_discovery", boom)
+
+
+def test_a_failed_first_analysis_lands_on_the_session_that_was_saved(client, with_provider,
+                                                                     failing_analysis):
+    """`start()` claims the session *before* the provider call, deliberately, so a refusal costs
+    nothing — which means that when the call fails the pasted email is already safe at revision 0 and
+    the session's own page already renders the 'Analyse request' retry button.
+
+    The route let `EngineError` propagate anyway, so it was mapped to 502 and `errors/500.html`:
+    "Something went wrong… check the server logs. Back to sessions." Nothing said the request had been
+    saved or where, so a first-time user on a transient API error reasonably concludes the product ate
+    what they pasted. The good outcome was one redirect away the whole time.
+    """
+    with_provider()
+    r = client.post("/sessions", data={"request_text": "A leave approval system.",
+                                       "provider": "anthropic"}, follow_redirects=True)
+
+    assert r.status_code == 200, "a failed first analysis still dead-ends on an error page"
+    assert "Your request was saved" in r.text
+    assert "Anthropic API unavailable" in r.text, "the cause was dropped, so the reader cannot act"
+    assert "A leave approval system." in r.text, "the page does not show the request it saved"
+    assert "Analyse request" in r.text, "the retry button the whole fix rests on is not on the page"
+
+    metas = SessionService().list_sessions()
+    assert [m.current_revision for m in metas] == [0]
+
+
+def test_a_failed_retry_from_the_pending_page_re_renders_it_rather_than_a_500(client, with_provider,
+                                                                             failing_analysis):
+    """The second door onto the same first analysis. Both must fail into the same place, or the
+    reader's experience depends on which button they happened to press."""
+    with_provider()
+    slug = SessionService().create_session("A leave approval system.", slug="leave").slug
+
+    r = client.post(f"/sessions/{slug}/discover", follow_redirects=True)
+
+    assert r.status_code == 200
+    assert "Your request was saved" in r.text and "Anthropic API unavailable" in r.text
+    assert "Analyse request" in r.text
+
+
+def test_the_revision_zero_gate_still_holds_after_a_failed_analysis(client, with_provider,
+                                                                   monkeypatch):
+    """The must-fire half: recovering from the failure must not have cost the gate. A session left at
+    revision 0 by a failed call is still a session a *successful* analysis may land on — and exactly
+    once."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    real = DiscoveryService.run_discovery
+    monkeypatch.setattr(DiscoveryService, "run_discovery",
+                        lambda self, slug, *, surface="discover": (_ for _ in ()).throw(
+                            EngineError("Anthropic API unavailable (529).")))
+
+    with_provider(engine_reply())
+    client.post("/sessions", data={"request_text": "A leave approval system.",
+                                   "provider": "anthropic"}, follow_redirects=True)
+    slug = SessionService().list_sessions()[0].slug
+
+    monkeypatch.setattr(DiscoveryService, "run_discovery", real)
+    r = client.post(f"/sessions/{slug}/discover", follow_redirects=True)
+
+    assert r.status_code == 200
+    assert SessionService().meta(slug).current_revision == 1, (
+        "the retry after a failed analysis did not land, so the recovery path is a cul-de-sac"
+    )
+
+
+def test_an_error_fragment_retargets_but_a_full_region_keeps_its_own_target(client, with_provider):
+    """The server half of #203, and the distinction is the whole design.
+
+    Once `app.js` swaps 4xx/5xx, *where* they land decides whether the fix helps or repeats #30. The
+    one-line `errors/_error.html` fragment carries `HX-Retarget: #flash`, because the form's own
+    target is `#session-body` — the region holding the textarea the reader just typed into, which a
+    one-line notice would replace wholesale. The 413 answers refusal returns the **full region** with
+    the submission still in it, so it must keep the form's target and carry no retarget at all.
+
+    Asserted together, in one test, because the bug is the pair being wrong relative to each other: a
+    retarget on both loses #30's preserved answers, and a retarget on neither destroys the form on
+    every conflict.
+    """
+    # One reply, because the conflict below is only reached *after* the provider call — the answers
+    # turn reasons first and checks `expected_revision` at the apply. That ordering is #205's subject,
+    # not this test's; noted so the reply count reads as a fact about the route rather than padding.
+    with_provider(engine_reply())
+    slug = _make_session()
+
+    oversized = client.post(f"/sessions/{slug}/answers",
+                            data={"answers": "x" * (MAX_ANSWERS_CHARS + 1), "expected_revision": "1"},
+                            headers={"HX-Request": "true"})
+    assert oversized.status_code == 413
+    assert "HX-Retarget" not in oversized.headers, (
+        "the full-region refusal was retargeted, so #30's preserved answers land in the flash strip "
+        "and the form they were typed into is left holding the stale text"
+    )
+    assert "<textarea" in oversized.text and "x" * 300 in oversized.text
+
+    conflict = client.post(f"/sessions/{slug}/answers",
+                           data={"answers": "The HR lead approves.", "expected_revision": "0"},
+                           headers={"HX-Request": "true"})
+    assert conflict.status_code == 409
+    assert conflict.headers["HX-Retarget"] == "#flash", (
+        "the conflict notice would swap over #session-body and delete the answers form — #30 again, "
+        "reintroduced by the very change that made errors visible"
+    )
+    assert conflict.headers["HX-Reswap"] == "innerHTML"
+    assert "notice danger" in conflict.text
+
+
+def test_every_page_carries_the_flash_region_the_retarget_aims_at(client):
+    """`HX-Retarget: #flash` is a promise about the document, not about the response. If the element
+    is missing htmx has nowhere to put the notice and the error is silently invisible again — the
+    exact failure #203 exists to end, restored by a template edit that looked cosmetic."""
+    slug = _make_session()
+    for path in ("/", f"/sessions/{slug}"):
+        assert 'id="flash"' in client.get(path).text, f"{path} has no flash region to retarget into"

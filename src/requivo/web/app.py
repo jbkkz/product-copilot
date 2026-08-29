@@ -190,7 +190,17 @@ def _render_error(request: Request, status: int, code: str, message: str):
     page otherwise. Never leaks a traceback."""
     ctx = {"status": status, "code": code, "message": message}
     if request.headers.get("HX-Request") == "true":
-        return templates.TemplateResponse(request, "errors/_error.html", ctx, status_code=status)
+        response = templates.TemplateResponse(request, "errors/_error.html", ctx, status_code=status)
+        # **Retargeted, because the fragment is one line and the form's target is the whole region**
+        # (#203). `app.js` now swaps 4xx/5xx instead of dropping them; without these headers that
+        # opt-in would swap this notice *over* `#session-body` — deleting the textarea the reader had
+        # just typed into, which is exactly the destruction #30 was filed to stop. `#flash` lives in
+        # `base.html`, outside every swap target, so the message appears and nothing is taken away.
+        # The routes that already return a full region with the error stated on it (the 413 answers
+        # refusal) do not come through here and keep their own target.
+        response.headers["HX-Retarget"] = "#flash"
+        response.headers["HX-Reswap"] = "innerHTML"
+        return response
     template = "errors/404.html" if status == 404 else (
         "errors/500.html" if status >= 500 else "errors/error.html")
     return templates.TemplateResponse(request, template, ctx, status_code=status)

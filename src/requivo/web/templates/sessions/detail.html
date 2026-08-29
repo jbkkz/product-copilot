@@ -6,6 +6,13 @@
 {% if pending %}
 <h1>{{ slug }}</h1>
 <p><span class="badge">Awaiting analysis</span></p>
+{% if analysis_failed %}
+{# The whole point of #207: the request below is saved, and the button below that still works. #}
+<div class="notice danger" role="alert">
+  <strong>Your request was saved.</strong> The analysis did not run: {{ analysis_failed }}
+  <br>Retry it below, or analyse it from the CLI or Claude Code — they read the same session.
+</div>
+{% endif %}
 <h2>The request</h2>
 <blockquote class="request">{{ request_text }}</blockquote>
 {% if provider.available %}

@@ -32,6 +32,12 @@
   </header>
   <main>
     <div class="container">
+      {# Where every error fragment lands. Outside `#session-body` and `#artifacts-region` on purpose:
+         those hold the reader's typed answers and their documents, and letting a one-line refusal
+         replace either of them is #30's destruction again. `_render_error` retargets here, so the
+         message appears without anything being taken away. `aria-live` so a swap that changes nothing
+         visually above the fold is still announced. #}
+      <div id="flash" aria-live="polite"></div>
       {% block content %}{% endblock %}
     </div>
   </main>
