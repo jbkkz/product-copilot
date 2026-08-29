@@ -30,6 +30,7 @@ from requivo.core.integrity import IntegrityProblem, check_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
 from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
+from requivo.providers.anthropic import current_model_name
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
@@ -80,9 +81,24 @@ def doctor_report() -> dict:
     # one state in which a glyph can still kill the process mid-report.
     output = describe_streams()
 
+    # The model this install will reason with, and where the choice came from (#247). Two states
+    # rather than one string: a reporter with MODEL set in an environment they have forgotten about
+    # is exactly the case this row exists for, and a row printing only the resolved name reads
+    # identically in both. `current_model_name` is the provider own answer rather than a second copy
+    # of the same lookup, which would be right until the day the default moved. Importing it is a
+    # read that orchestrates nothing, and the argument for that is written into the boundary guard
+    # surface-provider allowlist, which is where such a claim is kept honest.
+    override = os.getenv("MODEL")
+    model = {"name": current_model_name(), "source": "default" if override is None else "env"}
+
     return {
         "requivo_version": __version__,
         "python_version": platform.python_version(),
+        # `platform.platform()` rather than `sys.platform`: the bug template asks for an OS, and
+        # "darwin" is not one -- the release and the architecture are what separate a Windows path
+        # bug from a macOS one. Additive, so a consumer reading any existing key is unaffected.
+        "os": platform.platform(),
+        "model": model,
         "assets": {"root": str(ASSETS), "present": ASSETS.exists()},
         "output": {"ok": all(s["state"] == "safe" for s in output), "streams": output},
         "schema": {"ok": schema_ok, "slots": slot_count, "error": schema_err},
@@ -349,6 +365,17 @@ def _cmd_doctor(a, client) -> None:
     print("Requivo doctor")
     print(f"  {ok} requivo         {r['requivo_version']}")
     print(f"  {ok} python          {r['python_version']}")
+    # The three rows the bug template asks a reporter to assemble by hand (#247). They sit at the
+    # top, together, because the point is that a paste of the first four lines is a bug report.
+    print(f"  {ok} os              {r['os']}")
+    if not r["model"]["name"]:
+        # An exported-but-empty MODEL is not a working install: every provider call would send no
+        # model id at all. `doctor` answers *is anything wrong*, so this is a finding it states
+        # rather than a blank it renders calmly under a tick.
+        print("  ❌ model           MODEL is set but empty — a provider call would send no model id")
+    else:
+        origin = "MODEL env override" if r["model"]["source"] == "env" else "default"
+        print(f"  {ok} model           {r['model']['name']}  ({origin})")
     # The console's codec, reported before anything that depends on it. Only ever a line when there
     # is something to say: on a UTF-8 terminal — every developer's, which is why this shipped — the
     # answer is uninteresting and a clean report should not grow a row per non-finding.

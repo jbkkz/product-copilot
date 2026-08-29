@@ -626,6 +626,18 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "page a reader lands on is the surface's whole job; the reasoning still happens behind "
         "DiscoveryService, and this file calls nothing on the provider."
     ),
+    ("deterministic/doctor.py", "current_model_name"): (
+        "a read of the provider's own model id, for the row `requivo doctor` prints so a bug report "
+        "is one paste (#247). It orchestrates nothing: no client is built, no call is made, and the "
+        "verb answers about the *install* rather than about a session -- which is why this is not "
+        "reachable through DiscoveryService, whose every method takes a slug. Weighed against "
+        "#167's rule (move the neutral concept out of `providers/` rather than allowlist it) and "
+        "that rule does not apply here: the value is `os.getenv('MODEL', 'claude-sonnet-5')`, and "
+        "the default in it is Anthropic's own fact, not a neutral one waiting to be relocated. The "
+        "alternative -- doctor re-deriving the same getenv with its own copy of the default -- is "
+        "worse in the specific way this file exists to prevent: it would be correct until the day "
+        "the default moved, and then quietly wrong in the verb people paste into bug reports."
+    ),
     ("web/routes/discovery.py", "EngineError"): (
         "the second door onto the same first analysis, and it must fail into the same page as the "
         "first -- see the entry above. Argued separately rather than inherited, which is why this "

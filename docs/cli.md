@@ -10,13 +10,43 @@ Verbs take a session **slug**. `status` and `impact` also accept a path to a sav
 they can read a model that is not in a session store; every other verb resolves a session, because it
 writes a revision or an artifact back into one.
 
+## Global flags, and reading `--help`
+
+| Flag | Does |
+|---|---|
+| `requivo --version` | Print `requivo <version>` and exit 0. Read from the package, so it is the version you actually have |
+| `requivo --workspace DIR <command>` | Where sessions are read and written (default: cwd). Place it *before* the command |
+
+`requivo --help` lists the verbs in journey order — `demo` and `discover` first, then refinement,
+then the generators, then the offline plumbing — and marks the nine that spend money **`(API)`**.
+Everything without the marker is offline and free, including `status` and `impact`, which take a
+slug exactly like `brief` does and cost nothing. What the marked verbs cost is in
+[providers.md](providers.md#what-a-run-costs).
+
+## When a session cannot be found
+
+Every route to it says the same three things: the reference it was given, **the sessions root it
+searched**, and `requivo session list`.
+
+```
+no session named leave-aproval under /home/you/project/.requivo/sessions. `requivo session list`
+shows the sessions in this workspace; a different --workspace (or REQUIVO_WORKSPACE) changes where
+Requivo looks.
+```
+
+Naming the root is the point. The usual cause is not a typo but a different working directory —
+sessions live under the workspace you run from, so a valid session is invisible from one directory
+and present from another, and nothing about a bare "not found" says which of the two you are in.
+The `--json` envelope is unchanged: `code` is still `session_not_found`, with the reference in
+`details`.
+
 ## Discovery and refinement
 
 | Command | Does |
 |---|---|
 | `requivo discover <request\|file>` | Analyse a request and create a session (interactive; `--once` for a single pass, `--context a,b` to scope cards) |
 | `requivo answer <slug> "<answers>"` | Fold answers in and refine the model one more turn |
-| `requivo status <slug>` | Understanding checklist + readiness (`--json` for a machine snapshot). No network |
+| `requivo status <slug>` | Understanding checklist + readiness, closing with the single next command (`--json` for a machine snapshot, with no pointer). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
 
 The context-card selector is spelled **`--context`** everywhere — on `discover`, on `session init`,
@@ -31,6 +61,21 @@ the input was malformed. A slot name that matches nothing is listed as unmatched
 resolve; an unknown *card* is a hard error, since dropping it would silently load every card instead of
 the ones you asked for. Pass no selector at all to select everything deliberately. See
 [context-cards.md](context-cards.md#scoping-a-session-to-relevant-cards).
+
+**`status` ends by naming one next command**, never a menu, and the order it picks in is deliberate:
+open questions win over a stale artifact (regenerating against a model that is about to move is a
+paid call thrown away), a stale artifact wins over a missing brief. A converged session whose brief
+is already fresh gets no pointer — there is no single next step, and inventing one would be the menu
+this rule exists to refuse. `--json` never carries it.
+
+**The slug is derived from the request**, and it now drops function words and folds accents, so
+*"We need a way to track vendor invoices"* becomes `track-vendor-invoices` rather than
+`we-need-a-way-to`. Pass `--slug` to `session init` for an explicit one. A request in a script the
+ASCII fold cannot romanize — Japanese, Cyrillic — still lands on `discovery`, and the second such
+session on `discovery-<hash>`; that is a documented limit, not a bug, and an explicit slug is the way
+past it. Sessions already on disk keep the names they were created with; see
+[compatibility.md](compatibility.md#what-is-explicitly-not-stable) for what changes about re-running
+`discover` on a request first analysed by an older Requivo.
 
 **`discover` claims its session before it reasons**, on both the interactive path and `--once`. Two
 consequences, and both are the point:
@@ -90,6 +135,8 @@ at all.
 
 | `--json` field | Reads |
 |---|---|
+| `requivo_version` / `python_version` / `os` | The three facts a bug report needs, printed as the first rows of the human view so a paste of them is a bug report |
+| `model.name` / `model.source` | The model this install will reason with, and whether it came from the `MODEL` environment override (`env`) or the built-in `default` |
 | `schema.ok` / `schema.slots` / `schema.error` | The slot schema loaded, and how many slots it defines |
 | `context.status` | `ok`, `empty` (the install has no context cards) or `unreadable` (a card directory exists but could not be enumerated — permissions, usually). `context.ok` is true only for `ok` |
 | `context_cards` | The card names themselves — the plain list it has always been |

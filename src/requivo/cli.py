@@ -11,13 +11,14 @@ from typing import NamedTuple
 
 from dotenv import load_dotenv
 
+from requivo import __version__
 from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from requivo.core.analysis import _label, model_status
 from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
-from requivo.core.errors import RequivoError, SessionNotFoundError
+from requivo.core.errors import RequivoError
 from requivo.core.persistence import load_model
 from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
@@ -42,6 +43,7 @@ from requivo.render.terminal import (
     render_dependency_map,
     render_estimate,
     render_impact,
+    render_next_command,
     render_stale,
     render_stories,
     render_turn,
@@ -407,7 +409,7 @@ def _cmd_answer(a, client) -> None:
     svc = disco.sessions
     slug = svc.resolve_slug(a.model)
     if not svc.exists(slug):
-        raise SessionNotFoundError(f"no session '{slug}' to answer", details={"slug": slug})
+        raise svc.no_session(slug)
     result = disco.answer(slug, a.answers, surface="cli-answer")
     out = svc.load_model(slug)
     render_turn(out)
@@ -428,14 +430,19 @@ def _cmd_answer(a, client) -> None:
 
 def _resolve_ref(ref: str) -> tuple[EngineOutput, str]:
     """Resolve a reference to (model, slug). Accepts a model.json path (legacy or direct) OR a session
-    slug in the canonical/legacy store — so the read verbs work both on a raw file and on a session."""
+    slug in the canonical/legacy store — so the read verbs work both on a raw file and on a session.
+
+    The refusal widens its noun and nothing else (#243): this is the one site that also accepts a
+    path to a `model.json`, so a bare "no session" would name half of what it looked for. Everything
+    after the noun is the shared message — the root searched, the listing verb, the workspace hint.
+    """
     p = Path(ref)
     if p.is_file():
         return load_model(p), p.parent.name
     svc = SessionService()
     if svc.exists(ref):
         return svc.load_model(ref), svc.resolve_slug(ref)
-    raise SessionNotFoundError(f"no model file or session found for '{ref}'", details={"ref": ref})
+    raise svc.no_session(ref, what="model file or session", details={"ref": ref})
 
 
 def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
@@ -461,9 +468,12 @@ def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
 def _cmd_status(a, client) -> None:
     out, payload = _status_payload(a.model)
     if getattr(a, "json", False):
+        # `--json` deliberately gets no pointer (#246): a machine consumer picks its own next step,
+        # and a line printed beside the payload would break every caller that pipes this into `jq`.
         print(json.dumps(payload, indent=2))
         return
     render_turn(out)
+    render_next_command(payload)
 
 
 DEMO_SLUG = "event-checkin-reconciliation"
@@ -585,7 +595,7 @@ def _generator_service(a, client) -> tuple[str, DiscoveryService]:
     svc = SessionService()
     slug = svc.resolve_slug(a.model)
     if not svc.exists(slug):
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+        raise svc.no_session(slug)
     return slug, DiscoveryService(client=client, sessions=svc)
 
 
@@ -719,20 +729,64 @@ def _cmd_web(a, client) -> None:
         uvicorn.run(create_app(), host=host, port=port)
 
 
+# The closing paragraph of `requivo --help` (#244). It carries the two things a flat list of
+# nineteen verbs cannot: the first command to run, and what the (API) marker on nine of them means.
+# A marker nobody defines is a decoration, and the old help defined nothing at all -- a reader could
+# not tell from it that `brief` would bill them and `status` would not.
+EPILOG = (
+    "Try it first, with no key and no network:\n"
+    "  requivo demo\n"
+    "\n"
+    "Then start real work:\n"
+    "  requivo discover \"We need a leave approval system\"   (API)\n"
+    "\n"
+    "Verbs marked (API) call the Anthropic API and spend money on your own key; every other verb\n"
+    "is offline and free. Set ANTHROPIC_API_KEY, or put it in a .env file in the directory you run\n"
+    "from. `requivo doctor` reports whether this install can make a call, and which model it uses.\n"
+)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="requivo",
         description="Requivo — find what could change the solution before you commit to the scope.",
+        epilog=EPILOG,
+        # Raw, or argparse reflows the epilog into one paragraph and the two example commands stop
+        # being copy-pasteable. It affects the description and the epilog only, never a verb help.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    # Read from `requivo.__version__` rather than written here (#247). `tests/test_version_sites.py`
+    # scans pyproject, the package dunder and the two plugin manifests; `cli.py` is in none of those
+    # globs, so a literal here would be a fifth declaration with no guard on it -- added by the very
+    # change whose subject is telling people the right version. Pinned by
+    # `test_the_version_flag_declares_nothing_that_test_version_sites_cannot_see`.
+    p.add_argument("--version", action="version", version=f"requivo {__version__}",
+                   help="print the Requivo version and exit")
     p.add_argument("--workspace", metavar="DIR",
                    help="workspace root for sessions (default: cwd). Sessions live in "
                         "<workspace>/.requivo/sessions/. Place before the command.")
     sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
 
-    # The deterministic surface (doctor / session / model / artifact) — no LLM, no API key.
-    register_deterministic(sub)
+    # Registration order IS render order in argparse, so this list is the first screen (#244). It
+    # runs demo → discover → the refinement verbs → the generators → the plumbing → web, which is
+    # the order a user meets them in. It used to open with `register_deterministic(sub)`, so the six
+    # diagnostic entries led and the two verbs a visitor needs sat seventh and eighth.
+    #
+    # `model_cmd` is defined here rather than further down for the same reason: the twelve journey
+    # verbs are registered above the plumbing now, and they need it. Pinned by
+    # `test_the_plumbing_verbs_come_after_the_journey_verbs`.
 
-    d = sub.add_parser("discover", help="analyse a request (a string or a file path) and start a session")
+    def model_cmd(name: str, help_: str, func, extra=None):
+        sp = sub.add_parser(name, help=help_)
+        sp.add_argument("model", help="a session slug, or a path to a saved model.json")
+        if extra:
+            extra(sp)
+        sp.set_defaults(func=func)
+
+    demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
+    demo.set_defaults(func=_cmd_demo)
+
+    d = sub.add_parser("discover", help="analyse a request (a string or a file path) and start a session (API)")
     d.add_argument("request", help="the client request, or a path to a file containing it")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
     # `--cards` is a permanent alias of `--context` (#85): the same selector was spelled two ways
@@ -745,38 +799,18 @@ def _build_parser() -> argparse.ArgumentParser:
                         "irrelevant cards. Applies to this discovery only. Alias: --cards.")
     d.set_defaults(func=_cmd_discover)
 
-    demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
-    demo.set_defaults(func=_cmd_demo)
-
-    web = sub.add_parser("web", help="launch the local single-user web interface (needs the [web] extra)")
-    web.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, localhost only)")
-    web.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
-    # SUPPRESS so an absent web --workspace does not overwrite a global `requivo --workspace … web`.
-    web.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS,
-                     help="workspace root for sessions (default: cwd)")
-    web.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
-    web.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
-    web.set_defaults(func=_cmd_web)
-
-    def model_cmd(name: str, help_: str, func, extra=None):
-        sp = sub.add_parser(name, help=help_)
-        sp.add_argument("model", help="a session slug, or a path to a saved model.json")
-        if extra:
-            extra(sp)
-        sp.set_defaults(func=func)
-
-    model_cmd("answer", "fold the client's answers in and report what moved",
+    model_cmd("answer", "fold the client's answers in and report what moved (API)",
               _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
     model_cmd("status", "show the understanding, open questions and readiness", _cmd_status,
               lambda sp: sp.add_argument("--json", action="store_true", help="emit a machine status snapshot"))
     model_cmd("impact", "show what a change to given topics would reach; no topics = full map",
               _cmd_impact, lambda sp: sp.add_argument("slots", nargs="*",
               help="slot ids or label words (e.g. permissions workflow); omit for the full map"))
-    model_cmd("brief", "generate the decision brief — what to review before estimating", _cmd_brief)
-    model_cmd("prd", "generate the PRD", _cmd_prd)
-    model_cmd("stories", "derive user stories", _cmd_stories)
-    model_cmd("estimate", "derive stories and estimate them (day ranges)", _cmd_estimate)
-    model_cmd("criteria", "generate Given/When/Then acceptance criteria", _cmd_criteria)
+    model_cmd("brief", "generate the decision brief — what to review before estimating (API)", _cmd_brief)
+    model_cmd("prd", "generate the PRD (API)", _cmd_prd)
+    model_cmd("stories", "derive user stories (API)", _cmd_stories)
+    model_cmd("estimate", "derive stories and estimate them, in day ranges (API)", _cmd_estimate)
+    model_cmd("criteria", "generate Given/When/Then acceptance criteria (API)", _cmd_criteria)
 
     def epic_flags(sp):
         # Three sibling flags of one kind: each writes an export file. `--export-json` was spelled
@@ -792,9 +826,28 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--github", action="store_true", help="also write a GitHub issue-creation plan")
         sp.add_argument("--gitlab", action="store_true", help="also write a GitLab issue-creation plan")
 
-    model_cmd("epic", "generate the delivery epic (+ optional tracker plans)", _cmd_epic, epic_flags)
-    model_cmd("release", "generate client-facing release notes", _cmd_release,
+    model_cmd("epic", "generate the delivery epic, plus optional tracker plans (API)", _cmd_epic,
+              epic_flags)
+    model_cmd("release", "generate client-facing release notes (API)", _cmd_release,
               lambda sp: sp.add_argument("version", nargs="?", default="", help="optional version label to stamp"))
+
+    # The deterministic surface (doctor / schema / context / session / model / artifact) — no LLM,
+    # no API key. Registered here rather than first (#244) so the plumbing renders below the product.
+    # Moving the call weakens nothing: `register` composes its four halves at import, so a module
+    # that stops registering is still an ImportError rather than a quietly shorter `--help`.
+    register_deterministic(sub)
+
+    # Last, and not with the journey verbs: `web` is a *surface*, not a step. It launches the same
+    # services behind a browser, so it belongs beside the plumbing rather than in a sequence.
+    web = sub.add_parser("web", help="launch the local single-user web interface (needs the [web] extra)")
+    web.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, localhost only)")
+    web.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
+    # SUPPRESS so an absent web --workspace does not overwrite a global `requivo --workspace … web`.
+    web.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS,
+                     help="workspace root for sessions (default: cwd)")
+    web.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
+    web.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
+    web.set_defaults(func=_cmd_web)
 
     return p
 

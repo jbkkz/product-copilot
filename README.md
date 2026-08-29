@@ -46,6 +46,12 @@ Unlike the demo, this one analyses, so it needs a key: set `ANTHROPIC_API_KEY` i
 a `.env` file. Without it the interface still opens and reads existing sessions, and tells you what is
 missing.
 
+**What it costs.** You pay Anthropic directly, on your own key: roughly **$0.03 to $0.06 per call**,
+which puts a complete session — a full discovery plus every artifact — **under $1** at current
+rates. Every command that spends prints its own exact tokens and estimated cost when it finishes.
+The per-step table, its method and its limits are in [`docs/providers.md`][providers]; the figures
+there are recomputed from the rate table on every build, so they cannot quietly go stale.
+
 One command, nothing installed — [uv](https://docs.astral.sh/uv/) fetches Requivo into a temporary
 environment and runs it (`curl -LsSf https://astral.sh/uv/install.sh | sh` if you don't have uv). To
 keep it around, `uv tool install "requivo[web,anthropic]"` and then just `requivo web`; `pipx install`
@@ -246,6 +252,7 @@ the code license — see [TRADEMARKS.md][trademarks].
 [web]: https://github.com/jbkkz/requivo/blob/main/docs/web.md
 [claude-code]: https://github.com/jbkkz/requivo/tree/main/plugins/claude-code/
 [cli]: https://github.com/jbkkz/requivo/blob/main/docs/cli.md
+[providers]: https://github.com/jbkkz/requivo/blob/main/docs/providers.md
 [leave-approval]: https://github.com/jbkkz/requivo/tree/main/examples/leave-approval/
 [event-checkin-reconciliation]: https://github.com/jbkkz/requivo/tree/main/examples/event-checkin-reconciliation/
 [requirements-model]: https://github.com/jbkkz/requivo/blob/main/docs/requirements-model.md

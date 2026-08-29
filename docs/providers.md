@@ -28,7 +28,36 @@ MODEL=claude-opus-4-8 requivo discover "…"
 The exact model a session ran against is recorded in its revision provenance (see
 [session-format.md](session-format.md)).
 
-## Cost and the usage footprint
+## What a run costs
+
+You pay Anthropic directly, on your own key, and these are the numbers to expect before you spend
+anything. `requivo demo` is free and needs no key at all.
+
+| Step | Calls | Input tokens | Output tokens | Estimated cost |
+|---|---|---|---|---|
+| One provider call | 1 | 7,300–8,900 | 1,300–3,800 | **$0.03–$0.06** |
+| A full interactive discovery (8 turns + the assessment) | 9 | — | — | **$0.25–$0.50** |
+| Every remaining artifact (prd, stories, estimate, criteria, epic, release) | 7 | — | — | **$0.19–$0.39** |
+| A complete session, end to end | 16 | — | — | **$0.44–$0.89** |
+
+Priced at **$2.00 / $10.00 per million tokens** (input / output) for `claude-sonnet-5`, rates as of
+**2026-08-29**. An estimate, never a bill — and a *derived* one: `tests/test_cost_claims.py`
+recomputes every figure in that table from the rate table in `providers/anthropic/pricing.py` and
+fails when the two disagree, so a price change breaks this page instead of quietly outdating it.
+
+Two honest limits, because a number with an unstated method is worth less than no number.
+
+- **The token counts are estimated at four characters per token.** The input figure is the real
+  assembled system prompt for each operation; the output figure is the real replies captured in
+  `fixtures/golden/`. Neither is a token count from the API — no ledger output is committed to this
+  repository, and the test suite makes no calls. Both are bracketed by the same test, so a prompt
+  that grows past the published range is a red build.
+- **The table charges every call at full price.** Prompt caching (below) makes a long interactive
+  discovery cheaper than nine independent calls, and the retry path makes a rare one dearer. The
+  range is wide enough to hold both, and the exact number for *your* request is printed by the verb
+  that spent it.
+
+## The usage footprint
 
 A discovery is a few calls (one per turn, up to 8) plus one per generated artifact. The system prompt
 (prompt + schema + context cards) is **prompt-cached where the same prompt is sent again** — a

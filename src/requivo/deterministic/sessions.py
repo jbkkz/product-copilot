@@ -295,7 +295,7 @@ def _cmd_session_show(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not svc.exists(slug):
-        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
+        raise svc.no_session(slug)
     meta = svc.meta(slug)
     if a.json:
         _print_json(meta.model_dump())
@@ -389,7 +389,7 @@ def _cmd_session_export(a, client) -> None:
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not svc.exists(slug):
-        raise SessionNotFoundError(f"no canonical session {display_token(slug)}", details={"slug": slug})
+        raise svc.no_session(slug)
     # Direct, and legitimately so: this verb archives the session's *directory*. A path is the
     # subject of the command, not an implementation detail leaking through it.
     d = store.canonical_dir(slug)
@@ -457,8 +457,7 @@ def _cmd_session_verify(a, client) -> None:
         found = True
     else:
         if not found:
-            raise SessionNotFoundError(f"no canonical session {display_token(slug)}",
-                                       details={"slug": slug})
+            raise svc.no_session(slug)
     problems = check_session(slug) if session_probe["checked"] else []
     cards = _card_health(slug) if session_probe["checked"] else {"checked": False, "problem": None,
                                                                  "error": session_probe["error"]}
