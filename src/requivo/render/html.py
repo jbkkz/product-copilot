@@ -196,7 +196,18 @@ def markdown_to_html(text: str) -> str:
         while i < len(lines) and lines[i].strip() and not _is_block_start(lines[i]):
             paragraph.append(lines[i].strip())
             i += 1
-        out.append(f"<p>{_inline(' '.join(paragraph))}</p>")
+        # **A line break inside a paragraph is kept**, which is a deliberate departure from what a
+        # general Markdown renderer does with a soft break — and the dialect is what justifies it.
+        # `render/markdown.py` never wraps: it emits one source line per value, so consecutive lines
+        # are consecutive *facts*, not one sentence flowed across a column. Joining them with a space
+        # turned the decision brief's opening block — objective, problem, solution, complexity, main
+        # cost driver — into a single run-on paragraph, on the most-read part of the primary
+        # deliverable, where the code block it replaced had shown five lines. Measured on
+        # `examples/leave-approval/`: one multi-line paragraph across all five generated documents,
+        # and that is the one. Each line is escaped on its own, so the separator is a tag this
+        # function wrote and never something a document can forge. Pinned by
+        # `test_a_line_break_inside_a_paragraph_is_kept`.
+        out.append("<p>" + "<br>".join(_inline(line) for line in paragraph) + "</p>")
     return "\n".join(out)
 
 
