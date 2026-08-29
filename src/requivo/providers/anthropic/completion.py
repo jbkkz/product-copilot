@@ -23,7 +23,14 @@ import time
 from pydantic import ValidationError
 
 from requivo.core.errors import ProviderOutputError
-from requivo.providers.anthropic.client import APIError, current_model_name
+from requivo.providers.anthropic.client import (
+    _NO_KEY_MESSAGE,
+    APIError,
+    AuthenticationError,
+    PermissionDeniedError,
+    RateLimitError,
+    current_model_name,
+)
 from requivo.providers.anthropic.pricing import price_call
 from requivo.providers.errors import EngineError
 from requivo.usage import CallRecord, record_call
@@ -111,6 +118,35 @@ def _system_blocks(system: str, reuse_system: bool) -> list[dict]:
     return [block]
 
 
+def _transport_message(e: Exception) -> str:
+    """What to tell the operator about a transport failure, and whether retrying is worth advising.
+
+    Three outcomes rather than one. A credential failure is not transient and must not suggest it
+    is; a rate limit is transient but has its own remedy (wait, do not hammer); everything else --
+    a connection drop, a timeout, a 5xx -- keeps the original wording, which was right for it all
+    along. The SDK's own class name is still included in every branch: it is the only part of this
+    that a bug report can be diagnosed from.
+    """
+    detail = f"({type(e).__name__}: {e})"
+    if isinstance(e, (AuthenticationError, PermissionDeniedError)):
+        return (
+            f"Anthropic rejected the credential {detail}.\n"
+            f"{_NO_KEY_MESSAGE}\n"
+            "If a key is set, it may be expired, revoked, or lacking access to this model. "
+            "Retrying will not help until it is replaced. The model on disk was not modified."
+        )
+    if isinstance(e, RateLimitError):
+        return (
+            f"Anthropic rate-limited this request {detail}.\n"
+            "The model on disk was not modified. Wait for the limit to reset and retry; "
+            "running the command again immediately will be rejected the same way."
+        )
+    return (
+        f"Anthropic API unavailable — the request could not be completed {detail}.\n"
+        "The model on disk was not modified. Retry the command in a moment."
+    )
+
+
 def _complete(client, system: str, messages: list[dict], out_model, retries: int = 2,
               validate=None, *, reuse_system: bool = True):
     """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
@@ -152,13 +188,30 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
                 messages=attempt,
             )
         except APIError as e:
-            # Network drop, timeout, rate limit, provider outage — anything from the transport. Turn
-            # it into a clean, actionable message instead of a raw traceback. The saved model is
-            # untouched (nothing was written yet), so retrying the command is always safe.
+            # Anything from the transport, turned into a clean message instead of a raw traceback.
+            # The saved model is untouched (nothing was written yet) on every branch.
+            #
+            # Branched, because one message for all of them was actively wrong for the most likely
+            # failure: `AuthenticationError`, `PermissionDeniedError` and `RateLimitError` are all
+            # `APIError` subclasses, so a rejected key was told to "retry the command in a moment"
+            # -- advice that never works on a 401 -- with the real cause buried in a parenthetical
+            # class name (#201). Retrying is only safe advice where retrying can help.
+            # Pinned by `test_an_auth_failure_names_the_key_and_does_not_advise_retry`.
+            raise _stop(_transport_message(e)) from e
+        except TypeError as e:
+            # The belt, and it is a belt rather than the fix: `new_client()` refuses upfront when no
+            # credential is visible, so this arm should be unreachable. It exists because the shape
+            # of #201 was an SDK raising a *bare builtin* out of its own auth resolution -- not an
+            # `APIError`, so the arm above did not see it, and not a `RequivoError`, so `cli.app()`
+            # did not either. Whatever the next such change looks like, it stops being a traceback
+            # here. Deliberately not narrowed by matching the SDK's wording: a verdict that depends
+            # on a foreign string is one that goes quiet when that string is reworded.
+            # Pinned by `test_a_typeerror_out_of_the_sdk_is_not_a_traceback`.
             raise _stop(
-                "Anthropic API unavailable — the request could not be completed "
-                f"({type(e).__name__}: {e}).\n"
-                "The model on disk was not modified. Retry the command in a moment."
+                f"The Anthropic client could not build the request ({type(e).__name__}: {e}).\n"
+                "This is usually an unresolved credential -- check ANTHROPIC_API_KEY, and see "
+                "`requivo doctor`. If a working key is set, it is a provider-SDK incompatibility "
+                "worth reporting. The model on disk was not modified."
             ) from e
         # Accumulate usage across every attempt — a retry spends tokens too (fields absent on the
         # test fake, so default to 0 and this stays a no-op offline).

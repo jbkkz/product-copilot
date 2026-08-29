@@ -13,11 +13,19 @@ from contextlib import redirect_stdout
 import anthropic
 import httpx
 import pytest
-from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, full_slots, out, slot
+from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, _run_app, full_slots, out, slot
 
 from requivo.core.contracts import PRD, Brief, EngineOutput, Stories, Story
 from requivo.core.persistence import load_model
-from requivo.providers.anthropic import advise, answer_turn, current_model_name, derive_stories, generate_prd, run
+from requivo.providers.anthropic import (
+    advise,
+    answer_turn,
+    current_model_name,
+    derive_stories,
+    generate_prd,
+    new_client,
+    run,
+)
 from requivo.providers.anthropic.completion import _complete, _extract_json, _response_text
 from requivo.providers.anthropic.pricing import price_call
 from requivo.providers.errors import EngineError
@@ -179,6 +187,164 @@ def test_complete_wraps_api_errors_as_a_clean_engine_error():
     with pytest.raises(EngineError) as ei:
         _complete(_RaisingClient(exc), "sys", [{"role": "user", "content": "x"}], EngineOutput)
     assert "not modified" in str(ei.value)  # the reassurance that nothing was written
+
+
+# ── #201: refusing before the SDK can traceback ──────────────────────────────
+
+
+def _no_credentials(monkeypatch):
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):
+    """The most likely first failure of a fresh install, turned into one line.
+
+    `Anthropic()` constructs fine with no credential -- it defers auth resolution to the first
+    request and raises a bare `TypeError` from its own internals there. So the guard cannot be "did
+    the client build?", and there was nothing else on the CLI paid path asking: `requivo discover`
+    on a fresh `pip install requivo[anthropic]` produced a stack ending in the SDK, naming neither
+    the environment variable, nor `.env`, nor `requivo doctor` (#201).
+
+    `EngineError` and not `SystemExit`, deliberately: the CLI turns the former into a one-line stderr
+    message *and* the `--json` envelope, and asserting the exit code instead would pass just as well
+    against a `sys.exit()` that prints nothing a machine can read.
+    """
+    _no_credentials(monkeypatch)
+    with pytest.raises(EngineError) as ei:
+        new_client()
+    msg = str(ei.value)
+    assert "ANTHROPIC_API_KEY" in msg
+    assert ".env" in msg
+    assert "requivo doctor" in msg
+    assert "requivo demo" in msg, "the offline escape hatches are part of the remedy, not a footnote"
+    assert ei.value.to_dict()["code"] == "provider_unavailable", (
+        "the published code for 'this install cannot make a call' -- a new code here would be a "
+        "breaking change to the --json envelope for no gain (see "
+        "test_the_missing_web_extra_keeps_its_published_error_code)"
+    )
+
+
+def test_a_bearer_token_alone_is_not_false_refused(monkeypatch):
+    """A guard meant to help must not refuse a setup that would have worked.
+
+    The SDK authenticates from `ANTHROPIC_AUTH_TOKEN` as well as `ANTHROPIC_API_KEY`. Checking only
+    the key would turn a working bearer-token install into a hard refusal it cannot argue with --
+    the failure mode of every upfront check that knows less than the thing it is guarding.
+    """
+    _no_credentials(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-whatever")
+    assert new_client() is not None
+
+
+def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
+    """End to end, and the part that is not about the message: nothing is written and nothing is paid.
+
+    The alternative to an upfront refusal is not merely an uglier error -- it is a session claimed at
+    revision 0 and a billed call that 401s, which the operator then has to clean up.
+    """
+    _no_credentials(monkeypatch)
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    with pytest.raises(SystemExit) as ei:
+        _run_app(["discover", "a leave approval system", "--once"])
+    assert ei.value.code == 1
+    assert not list((tmp_path / ".requivo" / "sessions").glob("*")), (
+        "an upfront refusal that still claims the slug has only moved the mess"
+    )
+
+
+def test_the_typed_error_arms_are_inert_without_the_sdk():
+    """What the auth and rate-limit arms catch when the SDK that defines them is not installed.
+
+    The obvious binding for an unimportable error class is `Exception`, which is what `APIError`
+    already does -- and it is wrong for these two. `except Exception` in the auth arm would catch
+    every transport failure and answer a network drop with a credential remedy. A class nothing ever
+    raises catches nothing, which is the correct behaviour: with no SDK there is no call to fail.
+    """
+    from requivo.providers.anthropic import client as mod
+
+    for name in ("AuthenticationError", "PermissionDeniedError", "RateLimitError"):
+        cls = getattr(mod, name)
+        assert issubclass(cls, BaseException)
+        assert cls is not Exception, (
+            f"{name} bound to Exception would make the {name} arm swallow unrelated failures"
+        )
+
+
+
+# ── #201: which transport failures are worth retrying, and which are not ─────
+
+
+def _api_status(cls, status: int):
+    """An SDK status error of `cls`, built the way the SDK builds one."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status, request=request)
+    return cls(message="boom", response=response, body=None)
+
+
+def _complete_failing_with(exc):
+    with pytest.raises(EngineError) as ei:
+        _complete(_RaisingClient(exc), "sys", [{"role": "user", "content": "x"}], EngineOutput)
+    return str(ei.value)
+
+
+def test_an_auth_failure_names_the_key_and_does_not_advise_retry():
+    """The message that was actively wrong, and the assertion that keeps it from coming back.
+
+    `AuthenticationError`, `PermissionDeniedError` and `RateLimitError` are all `APIError`
+    subclasses, so one `except APIError` arm answered a rejected key with "Retry the command in a
+    moment" -- advice that never works on a 401, given to the single most likely failure of a fresh
+    install, with the real cause reduced to a parenthetical class name (#201).
+
+    The negative half is the load-bearing half: it is easy to add the key remedy and leave the retry
+    sentence sitting underneath it, which reads as "your key is wrong, try again".
+    """
+    for cls in (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        msg = _complete_failing_with(_api_status(cls, 401 if cls is anthropic.AuthenticationError else 403))
+        assert "ANTHROPIC_API_KEY" in msg, "the remedy is the message's whole job"
+        assert "requivo doctor" in msg
+        assert cls.__name__ in msg, "the SDK class is what a bug report is diagnosed from"
+        assert "Retry the command in a moment" not in msg, (
+            "retrying a rejected credential never helps, and saying so wastes the one line the "
+            "operator reads"
+        )
+        assert "not modified" in msg
+
+
+def test_a_rate_limit_says_so_and_does_not_send_the_operator_straight_back():
+    msg = _complete_failing_with(_api_status(anthropic.RateLimitError, 429))
+    assert "rate-limited" in msg
+    assert "ANTHROPIC_API_KEY" not in msg, "a rate limit is not a credential problem"
+    assert "Wait for the limit to reset" in msg
+
+
+def test_a_connection_failure_keeps_the_wording_that_was_right_for_it():
+    """The third branch exists to leave something alone.
+
+    Splitting an over-general message is only an improvement if the case it was actually correct
+    for still gets it: a connection drop, a timeout or a 5xx *is* transient, and "retry in a moment"
+    is the right thing to say.
+    """
+    exc = anthropic.APIConnectionError(message="boom", request=httpx.Request("POST", "https://api.anthropic.com"))
+    msg = _complete_failing_with(exc)
+    assert "Anthropic API unavailable" in msg
+    assert "Retry the command in a moment" in msg
+    assert "ANTHROPIC_API_KEY" not in msg
+
+
+def test_a_typeerror_out_of_the_sdk_is_not_a_traceback():
+    """The belt, and the shape of the defect it is a belt against.
+
+    #201 was an SDK raising a bare `TypeError` out of its own auth resolution: not an `APIError`, so
+    `_complete`'s transport arm did not see it, and not a `RequivoError`, so `cli.app()` did not
+    either. It threaded through every handler in the product and reached the operator as twenty-five
+    lines of stack. `new_client()` refuses upfront now, so this arm should be unreachable -- which is
+    the point of testing it, because an unreachable arm nobody exercises is one that rots.
+    """
+    msg = _complete_failing_with(TypeError("Could not resolve authentication method."))
+    assert "TypeError" in msg
+    assert "ANTHROPIC_API_KEY" in msg
+    assert "not modified" in msg
 
 
 class _MaxTokensClient:
