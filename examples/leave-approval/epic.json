@@ -2,8 +2,8 @@
   "format": "requivo-epic",
   "version": 1,
   "epic": {
-    "title": "Digital Leave Approval Workflow",
-    "description": "Replace the current email/Excel leave approval process with a configurable, auditable digital workflow that enforces real-time balance checks and routes approvals by role.\n\n**Business value:** Eliminates manual errors and untracked approvals, gives HR a full audit trail, and lets the client roll out a consistent, client-specific approval circuit starting with a pilot before scaling to other clients.\n\n**In scope:**\n- Leave request lifecycle: submission, manager/HR approval, rejection, cancellation\n- Balance/quota validation before approval\n- Configurable multi-level approval circuit per client\n- Delegation layer and auto-escalation after 5 business days\n- HR-validated cancellation, including already-started leave\n- Email and in-app notifications on key events\n- One-way calendar sync (system to calendar)\n- Role-based permissions with HR as sole editor of approved requests\n- Multi-tenant configuration isolation for pilot-then-scale rollout\n\n**Out of scope:**\n- Payroll integration\n- Two-way calendar sync\n- Migration of historical leave requests / past audit data\n- Reporting dashboards and exports\n- Country templates beyond France at this stage",
+    "title": "Traceable Leave Approval Workflow",
+    "description": "Replace the informal, email-based leave approval process with a system where every leave request reaches an explicit, recorded decision \u2014 enforcing HR sign-off for long or over-balance requests and producing a full audit trail.\n\n**Business value:** Eliminates the recurring payroll surprise of unapproved leave and the compliance exposure of undocumented decisions; gives HR and the works council a defensible audit trail while keeping routine approvals fast.\n\n**In scope:**\n- Leave/Absence request lifecycle: submitted \u2192 manager review \u2192 HR review (mandatory above 10 days or over-balance) \u2192 approved/rejected\n- Manager delegation to a named substitute for a date range\n- 3-working-day stall detection and auto-escalation to HR\n- Cancellation flow with automatic same-night balance restoration\n- Nightly bidirectional sync with the legacy HR tool (balances, approvals, cancellations write-back)\n- Mismatch handling: requests during an unresolved sync mismatch proceed flagged at-risk, never blocked\n- Full audit trail (who approved/overrode/escalated/cancelled, when), retained 5 years\n- Reporting-line-based permissions and HR override rights\n- Single shared rule set for the pilot (no per-department/country configuration)\n\n**Out of scope:**\n- Per-department / per-country rule configuration\n- Migrating balance ownership off the legacy HR tool (post-pilot decision)\n- Generalizing the approval+delegation+escalation logic into a reusable cross-module circuit (noted as a future opportunity)\n- Platform-level compliance/audit-trail service reused by other modules (future opportunity)\n- Organizational enforcement against email-based approvals (policy/communication lever, not a build item)",
     "labels": [
       "epic"
     ],
@@ -12,33 +12,31 @@
   "issues": [
     {
       "ref": "#1",
-      "title": "Spike: define concurrency and race-safety model for balance checks and escalation timing",
-      "description": "Investigate how to safely handle overlapping leave requests, simultaneous balance deductions, and an approver/delegate racing the escalation timer. Output a locking/versioning approach to guide implementation.",
+      "title": "Resolve the zero-mismatch metric vs. nightly-sync design conflict",
+      "description": "The pilot's success bar of 'zero unresolved balance mismatches at month end' assumes a level of accuracy the nightly (not real-time) sync design doesn't guarantee. Decide with the client whether the metric should be reworded as 'resolved within 24h' or whether over-balance checks need a live call to the legacy tool, before this is baked into acceptance testing.",
       "labels": [
-        "spike",
-        "backend"
+        "spike"
       ],
       "milestone": "Pilot",
       "depends_on": []
     },
     {
       "ref": "#2",
-      "title": "Extend Leave/Absence data model for approval workflow",
-      "description": "Add approval status, approver chain, balance reference, delegation, escalation state, and calendar reference fields to the existing Leave/Absence entity.",
+      "title": "Model the Leave/Absence request entity",
+      "description": "Build the Leave/Absence data model (employee, dates, duration, status, approver chain, balance reference, over-balance flag, at-risk flag). Field-level detail beyond what the workflow needs was inferred, not itemized by the client \u2014 confirm before finalizing the schema.",
       "labels": [
         "backend",
-        "migration"
+        "feature"
       ],
       "milestone": "Pilot",
       "depends_on": []
     },
     {
       "ref": "#3",
-      "title": "Build configurable approval circuit engine",
-      "description": "Implement a per-client configurable circuit (manager, then HR above a threshold) so rules can vary by client, country and contract without code changes.",
+      "title": "Build the core request lifecycle state machine",
+      "description": "Implement states submitted \u2192 manager review \u2192 HR review \u2192 approved/rejected, with cancellation as a parallel transition. This is the backbone every other rule (HR sign-off, escalation, cancellation) plugs into.",
       "labels": [
         "backend",
-        "config",
         "feature"
       ],
       "milestone": "Pilot",
@@ -48,132 +46,12 @@
     },
     {
       "ref": "#4",
-      "title": "Implement balance/quota validation with concurrency-safe checks",
-      "description": "Validate balance/quota before approval using the locking approach from the concurrency spike; revalidate at final approval to handle overlapping requests.",
+      "title": "Implement manager approval and named-substitute delegation",
+      "description": "Manager approves by default following the reporting line; support delegating approval authority to a named substitute for a specific date range.",
       "labels": [
         "backend",
-        "feature"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#1",
-        "#2"
-      ]
-    },
-    {
-      "ref": "#5",
-      "title": "Implement leave request state machine",
-      "description": "Build the submitted -> manager -> optional HR -> approved/rejected workflow, wired to the approval circuit engine and balance validation.",
-      "labels": [
-        "backend",
-        "feature"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#3",
-        "#4"
-      ]
-    },
-    {
-      "ref": "#6",
-      "title": "Add auto-escalation after 5 business days",
-      "description": "Trigger automatic escalation to the next approver level if no action is taken within 5 business days, respecting the concurrency-safe timer design.",
-      "labels": [
-        "backend",
-        "feature"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5"
-      ]
-    },
-    {
-      "ref": "#7",
-      "title": "Build delegation layer over existing permissions",
-      "description": "Allow an approver to delegate their approval authority; delegation must overlay existing role permissions without replacing them.",
-      "labels": [
-        "backend",
+        "feature",
         "permissions"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5"
-      ]
-    },
-    {
-      "ref": "#8",
-      "title": "Implement HR-validated cancellation flow",
-      "description": "Build a separate cancellation workflow requiring HR validation, including cancellation of leave that has already started.",
-      "labels": [
-        "backend",
-        "feature"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5"
-      ]
-    },
-    {
-      "ref": "#9",
-      "title": "Configure notifications for key workflow events",
-      "description": "Send email and in-app notifications on submission, approval, rejection, escalation and cancellation, routed to the correct role/contact per event.",
-      "labels": [
-        "integration"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5",
-        "#6",
-        "#8"
-      ]
-    },
-    {
-      "ref": "#10",
-      "title": "Build one-way calendar sync integration",
-      "description": "Push approved leave to the external calendar system; no reverse sync is required at this stage.",
-      "labels": [
-        "integration"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5"
-      ]
-    },
-    {
-      "ref": "#11",
-      "title": "Implement role-based permissions for leave workflow",
-      "description": "Enforce Employee/Manager/HR/Admin permissions, with HR as the sole editor of approved requests and validator of cancellations, layered with the delegation model.",
-      "labels": [
-        "permissions",
-        "backend"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5",
-        "#7"
-      ]
-    },
-    {
-      "ref": "#12",
-      "title": "Build employee and manager request/approval UI",
-      "description": "Provide screens for employees to submit requests and for managers/HR to review, approve, reject or escalate, reflecting current workflow state and permissions.",
-      "labels": [
-        "frontend",
-        "feature"
-      ],
-      "milestone": "Pilot",
-      "depends_on": [
-        "#5",
-        "#11"
-      ]
-    },
-    {
-      "ref": "#13",
-      "title": "Build HR admin console for circuit and entitlement configuration",
-      "description": "Let HR/admins configure the approval circuit and entitlement templates per client, without engineering involvement.",
-      "labels": [
-        "frontend",
-        "config"
       ],
       "milestone": "Pilot",
       "depends_on": [
@@ -181,51 +59,137 @@
       ]
     },
     {
-      "ref": "#14",
-      "title": "Configure multi-tenant isolation for pilot rollout",
-      "description": "Ensure per-client configuration (circuits, entitlement templates, notification routing) is isolated so the pilot client's setup does not affect others during scale-out.",
+      "ref": "#5",
+      "title": "Implement mandatory HR sign-off for long/over-balance requests",
+      "description": "Route to HR review whenever duration exceeds 10 working days or the request exceeds available balance; over-balance requests are allowed but must be flagged and cannot be manager-approved alone. Include HR override authority over any decision.",
       "labels": [
-        "config",
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#3"
+      ]
+    },
+    {
+      "ref": "#6",
+      "title": "Add stall detection and auto-escalation to HR",
+      "description": "If a request has no named backup approver and sits unresolved for 3 working days, auto-escalate it to HR so no request stalls silently.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#3",
+        "#5"
+      ]
+    },
+    {
+      "ref": "#7",
+      "title": "Implement cancellation with automatic balance restoration",
+      "description": "Allow cancellation while submitted, or up to 48h before start if already approved; restore balance automatically the same night without requiring HR confirmation.",
+      "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#3"
+      ]
+    },
+    {
+      "ref": "#8",
+      "title": "Build nightly bidirectional sync with the legacy HR tool",
+      "description": "Sync balances from the legacy tool (source of truth during the pilot) and write back approvals/cancellations the same night. Treat this as the pilot's dual-system dependency \u2014 an explicit post-pilot direction for balance ownership is still open.",
+      "labels": [
+        "integration",
         "backend"
       ],
       "milestone": "Pilot",
       "depends_on": [
-        "#13"
+        "#2"
       ]
     },
     {
-      "ref": "#15",
-      "title": "Add audit trail for requests and entitlement rule changes",
-      "description": "Log all state transitions on leave requests plus any changes to entitlement rule templates, so approvals and configuration changes are both traceable.",
+      "ref": "#9",
+      "title": "Handle balance mismatches without blocking requests",
+      "description": "When the nightly sync surfaces a disagreement, queue it for HR resolution the next morning; new requests submitted during that window proceed against the last-known balance and are flagged at-risk rather than blocked.",
       "labels": [
+        "backend",
+        "feature"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#8",
+        "#1"
+      ]
+    },
+    {
+      "ref": "#10",
+      "title": "Build the audit trail",
+      "description": "Log every approval, override, escalation and cancellation with actor and timestamp, retained 5 years for works-council compliance. Must cover at-risk and mismatch-window decisions, not just the happy path.",
+      "labels": [
+        "backend",
+        "feature",
+        "qa"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#4",
+        "#5",
+        "#6",
+        "#7"
+      ]
+    },
+    {
+      "ref": "#11",
+      "title": "Configure permissions for approval, override and delegation",
+      "description": "Approval rights follow the reporting line; HR can override any decision; a manager can delegate to a named substitute for a bounded date range. Verify these rules hold consistently across the manager and HR review states.",
+      "labels": [
+        "permissions",
+        "backend"
+      ],
+      "milestone": "Pilot",
+      "depends_on": [
+        "#4",
+        "#5"
+      ]
+    },
+    {
+      "ref": "#12",
+      "title": "Build audit trail reporting and export",
+      "description": "Provide a view/export of the audit trail sufficient for works-council and internal review, including turnaround time and mismatch/at-risk resolution tracking against the pilot's success metrics.",
+      "labels": [
+        "frontend",
         "backend",
         "qa"
       ],
       "milestone": "Pilot",
       "depends_on": [
-        "#5",
-        "#13"
+        "#10"
       ]
     },
     {
-      "ref": "#16",
-      "title": "QA: acceptance suite for approval, escalation, cancellation and concurrency scenarios",
-      "description": "Cover approve/reject across the full circuit, auto-escalation timing, HR-validated cancellation of started leave, and race conditions between approvers/delegates and the escalation timer.",
+      "ref": "#13",
+      "title": "Run end-to-end acceptance testing against pilot success criteria",
+      "description": "Validate: 100% of requests reach a recorded decision, no silent drops; mismatches resolved per the agreed metric wording; median turnaround under 2 working days; full manager adoption in-app; audit trail complete for a sample including at-risk and cancellation cases.",
       "labels": [
         "qa"
       ],
       "milestone": "Pilot",
       "depends_on": [
+        "#6",
+        "#7",
         "#9",
-        "#10",
-        "#12",
-        "#15"
+        "#11",
+        "#12"
       ]
     }
   ],
   "open_questions": [
-    "What is the target delivery timeline for the pilot, and which client goes first?",
-    "Do reporting/export needs stay fully out of scope for this phase, or is a minimal audit view expected at pilot launch?",
-    "Should historical leave requests be backfilled for continuity of the audit trail, even in summary form?"
+    "What organizational lever (policy, payroll gate, HR spot-check) will ensure managers actually stop approving leave by email, since the workflow alone can't enforce that behavior change?",
+    "Is the legacy HR tool meant to remain the permanent balance source of truth after the pilot, or should balance ownership migrate into this platform \u2014 this shapes whether the nightly-sync/mismatch design is temporary or permanent?",
+    "Should the pilot's 'zero unresolved mismatches at month end' metric be reworded to match the async nightly-sync design (e.g. 'resolved within 24h'), or should over-balance checks call the legacy tool live instead?"
   ]
 }

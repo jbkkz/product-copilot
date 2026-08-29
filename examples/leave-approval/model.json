@@ -1,119 +1,253 @@
 {
   "model": {
     "problem": {
-      "completeness": 75,
-      "confidence": "inferred",
+      "completeness": 95,
+      "confidence": "explicit",
       "impact": "high",
-      "value": "Leave is approved inconsistently, with no systematic balance check or audit trail.",
-      "evidence": "Requested a \"system\", underlying pain inferred from as-is"
+      "value": "Today, leave requests are approved (or not) informally by email; messages get lost or sit unanswered for weeks, so employees end up taking leave that was never formally approved, and HR only discovers the gap at payroll. The real need is a decision that is always traceable and always happens — not a friendlier request form.",
+      "evidence": "Client explicit: \"leave requests today go by email and get lost... What we actually need is a decision that is traceable and that always happens, not a nicer form.\""
     },
     "current_process": {
       "completeness": 90,
       "confidence": "explicit",
-      "impact": "high",
-      "value": "Handled today via email and an Excel spreadsheet.",
-      "evidence": "Client answer"
+      "impact": "medium",
+      "value": "Fully manual, ad hoc email chain between employee and manager; no enforced response, no record HR can rely on, discrepancies surface only at payroll time.",
+      "evidence": "Client explicit description of the as-is process."
     },
     "success_metrics": {
-      "completeness": 60,
-      "confidence": "inferred",
+      "completeness": 90,
+      "confidence": "explicit",
       "impact": "medium",
-      "value": "Fewer balance errors, full auditability, timely escalations, a successful pilot.",
-      "evidence": "Partly stated, partly inferred"
+      "value": "Pilot success = every leave request reaches an explicit, recorded decision (no silent drops), zero unresolved balance mismatches at month end, median approval turnaround under 2 working days, full manager adoption (no email approvals) in pilot scope.",
+      "evidence": "Prior answer 4, reinforced by the newly stated core problem (a decision that always happens)."
     },
     "actors": {
-      "completeness": 85,
+      "completeness": 80,
       "confidence": "explicit",
       "impact": "high",
-      "value": "Employee, Manager, HR, Administrator, and external client contacts.",
-      "evidence": "Client answer"
+      "value": "Employee (requester, can cancel), Manager (base approver, can delegate to a named substitute for a date range), HR (mandatory sign-off above 10 days and for over-balance requests, override authority, escalation target, resolves nightly mismatches each morning), works council (external compliance stakeholder), legacy HR tool (balance source of truth during pilot).",
+      "evidence": "Answers across turns, unchanged since last turn."
     },
     "business_objects": {
-      "completeness": 65,
+      "completeness": 45,
       "confidence": "inferred",
       "impact": "medium",
-      "value": "Existing Leave/Absence extended with approval status, approver chain, balance, delegation, escalation and a calendar reference.",
-      "evidence": "Reuse of platform entities inferred"
+      "value": "Leave/Absence request: employee, dates, duration, status, approver chain, balance reference synced nightly with legacy tool, over-balance flag, at-risk (mismatch) flag.",
+      "evidence": "Inferred from workflow/rules; field-level detail still not itemized, but impact stays medium so not worth probing further."
     },
     "business_rules": {
-      "completeness": 85,
-      "confidence": "explicit",
-      "impact": "high",
-      "value": "Balance/quota check before approval; manager then HR above a threshold; rules vary by client, country and contract.",
-      "evidence": "Client answer"
-    },
-    "workflow": {
       "completeness": 90,
       "confidence": "explicit",
       "impact": "high",
-      "value": "submitted -> manager -> optional HR -> approved/rejected; auto-escalation after 5 business days; separate HR-validated cancellation, including started leave.",
-      "evidence": "Client answer"
+      "value": "Manager approves by default; HR sign-off mandatory when duration >10 working days OR when the request exceeds the employee's available balance (over-balance allowed but flagged, cannot be manager-approved alone). Cancellations restore balance automatically, no HR confirmation needed.",
+      "evidence": "Answers across turns; cancellation clarified this turn (only over-balance approvals need HR confirmation, not cancellations)."
+    },
+    "workflow": {
+      "completeness": 95,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "States: submitted → manager review → HR review if >10 days or over-balance → approved/rejected; employee can cancel while submitted or up to 48h before start if approved, restoring balance automatically same night. No named backup approver + 3 working-day stall → escalates to HR. New requests during an open mismatch are processed normally against last-known balance, flagged at-risk rather than blocked. Every request resolves to an explicit, recorded decision — no silent drop.",
+      "evidence": "This turn's answers 1-2 close both previously open questions (mismatch-window handling, cancellation reversal)."
     },
     "integrations": {
-      "completeness": 85,
+      "completeness": 90,
       "confidence": "explicit",
-      "impact": "medium",
-      "value": "Email + in-app notifications on key events; one-way calendar sync (system to calendar).",
-      "evidence": "Client answer"
+      "impact": "high",
+      "value": "Legacy HR tool remains source of truth for balances during the pilot. Bidirectional nightly sync; approvals and cancellations write back the same night. Balance disagreements raise a mismatch queued for HR the next morning; requests during that window proceed against last-known balance, flagged at-risk.",
+      "evidence": "Prior + this turn's answer 1."
     },
     "permissions": {
       "completeness": 85,
       "confidence": "explicit",
       "impact": "high",
-      "value": "Employee/Manager/HR/Admin; HR is the sole editor of approved requests and validator of cancellations; a delegation layer overlays existing permissions.",
-      "evidence": "Client answer"
+      "value": "Approval follows the reporting line; HR can override any decision and must confirm over-balance requests; a manager can delegate approval to a named substitute for a specific date range.",
+      "evidence": "Unchanged from last turn, consistent with new answers."
     },
     "config_vs_custom": {
-      "completeness": 85,
+      "completeness": 70,
       "confidence": "explicit",
-      "impact": "high",
-      "value": "Approval circuit configurable per client; multi-tenant configuration isolation for a pilot-then-scale rollout.",
-      "evidence": "Client answer"
+      "impact": "medium",
+      "value": "One shared workflow and rule set for the pilot; no per-department/country configuration needed yet.",
+      "evidence": "Prior answer, unchanged."
     },
     "constraints": {
+      "completeness": 80,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Full audit trail must be retained 5 years for works-council compliance; French labor law (paid leave/RTT) and GDPR on HR data apply; legacy tool remains authoritative during the pilot, creating a dual-system dependency.",
+      "evidence": "Unchanged, reinforced by traceability emphasis."
+    },
+    "edge_cases": {
+      "completeness": 90,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Over-balance requests: allowed, flagged, require HR confirmation. Requests during an unresolved mismatch: processed against last-known balance, flagged at-risk, never blocked. Cancellations after approval: automatic same-night balance restoration, no HR confirmation required.",
+      "evidence": "This turn's answers 1-2 resolve both previously open edge cases."
+    },
+    "reporting": {
+      "completeness": 95,
+      "confidence": "explicit",
+      "impact": "high",
+      "value": "Full audit trail required: who approved, overrode, escalated or cancelled each request and when; every request must resolve to a recorded decision (nothing silently lost); retained 5 years for works-council compliance.",
+      "evidence": "Prior answer 3, reinforced this turn by the client naming traceability and reliability as the core problem."
+    },
+    "acceptance": {
       "completeness": 55,
       "confidence": "inferred",
       "impact": "medium",
-      "value": "French labour law (paid leave, RTT) and GDPR on HR data apply; delivery timeline not yet specified.",
-      "evidence": "Platform baseline + partial answer"
-    },
-    "edge_cases": {
-      "completeness": 80,
-      "confidence": "explicit",
-      "impact": "medium",
-      "value": "Overlapping requests allowed but revalidated at approval; cancellation of already-started leave; approver/delegate racing the escalation timer.",
-      "evidence": "Client answer"
-    },
-    "reporting": {
-      "completeness": 10,
-      "confidence": "empty",
-      "impact": "low",
-      "value": "",
-      "evidence": "Not raised; low impact for this request"
-    },
-    "acceptance": {
-      "completeness": 50,
-      "confidence": "inferred",
-      "impact": "medium",
-      "value": "Approve/reject scenarios across the circuit; concurrency and escalation timing not yet formalised.",
-      "evidence": "Inferred from workflow"
+      "value": "Pilot passes if: (a) 100% of requests reach an explicit recorded decision, no silent drops; (b) zero unresolved balance mismatches at month end; (c) median turnaround <2 working days; (d) full manager adoption; (e) audit trail complete for a sample of requests including at-risk and cancellation cases.",
+      "evidence": "Derived from success_metrics and the newly stated core problem; not yet phrased as formal test scenarios by the client, but impact stays medium so not worth a dedicated question now."
     },
     "risks": {
-      "completeness": 75,
-      "confidence": "explicit",
+      "completeness": 65,
+      "confidence": "inferred",
       "impact": "medium",
-      "value": "Shared approval framework may ripple into other modules; concurrency on balance; audit trail weakened by not migrating historical requests.",
-      "evidence": "Client answer + context"
+      "value": "Main residual risk is adoption — the tool only solves the email-chain problem if managers stop approving by email in practice; secondary risk is the at-risk flag on mismatch-window requests being ignored or mismanaged by HR each morning.",
+      "evidence": "Inferred from the core problem statement and the mismatch-handling answer."
     }
   },
   "questions": [],
   "summary": {
-    "objective": "Replace the email/Excel-based leave approval process with a configurable, auditable digital workflow that enforces real-time balance checks, routes notifications by role, and scales safely via a pilot-first rollout.",
-    "scope": "Leave request lifecycle with balance validation, multi-level configurable circuit, delegation and auto-escalation, HR-validated cancellation, per-client entitlement templates, and a pilot rollout.",
+    "objective": "Replace the informal email-based leave approval process — where requests get lost or stall for weeks and HR only discovers unapproved leave at payroll — with a workflow where every leave request reaches an explicit, recorded, traceable decision, enforcing HR sign-off for long or over-balance requests and producing a full audit trail for works-council compliance.",
+    "scope": "A Leave/Absence request lifecycle: submitted → manager review → HR review (mandatory above 10 working days or over-balance) → approved/rejected/cancelled. Named-substitute delegation and 3-day auto-escalation to HR ensure no request stalls silently. Nightly bidirectional sync with the legacy HR tool (source of truth for balances during the pilot): approvals and cancellations write back same-night; cancellations auto-restore balance without HR confirmation; over-balance approvals do require HR confirmation. Requests submitted during an unresolved balance mismatch proceed against the last-known balance, flagged at-risk, never blocked — HR resolves the mismatch the next morning. Full audit trail (who approved/overrode/escalated/cancelled, when) retained 5 years. Single shared rule set for the pilot, no per-entity configuration yet.",
     "assumptions": [
-      "French labour law is one country template among others",
-      "No payroll integration at this stage; calendar sync is one-way"
+      "Acceptance testing will be based on the stated success metrics (100% recorded decisions, zero month-end mismatches, <2-day turnaround, full adoption, complete audit trail) even though not yet phrased as formal test scenarios.",
+      "GDPR and French labor-law obligations apply to HR data as standard, beyond the explicitly named works-council retention requirement.",
+      "The detailed field list of the Leave/Absence object follows the platform's standard model and hasn't been itemized beyond what the workflow requires."
     ],
-    "blind_spot": "The audit trail should also cover changes to entitlement rule templates, and concurrent overlapping approvals must be race-safe."
-  }
+    "blind_spot": "The named problem is not 'requests are annoying to submit' but 'decisions silently fail to happen' — meaning adoption enforcement (managers genuinely stop using email) matters as much as the workflow logic itself; a technically correct system that managers route around by email again would fail the actual objective even while passing every functional test."
+  },
+  "decisions": [
+    {
+      "id": "dec_0262d8c030",
+      "decision": "Manager approves by default; HR sign-off is mandatory above 10 working days or for over-balance requests",
+      "why": "Keeps routine approvals fast while routing higher-risk or exception cases to HR.",
+      "alternative": "All requests could route through HR, or all could be manager-only regardless of duration/balance.",
+      "tradeoff": "Faster turnaround for the common case, at the cost of a conditional branch in the workflow that must stay correctly enforced.",
+      "derived_from": [
+        "business_rules",
+        "workflow"
+      ]
+    },
+    {
+      "id": "dec_5e2adacb4e",
+      "decision": "Cancellations auto-restore balance same night without HR confirmation",
+      "why": "Cancellations reduce risk (give balance back), unlike over-balance approvals which increase it.",
+      "alternative": "Require HR confirmation symmetrically with over-balance approvals.",
+      "tradeoff": "Faster, lower-friction cancellations, accepting that balance restoration happens without a human check.",
+      "derived_from": [
+        "business_rules",
+        "edge_cases"
+      ]
+    },
+    {
+      "id": "dec_f375357ddf",
+      "decision": "Requests during an unresolved mismatch proceed against last-known balance, flagged at-risk, never blocked",
+      "why": "Prioritizes the 'a decision always happens' objective over strict balance accuracy at submission time.",
+      "alternative": "Block new requests until HR resolves the mismatch.",
+      "tradeoff": "Keeps the process moving and avoids employee-facing stalls, at the cost of approving some requests against potentially stale data.",
+      "derived_from": [
+        "workflow",
+        "integrations",
+        "edge_cases"
+      ]
+    },
+    {
+      "id": "dec_297e259856",
+      "decision": "Single shared workflow and rule set for the pilot, no per-department or per-country configuration",
+      "why": "Reduces pilot scope and lets the core loop be validated before investing in configurability.",
+      "alternative": "Build per-department/country rule variation from the start.",
+      "tradeoff": "Faster pilot delivery, deferring rework if different departments or countries need distinct rules later.",
+      "derived_from": [
+        "config_vs_custom"
+      ]
+    },
+    {
+      "id": "dec_0b14625d48",
+      "decision": "Stalled requests with no named backup approver auto-escalate to HR after 3 working days",
+      "why": "Guarantees no request silently stalls indefinitely, matching the core traceability objective.",
+      "alternative": "",
+      "tradeoff": "",
+      "derived_from": [
+        "workflow",
+        "permissions"
+      ]
+    },
+    {
+      "id": "dec_8398410d5e",
+      "decision": "Full audit trail retained 5 years for works-council compliance",
+      "why": "",
+      "alternative": "",
+      "tradeoff": "",
+      "derived_from": [
+        "constraints",
+        "reporting"
+      ]
+    }
+  ],
+  "challenges": [
+    {
+      "id": "chl_08d254f34f",
+      "headline": "Zero-mismatch goal vs nightly sync",
+      "premise": "The success metric demands zero unresolved balance mismatches at month end, while the design explicitly allows mismatches to occur every night and lets new requests proceed against stale balances rather than blocking.",
+      "alternative": "Reasoning from the design itself: since mismatches are an accepted, recurring by-product of nightly (not real-time) sync, the metric should be 'resolved within 24h', or the over-balance check specifically should call the legacy tool live instead of relying on the nightly batch.",
+      "consequence": "As stated, hitting 'zero mismatches at month end' depends entirely on HR never missing a morning reconciliation — one lapse fails the pilot's own bar even though the system behaved exactly as designed.",
+      "recommendation": "Reconcile the success metric's wording with the async sync design before acceptance testing begins.",
+      "contests": [
+        "success_metrics",
+        "integrations"
+      ]
+    },
+    {
+      "id": "chl_7669751246",
+      "headline": "No enforcement against email approvals",
+      "premise": "The request treats 'a decision that always happens' as solved once the workflow exists, but nothing in scope stops a manager from simply replying to an email as before.",
+      "alternative": "Pair the launch with an explicit organizational rule — e.g. payroll only accepts system-recorded decisions, and HR flags/reports any email-based approval it becomes aware of — since software alone cannot force the behavior change the client actually wants.",
+      "consequence": "A functionally correct system that managers route around by email reproduces the exact problem being solved, while still passing every test written against the workflow logic.",
+      "recommendation": "Define the policy/communication lever that makes the platform the only valid approval channel, and add it to acceptance criteria alongside the functional tests.",
+      "contests": [
+        "acceptance",
+        "risks"
+      ]
+    },
+    {
+      "id": "chl_4953bda629",
+      "headline": "Legacy tool as permanent truth source",
+      "premise": "The legacy HR tool is named as authoritative 'during the pilot,' implying a temporary state, but no decision exists on what happens to balance ownership after the pilot.",
+      "alternative": "Decide now whether pilot success triggers migrating balance ownership into the new platform, or whether the nightly-sync dual-system dependency is meant to persist — because an undecided 'temporary' architecture tends to become the permanent one by default.",
+      "consequence": "Left open, the mismatch-handling and nightly-sync logic being built for a pilot becomes the long-term architecture, baking in a recurring reconciliation cost indefinitely.",
+      "recommendation": "Get an explicit post-pilot integration target from the client before finalizing the sync design.",
+      "contests": [
+        "constraints",
+        "integrations"
+      ]
+    }
+  ],
+  "opportunities": [
+    {
+      "id": "opp_b636c847ab",
+      "text": "Generalize the manager→HR conditional approval + delegation + escalation engine into a reusable circuit other modules can configure.",
+      "leverage": "high",
+      "modules": [
+        "Absence",
+        "Contracts",
+        "Missions"
+      ]
+    },
+    {
+      "id": "opp_4d4815dcca",
+      "text": "Build the audit trail as a platform-level compliance service rather than an Absence-specific log, since works-council and GDPR traceability needs recur elsewhere.",
+      "leverage": "future",
+      "modules": [
+        "Contracts",
+        "Invoicing"
+      ]
+    },
+    {
+      "id": "opp_0e455dd2ea",
+      "text": "Extract the nightly-sync + mismatch-flagging pattern into a reusable legacy-integration module for other systems still on batch sync.",
+      "leverage": "future",
+      "modules": []
+    }
+  ]
 }

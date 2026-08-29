@@ -161,6 +161,9 @@ def test_the_browsable_examples_deterministic_half_matches_the_renderer():
     from requivo.render.terminal import DRAFT_NOTE, render_readiness
 
     repo_root = DEMO.parents[3]
+    # event-checkin only: its assessment is a *terminal* capture inside a ```text fence, which is
+    # what `requivo demo` replays. leave-approval ships the markdown artifact `requivo brief` writes,
+    # so its deterministic half is checked against `brief_markdown` instead, in the test below.
     example_dir = repo_root / "examples" / "event-checkin-reconciliation"
     out = load_model(example_dir / "model.json")
     assessment = _fenced_text((example_dir / "solution-assessment.md").read_text(encoding="utf-8"))
@@ -194,6 +197,62 @@ def test_the_browsable_examples_deterministic_half_matches_the_renderer():
         "the captured example's readiness block disagrees with render_readiness() over the same "
         f"model.json.\n--- captured ---\n{actual_readiness}\n--- live ---\n{expected_readiness}"
     )
+
+
+def test_the_leave_approval_brief_still_projects_its_own_model():
+    """The canonical example's decision brief is half a projection, and this is that half.
+
+    `What is confirmed` and `Important assumptions` are not prose the provider was asked to write —
+    `_stated()` reads each topic's value and provenance off the model, precisely so a restatement
+    cannot drift from what it restates. Which means a committed pair can be checked with no API call,
+    and a `model.json` swapped in without its brief goes red here.
+
+    That could not be asserted before #223: the shipped assessment was a frozen capture from an
+    earlier run, against an earlier layout, and its own README said so. Regenerating the example's
+    whole chain from one model in one sitting is what makes the pair checkable at all.
+    """
+    from requivo.core.analysis import _readiness_blockers
+    from requivo.core.contracts import Confidence
+    from requivo.core.persistence import load_model
+    from requivo.paths import DEMO
+    from requivo.render.markdown import _stated
+
+    example_dir = DEMO.parents[3] / "examples" / "leave-approval"
+    out = load_model(example_dir / "model.json")
+    brief = (example_dir / "solution-assessment.md").read_text(encoding="utf-8")
+
+    def section(heading):
+        body = brief.split(f"## {heading}\n", 1)[1].split("\n## ", 1)[0]
+        return [ln for ln in body.splitlines() if ln.startswith("- **")]
+
+    assert section("What is confirmed") == _stated(out, Confidence.explicit)
+    # The assumptions section carries `summary.assumptions` after the projected topics; only the
+    # `- **Label** —` lines are the projection, which is what `section` selects.
+    assert section("Important assumptions") == _stated(out, Confidence.inferred)
+    # The draft banner is the same rule `brief_markdown` applies, from the same model.
+    draft = " — Draft: unresolved topics remain" if _readiness_blockers(out) else ""
+    assert brief.splitlines()[0] == f"# Decision Brief{draft}"
+    assert f"**Objective:** {out.summary.objective}" in brief
+
+
+def test_the_canonical_example_can_reproduce_the_change_impact_moment():
+    """`impact` on the committed leave-approval model has something to say (#223).
+
+    The shipped model carried no reasoning layer at all — six top-level keys, three of them empty —
+    so `impact` on the example the README calls "the one to read first" listed stale artifacts and
+    nothing else, while that README promised it would name the decisions resting on the integration
+    topic. The differentiator was claimed on the example and reproducible only on the other one.
+    """
+    from requivo.core.dependencies import propagate
+    from requivo.core.persistence import load_model
+    from requivo.paths import DEMO
+
+    out = load_model(DEMO.parents[3] / "examples" / "leave-approval" / "model.json")
+    assert out.decisions and out.challenges, "the canonical example carries no reasoning layer"
+    hit = propagate(out, ["integrations"])
+    assert hit.decisions, "no decision rests on the integration topic"
+    assert hit.challenges, "no premise contests the integration topic"
+    assert hit.artifacts, "no artifact consumes the integration topic"
 
 
 def test_pc_brief_persists_reasoning_into_model():
