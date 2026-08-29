@@ -18,23 +18,39 @@ B2B products.
 
 ---
 
-## Start here — Requivo Web
+## Start here
 
-A local browser workspace, and the way to use Requivo. Paste a request, answer the few questions that
-could change the solution, see what each answer moved, generate one decision brief.
+### 1. See a real run — no key, nothing installed
+
+```bash
+uvx --from requivo requivo demo
+```
+
+Ten seconds, offline. A messy client email, the questions Requivo raised against it, the decision
+brief it wrote, and then the part that is not reasoned at all: change one answer, and it reports what
+that invalidates, computed from the dependency graph. No Anthropic key, no network, no extras — the
+`demo` path needs neither the provider SDK nor a credential.
+
+### 2. Requivo Web — the way to use it
+
+A local browser workspace. Paste a request, answer the few questions that could change the solution,
+see what each answer moved, generate one decision brief.
 
 ```bash
 uvx --from "requivo[web,anthropic]" requivo web    # opens http://127.0.0.1:8765
 ```
+
+[![The Requivo Web session page: the objective, the request, and what Requivo understood, split into what is confirmed and what is being assumed.][shot-session]][web]
+
+Unlike the demo, this one analyses, so it needs a key: set `ANTHROPIC_API_KEY` in your environment or
+a `.env` file. Without it the interface still opens and reads existing sessions, and tells you what is
+missing.
 
 One command, nothing installed — [uv](https://docs.astral.sh/uv/) fetches Requivo into a temporary
 environment and runs it (`curl -LsSf https://astral.sh/uv/install.sh | sh` if you don't have uv). To
 keep it around, `uv tool install "requivo[web,anthropic]"` and then just `requivo web`; `pipx install`
 works the same way. Prefer plain pip? [`docs/getting-started.md`][getting-started] has the
 virtualenv route — avoid `pip install --user`, which succeeds while leaving `requivo` off your PATH.
-
-Set `ANTHROPIC_API_KEY` in your environment or a `.env` file to analyse and generate. Without it the
-interface still opens and reads existing sessions, and tells you what is missing.
 
 Sessions stay on your machine, the server binds to localhost, and nothing leaves your workspace — no
 accounts, no database, no remote storage. See [`docs/web.md`][web].
@@ -190,6 +206,26 @@ See the [roadmap][roadmap].
 
 ---
 
+## How this is built
+
+Requivo is written by AI coding agents under maintainer direction and review. Most commits carry an
+agent co-author trailer, and the maintainer decides what gets built, reviews every change and merges
+it.
+
+The controls around that are the interesting part, and they are not incidental to it. Nothing reaches
+`main` except through a squash-merged pull request that passed every required check, on the platform
+matrix above. The test suite is hermetic — no API calls, no network, no build step — and a large share
+of it guards the codebase against its own authors rather than against users: a boundary test that
+fails when the engine imports a provider, an encoding test that walks every file read in the
+repository, a test that fails when a comment cites a test that does not exist. Each of those exists
+because a plausible change broke something quietly, and the fix was to make the next such change
+loud.
+
+That is the honest account of who wrote this. Judge it on the guards and the record, not on the
+authorship.
+
+---
+
 ## Contributing and license
 
 Contributions are welcome — see [CONTRIBUTING.md][contributing]. The Core, CLI and Claude Code
@@ -205,6 +241,7 @@ the code license — see [TRADEMARKS.md][trademarks].
      rewrite relative hrefs, so every one of them 404s there. Keeping the URLs in one block is
      what stops that from costing the prose its line width. -->
 [license]: https://github.com/jbkkz/requivo/blob/main/LICENSE
+[shot-session]: https://raw.githubusercontent.com/jbkkz/requivo/main/docs/images/web-session.webp
 [getting-started]: https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md
 [web]: https://github.com/jbkkz/requivo/blob/main/docs/web.md
 [claude-code]: https://github.com/jbkkz/requivo/tree/main/plugins/claude-code/

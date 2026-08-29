@@ -471,6 +471,11 @@ DEMO_SLUG = "event-checkin-reconciliation"
 # slot in words ("the six-week deadline"), and the two have to move together — `constraints` is where
 # that deadline lives in the bundled model.
 DEMO_CHANGED_SLOT = "constraints"
+# Where the browsable copies live. A literal rather than a read of the package metadata: the demo
+# prints this on a machine that may have no `importlib.metadata` entry for a `uv run` from a clone,
+# and a closing pointer that can raise is worse than one that can go stale. `test_version_sites.py`
+# is where a URL claim gets its guard.
+EXAMPLES_URL = "https://github.com/jbkkz/requivo/tree/main/examples"
 
 
 def _fenced_text(markdown: str) -> str:
@@ -528,7 +533,14 @@ def _cmd_demo(a, client) -> None:
     print("     Regenerated from this one model.json, no re-discovery:")
     for name in ("epic.md", "acceptance-criteria.md"):
         if (demo / name).exists():
-            print(f"       • examples/{DEMO_SLUG}/{name}")
+            print(f"       • {name}")
+    # **A URL, because the README's own recommended installs are uvx and pipx** (#225). This block
+    # used to prove its point with two `examples/<slug>/…` paths, which exist in a clone and nowhere
+    # else — so the demo's closing evidence was two dead pointers for the majority install path. The
+    # files themselves ship in the wheel; what a wheel user lacked was any way to reach them.
+    # Pinned by `test_the_demo_points_a_wheel_install_at_something_it_can_reach`.
+    print(f"     Readable in the repository, or beside this payload in the package:\n"
+          f"       {EXAMPLES_URL}/{DEMO_SLUG}")
     # **A closing step a reader can take without a key** (#223). The demo's whole premise is that no
     # key is needed, and it used to end on the one command that requires one — so the visitor it was
     # written for had nothing to do next.
@@ -537,7 +549,11 @@ def _cmd_demo(a, client) -> None:
     print("        the browser interface, where a changed answer renders that block live")
     print(f"    requivo impact examples/{DEMO_SLUG}/model.json <slot>")
     print("        step ④ for any slot you name, from a clone of the repo")
+    # The banner promises no key is needed; the one command here that needs one has to say so in the
+    # same breath, or the demo converts a keyless reader into a failed command (#225).
     print('\n  With a key:   requivo discover "<your own request>"')
+    print("                needs the [anthropic] extra and ANTHROPIC_API_KEY — `requivo doctor`")
+    print("                checks both before you spend anything")
     print(bar)
 
 

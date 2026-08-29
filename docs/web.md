@@ -57,6 +57,19 @@ paste a request
   → change an answer later and see what needs review
 ```
 
+### What it looks like
+
+Four moments from one session, in order. The engine's own vocabulary — slots, coverage, revisions —
+is not on any of these screens; the translation is defined once in `web/viewmodels/labels.py`.
+
+![The home page: a single request box, with the sessions already in progress listed below it.](images/web-home.webp)
+
+![The session page: the objective Requivo derived, the request it read, and what it understood, split into what is confirmed and what is being assumed.](images/web-session.webp)
+
+![What could change the solution: each open question with why it matters and the area it would move, the answer form below it, and the Are we ready? verdict with its reasons.](images/web-questions.webp)
+
+![The decision brief: what is confirmed, what is being assumed, the decisions on record and the premises worth contesting.](images/web-brief.webp)
+
 - **Home** — the request box *is* the home page; there is no separate "new discovery" screen. Below it,
   the requests already in progress, each showing what was asked, whether it is waiting on you, and
   whether a document needs updating. Sessions created by the CLI or Claude Code appear here too. A

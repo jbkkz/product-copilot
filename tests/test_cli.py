@@ -74,7 +74,7 @@ def test_pc_demo_runs_offline_from_saved_example():
     assert "freelancers to check guests in" in text     # the real request is shown
     assert "UNDERSTANDING" in text                       # status rendered live from the saved model
     assert "DECISION BRIEF" in text                      # the deliverable (the differentiator)
-    assert "event-checkin-reconciliation/epic.md" in text  # the other artifacts are pointed to
+    assert "epic.md" in text                             # the other artifacts are pointed to
 
 
 def test_the_demo_shows_the_computed_blast_radius_of_a_changed_answer():
@@ -121,6 +121,36 @@ def test_the_demo_ends_on_something_a_reader_without_a_key_can_do():
     assert "requivo impact" in keyless
     # `discover` still appears, and is still marked as the one that costs something.
     assert "With a key:" in tail
+
+
+def test_the_demo_points_a_wheel_install_at_something_it_can_reach():
+    """The demo's closing evidence used to be two paths that exist only in a clone (#225).
+
+    The README's own recommended installs are `uvx`, `uv tool install` and `pipx` — none of which
+    leaves a checkout — and step ⑤ proved "everything else is a view" by naming
+    `examples/<slug>/epic.md` and `acceptance-criteria.md`. For the majority install path those were
+    two dead pointers, in the one place the walkthrough asks to be believed. The files ship inside
+    the wheel; what was missing was any way for that reader to reach them.
+    """
+    text = _run_app(["demo"])
+    assert "https://github.com/jbkkz/requivo/tree/main/examples/event-checkin-reconciliation" in text
+    tail = text[text.index("⑤ EVERYTHING ELSE"):]
+    # A bare repo-relative path is allowed only where the line says it needs the repo — which is the
+    # `impact` command, and nothing else in this block.
+    for line in tail.splitlines():
+        if "examples/" in line and "https://" not in line:
+            assert "requivo impact" in line, f"unlabelled repo-relative path in the demo tail: {line!r}"
+
+
+def test_the_demo_names_the_key_requirement_beside_the_command_that_needs_one():
+    """The banner promises no key is needed; exactly one command in the closing block needs one, and
+    it has to say so in the same breath (#225). A keyless reader following that line lands on a
+    failure the demo could have predicted for them."""
+    text = _run_app(["demo"])
+    tail = text[text.index("With a key:"):]
+    assert "requivo discover" in tail
+    assert "ANTHROPIC_API_KEY" in tail
+    assert "[anthropic]" in tail
 
 
 def test_pc_brief_uses_injected_client():
