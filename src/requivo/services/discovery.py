@@ -240,8 +240,16 @@ class DiscoveryService:
             request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
 
     def draft_assessment(self, model: EngineOutput, *, cards: list[str] | None = None):
-        """The solution assessment for a model that is not a session yet — the last provider call of
-        an interactive discovery, before `finalize_discovery` absorbs its reasoning and writes.
+        """The solution assessment for a model that is not a session yet.
+
+        **No surface calls this any more, and the reason is worth knowing before reaching for it**
+        (#202). It was the last provider call of the CLI's interactive discovery, made *before* the
+        one write, so an `EngineError` here discarded all eight drafted turns. That branch now
+        persists the converged model first and produces the brief through `generate(slug, "brief")`,
+        which is what every other surface already did. Kept because reasoning an assessment for a
+        model that is not a session is a coherent operation and the contract is public, but a caller
+        that has a session should use `generate`: it absorbs, revisions and saves, and this does none
+        of those.
 
         Distinct from `generate(slug, "brief")`, which reads a persisted session, applies the absorbed
         reasoning as a revision and saves a document. There is no session here to read or write, so

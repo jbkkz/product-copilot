@@ -121,6 +121,29 @@ _RENDER_FAILED_TAIL = (
 )
 
 
+class DraftingFailed(Exception):
+    """A provider failure (or a Ctrl-C) *during* a draft turn, carrying the work that survived it.
+
+    `converse` drafts up to eight paid turns in memory and writes none of them — deliberate, because
+    what is drafted becomes real through the one validated apply path. The cost of that design is that
+    an exception anywhere in the loop used to discard every prior turn **and** every answer the user
+    typed, leaving the session at revision 0 and printing a transport message that named neither the
+    session nor a way back. One transient 529 on turn 8 threw away seven paid calls and ten minutes of
+    typing (#202).
+
+    So the loop stops raising the transport error directly. It raises this, which carries the last
+    model that succeeded, and `_cmd_discover` persists that model before letting the failure surface.
+    `last` is None only when the very first turn failed, where there is genuinely nothing to save.
+    Pinned by `test_a_failed_draft_turn_persists_the_turns_that_succeeded`.
+    """
+
+    def __init__(self, cause: BaseException, last: EngineOutput | None, turn: int) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.last = last
+        self.turn = turn
+
+
 def converse(disco: DiscoveryService, request: str, only: list[str] | None = None) -> EngineOutput | None:
     """Fill the model, ask, feed answers back, until no high-value question remains.
     Returns the final model (None if the user stopped early). Finalization (brief, save) is
@@ -141,7 +164,14 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
     answers = None
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n──────────── TURN {turn} ────────────")
-        out = disco.draft_turn(request, current_model=out, answers=answers, cards=only)
+        try:
+            out = disco.draft_turn(request, current_model=out, answers=answers, cards=only)
+        except (EngineError, KeyboardInterrupt) as e:
+            # `out` still holds the last turn that succeeded, because the failed assignment did not
+            # land — and that model is every answer the client has given so far, since the model is
+            # what this loop carries. Handing it to the caller is the difference between a transient
+            # 529 costing one turn and it costing all of them (#202).
+            raise DraftingFailed(e, out, turn) from e
         render_turn(out)
 
         if not out.questions:
@@ -193,6 +223,45 @@ def _is_file_arg(arg: str) -> bool:
         return False
 
 
+def _say_saved(slug: str) -> None:
+    """Where the session landed. `canonical_dir` direct, and justified (#76): the path *is* the
+    answer, and `SessionRepository` exposes none because a non-file backing has none. Same at the
+    three other display sites in this file and in `deterministic/sessions.py`."""
+    print(f"\nSaved session → {store.canonical_dir(slug)}")
+
+
+def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str):
+    """Persist what an interrupted drafting loop had already paid for, then let the failure surface.
+
+    Every abort path after `claim_session` must name the session, and this one must also *keep* the
+    work: the turns that succeeded are in `e.last`, because the model is what the loop carries. The
+    user retries with `requivo answer`, which works from any revision >= 1, instead of restarting a
+    conversation they already had at full price (#202).
+
+    Turn 1 failing is the one case with nothing to save; the session stays at revision 0 and
+    `requivo discover` is still the right retry, so it says so rather than pointing at `answer`.
+    Never returns. Pinned by `test_a_failed_draft_turn_persists_the_turns_that_succeeded`."""
+    if e.last is None:
+        print(f"\nSaved request → {store.canonical_dir(slug)}", file=sys.stderr)
+        print("Nothing was drafted, so the session is unchanged — re-run `requivo discover` to try "
+              "again.", file=sys.stderr)
+    else:
+        kept = e.turn - 1
+        slug = disco.finalize_discovery(request, e.last, cards=cards, slug=slug,
+                                        brief=None, surface="cli-discover")
+        print(f"\nTurn {e.turn} failed, so the {kept} turn(s) before it were saved rather than "
+              f"discarded.", file=sys.stderr)
+        print(f"Saved session → {store.canonical_dir(slug)}", file=sys.stderr)
+        print(f'Continue where you left off with:\n  requivo answer {slug} "<your answers>"',
+              file=sys.stderr)
+    if isinstance(e.cause, RequivoError):
+        raise e.cause
+    # A Ctrl-C landing inside the provider call, which `converse`'s prompt-level catch never saw:
+    # it is not a `RequivoError`, so `app()` would have let it out as a traceback (#202).
+    print("\nInterrupted.", file=sys.stderr)
+    raise SystemExit(1) from e.cause
+
+
 def _cmd_discover(a, client) -> None:
     if not a.request or not a.request.strip():
         print("discover needs a request: a sentence describing what to build, or a path to a file "
@@ -223,29 +292,47 @@ def _cmd_discover(a, client) -> None:
         slug = disco.start(request, cards=only, slug=slug_hint, finalize=False, surface="cli-discover")
         out = disco.sessions.load_model(slug)
         render_turn(out)
-    else:
-        # Invariant 13's gate, here rather than only inside `finalize_discovery`: refusing after the
-        # loop meant paying for up to nine provider calls first (#133). Pinned by
-        # `test_both_discover_entry_points_refuse_a_refined_session_before_paying`.
-        slug = disco.claim_session(request, cards=only, slug=slug_hint).slug
+        _say_saved(slug)
+        if out.questions:
+            print(f'\n→ Answer and refine: requivo answer {slug} "<your answers>"')
+        return
+
+    # Invariant 13's gate, here rather than only inside `finalize_discovery`: refusing after the
+    # loop meant paying for up to nine provider calls first (#133). Pinned by
+    # `test_both_discover_entry_points_refuse_a_refined_session_before_paying`.
+    slug = disco.claim_session(request, cards=only, slug=slug_hint).slug
+    try:
         out = converse(disco, request, only=only)
-        if not out:
-            # Claiming first means an abandoned discovery leaves the request captured at revision 0
-            # rather than nothing, so say where it went — see
-            # `test_stopping_early_leaves_the_claimed_session_and_says_where`.
-            print(f"\nSaved request → {store.canonical_dir(slug)}")
-            return
-        print("\nGenerating the decision brief…")
-        brief = disco.draft_assessment(out, cards=only)
-        slug = disco.finalize_discovery(request, out, cards=only, slug=slug,
-                                        brief=brief, surface="cli-discover")
-        render_brief(out, brief)
-    # `canonical_dir` direct, and justified (#76): where the session landed is the answer, and
-    # `SessionRepository` exposes no path because a non-file backing has none. Same at the three
-    # other display sites in this file and in `deterministic/sessions.py`.
-    print(f"\nSaved session → {store.canonical_dir(slug)}")
-    if quick and out.questions:
-        print(f'\n→ Answer and refine: requivo answer {slug} "<your answers>"')
+    except DraftingFailed as e:
+        _rescue_drafted(disco, request, e, cards=only, slug=slug)
+    if not out:
+        # Claiming first means an abandoned discovery leaves the request captured at revision 0
+        # rather than nothing, so say where it went — see
+        # `test_stopping_early_leaves_the_claimed_session_and_says_where`.
+        print(f"\nSaved request → {store.canonical_dir(slug)}")
+        return
+
+    # **The write comes before the last paid call, and that ordering is the fix** (#202). The
+    # assessment used to be reasoned first and passed into `finalize_discovery`, so an `EngineError`
+    # on that ninth call discarded all eight drafted turns along with it. Persisting first costs
+    # nothing — `generate(slug, "brief")` reads the session back, absorbs the assessment's reasoning
+    # as a revision of its own and saves the document, which is the same path every other surface
+    # takes — and it turns the worst failure in the product into one retryable call. Pinned by
+    # `test_a_failed_assessment_leaves_the_discovery_saved_and_names_the_retry`.
+    slug = disco.finalize_discovery(request, out, cards=only, slug=slug,
+                                    brief=None, surface="cli-discover")
+    _say_saved(slug)
+    print("\nGenerating the decision brief…")
+    try:
+        gen = disco.generate(slug, "brief", surface="cli-discover")
+    except RequivoError as e:
+        print(f"\nThe decision brief failed: {e}", file=sys.stderr)
+        print(f"Your discovery is saved and nothing was lost — retry just this step with:\n"
+              f"  requivo brief {slug}", file=sys.stderr)
+        raise SystemExit(1) from e
+    # `gen.model`, not `out`: the assessment's reasoning has been absorbed into the model as a
+    # revision by now, so this renders what was actually saved rather than the pre-absorption copy.
+    render_brief(gen.model, gen.artifact)
 
 
 def _cmd_answer(a, client) -> None:

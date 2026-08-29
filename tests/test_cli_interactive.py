@@ -26,6 +26,7 @@ from _fakes import _ENGINE_REPLY, FakeClient, _run_app, full_slots, slot
 from requivo.cli import MAX_TURNS, app, converse
 from requivo.core.contracts import Brief, EngineOutput, Question, Slot, Summary
 from requivo.providers.base import ReasoningProvider
+from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 
@@ -335,7 +336,13 @@ def test_a_first_discovery_still_reaches_the_provider_on_both_paths(monkeypatch,
     fake = FakeClient(_ENGINE_REPLY, _BRIEF_REPLY)
     _run_app(["discover", _REQUEST, *argv_tail], client=fake)
     assert len(fake.calls) == calls
-    assert [m.current_revision for m in SessionService().list_sessions()] == [1]
+    # Two revisions on the interactive path, and the second one is #202's fix showing through. The
+    # converged model is applied first (revision 1), *then* `generate(slug, "brief")` absorbs the
+    # assessment's reasoning as a revision of its own (revision 2) — the same two steps every other
+    # surface takes to produce a brief. It used to be one apply, because the assessment was reasoned
+    # before anything was written, which is exactly what made a failure there cost all eight turns.
+    # Nothing documents a finished discovery as revision 1; the number is provenance, not a contract.
+    assert [m.current_revision for m in SessionService().list_sessions()] == [1 if argv_tail else 2]
 
 
 def test_stopping_early_leaves_the_claimed_session_and_says_where(monkeypatch, capsys):
@@ -388,3 +395,120 @@ def test_the_golden_harness_answers_a_turn_in_exactly_the_words_this_loop_does()
         [question], AnswerSheet({question.slot: ["a scripted reply"]}))
     assert from_the_harness == from_the_loop
     assert answered == [question.slot]
+
+
+# ── #202: a failure after the first paid turn must not cost the turns before it ───────────────────
+
+
+def _fail_draft_turn_on(monkeypatch, nth: int, exc: BaseException) -> None:
+    """Let the real `draft_turn` run, then raise `exc` on the `nth` call. Patched at the service
+    rather than in the transport because what these pin is `_cmd_discover`'s handling of a failed
+    turn, not how the SDK's error becomes an `EngineError` — `tests/test_provider.py` owns that."""
+    real = DiscoveryService.draft_turn
+    calls = {"n": 0}
+
+    def stub(self, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] == nth:
+            raise exc
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(DiscoveryService, "draft_turn", stub)
+
+
+def test_a_failed_assessment_leaves_the_discovery_saved_and_names_the_retry(monkeypatch, capsys):
+    """The single most expensive failure a real user could hit (#202).
+
+    The interactive loop drafts up to eight paid turns entirely in memory, then makes a ninth paid
+    call for the decision brief — and that ninth call used to come *before* the one write. An
+    `EngineError` on it discarded all eight turns, every answer the user had typed, and left the
+    session at revision 0 while printing a transport message that named neither the session nor a way
+    back. Retrying meant restarting the conversation at full price.
+
+    The write now comes first, so the failure costs one call instead of nine and the remedy is a verb
+    the user can actually run. The assertion that matters is the *revision*: a test checking only the
+    error message would have been green on the defect.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(DiscoveryService, "generate",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(EngineError("API unavailable")))
+    fake = FakeClient(_ENGINE_REPLY)
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=fake)
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], (
+        "the drafted model was not persisted before the assessment call, so the failure discarded it"
+    )
+    err = capsys.readouterr().err
+    assert f"requivo brief {sessions[0].slug}" in err, (
+        "the failure did not name the one command that finishes the run without re-paying for "
+        f"discovery; it said: {err!r}"
+    )
+
+
+def test_a_failed_draft_turn_persists_the_turns_that_succeeded(monkeypatch, capsys):
+    """The same loss, one call earlier: a transient failure *mid-loop* rather than on the assessment.
+
+    Turn 3 raising took turns 1 and 2 with it. The model is what this loop carries, so the last turn
+    that succeeded already holds every answer given so far — keeping it costs nothing and turns a
+    restart-from-scratch into a `requivo answer`, which works from any revision >= 1.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, EngineError("API unavailable"))
+    fake = FakeClient(_ASKING_REPLY)
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=fake)
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], "turn 1 was drafted, paid for, and dropped"
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err and "requivo answer" in err, (
+        f"the abort named neither the session nor the way to continue it: {err!r}"
+    )
+
+
+def test_a_first_turn_that_fails_leaves_the_session_at_revision_zero(monkeypatch, capsys):
+    """The one case with genuinely nothing to save, and it must not invent a revision out of it.
+
+    `_rescue_drafted` persists the last model that succeeded; on turn 1 there is none. The session
+    stays where `claim_session` left it and the remedy is `discover` again, not `answer` — pointing
+    at `answer` here would name a verb that has no model to refine.
+    """
+    _at_a_terminal(monkeypatch)
+    _fail_draft_turn_on(monkeypatch, 1, EngineError("API unavailable"))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [0]
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err
+    assert "requivo answer" not in err, "named a verb with no model to refine"
+
+
+def test_an_interrupt_inside_a_draft_turn_is_not_a_traceback(monkeypatch, capsys):
+    """`converse`'s existing catch wraps the `input()` loop, so a Ctrl-C landing *inside* the provider
+    call — the several-second window where it is most likely to land — went past it. It is not a
+    `RequivoError` either, so `app()` let it out as a raw traceback with the claimed session unnamed
+    and the drafted turn lost.
+    """
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, KeyboardInterrupt())
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], "the interrupt discarded a paid turn"
+    err = capsys.readouterr().err
+    assert "Interrupted." in err and sessions[0].slug in err
