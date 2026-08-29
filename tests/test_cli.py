@@ -77,6 +77,52 @@ def test_pc_demo_runs_offline_from_saved_example():
     assert "event-checkin-reconciliation/epic.md" in text  # the other artifacts are pointed to
 
 
+def test_the_demo_shows_the_computed_blast_radius_of_a_changed_answer():
+    """The demo used to end at the decision brief — one beat short of the only step in it that a
+    strong prompt cannot also produce (#223).
+
+    Steps ① to ③ are a request, an understanding and a judgment. Step ④ is the dependency graph:
+    `propagate` walks the edges the discovery recorded, so the same change yields the same list every
+    time. Asserting the *contents* rather than the header is the point — a heading can be printed
+    over an empty graph, and an empty blast radius is the shape this step must never silently take.
+    """
+    text = _run_app(["demo"])  # client=None — the whole step is offline
+    assert "④ CHANGE ONE ANSWER" in text
+    assert "Computed, not generated" in text
+    assert "IMPACT — what rests on: Constraints" in text
+    assert "DECISIONS TO RE-VALIDATE" in text
+    assert "PREMISES TO RE-EXAMINE" in text
+    assert "ARTIFACTS THAT GO STALE" in text
+    # The brief comes before it: the change-impact step is the answer to the brief, not a preamble.
+    assert text.index("DECISION BRIEF") < text.index("④ CHANGE ONE ANSWER")
+
+
+def test_the_demo_prose_describes_the_slot_it_actually_changes():
+    """Step ④'s prose names the deadline in words; `DEMO_CHANGED_SLOT` names it as a slot id. Nothing
+    connects the two but this test, and a payload whose `constraints` stops being about six weeks
+    would leave the demo describing a change it does not make (#223)."""
+    from requivo.cli import DEMO_CHANGED_SLOT
+    from requivo.core.persistence import load_model
+    from requivo.paths import DEMO
+
+    out = load_model(DEMO / "model.json")
+    assert "six weeks" in out.model[DEMO_CHANGED_SLOT].value.lower()
+    assert "six-week deadline" in _run_app(["demo"])
+
+
+def test_the_demo_ends_on_something_a_reader_without_a_key_can_do():
+    """The demo's premise is that no key is needed, and its closing step used to name only
+    `requivo discover`, which requires one (#223). A walkthrough that leaves its own audience with
+    nothing to do next has spent its whole effect on the last line."""
+    text = _run_app(["demo"])
+    tail = text[text.index("⑤ EVERYTHING ELSE"):]
+    keyless = tail[tail.index("still no API key"):tail.index("With a key")]
+    assert "requivo web" in keyless
+    assert "requivo impact" in keyless
+    # `discover` still appears, and is still marked as the one that costs something.
+    assert "With a key:" in tail
+
+
 def test_pc_brief_uses_injected_client():
     with _model_in_out("clitest-brief") as p:
         text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))

@@ -467,6 +467,10 @@ def _cmd_status(a, client) -> None:
 
 
 DEMO_SLUG = "event-checkin-reconciliation"
+# The slot step ④ changes. Named here rather than inline because the prose above it describes this
+# slot in words ("the six-week deadline"), and the two have to move together — `constraints` is where
+# that deadline lives in the bundled model.
+DEMO_CHANGED_SLOT = "constraints"
 
 
 def _fenced_text(markdown: str) -> str:
@@ -505,13 +509,35 @@ def _cmd_demo(a, client) -> None:
     print("\n\n③ THE DECISION BRIEF  — a judgment, not a recap (the differentiator)\n")
     print(assessment)
 
+    # **The step the whole engine exists for, and the demo used to stop one beat short of it** (#223).
+    # Steps ① to ③ are things a strong prompt can also do; this one is not, because it is not
+    # reasoned. `propagate` walks the dependency graph the discovery recorded — the slots each
+    # decision was `derived_from`, the slots each challenge `contests`, `ARTIFACT_SLOTS` — so the
+    # same change yields the same list every time, which is exactly the promise a generated answer
+    # cannot make. It is also free and offline, which is why it belongs in the keyless demo rather
+    # than behind a key. Pinned by `test_the_demo_shows_the_computed_blast_radius_of_a_changed_answer`.
+    print("\n\n④ CHANGE ONE ANSWER  — and this is what it costs\n")
+    print("  Say the six-week deadline moves. Nothing is re-analysed and nothing is asked of a")
+    print("  model: Requivo reads the dependency graph the discovery recorded and reports what")
+    print("  now rests on shaky ground. Computed, not generated — the same change gives the same")
+    print("  answer every time.")
+    render_impact(propagate(out, [DEMO_CHANGED_SLOT]))
+
     print("\n\n" + bar)
-    print("  ④ EVERYTHING ELSE IS A VIEW OF THE SAME MODEL")
+    print("  ⑤ EVERYTHING ELSE IS A VIEW OF THE SAME MODEL")
     print("     Regenerated from this one model.json, no re-discovery:")
     for name in ("epic.md", "acceptance-criteria.md"):
         if (demo / name).exists():
             print(f"       • examples/{DEMO_SLUG}/{name}")
-    print('\n  Your turn:   requivo discover "<your own request>"')
+    # **A closing step a reader can take without a key** (#223). The demo's whole premise is that no
+    # key is needed, and it used to end on the one command that requires one — so the visitor it was
+    # written for had nothing to do next.
+    print("\n  Keep going, still no API key:")
+    print("    requivo web")
+    print("        the browser interface, where a changed answer renders that block live")
+    print(f"    requivo impact examples/{DEMO_SLUG}/model.json <slot>")
+    print("        step ④ for any slot you name, from a clone of the repo")
+    print('\n  With a key:   requivo discover "<your own request>"')
     print(bar)
 
 
