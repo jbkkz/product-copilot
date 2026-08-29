@@ -43,7 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
-anthropic = ["anthropic>=0.40.0,<1"]
+anthropic = ["anthropic>=0.40.0,<2"]
 # Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
