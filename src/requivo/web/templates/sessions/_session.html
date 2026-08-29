@@ -4,6 +4,10 @@
    the page quietly describing the previous revision. #}
 <section id="session-body" aria-live="polite">
 
+  {# What the turn that produced this region cost. Set only by the answers route; the ordinary
+     session page renders this same partial with nothing to report and the include is a no-op. #}
+  {% include "_usage.html" %}
+
   {% if update is defined and update %}
   <section class="changed" aria-labelledby="changed-h">
     <h2 id="changed-h">What changed</h2>

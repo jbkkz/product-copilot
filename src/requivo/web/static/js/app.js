@@ -8,21 +8,28 @@
   var bar = document.getElementById("progress");
   var timer = null;
 
+  // Timers go through `window` rather than the bare globals so a test harness can supply its own
+  // clock. The elapsed signal below is behaviour *over time*, and a test that waits eleven real
+  // seconds for it is either slow or a race; with an injected clock the ten-second boundary is
+  // asserted exactly. Identical in a browser, where these are the same functions.
+  function every(fn, ms) { return window.setInterval(fn, ms); }
+  function stop(id) { window.clearInterval(id); }
+
   function start() {
     if (!bar) return;
     bar.classList.add("on");
     var w = 12;
     bar.style.width = w + "%";
-    clearInterval(timer);
+    stop(timer);
     // ease toward 90% while we wait; the request completing (or the page navigating) finishes it.
-    timer = setInterval(function () { w += (90 - w) * 0.12; bar.style.width = w + "%"; }, 300);
+    timer = every(function () { w += (90 - w) * 0.12; bar.style.width = w + "%"; }, 300);
   }
 
   function done() {
     if (!bar) return;
-    clearInterval(timer);
+    stop(timer);
     bar.style.width = "100%";
-    setTimeout(function () { bar.classList.remove("on"); bar.style.width = "0%"; }, 350);
+    window.setTimeout(function () { bar.classList.remove("on"); bar.style.width = "0%"; }, 350);
   }
 
   function markLoading(scope, on) {
@@ -43,6 +50,65 @@
   // either way, and without JS the page still works. It is the honest reading of what is happening.
   var inFlight = 0;
 
+  // **A wait that outlives its own copy has to keep speaking** (#236). The provider call is
+  // synchronous and the page blocks on it, for what invariants 2 and 12 describe as "seconds to
+  // minutes". Until this, the only status text was a fixed label — so past the point where a
+  // first-time reader expected an answer, the page looked exactly like one that had hung, and the
+  // natural next move on a blocked create is to reload or re-paste: a second session and a second
+  // paid call.
+  //
+  // Nothing happens for the first ten seconds, deliberately. A label that churns from the start is
+  // decoration on a fast call and carries no information on a slow one; the *change* is the signal,
+  // so it has to mean "this is taking longer than the copy promised" and nothing else. The original
+  // label is restored when the work ends, or a finished page would still read "still working".
+  // Pinned by `test_a_long_call_says_so_after_ten_seconds_rather_than_looking_stuck`, which drives
+  // this file against an injected clock.
+  var ELAPSED_AFTER_MS = 10000;
+  var LABEL_ATTR = "data-label";
+  var elapsedTimer = null;
+  var elapsedFrom = 0;
+
+  function statusNodes() {
+    // Queried fresh, for the same reason `applyBusy` does it: an htmx swap replaces these nodes
+    // mid-flight, and a saved list would keep writing into elements the document no longer holds.
+    return document.querySelectorAll(".spinner");
+  }
+
+  function baseLabel(node) {
+    var stored = node.getAttribute(LABEL_ATTR);
+    if (stored === null || stored === undefined) {
+      stored = node.textContent;
+      node.setAttribute(LABEL_ATTR, stored);
+    }
+    return stored;
+  }
+
+  function tickElapsed() {
+    var ms = Date.now() - elapsedFrom;
+    if (ms < ELAPSED_AFTER_MS) return;
+    var seconds = Math.floor(ms / 1000);
+    var nodes = statusNodes();
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].textContent = baseLabel(nodes[i]) + " still working (" + seconds + "s)";
+    }
+  }
+
+  function startElapsed() {
+    elapsedFrom = Date.now();
+    stop(elapsedTimer);
+    elapsedTimer = every(tickElapsed, 1000);
+  }
+
+  function stopElapsed() {
+    stop(elapsedTimer);
+    elapsedTimer = null;
+    var nodes = statusNodes();
+    for (var i = 0; i < nodes.length; i++) {
+      var stored = nodes[i].getAttribute(LABEL_ATTR);
+      if (stored !== null && stored !== undefined) nodes[i].textContent = stored;
+    }
+  }
+
   function applyBusy() {
     var busy = inFlight > 0;
     document.body.classList.toggle("busy", busy);
@@ -60,7 +126,14 @@
   // because listener order decides who runs first. The clamp below keeps the count from going
   // negative, which is the other half of the same bookkeeping.
   function setBusy(on) {
+    var was = inFlight;
     inFlight = Math.max(0, inFlight + (on ? 1 : -1));
+    // The elapsed clock is scoped to the whole page's busy period, not to one request, for the same
+    // reason the button muting is: two generations can be in flight at once, and restarting the
+    // count on the second would reset a reader's sense of how long they have been waiting, while
+    // stopping it on the first finishing would go quiet while work is still running.
+    if (was === 0 && inFlight > 0) startElapsed();
+    else if (was > 0 && inFlight === 0) stopElapsed();
     applyBusy();
   }
 
@@ -129,6 +202,9 @@
   window.addEventListener("pageshow", function () {
     if (bar) { bar.classList.remove("on"); bar.style.width = "0%"; }
     inFlight = 0;
+    // …and the clock with it. A restored page that keeps counting against a request that finished
+    // before the reader navigated away is the same lie as a page that says nothing, inverted.
+    stopElapsed();
     applyBusy();
   });
 })();

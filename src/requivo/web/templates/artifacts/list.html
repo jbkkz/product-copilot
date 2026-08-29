@@ -2,6 +2,10 @@
    not six options, it is no recommendation: the decision brief is the smallest output that answers
    "what would I need to review before estimating this?", and it is the one the flow leads to. #}
 <div id="artifacts-region">
+  {# What the generation that produced this region cost. Set only by the generate route; this
+     partial is also rendered inside the ordinary session page, where there is nothing to report and
+     the include is a no-op. #}
+  {% include "_usage.html" %}
   {% macro artifact_row(a) %}
   <div class="session-row">
     <span>

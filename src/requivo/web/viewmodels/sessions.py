@@ -90,6 +90,33 @@ def _readable_row(sessions: SessionService, meta) -> dict:
     }
 
 
+def _most_recent_first(items: list[dict]) -> list[dict]:
+    """Order the home page's rows the way its heading claims: the session that moved last, first.
+
+    **Ordering is presentation, so it happens here and not in the service** (#237). The rows arrive
+    from `SessionService.list_entries()` sorted by slug, which is correct for that method — it is what
+    `requivo session list` prints, and that output is a public surface whose order other callers read.
+    On a screen headed *Recent* it was simply wrong: with a handful of sessions the one touched five
+    minutes ago sat at the bottom while an abandoned `a-test` experiment led the page a returning
+    reader resumes from. `test_the_cli_listing_order_is_not_what_changed` is what says which of the
+    two moved.
+
+    Two sorts rather than one key, because Python's sort is stable and `reverse=True` does not reverse
+    the order of equal keys: the slug pass supplies the tie-break, and the recency pass overrides it
+    only where the instants differ. Second-precision timestamps collide often enough for that to
+    matter — without it, two sessions saved in the same second would swap places between reloads.
+
+    A row nobody could read carries an empty `updated_at`, deliberately (invariant 15: we did not
+    read a time, so we state none). An empty string is also the smallest string, so sorting on the
+    value alone would put every broken session at the *top*. `bool(...)` in the key is what pins them
+    last instead — the third state ordered explicitly rather than left to fall out of a comparison.
+    Pinned by `test_a_row_nobody_could_read_sorts_last_rather_than_first`.
+    """
+    items.sort(key=lambda r: r["slug"])
+    items.sort(key=lambda r: (bool(r["updated_at"]), r["updated_at"]), reverse=True)
+    return items
+
+
 def session_list(sessions: SessionService) -> list[dict]:
     """One row per local session for the home page.
 
@@ -121,7 +148,7 @@ def session_list(sessions: SessionService) -> list[dict]:
             items.append(_readable_row(sessions, entry.meta))
         except Exception as e:  # noqa: BLE001 - one member must not take the listing down
             items.append(_unreadable_row(entry.slug, str(e)))
-    return items
+    return _most_recent_first(items)
 
 
 def session_detail(sessions: SessionService, slug: str) -> dict:

@@ -64,25 +64,48 @@ def _make_session(slug="leave-approval", **model_over):
     return slug
 
 
+class Spend:
+    """The token counts the SDK reports on a response, under the names it uses.
+
+    The default fake reports `usage = None`, which is right for every test that is not about cost:
+    the provider then records a call with zero tokens and nothing prints. A test *about* the spend
+    has to say what was spent, so it passes one of these — the attribute names are the SDK's, because
+    `_complete` reads them by name and a rename there has to break these tests rather than quietly
+    zero them (#253).
+    """
+
+    def __init__(self, input_tokens=0, output_tokens=0, cache_read_input_tokens=0,
+                 cache_creation_input_tokens=0):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+
+
 class FakeClient:
     """Returns canned JSON replies in order; records each create() call so a test can assert a key was
-    never sent to the provider."""
+    never sent to the provider.
 
-    def __init__(self, *replies):
+    `spend` is what every reply reports as its usage — `None` by default, so the offline fake stays
+    free of cost machinery and the usage line stays absent everywhere it should be.
+    """
+
+    def __init__(self, *replies, spend=None):
         self._replies = list(replies)
+        self._spend = spend
         self.calls = []
         self.messages = self  # client.messages.create → self.create
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _FakeResponse(self._replies.pop(0))
+        return _FakeResponse(self._replies.pop(0), self._spend)
 
 
 class _FakeResponse:
-    def __init__(self, text):
+    def __init__(self, text, usage=None):
         self.content = [_Block(text)]
         self.stop_reason = "end_turn"
-        self.usage = None
+        self.usage = usage
 
 
 class _Block:
@@ -123,8 +146,8 @@ def client(raw_client):
 def with_provider(app):
     """Swap in a DiscoveryService backed by a FakeClient (shared across requests, so replies pop in
     order over a multi-step flow). Returns a function taking the reply sequence."""
-    def _install(*replies):
-        fake = FakeClient(*replies)
+    def _install(*replies, spend=None):
+        fake = FakeClient(*replies, spend=spend)
         disco = DiscoveryService(client=fake)
         app.dependency_overrides[get_discovery] = lambda: disco
         return fake

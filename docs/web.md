@@ -76,6 +76,11 @@ is not on any of these screens; the translation is defined once in `web/viewmode
   session that cannot be read — written by a newer Requivo, or left with a truncated file by a crash
   mid-write — is a **row that says so and names itself**, not an error over the whole page: one bad
   session used to hide the list of every other, and neither surface said which one it was (#7).
+  The list is ordered by when each session last moved, newest first, and a row nobody could read
+  sorts last — it states no timestamp at all, and an empty string would otherwise sort it to the top
+  (#237). Times read as *3 days ago* or *25 Aug 2026*, with the exact instant on the row's `title`.
+  The ordering lives in the view model, not in `SessionService.list_entries()`, which stays sorted by
+  slug because `requivo session list` is a public surface whose order other callers read.
 - **Advanced settings** — session name, product context cards, and whether to analyse now or just save
   the request. Collapsed by default: the server already knows whether a provider action can run, so it
   resolves that itself instead of asking. The API key is never a form field.
@@ -191,7 +196,12 @@ Even though it is a local app:
   request can never escape `.requivo/sessions/`.
 - Only the package's `static/` directory is served — never the workspace, `.requivo`, `.env` or `.git`.
 - The Anthropic key is read from the server environment and never rendered into HTML or logged.
-- All rendered content is HTML-escaped (Jinja autoescape); artifact Markdown is shown in a code block.
+- All rendered content is HTML-escaped (Jinja autoescape). The one value rendered with autoescape off
+  is a saved artifact, and it is off because the point is to *apply* markup rather than show it (#235):
+  `render/html.py` builds the document tag by tag, escaping every run of text that came out of the
+  file before any tag is constructed, so nothing a language model wrote or a user edited on disk can
+  become live markup. That renderer emits no attributes at all, which is also why it cannot conflict
+  with `style-src 'self'`.
 - `Referrer-Policy` is **`same-origin`**: the full referrer within this app, and nothing at all to any
   other origin. It was `no-referrer`, which is the one value a same-origin form post cannot survive —
   under it a browser replaces the `Origin` header with the opaque `null`, and the cross-site guard
@@ -230,7 +240,20 @@ Even though it is a local app:
   `epic.github.json`, `epic.gitlab.json`) remain CLI-only; `stories` and `estimate` are terminal
   analyses that produce no document at all.
 - Provider calls are synchronous (run in a worker thread so the event loop is not blocked); a request
-  waits for the result, with an HTMX loading state. No job queue, no WebSockets.
+  waits for the result, with an HTMX loading state. No job queue, no WebSockets. The copy beside a
+  provider-backed button says *usually under a minute*, which is what invariants 2 and 12 describe,
+  and after ten elapsed seconds the status text starts reporting how long it has been running (#236).
+  Nothing changes before then, deliberately: a label that churns from the start is decoration on a
+  fast call and says nothing about a slow one, so the *change* is the signal. With JavaScript off the
+  static copy is the whole signal, which is why it states what the wait is for.
+- **What a paid action cost is stated where it can be and logged always** (#253). The answers turn and
+  a document generation answer with a fragment, so the tokens and the estimate ride the response. The
+  two paths that create a session or run a deferred discovery answer with a 303 — a redirect has no
+  body to put a figure in, and carrying one to the following GET would need cross-request state this
+  app does not have — so those are recorded to the `requivo.web` logger, in the terminal you started
+  the server in. The log line is written from a `finally`, so a call that failed after spending tokens
+  still leaves a trace. Tokens are exact; the cost is an estimate carrying the date of the rate table
+  behind it, and a model with no price on file says so rather than borrowing a neighbour's rate.
 - **One provider call at a time, and that rule belongs to the page rather than to a form.** Every
   generator under *More documents* posts to the same region, so a second click while the first call is
   in flight bought a second paid call whose result the first swap then discarded — generated and saved
@@ -240,7 +263,12 @@ Even though it is a local app:
   keeps its spinner at full opacity so the muted ones read as muted rather than broken. None of this is
   a safety mechanism — the server holds the revision lock either way and the page still works with
   JavaScript disabled. It is the interface telling the truth about what is happening.
-- Artifacts are shown as escaped Markdown in a code block, not rendered to HTML.
+- Artifacts are rendered as formatted documents (#235). The dialect is closed to what
+  `render/markdown.py` actually emits — three heading levels, a blockquote, bullets one level deep,
+  ordered items, a pipe table, and bold/italic/code inline — and anything outside it degrades to
+  escaped text. No Markdown library is used and none is declared: a general parser would accept a
+  superset of that dialect over text a language model wrote, to render constructs nothing here
+  produces. The **Download** link is unchanged and still serves the exact bytes on disk.
 - Readiness is binary (ready + unresolved topics), as in the Core — no invented "levels".
 - **What changed** is shown after the answer that caused it, and is not persisted: reloading the page
   loses the narrative. What *is* persisted is the consequence — each document carries its own "needs
@@ -249,7 +277,11 @@ Even though it is a local app:
 - Single user, single workspace, no concurrent-editing UI beyond the optimistic-lock conflict message.
   Two tabs cannot corrupt a session — a generation carries the revision it read as a precondition, so a
   concurrent change surfaces as a conflict rather than being overwritten — but the second tab is not
-  live-updated; it finds out when it next submits.
+  live-updated; it finds out when it next submits. **It finds out before paying, though** (#205): the
+  answers form carries the revision it was rendered at, and when the session has already moved past it
+  the conflict is certain the moment the snapshot is read, so the turn is refused there rather than
+  after a full paid analysis whose result was guaranteed to be discarded. The precondition on the
+  apply stays — it covers the session moving *during* the call, which is a different race.
 
 ## Scope
 

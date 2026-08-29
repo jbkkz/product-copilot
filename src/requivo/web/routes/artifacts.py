@@ -10,14 +10,17 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 
+from requivo.render.html import markdown_to_html
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService, UnknownArtifactTypeError
 from requivo.services.discovery import GENERATABLE, DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import provider_status
 from requivo.web.dependencies import get_artifacts, get_discovery, get_sessions, safe_slug
+from requivo.web.spend import track_web_usage
 from requivo.web.templating import templates
 from requivo.web.viewmodels.labels import artifact_label
 from requivo.web.viewmodels.sessions import session_detail
+from requivo.web.viewmodels.usage import usage_view
 
 router = APIRouter()
 
@@ -37,9 +40,16 @@ def generate_artifact(
         raise UnknownArtifactTypeError(
             f"{artifact_type!r} is not a generated artifact; supported: {', '.join(GENERATABLE)}",
             details={"type": artifact_type})
-    discovery.generate(slug, artifact_type, surface=f"web-{artifact_type}")
+    # A generation is the paid step a reader is most likely to repeat — a document that reads badly
+    # invites another click — so it is the one whose cost was most worth stating and was stated
+    # nowhere (#253). The fragment it swaps in carries the footprint; `track_web_usage` also logs it,
+    # which is what covers the arm where the provider fails and this fragment is never rendered.
+    with track_web_usage(f"web-{artifact_type}") as spend:
+        discovery.generate(slug, artifact_type, surface=f"web-{artifact_type}")
+        usage = usage_view(spend)
     return templates.TemplateResponse(request, "artifacts/list.html", {
         "s": session_detail(sessions, slug), "provider": provider_status(),
+        "usage": usage,
     })
 
 
@@ -51,7 +61,19 @@ def view_artifact(
     slug: str = Depends(safe_slug),
     artifacts: ArtifactService = Depends(get_artifacts),
 ):
-    """View a saved artifact's Markdown (rendered escaped, in a code block) or download the raw file."""
+    """View a saved artifact as a formatted document, or download the raw Markdown file.
+
+    **Two views of one file, and only the view moved** (#235). The download stays byte-identical to
+    what `ArtifactService` saved, because the file is the artifact: it is what gets handed to a
+    tracker, a colleague or the CLI, and a browser reformatting it on the way out would break every
+    consumer that is not a browser. Pinned by
+    `test_downloading_an_artifact_still_serves_the_bytes_that_were_saved`.
+
+    The rendered half goes through `markdown_to_html`, which escapes every run of document text
+    before it builds any tag — see that module. It has to, because the template renders the result
+    with autoescape off; that is not a shortcut but the only way to apply markup at all, and it is
+    why the escaping is the renderer's job rather than Jinja's here.
+    """
     content = artifacts.show(slug, artifact_type)  # SessionNotFoundError → 404 if absent
     if download:
         filename = ARTIFACT_FILENAMES.get(artifact_type, f"{artifact_type}.md")
@@ -59,6 +81,6 @@ def view_artifact(
             "Content-Disposition": f'attachment; filename="{filename}"'})
     return templates.TemplateResponse(request, "artifacts/detail.html", {
         "slug": slug, "artifact_type": artifact_type,
-        "label": artifact_label(artifact_type), "content": content,
+        "label": artifact_label(artifact_type), "document": markdown_to_html(content),
         "provider": provider_status(),
     })

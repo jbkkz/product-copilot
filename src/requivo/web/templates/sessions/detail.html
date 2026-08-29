@@ -18,8 +18,12 @@
 {% if provider.available %}
 <form method="post" action="/sessions/{{ slug }}/discover">
   {% include "_csrf.html" %}
+  {# Same call, same promise — see the note beside the create form in `home.html` (#236). This page
+     had no spinner at all, so with JavaScript on there was nothing between the click and the result. #}
   <div class="toolbar"><button class="btn" type="submit">Analyse request</button>
-    <span class="muted">Takes a few seconds.</span></div>
+    <span class="muted">Usually under a minute — reading the request and building a first
+      understanding.</span>
+    <span class="spinner" role="status">Reading the request…</span></div>
 </form>
 {% else %}
 <div class="notice info">{{ provider.reason }} You can analyse this request from Claude Code or the

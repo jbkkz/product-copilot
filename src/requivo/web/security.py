@@ -357,7 +357,27 @@ async def _enforce(request: Request) -> None:
     if len(body) > MAX_BODY_BYTES:
         raise InputTooLargeError(
             f"the submitted form exceeds {MAX_BODY_BYTES:,} bytes", details={"limit": MAX_BODY_BYTES})
-    if not secrets.compare_digest(_submitted_token(request, body), _TOKEN):
+    # **Compared as bytes, because a token this check cannot read is a wrong token — not a crash**
+    # (#212). `secrets.compare_digest` on two `str` arguments raises `TypeError` unless both are
+    # ASCII-only, and neither side of `_submitted_token` is guaranteed to be: a form field is decoded
+    # from the body as UTF-8, and a header is decoded by Starlette as latin-1. So one accented
+    # character in a mangled token took the module's own stated rule — a check that cannot read its
+    # input has to refuse, not treat it as nothing to check — and broke it in the loudest available
+    # way. The `TypeError` escaped `_guard`'s two `except` arms, so it never became the 403 this line
+    # is written to raise; it propagated *past* `security_headers` and landed on the outermost 500
+    # handler, making the one crash path in the security module also the one response class served
+    # with no CSP, no nosniff and no Referrer-Policy.
+    #
+    # `surrogatepass` rather than a bare `.encode()` for the same reason the line is here at all: a
+    # lone surrogate would raise `UnicodeEncodeError` and reintroduce the identical shape one codec
+    # along. Neither path above can produce one today — that is precisely the kind of "today's
+    # callers happen to pre-filter it" argument this module declines to narrow a check on. Every
+    # `str` now has an encoding, so every input reaches a verdict.
+    #
+    # Pinned by `test_a_token_this_server_cannot_compare_is_refused_rather_than_crashing` and
+    # `test_a_latin1_token_header_reaches_the_refusal_rather_than_the_comparison`.
+    submitted = _submitted_token(request, body).encode("utf-8", errors="surrogatepass")
+    if not secrets.compare_digest(submitted, _TOKEN.encode("ascii")):
         raise MissingRequestTokenError(
             "this form did not carry a valid request token — reload the page and try again",
             details={})

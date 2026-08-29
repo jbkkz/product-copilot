@@ -75,6 +75,37 @@ def _require_revision_zero(slug: str, revision: int) -> None:
 
 
 
+def _require_no_conflict_yet(slug: str, expected_revision: int | None, snap: SessionSnapshot) -> None:
+    """A conflict that is already certain is refused before the paid call, not after it (#205).
+
+    `answer()` takes the revision the caller's form was rendered at and passes it to `update_model`
+    as an optimistic-locking precondition — which fires *after* the provider has reasoned a full
+    turn. But the snapshot read at the top of `answer()` already knows the session's current
+    revision, so when the two disagree the apply is guaranteed to fail and the turn is guaranteed to
+    be discarded: a second tab, the CLI or a back-button submit had moved the session on, and the
+    user was billed minutes of analysis for a result nothing would ever read.
+
+    This is invariant 13's own principle — the check is cheap and the call is not — applied to the
+    second gate that needed it rather than only to the revision-zero one. It does not replace the
+    precondition on the apply: the session can still move *during* the call, which is what
+    `expected_revision` on `update_model` is for. It removes the case where it had already moved
+    *before* it.
+
+    A caller that passes `None` (the CLI, which is single-user and holds no rendered form) is
+    unaffected: it has stated no expectation, so there is nothing to be stale.
+
+    Pinned by `test_a_stale_answers_form_is_refused_before_the_provider_is_paid`, whose assertion is
+    the provider call count — the 409 already happened before this gate existed, so a test asserting
+    only the refusal was green on the defect. `test_a_matching_answers_form_still_reaches_the_provider`
+    is the must-fire control.
+    """
+    if expected_revision is not None and expected_revision != snap.revision:
+        raise RevisionConflictError(
+            f"session '{slug}' is at revision {snap.revision}, not the expected "
+            f"{expected_revision} — reload the page and re-submit your answers",
+            details={"slug": slug, "expected": expected_revision, "actual": snap.revision})
+
+
 def _require_a_model(slug: str, snap: SessionSnapshot) -> EngineOutput:
     """Generation may only run on a session that *has* a model — the mirror of the rule above (#152).
 
@@ -285,9 +316,13 @@ class DiscoveryService:
         — a caller that knows better (the Web, which carries the revision the user saw in the form) can
         still pass its own. The turn reasons from one coherent `SessionSnapshot` — the revision it will
         be held to and the model it reasoned over are the same read, not two. A legacy `out/` session is
-        migrated first, so there is always a real revision to hold it to."""
+        migrated first, so there is always a real revision to hold it to.
+
+        A caller-supplied precondition that is *already* stale against the snapshot is refused here,
+        before the call — see `_require_no_conflict_yet` (#205)."""
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
+        _require_no_conflict_yet(slug, expected_revision, snap)
         out = self._need_provider().analyze(
             snap.request, current_model=snap.model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(

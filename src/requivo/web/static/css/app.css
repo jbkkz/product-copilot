@@ -440,12 +440,40 @@ ul.clean > li { padding: 10px 0; border-bottom: 1px solid var(--border); }
 ul.clean > li:last-child { border-bottom: 0; }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
-pre.artifact {
+/* The primary deliverable, laid out as a document rather than as source (#235). The container keeps
+   the card treatment it had as a `<pre>`; what changed is that its contents are now structure a
+   reader can scan instead of Markdown they have to parse. Prose measure is capped so a long risk
+   paragraph does not run the full width of a wide window. */
+.artifact {
+  display: block;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
-  box-shadow: var(--shadow); padding: 20px; overflow-x: auto; font-family: var(--mono);
-  font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-wrap: break-word;
-  color: var(--text); max-width: none;
+  box-shadow: var(--shadow); padding: 24px 28px; overflow-x: auto;
+  font-size: 15px; line-height: 1.65; color: var(--text);
 }
+.artifact > :first-child { margin-top: 0; }
+.artifact > :last-child { margin-bottom: 0; }
+.artifact h1 { font-size: 24px; margin: 0 0 4px; }
+.artifact h2 {
+  font-size: 16px; margin: 28px 0 10px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.artifact h3 { font-size: 14.5px; margin: 20px 0 6px; }
+.artifact p, .artifact li { max-width: 68ch; }
+.artifact ul, .artifact ol { padding-left: 22px; margin: 10px 0; }
+.artifact li { margin: 4px 0; }
+.artifact ul ul, .artifact ol ol { margin: 4px 0; }
+.artifact blockquote {
+  margin: 8px 0 20px; padding-left: 14px; border-left: 3px solid var(--border);
+  color: var(--muted); font-size: 13.5px;
+}
+.artifact code {
+  font-family: var(--mono); font-size: 12.5px;
+  background: var(--surface-2); border-radius: var(--r-sm); padding: 1px 5px;
+}
+.artifact table { border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+.artifact th, .artifact td {
+  border: 1px solid var(--border); padding: 7px 11px; text-align: left; vertical-align: top;
+}
+.artifact th { background: var(--surface-2); font-weight: 650; }
 
 /* ── notices ─────────────────────────────────────────────────────────────────*/
 .notice {
@@ -462,6 +490,12 @@ pre.artifact {
   display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 4px;
 }
 .backlink:hover { color: var(--link); text-decoration: none; }
+
+/* The footprint of the paid action that produced this region (#253). Deliberately quiet: it is a
+   receipt, not a result — a reader should be able to find it without it competing with what they
+   asked for. */
+.usage { font-size: 13px; margin: 0 0 14px; }
+.usage-note { opacity: .8; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -499,6 +533,11 @@ body.busy { cursor: progress; }
 
 .spinner { display: none; color: var(--muted); font-size: 13px; }
 .htmx-request .spinner, .htmx-request.spinner { display: inline; }
+/* A full-page form post (creating a session, running a deferred discovery) is not an htmx request,
+   so the two rules above never revealed the status text on the one path where the whole page blocks
+   on a paid call. `body.busy` is set by app.js for both kinds, which is what puts the elapsed-time
+   signal in front of the reader at the moment it matters most (#236). */
+body.busy .spinner { display: inline; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }

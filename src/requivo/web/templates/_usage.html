@@ -1,0 +1,25 @@
+{# What the action the reader just took cost (#253).
+
+   Rendered only when `usage` is set, which is only after a provider-backed POST — an offline page
+   passes nothing and this whole file is skipped, so reading a session never reports a spend.
+
+   Two shapes, and the second is the point. A priced call states an estimate with the date of the
+   rate table behind it, because an undated estimate reads exactly like a current one. A call the
+   rate table does not cover states the tokens, which are exact, and then says there is no price on
+   file — it never falls back to a neighbouring model's rate, which is how an estimate becomes an
+   invented bill. `cost_usd()` refuses to guess one layer down; this refuses to dress the refusal up.
+
+   Pinned by `test_an_unpriced_call_says_so_rather_than_guessing`. #}
+{% if usage is defined and usage %}
+<p class="usage muted">
+  This step used {{ "{:,}".format(usage.tokens) }} tokens
+  over {{ usage.calls }} call{{ '' if usage.calls == 1 else 's' }}{% if usage.cached %},
+  {{ "{:,}".format(usage.cached) }} of them served from cache{% endif %} —
+  {% if usage.cost %}est. ~${{ usage.cost }}
+    <span class="usage-note">(estimate{% if usage.rates_as_of %}, rates as of
+      {{ usage.rates_as_of }}{% endif %}; the token count is exact)</span>
+  {% else %}{{ usage.unpriced_reason }}
+    <span class="usage-note">(the token count above is exact)</span>
+  {% endif %}
+</p>
+{% endif %}

@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from requivo.core.persistence import canonical_dir
 from requivo.providers.errors import EngineError
+from requivo.services.artifacts import ArtifactService
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS
@@ -74,14 +76,67 @@ def test_answers_apply_and_return_status_partial(client, with_provider):
 
 
 def test_revision_conflict_is_clean(client, with_provider):
-    # Two replies: one for discovery, one for the answers turn (the turn runs before the apply where the
-    # optimistic-lock check fires).
-    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED),
-                  engine_reply(converged=True, problem=HIGH_EXPLICIT))
+    # One reply, for the discovery. The answers turn never reaches the provider: since #205 the
+    # certain conflict is detected against the snapshot *before* the call, so a second scripted reply
+    # would go unused. `test_a_stale_answers_form_is_refused_before_the_provider_is_paid` is what pins
+    # that position; this one pins that the refusal is still a clean 409 rather than a traceback.
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED))
     client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
     r = client.post("/sessions/leave-approval/answers",
                     data={"answers": "…", "expected_revision": "999"})  # stale expectation
     assert r.status_code == 409  # RevisionConflictError → clean 409, not a traceback
+
+
+def test_a_stale_answers_form_is_refused_before_the_provider_is_paid(client, with_provider):
+    """A conflict that is already certain must not be discovered by paying for it (#205).
+
+    `answer()` took the caller's `expected_revision`, read a fresh snapshot, ran the paid analyze
+    call, and only then applied with that precondition. When a second tab, the CLI or a back-button
+    form had moved the session past the revision the form was rendered at, the conflict was decided
+    the moment the snapshot was read — and the user was still billed for a full turn whose result was
+    guaranteed to be thrown away. This is invariant 13's own sentence, "the check is cheap and the
+    call is not", applied to the gate it was written for and not to this one.
+
+    **The assertion is the call count, not the 409.** The refusal already happened before the fix, at
+    the apply, so a test asserting only the status code was green on the defect — the same trap
+    `test_both_discover_entry_points_refuse_a_refined_session_before_paying` documents for the
+    revision-zero gate.
+    """
+    fake = with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval",
+                                   "provider": "anthropic"})
+    spent_on_discovery = len(fake.calls)
+
+    r = client.post("/sessions/leave-approval/answers",
+                    data={"answers": "…", "expected_revision": "999"})
+
+    assert r.status_code == 409
+    assert len(fake.calls) == spent_on_discovery, (
+        f"{len(fake.calls) - spent_on_discovery} provider call(s) were billed for a turn whose "
+        f"conflict was certain before the call — the gate is downstream of the reasoning")
+
+
+def test_a_matching_answers_form_still_reaches_the_provider(client, with_provider):
+    """The must-fire half of the test above (#205).
+
+    `len(fake.calls) == spent_on_discovery` is also true of a gate that refuses *every* answers turn,
+    of a route that stopped working and of a harness that never posted — so without this control the
+    pre-call check could be wrong in the widening-refusal direction and still look green.
+    """
+    fake = with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED),
+                         engine_reply(converged=True, problem=HIGH_EXPLICIT,
+                                      business_rules=HIGH_EXPLICIT))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval",
+                                   "provider": "anthropic"})
+    spent_on_discovery = len(fake.calls)
+
+    r = client.post("/sessions/leave-approval/answers",
+                    data={"answers": "Exceptions go to HR.", "expected_revision": "1"})
+
+    assert r.status_code == 200
+    assert len(fake.calls) == spent_on_discovery + 1, (
+        "a form rendered at the current revision has to reach the provider — the pre-call check "
+        "refused a turn it should have let through")
 
 
 # ── artifacts ─────────────────────────────────────────────────────────────────
@@ -99,6 +154,70 @@ def test_generate_brief_and_prd_and_view(client, with_provider):
     assert view.status_code == 200 and "Leave approval — PRD" in view.text
     dl = client.get("/sessions/leave-approval/artifacts/prd?download=1")
     assert dl.headers["content-disposition"].endswith('filename="prd.md"')
+
+
+def test_a_saved_artifact_reads_as_a_document_not_as_source(client, with_provider):
+    """The money screen, rendered (#235).
+
+    The decision brief is the product's stated primary deliverable — "the one to hand someone who has
+    a request and half an hour" — and it was served as literal `# Decision Brief` and `**Objective:**`
+    inside a monospace code block. The audience the web vocabulary exists for, the reader who must not
+    have to learn the engine's model, was handed Markdown source at the exact moment the product
+    delivers its value.
+    """
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT), BRIEF_REPLY)
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval",
+                                   "provider": "anthropic"})
+    client.post("/sessions/leave-approval/artifacts/brief")
+
+    page = client.get("/sessions/leave-approval/artifacts/brief").text
+    document = page.split('class="artifact"')[1]
+
+    assert "<h1>" in document and "<strong>" in document, "the document has no structure"
+    assert "# Decision Brief" not in document, "a heading marker reached the reader"
+    assert "**" not in document, "a bold marker reached the reader"
+
+
+def test_downloading_an_artifact_still_serves_the_bytes_that_were_saved(client, with_provider):
+    """Rendering is a *view*. The file is the artifact, and it is what the reader hands on — to a
+    tracker, to a colleague, to the CLI — so the download has to be byte-identical to what
+    `ArtifactService` saved. A renderer that quietly reformatted the download would break every
+    consumer that is not a browser."""
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT), BRIEF_REPLY)
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval",
+                                   "provider": "anthropic"})
+    client.post("/sessions/leave-approval/artifacts/brief")
+
+    saved = ArtifactService().show("leave-approval", "brief")
+    downloaded = client.get("/sessions/leave-approval/artifacts/brief?download=1")
+
+    assert downloaded.text == saved
+    assert "# Decision Brief" in saved, (
+        "must fire: the saved file really is Markdown, so the assertion above is comparing something")
+
+
+def test_hostile_markup_in_a_saved_artifact_is_shown_not_executed(client, with_provider):
+    """The rendered page turns Jinja's autoescape off for this one value, so the escaping has to be
+    complete before it gets there (#235).
+
+    Written to disk directly, which is the honest reproduction: an artifact file is a file the user
+    owns and can edit, and its content was written by a language model. `test_render_html.py` owns the
+    per-construct proof; this is the end-to-end one that says the page actually goes through it.
+    """
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT), BRIEF_REPLY)
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval",
+                                   "provider": "anthropic"})
+    client.post("/sessions/leave-approval/artifacts/brief")
+
+    saved = canonical_dir("leave-approval") / "artifacts" / "solution-assessment.md"
+    saved.write_text("# Owned\n\n<script>alert(1)</script>\n", encoding="utf-8")
+
+    page = client.get("/sessions/leave-approval/artifacts/brief").text
+
+    assert "<script>alert(1)</script>" not in page, "the page would run markup out of a saved file"
+    assert "&lt;script&gt;" in page, "the tag was dropped rather than shown, which hides the tampering"
+    assert "<h1>Owned</h1>" in page, (
+        "must fire: the document really was re-rendered, so the assertions above are about this file")
 
 
 def test_related_change_marks_artifact_stale(client, with_provider):
@@ -290,6 +409,7 @@ def test_a_resolved_session_can_still_be_refined(client, with_provider):
 
 _BUSY_HARNESS = Path(__file__).parent / "busy_harness.js"
 _ERROR_SWAP_HARNESS = Path(__file__).parent / "error_swap_harness.js"
+_ELAPSED_HARNESS = Path(__file__).parent / "elapsed_harness.js"
 
 
 def _busy_timeline() -> dict[str, dict]:
@@ -411,7 +531,105 @@ def test_every_rendered_button_is_reachable_by_the_page_wide_busy_rule(client, m
                 f"in static/js/app.js cannot reach it and it can still buy a provider call: {tag}")
 
 
-# ── error responses reach the eye (#203) ─────────────────────────────────────
+# ── an honest wait (#236) ────────────────────────────────────────────────────
+
+
+def _elapsed_timeline() -> dict[str, dict]:
+    """Execute the real `static/js/app.js` against a fake clock and report what the status text said,
+    second by second.
+
+    Skips loudly without node, for the reason `_busy_timeline` gives: a green run must not imply
+    coverage of browser behaviour nothing else in this suite can see.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH, so the elapsed-time signal in static/js/app.js was NOT "
+                    "asserted in this run — it is browser behaviour over time and nothing else in "
+                    "this suite can see it (#236)")
+    app_js = TEMPLATES_DIR.parent / "static" / "js" / "app.js"
+    proc = subprocess.run([node, str(_ELAPSED_HARNESS), str(app_js)], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 0, "the harness itself failed, nothing observed: " + proc.stderr
+    return {row["at"]: row for row in json.loads(proc.stdout)}
+
+
+def test_a_long_call_says_so_after_ten_seconds_rather_than_looking_stuck():
+    """A wait that outlives its own copy has to keep speaking (#236).
+
+    The provider call is synchronous and the page blocks on it; this repo's own invariants 2 and 12
+    put that at "seconds to minutes". The status text was a single static label, so past the point
+    where a first-time reader expected an answer the page looked identical to one that had hung — and
+    the natural next move on a blocked create is to reload or re-paste, which buys a second session
+    and a second paid call.
+
+    **The first assertion is the control, and it is the one that matters.** "The text changed" is
+    trivially satisfiable by a page that rewrites its label on every tick from the start, which would
+    say nothing about a long call and would be noise on a short one. The signal is that it holds still
+    through the first nine seconds and only then starts reporting.
+    """
+    t = _elapsed_timeline()
+    started = t["request started"]["text"]
+    eleven = t["eleven seconds in"]["text"]
+
+    # must fire: nothing changes while the wait is still within what the copy promised.
+    assert t["nine seconds in"]["text"] == started, (
+        "the status text moved before the wait was long enough to need explaining — a label that "
+        "always churns tells a reader nothing about a call that is genuinely slow")
+
+    assert eleven != started, (
+        "past ten seconds the page still said exactly what it said at second one, which is what a "
+        "hung page also says")
+    assert any("11s" in line for line in eleven), (
+        "the elapsed seconds have to be visible, got: " + repr(eleven))
+    assert any("20s" in line for line in t["twenty seconds in"]["text"]), (
+        "the signal has to keep moving — one update and then stillness is a page that hung later")
+
+    # The original label comes back, so a finished turn does not leave "still working" on screen.
+    assert t["request finished"]["text"] == started
+    assert t["request finished"]["liveTimers"] == 0, "the clock kept ticking after the call finished"
+
+    # A second turn counts from zero. Resuming the first one's total would open by claiming this
+    # call has already been running for half a minute.
+    assert t["second request, three seconds in"]["text"] == started
+
+    assert t["after pageshow"]["liveTimers"] == 0, (
+        "returning to a cached page must not leave a timer running against a request that is over")
+
+
+def test_no_provider_backed_button_still_promises_a_few_seconds():
+    """The copy and the measurement have to agree (#236).
+
+    "Takes a few seconds." sat beside both provider-backed buttons while CLAUDE.md's invariant 2 said
+    "Provider calls take seconds to minutes" and invariant 12 said "the call (which takes minutes)".
+    A promise the product's own documentation contradicts is worse than no promise: it sets an
+    expectation that expires, and what a reader does when it expires is resubmit.
+
+    Scanned as raw text over the templates rather than over a rendered page, because the claim is
+    about the copy that ships — a page rendered with no provider configured does not show it at all.
+    """
+    offenders = [p.name for p in sorted(TEMPLATES_DIR.rglob("*.html"))
+                 if "a few seconds" in p.read_text(encoding="utf-8")]
+    assert offenders == [], (
+        "these templates still promise 'a few seconds' for a call this repo documents as taking "
+        "seconds to minutes: " + repr(offenders))
+
+
+def test_the_no_js_path_still_states_how_long_it_will_take(client, monkeypatch):
+    """The elapsed counter is an enhancement; the honest static copy is the floor.
+
+    With JavaScript off there is no counter, so the page has to have said something true before the
+    call started. This is the must-fire half of the test above: deleting the copy outright would
+    satisfy "no page promises a few seconds" and leave the reader with nothing at all.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    assert "Usually under a minute" in client.get("/").text, (
+        "the create form states no duration at all, so a reader with JS off learns nothing")
+
+    client.post("/sessions", data={"request_text": "x", "slug": "later",
+                                   "provider": "create_only"})
+    assert "Usually under a minute" in client.get("/sessions/later").text, (
+        "the deferred-analysis page runs the same paid call and has to make the same promise")
 
 
 def _swap_decisions() -> dict[int, dict]:
