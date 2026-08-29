@@ -3,6 +3,9 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/jbkkz/requivo/security/advisories/new
     about: Please report vulnerabilities privately — do NOT open a public issue. See SECURITY.md.
+  - name: Question or idea
+    url: https://github.com/jbkkz/requivo/discussions
+    about: Anything that is not a bug and not yet a feature request. Start here if you are unsure.
   - name: Documentation
     url: https://github.com/jbkkz/requivo/blob/main/docs/README.md
-    about: How to run it, what each command does, and what the session format guarantees. Start here before filing.
+    about: How to run it, what each command does, and what the session format guarantees.
