@@ -2,8 +2,8 @@
   "target": "gitlab",
   "idempotency_label": "requivo-epic:leave-approval",
   "tracking_issue": {
-    "title": "Epic: Digital Leave Approval Workflow",
-    "description": "Replace the email/Excel leave process with a configurable, auditable digital workflow that enforces balance checks, routes multi-level approvals, and supports a pilot-first rollout.\n\n**Business value:** Cuts balance errors and approval delays, gives HR a full audit trail, and lets the platform scale the same workflow to new clients through configuration rather than rebuild.\n\n**In scope:**\n- Leave request submission and balance/quota validation\n- Configurable multi-level approval circuit (manager, optional HR above threshold)\n- Delegation of approval authority\n- Auto-escalation after 5 business days of inaction\n- HR-validated cancellation, including already-started leave\n- Email and in-app notifications on key workflow events\n- One-way sync of approved leave to calendar\n- Role-based permissions overlaying delegation\n- Per-client/country entitlement and circuit configuration\n- Audit trail of requests, approvals and rule changes\n- Pilot rollout for a single client/tenant\n\n**Out of scope:**\n- Payroll integration\n- Two-way calendar sync\n- Reporting dashboards and analytics beyond the audit log\n- Migration of historical leave requests\n- Authoring entitlement templates for countries beyond the pilot\n\n### Issues\n\n- [ ] Define the approval circuit configuration model\n- [ ] Extend Leave/Absence data model\n- [ ] Build the balance/quota check service\n- [ ] Implement the approval workflow engine\n- [ ] Add auto-escalation after 5 business days\n- [ ] Build delegation overlay on approval permissions\n- [ ] Build HR-validated cancellation flow\n- [ ] Configure role-based permissions\n- [ ] Wire up notifications for key workflow events\n- [ ] Integrate one-way calendar sync\n- [ ] Build audit trail for requests and rule changes\n- [ ] Build frontend for request submission, approval and cancellation\n- [ ] QA: acceptance and concurrency test suite\n- [ ] Configure pilot tenant and rollout",
+    "title": "Epic: Traceable Leave Approval Workflow",
+    "description": "Replace the informal, email-based leave approval process with a system where every leave request reaches an explicit, recorded decision \u2014 enforcing HR sign-off for long or over-balance requests and producing a full audit trail.\n\n**Business value:** Eliminates the recurring payroll surprise of unapproved leave and the compliance exposure of undocumented decisions; gives HR and the works council a defensible audit trail while keeping routine approvals fast.\n\n**In scope:**\n- Leave/Absence request lifecycle: submitted \u2192 manager review \u2192 HR review (mandatory above 10 days or over-balance) \u2192 approved/rejected\n- Manager delegation to a named substitute for a date range\n- 3-working-day stall detection and auto-escalation to HR\n- Cancellation flow with automatic same-night balance restoration\n- Nightly bidirectional sync with the legacy HR tool (balances, approvals, cancellations write-back)\n- Mismatch handling: requests during an unresolved sync mismatch proceed flagged at-risk, never blocked\n- Full audit trail (who approved/overrode/escalated/cancelled, when), retained 5 years\n- Reporting-line-based permissions and HR override rights\n- Single shared rule set for the pilot (no per-department/country configuration)\n\n**Out of scope:**\n- Per-department / per-country rule configuration\n- Migrating balance ownership off the legacy HR tool (post-pilot decision)\n- Generalizing the approval+delegation+escalation logic into a reusable cross-module circuit (noted as a future opportunity)\n- Platform-level compliance/audit-trail service reused by other modules (future opportunity)\n- Organizational enforcement against email-based approvals (policy/communication lever, not a build item)\n\n### Issues\n\n- [ ] Resolve the zero-mismatch metric vs. nightly-sync design conflict\n- [ ] Model the Leave/Absence request entity\n- [ ] Build the core request lifecycle state machine\n- [ ] Implement manager approval and named-substitute delegation\n- [ ] Implement mandatory HR sign-off for long/over-balance requests\n- [ ] Add stall detection and auto-escalation to HR\n- [ ] Implement cancellation with automatic balance restoration\n- [ ] Build nightly bidirectional sync with the legacy HR tool\n- [ ] Handle balance mismatches without blocking requests\n- [ ] Build the audit trail\n- [ ] Configure permissions for approval, override and delegation\n- [ ] Build audit trail reporting and export\n- [ ] Run end-to-end acceptance testing against pilot success criteria",
     "labels": [
       "epic",
       "requivo-epic:leave-approval"
@@ -13,19 +13,18 @@
   "issues": [
     {
       "ref": "#1",
-      "title": "Define the approval circuit configuration model",
-      "description": "Spike to design how approval circuits (manager, HR threshold, escalation rules) are configured per client, country and contract, since rules vary and this shapes the rest of the build.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Resolve the zero-mismatch metric vs. nightly-sync design conflict",
+      "description": "The pilot's success bar of 'zero unresolved balance mismatches at month end' assumes a level of accuracy the nightly (not real-time) sync design doesn't guarantee. Decide with the client whether the metric should be reworded as 'resolved within 24h' or whether over-balance checks need a live call to the legacy tool, before this is baked into acceptance testing.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "spike",
-        "config",
         "requivo-epic:leave-approval"
       ],
       "milestone": "Pilot"
     },
     {
       "ref": "#2",
-      "title": "Extend Leave/Absence data model",
-      "description": "Add approval status, approver chain, balance snapshot, delegation reference, escalation timestamp and calendar reference to the existing Leave/Absence entity.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Model the Leave/Absence request entity",
+      "description": "Build the Leave/Absence data model (employee, dates, duration, status, approver chain, balance reference, over-balance flag, at-risk flag). Field-level detail beyond what the workflow needs was inferred, not itemized by the client \u2014 confirm before finalizing the schema.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
         "feature",
@@ -35,8 +34,8 @@
     },
     {
       "ref": "#3",
-      "title": "Build the balance/quota check service",
-      "description": "Real-time check of remaining balance at submission and re-check at each approval step; must be concurrency-safe for overlapping/simultaneous requests.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Build the core request lifecycle state machine",
+      "description": "Implement states submitted \u2192 manager review \u2192 HR review \u2192 approved/rejected, with cancellation as a parallel transition. This is the backbone every other rule (HR sign-off, escalation, cancellation) plugs into.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
         "feature",
@@ -46,19 +45,20 @@
     },
     {
       "ref": "#4",
-      "title": "Implement the approval workflow engine",
-      "description": "Build the state machine for submitted -> manager -> optional HR -> approved/rejected, driven by the configured circuit from #1.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Implement manager approval and named-substitute delegation",
+      "description": "Manager approves by default following the reporting line; support delegating approval authority to a named substitute for a specific date range.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
         "feature",
+        "permissions",
         "requivo-epic:leave-approval"
       ],
       "milestone": "Pilot"
     },
     {
       "ref": "#5",
-      "title": "Add auto-escalation after 5 business days",
-      "description": "Timer-based escalation to the next approver/HR when no action is taken; must handle business-day calculation and be race-safe against last-minute approvals.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Implement mandatory HR sign-off for long/over-balance requests",
+      "description": "Route to HR review whenever duration exceeds 10 working days or the request exceeds available balance; over-balance requests are allowed but must be flagged and cannot be manager-approved alone. Include HR override authority over any decision.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
         "feature",
@@ -68,19 +68,19 @@
     },
     {
       "ref": "#6",
-      "title": "Build delegation overlay on approval permissions",
-      "description": "Allow a delegate to act on behalf of an approver without duplicating permission logic; ensure delegate actions race safely against the escalation timer.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Add stall detection and auto-escalation to HR",
+      "description": "If a request has no named backup approver and sits unresolved for 3 working days, auto-escalate it to HR so no request stalls silently.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
-        "permissions",
+        "feature",
         "requivo-epic:leave-approval"
       ],
       "milestone": "Pilot"
     },
     {
       "ref": "#7",
-      "title": "Build HR-validated cancellation flow",
-      "description": "Separate workflow for cancelling a request, including leave already in progress, requiring explicit HR validation before finalizing.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Implement cancellation with automatic balance restoration",
+      "description": "Allow cancellation while submitted, or up to 48h before start if already approved; restore balance automatically the same night without requiring HR confirmation.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "backend",
         "feature",
@@ -90,8 +90,42 @@
     },
     {
       "ref": "#8",
-      "title": "Configure role-based permissions",
-      "description": "Implement permission rules for Employee, Manager, HR and Administrator, with HR as sole editor of approved requests and sole validator of cancellations.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Build nightly bidirectional sync with the legacy HR tool",
+      "description": "Sync balances from the legacy tool (source of truth during the pilot) and write back approvals/cancellations the same night. Treat this as the pilot's dual-system dependency \u2014 an explicit post-pilot direction for balance ownership is still open.\n\n_Part of epic: Traceable Leave Approval Workflow_",
+      "labels": [
+        "integration",
+        "backend",
+        "requivo-epic:leave-approval"
+      ],
+      "milestone": "Pilot"
+    },
+    {
+      "ref": "#9",
+      "title": "Handle balance mismatches without blocking requests",
+      "description": "When the nightly sync surfaces a disagreement, queue it for HR resolution the next morning; new requests submitted during that window proceed against the last-known balance and are flagged at-risk rather than blocked.\n\n_Part of epic: Traceable Leave Approval Workflow_",
+      "labels": [
+        "backend",
+        "feature",
+        "requivo-epic:leave-approval"
+      ],
+      "milestone": "Pilot"
+    },
+    {
+      "ref": "#10",
+      "title": "Build the audit trail",
+      "description": "Log every approval, override, escalation and cancellation with actor and timestamp, retained 5 years for works-council compliance. Must cover at-risk and mismatch-window decisions, not just the happy path.\n\n_Part of epic: Traceable Leave Approval Workflow_",
+      "labels": [
+        "backend",
+        "feature",
+        "qa",
+        "requivo-epic:leave-approval"
+      ],
+      "milestone": "Pilot"
+    },
+    {
+      "ref": "#11",
+      "title": "Configure permissions for approval, override and delegation",
+      "description": "Approval rights follow the reporting line; HR can override any decision; a manager can delegate to a named substitute for a bounded date range. Verify these rules hold consistently across the manager and HR review states.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "permissions",
         "backend",
@@ -100,66 +134,23 @@
       "milestone": "Pilot"
     },
     {
-      "ref": "#9",
-      "title": "Wire up notifications for key workflow events",
-      "description": "Send email and in-app notifications on submission, approval, rejection, escalation and cancellation, routed to the correct role/actor.\n\n_Part of epic: Digital Leave Approval Workflow_",
-      "labels": [
-        "integration",
-        "backend",
-        "requivo-epic:leave-approval"
-      ],
-      "milestone": "Pilot"
-    },
-    {
-      "ref": "#10",
-      "title": "Integrate one-way calendar sync",
-      "description": "Push approved leave dates to the external calendar system; system remains source of truth, no calendar-to-system sync.\n\n_Part of epic: Digital Leave Approval Workflow_",
-      "labels": [
-        "integration",
-        "backend",
-        "requivo-epic:leave-approval"
-      ],
-      "milestone": "Pilot"
-    },
-    {
-      "ref": "#11",
-      "title": "Build audit trail for requests and rule changes",
-      "description": "Log every state transition, approval decision and edit to entitlement/circuit templates for compliance and traceability.\n\n_Part of epic: Digital Leave Approval Workflow_",
-      "labels": [
-        "backend",
-        "feature",
-        "requivo-epic:leave-approval"
-      ],
-      "milestone": "Pilot"
-    },
-    {
       "ref": "#12",
-      "title": "Build frontend for request submission, approval and cancellation",
-      "description": "Employee-facing submission form, manager/HR approval queue with balance visibility, and cancellation request UI.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "title": "Build audit trail reporting and export",
+      "description": "Provide a view/export of the audit trail sufficient for works-council and internal review, including turnaround time and mismatch/at-risk resolution tracking against the pilot's success metrics.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
         "frontend",
-        "feature",
-        "requivo-epic:leave-approval"
-      ],
-      "milestone": "Pilot"
-    },
-    {
-      "ref": "#13",
-      "title": "QA: acceptance and concurrency test suite",
-      "description": "Cover approve/reject scenarios across the full circuit, overlapping-request revalidation, escalation timing, and delegate-vs-escalation race conditions.\n\n_Part of epic: Digital Leave Approval Workflow_",
-      "labels": [
+        "backend",
         "qa",
         "requivo-epic:leave-approval"
       ],
       "milestone": "Pilot"
     },
     {
-      "ref": "#14",
-      "title": "Configure pilot tenant and rollout",
-      "description": "Set up the pilot client's approval circuit, entitlement rules and permissions in an isolated tenant configuration, without migrating historical leave data.\n\n_Part of epic: Digital Leave Approval Workflow_",
+      "ref": "#13",
+      "title": "Run end-to-end acceptance testing against pilot success criteria",
+      "description": "Validate: 100% of requests reach a recorded decision, no silent drops; mismatches resolved per the agreed metric wording; median turnaround under 2 working days; full manager adoption in-app; audit trail complete for a sample including at-risk and cancellation cases.\n\n_Part of epic: Traceable Leave Approval Workflow_",
       "labels": [
-        "config",
-        "migration",
+        "qa",
         "requivo-epic:leave-approval"
       ],
       "milestone": "Pilot"
@@ -167,18 +158,8 @@
   ],
   "links": [
     {
-      "source_ref": "#1",
-      "target_ref": "#2",
-      "type": "blocks"
-    },
-    {
       "source_ref": "#2",
       "target_ref": "#3",
-      "type": "blocks"
-    },
-    {
-      "source_ref": "#2",
-      "target_ref": "#4",
       "type": "blocks"
     },
     {
@@ -187,12 +168,12 @@
       "type": "blocks"
     },
     {
-      "source_ref": "#4",
+      "source_ref": "#3",
       "target_ref": "#5",
       "type": "blocks"
     },
     {
-      "source_ref": "#4",
+      "source_ref": "#3",
       "target_ref": "#6",
       "type": "blocks"
     },
@@ -202,7 +183,7 @@
       "type": "blocks"
     },
     {
-      "source_ref": "#4",
+      "source_ref": "#3",
       "target_ref": "#7",
       "type": "blocks"
     },
@@ -212,17 +193,12 @@
       "type": "blocks"
     },
     {
-      "source_ref": "#4",
+      "source_ref": "#8",
       "target_ref": "#9",
       "type": "blocks"
     },
     {
-      "source_ref": "#5",
-      "target_ref": "#9",
-      "type": "blocks"
-    },
-    {
-      "source_ref": "#7",
+      "source_ref": "#1",
       "target_ref": "#9",
       "type": "blocks"
     },
@@ -232,33 +208,33 @@
       "type": "blocks"
     },
     {
-      "source_ref": "#4",
-      "target_ref": "#11",
+      "source_ref": "#5",
+      "target_ref": "#10",
+      "type": "blocks"
+    },
+    {
+      "source_ref": "#6",
+      "target_ref": "#10",
       "type": "blocks"
     },
     {
       "source_ref": "#7",
-      "target_ref": "#11",
+      "target_ref": "#10",
       "type": "blocks"
     },
     {
       "source_ref": "#4",
-      "target_ref": "#12",
-      "type": "blocks"
-    },
-    {
-      "source_ref": "#7",
-      "target_ref": "#12",
-      "type": "blocks"
-    },
-    {
-      "source_ref": "#8",
-      "target_ref": "#12",
+      "target_ref": "#11",
       "type": "blocks"
     },
     {
       "source_ref": "#5",
-      "target_ref": "#13",
+      "target_ref": "#11",
+      "type": "blocks"
+    },
+    {
+      "source_ref": "#10",
+      "target_ref": "#12",
       "type": "blocks"
     },
     {
@@ -277,13 +253,13 @@
       "type": "blocks"
     },
     {
-      "source_ref": "#10",
+      "source_ref": "#11",
       "target_ref": "#13",
       "type": "blocks"
     },
     {
-      "source_ref": "#13",
-      "target_ref": "#14",
+      "source_ref": "#12",
+      "target_ref": "#13",
       "type": "blocks"
     }
   ]

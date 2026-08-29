@@ -6,7 +6,7 @@ a changed answer that moves the scope. Read it in order; no install required.
 | Step | File | What it is |
 |---|---|---|
 | 1 | [`request.md`](request.md) | The raw input — a single vague sentence. |
-| 2 | [`model.json`](model.json) | The understanding the analysis built: what is known, what is assumed, what is still open. |
+| 2 | [`model.json`](model.json) | The understanding the analysis built: what is known, what is assumed, and the decisions and challenges that rest on each. |
 | 3 | [`solution-assessment.md`](solution-assessment.md) | The decision brief — what to review before committing to the scope. |
 | 4 | [`prd.md`](prd.md) | A PRD generated from the *same* understanding. |
 | 5 | [`acceptance-criteria.md`](acceptance-criteria.md) | Given/When/Then checklist, from the *same* understanding. |
@@ -20,11 +20,9 @@ Steps 3 through 10 are all views of step 2. Any other document (user stories, an
 the same `model.json` — that is the point: the shared understanding is the source of truth, and every
 document is generated from it.
 
-> **Note on step 3.** `solution-assessment.md` is a frozen capture from an earlier run, and predates
-> the current decision-brief layout (which opens with *what is confirmed* and *what is being assumed*,
-> read straight off the model). Regenerating it takes one provider call — see below. The filename
-> stays `solution-assessment.md` because that is the artifact's name on disk in every session; only
-> what a reader is shown changed.
+Every file here was generated in one sitting from the same `model.json`, which is why they agree with
+each other. The filename `solution-assessment.md` is the artifact's name on disk in every session;
+what a reader is shown is a decision brief.
 
 ## Reproduce it
 
@@ -73,10 +71,11 @@ around.
 **1 — Analyse the request.**
 
 ```bash
-requivo discover "We'd like a leave approval system."
+requivo discover "We'd like to set up a leave approval system."
 ```
 
-Among the questions it raises is one about how the new system and the existing HR tool relate.
+Among the questions it raises is one about the existing HR tool: whether the new system reads from it,
+replaces it, or lives beside it.
 
 **2 — Answer it one way.**
 
@@ -85,8 +84,9 @@ requivo answer <slug> "During the pilot both systems stay in sync — the legacy
                        keeps being written to, and balances have to match on both sides."
 ```
 
-Two-way synchronization is now part of the understanding, and the reasoning follows it: reconciliation
-rules, conflict handling, an ownership rule per field.
+Two-way synchronization is now part of the understanding, and the next questions follow it rather than
+the original request: which system owns a balance, what happens when the two disagree, and whether a
+request may be approved while a mismatch is still open.
 
 **3 — Generate the brief, and check what rests on what.**
 
@@ -95,8 +95,11 @@ requivo brief  <slug>
 requivo impact <slug> integrations     # no provider call — a query over the dependency graph
 ```
 
-`impact` answers the question *before* you spend anything: which decisions rest on the integration
-topic, and which documents consume it.
+The order matters. The brief is where the reasoning layer is produced: the decisions the analysis is
+standing on, and the challenges it is raising against them, each recorded with the topics it rests on.
+`impact` then reads those edges, and answers *before* you spend anything — which decisions rest on the
+integration topic, and which documents consume it. On the model committed here it returns one decision
+to re-validate and two premises back in question.
 
 **4 — Change the answer.**
 
@@ -111,10 +114,11 @@ requivo answer <slug> "Correction: the migration is one-time. After cutover the 
 requivo status <slug>
 ```
 
-The integration topic has changed, the two-way-sync decision is flagged for re-validation, and the
-brief is marked as needing an update. Nothing was regenerated on your behalf — Requivo reports, you
-decide. That report is computed, not generated: the same change would produce the same list every
-time, which is exactly what a generated answer cannot promise.
+The integration topic has changed, so the decision about what a request may do while a balance
+mismatch is open is flagged for re-validation, both premises the brief raised about the sync are back
+in question, and the brief itself is marked as needing an update. Nothing was regenerated on your
+behalf — Requivo reports, you decide. That report is computed, not generated: the same change would
+produce the same list every time, which is exactly what a generated answer cannot promise.
 
 In the Web interface the same sequence renders as a **What changed** block with a **Needs review**
 list, immediately under the answer you just gave.

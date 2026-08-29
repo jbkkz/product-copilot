@@ -51,6 +51,11 @@ requivo demo
 
 From a clone instead, with nothing installed: `uv run requivo demo`.
 
+It ends on the step the engine exists for: one answer changes, and Requivo reports which decisions
+have to be re-validated and which documents go stale. That block is computed from the dependency
+graph rather than reasoned, so the same change gives the same answer every time — and it costs
+nothing, which is why the keyless demo is where it is shown.
+
 ## 1. Web — start here
 
 A local, single-user browser workspace, and the shortest path from a request to something reviewable.
