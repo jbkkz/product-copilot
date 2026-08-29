@@ -131,6 +131,15 @@ to the understanding it came from.
 The session format is versioned and shared. A session created here opens in the CLI and in Requivo Web,
 and one created there opens here.
 
+**Sessions stay out of git.** `.requivo/` is written into the directory you are working in, which here
+is your project repository, and `request.md` holds the request verbatim. That is usually a client's own
+words. So the first time Requivo creates `.requivo/`, it writes `.requivo/.gitignore` containing `*`:
+git ignores the whole store, and your own `.gitignore` is left alone.
+
+It is written once and never put back. Delete it if you want sessions committed, and they stay
+committed. To share one session instead of all of them, use `requivo session export <slug> -o <slug>.zip`
+and `requivo session import <slug>.zip`.
+
 ## What this is, and what it is not
 
 What it is: structured discovery, with **known / assumed / open** kept apart on purpose; assumptions

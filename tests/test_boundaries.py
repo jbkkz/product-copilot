@@ -881,6 +881,14 @@ _SURFACE_STORAGE_ALLOWLIST = {
         "four sites, all about a directory: `session init` and `session import` report where the "
         "session landed, and `session export` zips the tree. See the cli.py entry."
     ),
+    ("deterministic/sessions.py", "ensure_store_dir"): (
+        "creates `.requivo/sessions/` before the import moves a session into it. On a fresh "
+        "workspace `session import` is one of the calls that can bring the store root into "
+        "existence, and whichever one does writes the privacy `.gitignore` (#211) -- a statement "
+        "about a directory appearing, which is the same kind of fact as the `canonical_dir` entry "
+        "above and has no backing-neutral form: a repository with no filesystem has no root to "
+        "create."
+    ),
     ("deterministic/sessions.py", "migrate_legacy"): (
         "converts a session in the retired `out/` layout into one in `.requivo/sessions/`. A "
         "statement about two filesystem layouts, which is what the verb *is*; a backing with "

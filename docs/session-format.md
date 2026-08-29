@@ -13,6 +13,7 @@ plugin and the Web app all read and write the same layout.
 
 ```text
 .requivo/
+├── .gitignore              `*` — written once, on creation; see "Sessions and git" below
 ├── sessions/
 │   └── <slug>/
 │       ├── session.json        metadata + provenance + artifact status
@@ -25,6 +26,10 @@ plugin and the Web app all read and write the same layout.
     └── <slug>.lock             the write lock (empty; safe to delete when nothing is running)
 ```
 
+- **`.gitignore`** holds a single `*`, so git ignores the whole store — including the ignore file
+  itself, the self-ignoring pattern `uv` writes into `.venv/`. It is written **once**, by whichever
+  call first creates `.requivo/`, and never rewritten. See "Sessions and git" below for why, and for
+  how to opt out.
 - **model.json** is the product; every artifact is regenerated from it.
 - **revisions/** freezes each applied model, so history is inspectable and `requivo impact` can reason
   from a past point.
@@ -62,6 +67,34 @@ plugin and the Web app all read and write the same layout.
   against run a moment apart, and a session created or removed in that gap reads exactly the same
   way for a tick without being residue at all — the same rule that keeps `doctor` from concluding
   what a non-session entry under `sessions/` is.
+
+## Sessions and git
+
+`.requivo/` is written into your **workspace** — the directory you run from, unless `--workspace` or
+`REQUIVO_WORKSPACE` says otherwise. For the Claude Code plugin that is your project repository by
+construction, and `request.md` holds the originating request **verbatim**: for most users that is a
+client's own words, and often material they are under an obligation not to publish.
+
+So Requivo writes `.requivo/.gitignore` containing `*` the first time it creates the store. A routine
+`git add .` picks up nothing, and nothing has to be added to *your* `.gitignore` — a file Requivo has
+no business editing.
+
+**Written once, and never restored.** The trigger is the store directory not existing yet, not the
+ignore file being missing. If you delete it, sessions become ordinary tracked files and stay that way;
+if you edit it, your edit survives. Both are the same branch, and both are deliberate: committing
+sessions is a reasonable choice for a team whose requests are not confidential, and Requivo should not
+quietly overrule it on the next write.
+
+**To share one session rather than all of them**, use the archive verbs — they work whatever the
+ignore file says:
+
+```bash
+requivo session export <slug> -o <slug>.zip
+requivo session import <slug>.zip
+```
+
+A colleague importing that archive into a workspace with no `.requivo/` yet gets the ignore file too,
+for the same reason: the request text inside is someone's client's, not theirs.
 
 ## Revisions and provenance
 

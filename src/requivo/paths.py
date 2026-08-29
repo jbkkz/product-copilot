@@ -39,12 +39,22 @@ def workspace_root() -> Path:
     return Path(override) if override else Path.cwd()
 
 
+def store_root() -> Path:
+    """The whole on-disk store: `<workspace>/.requivo/`. `session_root()` and `lock_root()` are its
+    two children, and both derive from here rather than restating the directory name.
+
+    It exists as a name of its own because something has to own *the moment this directory comes into
+    existence* — that is where the privacy `.gitignore` is written (`ensure_store_dir` in
+    `core/persistence.py`, #211). Evaluated per call, like every other root."""
+    return workspace_root() / ".requivo"
+
+
 def session_root() -> Path:
     """Canonical home for sessions: `<workspace>/.requivo/sessions/`. Each session is a `<slug>/`
     directory under here (session.json + model.json + revisions/ + request.md + artifacts/). This is
     where every session lives; the retired `output_root()` (`./out`) is read only by
     `requivo session migrate`."""
-    return workspace_root() / ".requivo" / "sessions"
+    return store_root() / "sessions"
 
 
 def lock_root() -> Path:
@@ -73,7 +83,7 @@ def lock_root() -> Path:
     change to the skip one step from exposing them. Out here there is no coupling to undo.
 
     Evaluated per call, like every other root."""
-    return workspace_root() / ".requivo" / "locks"
+    return store_root() / "locks"
 
 
 def output_root() -> Path:

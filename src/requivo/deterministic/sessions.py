@@ -47,6 +47,7 @@ from requivo.core.errors import (
     UnreadableArchiveError,
 )
 from requivo.core.integrity import check_session, check_session_dir
+from requivo.core.persistence import ensure_store_dir
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _print_json, _read_source, _resolve_cards
 from requivo.deterministic.doctor import _REPAIR_HINT, _RESTORABLE_CARD_CODES, _RESTORE_HINT, _card_health
@@ -744,7 +745,12 @@ def _cmd_session_import(a, client) -> None:
         raise SessionNotFoundError(f"archive not found: {display_token(str(archive))}",
                                    details={"archive": str(archive)})
     root = session_root()
-    root.mkdir(parents=True, exist_ok=True)
+    # Not a bare `mkdir`: on a fresh workspace `session import` is one of the calls that can bring
+    # `.requivo/` into existence -- the second door of invariant 14, receiving a colleague's session
+    # before this user has run one of their own -- and the privacy `.gitignore` is written by
+    # whichever call creates the root (#211). Pinned by
+    # `test_import_into_a_fresh_workspace_writes_the_privacy_gitignore`.
+    ensure_store_dir(root)
     repo = SessionService().repo
 
     try:

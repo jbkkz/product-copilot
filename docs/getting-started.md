@@ -133,3 +133,16 @@ requivo impact <slug> permissions          # what rests on a slot
 ```
 
 Full reference: [cli.md](cli.md).
+
+## Your sessions stay out of git
+
+Sessions are written to `.requivo/` in the directory you run from — your project repository, for the
+Claude Code plugin. They hold the originating request **verbatim**, which for most users is a client's
+own words.
+
+Requivo writes `.requivo/.gitignore` containing `*` the first time it creates that directory, so
+`git add .` picks up nothing and your own `.gitignore` is left alone. It is written once and never
+restored: delete it to commit sessions deliberately and they stay committed. To share a single session
+instead, use `requivo session export <slug> -o <slug>.zip` and `requivo session import <slug>.zip`.
+
+Details in [session-format.md](session-format.md#sessions-and-git).
