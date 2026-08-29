@@ -117,6 +117,31 @@ def test_doctor_distinguishes_a_model_override_from_the_default(workspace, monke
         "the fixture no longer overrides anything -- pick a model id that is not the default")
 
 
+def test_a_model_override_that_is_set_but_empty_is_reported_as_one(workspace, monkeypatch):
+    """`name` and `source` are read from the same fact or they can disagree, and they did.
+
+    `current_model_name()` is `os.getenv("MODEL", MODEL_DEFAULT)`, which falls back only when the
+    variable is **absent**; `source` tested the value for truth, which an exported-but-empty `MODEL`
+    fails. So `MODEL=` produced `{"name": "", "source": "default"}` -- a row naming neither the
+    default it claimed nor the override that was really in force, in the verb whose entire purpose is
+    being accurate in a bug report. Both now key on presence.
+
+    And the human row stops printing a tick over an empty name. An empty model id is not a working
+    install: every provider call would send no model at all, so this is a finding `doctor` should
+    state rather than a blank it should render calmly."""
+    monkeypatch.setenv("MODEL", "")
+    report = _run_json(["doctor", "--json"])
+    assert report["model"]["source"] == "env", (
+        "an exported MODEL is an override whether or not it has a value")
+    # And `name` still reports what a call would actually send, which is the empty string -- not the
+    # default it is not going to use. Reporting `claude-sonnet-5` here would be the comfortable lie.
+    assert report["model"]["name"] == ""
+
+    text = _run(["doctor"])
+    assert "MODEL is set but empty" in text
+    assert "✅ model" not in text, "an empty model id must not render as a healthy row"
+
+
 def test_the_doctor_human_view_shows_both_rows(workspace, monkeypatch):
     """A `--json` key nobody prints is a fact a bug reporter still has to know to ask for. The human
     rendering is what a paste actually contains."""

@@ -755,6 +755,29 @@ def test_a_slug_carries_content_words_rather_than_the_request_opening():
         "We need a way to archive old contracts")
 
 
+def test_the_stopword_list_keeps_the_words_its_own_comment_promises_to_keep():
+    """#245, and the guard the comment needed rather than a second copy of it.
+
+    The rule above `_SLUG_STOPWORDS` is that a word is in it only if it is a function word in some
+    in-scope language and **not a content word in any of them**, and the comment names the seven
+    that were weighed and excluded on exactly that basis. `son` was in the list anyway -- the Spanish
+    "(they) are", which is also an ordinary English noun -- so the paragraph claiming it was absent
+    sat two lines above the line that contained it. Nothing checked, because the rule was prose.
+
+    Asserted as the *class*, not the instance: the seven the comment names, so the next word added
+    for one language's sake and refuted by another goes red under the comment that promised it
+    would not."""
+    from requivo.core.persistence import _SLUG_STOPWORDS
+
+    for word in ("son", "hay", "sin", "man", "war", "bin", "hat"):
+        assert word not in _SLUG_STOPWORDS, (
+            f"{word!r} is an ordinary English content word and the comment above _SLUG_STOPWORDS "
+            "says it was deliberately excluded")
+    # Must fire: the list is the real one and is not empty, so the loop above is a real check.
+    assert {"the", "nous", "der", "para"} <= _SLUG_STOPWORDS
+    assert "son" in derive_slug("Track the son of the account owner").split("-")
+
+
 def test_a_slug_folds_diacritics_rather_than_splitting_the_word():
     """#245. `[a-z0-9]+` treats an accented letter as a separator, so it does not merely drop the
     accent -- it cuts the word in half. 'systeme' arrived as 'syst' + 'me' and the slug read

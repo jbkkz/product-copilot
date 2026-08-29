@@ -88,8 +88,8 @@ def doctor_report() -> dict:
     # of the same lookup, which would be right until the day the default moved. Importing it is a
     # read that orchestrates nothing, and the argument for that is written into the boundary guard
     # surface-provider allowlist, which is where such a claim is kept honest.
-    model = {"name": current_model_name(),
-             "source": "env" if os.getenv("MODEL") else "default"}
+    override = os.getenv("MODEL")
+    model = {"name": current_model_name(), "source": "default" if override is None else "env"}
 
     return {
         "requivo_version": __version__,
@@ -368,8 +368,14 @@ def _cmd_doctor(a, client) -> None:
     # The three rows the bug template asks a reporter to assemble by hand (#247). They sit at the
     # top, together, because the point is that a paste of the first four lines is a bug report.
     print(f"  {ok} os              {r['os']}")
-    origin = "MODEL env override" if r["model"]["source"] == "env" else "default"
-    print(f"  {ok} model           {r['model']['name']}  ({origin})")
+    if not r["model"]["name"]:
+        # An exported-but-empty MODEL is not a working install: every provider call would send no
+        # model id at all. `doctor` answers *is anything wrong*, so this is a finding it states
+        # rather than a blank it renders calmly under a tick.
+        print("  ❌ model           MODEL is set but empty — a provider call would send no model id")
+    else:
+        origin = "MODEL env override" if r["model"]["source"] == "env" else "default"
+        print(f"  {ok} model           {r['model']['name']}  ({origin})")
     # The console's codec, reported before anything that depends on it. Only ever a line when there
     # is something to say: on a UTF-8 terminal — every developer's, which is why this shipped — the
     # answer is uninteresting and a clean report should not grow a row per non-finding.

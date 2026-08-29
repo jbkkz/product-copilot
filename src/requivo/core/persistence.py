@@ -412,10 +412,19 @@ _LATIN_EXPANSIONS = str.maketrans({
 # function words in French, Spanish or German. And nothing is here for being *common*: `system`,
 # `data`, `report` and `user` open a great many requests and are exactly what the handle should say.
 #
-# One accepted cost, stated rather than discovered: `die` is the German article and an English verb,
-# so "the service must not die quietly" loses a word it would have liked. The German article is far
-# the more frequent of the two in a request opening, and the fallback below covers the degenerate
-# case, so the trade is taken knowingly.
+# The exclusion rule is prose, so it has a guard rather than a promise:
+# `test_the_stopword_list_keeps_the_words_its_own_comment_promises_to_keep` asserts those seven are
+# absent. `son` was in the Spanish half anyway, two lines under the paragraph saying it was not.
+#
+# Two accepted costs, stated rather than discovered. **`die`** is the German article and an English
+# verb, so "the service must not die quietly" loses a word it would have liked; the German article is
+# far the more frequent of the two in a request opening, so the trade is taken knowingly. And
+# **matching is case-folded ASCII, so a short function word collides with an acronym** — `er` eats
+# the ER in "an ER diagram", and `im`, `am`, `us`, `et`, `est` and `par` are the same shape. That is
+# the real residual limit of packing four languages into one flat set, and it is not fixable by
+# pruning: dropping `er` costs German requests far more often than "ER diagram" costs English ones.
+# The fallback below is what keeps it survivable — a request eaten down to fewer than two survivors
+# uses its words as typed — and an explicit `--slug` is the way past it when it matters.
 _SLUG_STOPWORDS = frozenset("""
     a an and are as at be been being but by can could d did do does for from had has have i if in
     into is it its like ll m me my need needed needs of on or our ours ourselves please re s should
@@ -426,7 +435,7 @@ _SLUG_STOPWORDS = frozenset("""
     sa se ses sommes sont sur tu un une vos votre vous y aimerions aimerait souhaitons souhaiterions
     voudrais voudrions voulons
     al como con del el ella ellos es esta estas este esto estos la las lo los mi necesita necesitamos
-    necesito nuestra nuestro para podemos podria podriamos por que queremos quiero se ser son su sus
+    necesito nuestra nuestro para podemos podria podriamos por que queremos quiero se ser su sus
     tiene tenemos un una unas unos deberiamos
     aber alle als am auch auf aus bei benotigen benotigt brauche brauchen braucht das dass dem den
     der des die dies diese ein eine einem einen einer eines er es fur haben ich ihr ihre im ist kein
