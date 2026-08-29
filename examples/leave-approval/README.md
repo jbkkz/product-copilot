@@ -28,17 +28,36 @@ document is generated from it.
 
 ## Reproduce it
 
-Each command regenerates one view from the saved understanding — no re-analysis needed. Output lands
-in `out/leave-approval/` (it doesn't overwrite the files you're reading here):
+Every document below is a view of step 2, so the first thing to do is put step 2 where the engine
+keeps understandings: in a session. Both of these are offline — no API key, and no re-analysis, since
+the model already exists.
 
 ```bash
-requivo brief    examples/leave-approval/model.json                          # the decision brief
-requivo prd      examples/leave-approval/model.json                          # the PRD
-requivo criteria examples/leave-approval/model.json                          # the acceptance criteria
-requivo epic     examples/leave-approval/model.json --export-json --github --gitlab # epic.md + neutral export + tracker plans
-requivo release  examples/leave-approval/model.json v1.0                     # the release notes
-requivo stories  examples/leave-approval/model.json                          # user stories (also: requivo estimate)
+requivo session init examples/leave-approval/request.md --slug leave-approval
+requivo model apply  leave-approval examples/leave-approval/model.json --expected-revision 0
 ```
+
+You now hold this example's understanding at revision 1, and two more commands read it without
+spending anything:
+
+```bash
+requivo status leave-approval                # the understanding checklist and readiness
+requivo impact leave-approval integrations   # what rests on the integration topic
+```
+
+The generators take it from there. Each is one provider call and needs `ANTHROPIC_API_KEY`:
+
+```bash
+requivo brief    leave-approval                                   # the decision brief
+requivo prd      leave-approval                                   # the PRD
+requivo criteria leave-approval                                   # the acceptance criteria
+requivo epic     leave-approval --export-json --github --gitlab   # epic.md + neutral export + tracker plans
+requivo release  leave-approval v1.0                              # the release notes
+requivo stories  leave-approval                                   # user stories (also: requivo estimate)
+```
+
+Documents land in `.requivo/sessions/leave-approval/artifacts/`, under whichever directory you ran
+from — the files you are reading here are never written to.
 
 The `model.json` here was produced by a real interactive discovery from `request.md`.
 
