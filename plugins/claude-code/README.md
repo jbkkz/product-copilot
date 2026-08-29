@@ -174,8 +174,15 @@ honestly empty.
 
 The `requivo` CLI reaches the same sessions and carries generators the plugin does not wrap: acceptance
 criteria, an epic with tracker exports for GitHub and GitLab, release notes, and the terminal-only
-`stories` and `estimate` analyses. Requivo Web is a local browser workspace over those same sessions:
-paste a request, answer the questions, watch what each answer moved.
+`stories` and `estimate` analyses. Those run in Requivo's own **optional API mode**, so unlike the six
+skills they need the `requivo[anthropic]` extra and an `ANTHROPIC_API_KEY`. That is the opposite of
+what the install section above says you need for the plugin, and both are true: the skills reason in
+your Claude Code session, these verbs call the Anthropic API directly. `requivo doctor` reports
+whether you have the extra and the key.
+
+Requivo Web is a local browser workspace over those same sessions: paste a request, answer the
+questions, watch what each answer moved. It needs a key to analyse and generate; reading sessions the
+plugin created needs none.
 
 ## More
 
