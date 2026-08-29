@@ -13,7 +13,13 @@ from _fakes import _ENGINE_REPLY, _FakeBlock, _model_in_out, _run_app
 
 from requivo.core.errors import RequivoError
 from requivo.providers.anthropic import run
-from requivo.providers.anthropic.pricing import PRICING_AS_OF, price_call, price_per_mtok
+from requivo.providers.anthropic.pricing import (
+    _LAUNCH_PRICE_PER_MTOK,
+    _PRICE_PER_MTOK,
+    PRICING_AS_OF,
+    price_call,
+    price_per_mtok,
+)
 from requivo.providers.errors import EngineError
 from requivo.render.terminal import render_usage
 from requivo.usage import CallRecord, UsageLedger, track_usage
@@ -24,10 +30,23 @@ def priced(model: str, on: _date = _date(2026, 9, 1), **kw) -> CallRecord:
 
     The ledger holds no price table since #167 — it is arithmetic over rates the provider stamped,
     which is what lets it be provider-neutral without a registry. So a test that wants a *priced*
-    call has to price it, and `on` is where the calendar now lives: it defaults past the launch
-    window so an assertion states one rate rather than whichever is live when the suite runs.
+    call has to price it, and `on` is where the calendar lives: it is stated rather than defaulted
+    to today, so an assertion states one rate rather than whichever is live when the suite runs.
     """
     return price_call(CallRecord(model=model, **kw), on)
+
+
+@pytest.fixture
+def launch_priced_model(monkeypatch):
+    """A model on an intro rate that lapses, held in the tables for the length of one test.
+
+    The expiry mechanism is worth a guard whether or not any shipped model happens to be using it
+    today — and a guard aimed at a shipped rate is one a price change silently retires (#254).
+    """
+    name = "fixture-model-on-launch-pricing"
+    monkeypatch.setitem(_PRICE_PER_MTOK, name, (3.00, 15.00))
+    monkeypatch.setitem(_LAUNCH_PRICE_PER_MTOK, name, (2.00, 10.00, "2026-08-31"))
+    return name
 
 
 @pytest.fixture(autouse=True)
@@ -75,18 +94,40 @@ def test_usage_ledger_totals_and_cost():
     ledger.record(priced("claude-sonnet-5", input_tokens=1_000_000))
     ledger.record(priced("claude-sonnet-5", output_tokens=1_000_000))
     assert ledger.input_tokens == 1_000_000 and ledger.output_tokens == 1_000_000
-    # Standard rates: 1M input @ $3 + 1M output @ $15 = $18.00.
-    assert abs(ledger.cost_usd() - 18.0) < 1e-6
+    # Standard rates: 1M input @ $2 + 1M output @ $10 = $12.00.
+    assert abs(ledger.cost_usd() - 12.0) < 1e-6
 
 
-def test_launch_pricing_applies_until_it_lapses():
-    # Sonnet 5 runs on launch pricing ($2/$10) through 2026-08-31, then reverts to $3/$15. A dated
-    # table with no expiry gets exactly one of those two days right.
-    assert price_per_mtok("claude-sonnet-5", _date(2026, 8, 31)) == (2.00, 10.00)
-    assert price_per_mtok("claude-sonnet-5", _date(2026, 9, 1)) == (3.00, 15.00)
+def test_launch_pricing_applies_until_it_lapses(launch_priced_model):
+    """A dated table with no expiry gets exactly one of these two days right.
+
+    Written against a *fixture* model rather than a live one, and that is the whole point (#254).
+    The first version of this test asserted Sonnet 5's own launch window, so it measured the
+    mechanism only while that window was open — and when the introductory $2/$10 quietly became the
+    standard price, the assertion that would have caught the stale 3.00/15.00 sitting in the table
+    was the one thing guaranteed to be edited alongside it. A guard whose subject can be retired by
+    a calendar is a guard with an expiry date of its own.
+    """
+    assert price_per_mtok(launch_priced_model, _date(2026, 8, 31)) == (2.00, 10.00)
+    assert price_per_mtok(launch_priced_model, _date(2026, 9, 1)) == (3.00, 15.00)
 
 
-def test_a_call_is_priced_at_the_rate_in_force_when_it_was_made():
+def test_no_launch_rate_outlives_the_day_it_lapses():
+    """The other half: nothing in the shipped table is past its own end date.
+
+    `price_per_mtok` is right on both sides of an expiry, so a lapsed row is not a wrong *estimate*
+    — it is a row nobody has looked at since it stopped doing anything, which is the state the
+    stale Sonnet entry was found in.
+    """
+    today = _date.today()
+    for model, (_in, _out, until) in _LAUNCH_PRICE_PER_MTOK.items():
+        assert _date.fromisoformat(until) >= today, (
+            f"{model}'s launch rate lapsed on {until}; confirm the standard rate against Anthropic's "
+            f"pricing page, fold it into _PRICE_PER_MTOK and drop this row"
+        )
+
+
+def test_a_call_is_priced_at_the_rate_in_force_when_it_was_made(launch_priced_model):
     """The behaviour the stamp buys, and the reason the ledger no longer takes an `on` (#167).
 
     A ledger that looked a rate up at *render* time would re-price a call made under the launch
@@ -94,10 +135,10 @@ def test_a_call_is_priced_at_the_rate_in_force_when_it_was_made():
     each right for its own day, and both readable from one ledger.
     """
     launch = UsageLedger()
-    launch.record(priced("claude-sonnet-5", _date(2026, 8, 31),
+    launch.record(priced(launch_priced_model, _date(2026, 8, 31),
                          input_tokens=1_000_000, output_tokens=1_000_000))
     standard = UsageLedger()
-    standard.record(priced("claude-sonnet-5", _date(2026, 9, 1),
+    standard.record(priced(launch_priced_model, _date(2026, 9, 1),
                            input_tokens=1_000_000, output_tokens=1_000_000))
     assert abs(launch.cost_usd() - 12.0) < 1e-6     # launch: 2 + 10
     assert abs(standard.cost_usd() - 18.0) < 1e-6   # standard: 3 + 15
@@ -105,9 +146,9 @@ def test_a_call_is_priced_at_the_rate_in_force_when_it_was_made():
 
 def test_usage_ledger_cost_counts_cache_tiers():
     ledger = UsageLedger()
-    # cache read ≈ 0.1× input rate, cache write ≈ 1.25× input rate (Sonnet standard input $3/Mtok)
+    # cache read ≈ 0.1× input rate, cache write ≈ 1.25× input rate (Sonnet standard input $2/Mtok)
     ledger.record(priced("claude-sonnet-5", cache_read_tokens=1_000_000, cache_write_tokens=1_000_000))
-    assert abs(ledger.cost_usd() - (0.3 + 3.75)) < 1e-6
+    assert abs(ledger.cost_usd() - (0.2 + 2.5)) < 1e-6
 
 
 def test_usage_ledger_cost_is_none_for_unpriced_model():

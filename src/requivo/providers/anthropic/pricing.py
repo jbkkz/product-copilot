@@ -16,25 +16,36 @@ from datetime import date
 
 from requivo.usage import CallRecord
 
-# USD per 1M tokens (input, output), from the Anthropic pricing reference as of 2026-08-01. This
-# yields an *estimate*, never a bill: prices drift and intro rates lapse, so the renderer stamps this
-# date and labels the number an estimate. Tokens are ground truth from the API; cost is the only
-# thing here that can go stale — keep this table updateable and honest, not authoritative.
-PRICING_AS_OF = "2026-08-01"
+# USD per 1M tokens (input, output). Read from Anthropic's published rates at
+# https://platform.claude.com/docs/en/about-claude/pricing on 2026-08-29. This yields an *estimate*,
+# never a bill: prices drift and intro rates lapse, so the renderer stamps this date and labels the
+# number an estimate. Tokens are ground truth from the API; cost is the only thing here that can go
+# stale — keep this table updateable and honest, not authoritative. Whoever edits it next: state
+# where the rate was read and when, because the previous edit did not and the omission is what made
+# the entry below unfalsifiable for a release.
+PRICING_AS_OF = "2026-08-29"
 _PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    # 2.00/10.00 is the *standard* rate, not an intro one. It was carried here as 3.00/15.00 — Sonnet
+    # 4.6's rate, inherited from the previous Sonnet generation rather than confirmed — behind a
+    # launch row that expired 2026-08-31, so every cost line this product printed from September
+    # would have over-reported by exactly 50%. Anthropic's pricing page now states the introductory
+    # $2/$10 "is now the standard price" and that the scheduled increase "will not occur" (#254).
+    "claude-sonnet-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
 
 # Launch pricing that lapses on a known date: model → (input, output, last day inclusive). A dated
 # table with no notion of expiry is wrong twice — it over-reports while an intro rate is live, then
 # under-reports the day someone edits the rate in and forgets the lapse. Encoding the end date lets
-# the estimate be right on both sides of it without another edit. `claude-sonnet-5` (the default
-# model) is on launch pricing through 2026-08-31, reverting to the standard 3.00/15.00 above.
-_LAUNCH_PRICE_PER_MTOK: dict[str, tuple[float, float, str]] = {
-    "claude-sonnet-5": (2.00, 10.00, "2026-08-31"),
-}
+# the estimate be right on both sides of it without another edit.
+#
+# Empty today, and deliberately kept: no model is on a published intro rate, and the mechanism is
+# what makes the next one a one-line edit instead of a calendar reminder. Its guard does not depend
+# on this table being populated — `test_launch_pricing_applies_until_it_lapses` pins the expiry
+# semantics against a fixture model, because a mechanism test written against the live rate is a
+# test the calendar can retire, which is how this table came to be believed.
+_LAUNCH_PRICE_PER_MTOK: dict[str, tuple[float, float, str]] = {}
 
 
 def price_per_mtok(model: str, on: date | None = None) -> tuple[float, float] | None:

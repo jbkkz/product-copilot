@@ -424,15 +424,17 @@ def test_cost_estimate_bills_a_write_premium_and_plain_input_differently():
     # cache_write (1.25x) to input (1.0x) with no arithmetic change here. If these two ever bill the
     # same, the saving becomes invisible and the issue's "the number rendered is correct" stops
     # holding.
+    # The ratio, not the two dollar figures, is what this asserts. Stated absolutely it read as a
+    # guard on the write premium and behaved as a guard on Sonnet 5's rate, so a rate correction went
+    # red here with nothing to say about caching at all (#254).
     from datetime import date
 
-    on = date(2026, 9, 1)  # past the sonnet-5 launch-price expiry, so the rate is the plain 3.00
+    on = date(2026, 9, 1)
     cached = UsageLedger()
     cached.record(price_call(CallRecord(model="claude-sonnet-5", cache_write_tokens=1_000_000), on))
     plain = UsageLedger()
     plain.record(price_call(CallRecord(model="claude-sonnet-5", input_tokens=1_000_000), on))
-    assert cached.cost_usd() == pytest.approx(3.75)
-    assert plain.cost_usd() == pytest.approx(3.00)
+    assert cached.cost_usd() == pytest.approx(plain.cost_usd() * 1.25)
     assert cached.cost_usd() > plain.cost_usd()
 
 
