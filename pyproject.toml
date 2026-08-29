@@ -43,7 +43,25 @@ dependencies = [
 
 [project.optional-dependencies]
 # API-powered mode: `pip install 'requivo[anthropic]'`. Not needed to use Requivo inside Claude Code.
-anthropic = ["anthropic>=0.40.0,<1"]
+#
+# `<2` rather than `<1`, and per the rule in `.github/dependabot.yml` the widened ceiling is a
+# statement that we have run against the new major rather than a bot's guess. What that meant here,
+# because CI could not supply it: the whole suite green at 1.2.0 on py3.10-3.13 plus the macOS and
+# Windows legs, pyright green, and -- the part no leg reaches, since nothing in CI makes a wire call
+# -- one real `discover` and one real rejected-credential run against 1.2.0, checking the paid path
+# end to end and the typed-error arms `completion.py` branches on (#201). The token counts came back
+# populated, which is the same question #294 asks about the ledger's `getattr` defaults.
+#
+# The v1 break is the move to the `httpx2` fork plus removals; the SDK surface this provider uses is
+# `Anthropic()`, `messages.create`, `.content`/`.stop_reason`/`.usage` and five exception classes,
+# and none of it appears in that list. We construct no `httpx` object and pass none in, which is the
+# migration's one real edit.
+#
+# **The interpreter now decides the SDK major.** anthropic 1.x requires Python >=3.10 while this
+# package declares >=3.9, so `pip install 'requivo[anthropic]'` resolves 0.x on 3.9 and 1.x above it
+# -- correct by construction, and the reason the 3.9 legs and the rest no longer test the same SDK.
+# That is an argument for moving the supported-Python window (#298), not against this ceiling.
+anthropic = ["anthropic>=0.40.0,<2"]
 # Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
