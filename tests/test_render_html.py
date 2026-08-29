@@ -10,10 +10,16 @@ injection test that stops being collected looks exactly like one that passes.
 
 **The dialect is closed on purpose.** These documents are written by `render/markdown.py`, in this
 repository, so the constructs are known: three heading levels, a blockquote, bullets one level deep,
-ordered items, checkbox items, a pipe table, and `**bold**` / `_italic_` / `` `code` `` inline. A
-general Markdown library would parse a superset — and would parse it over text a language model
-wrote and a user can edit on disk. Anything outside the dialect is rendered as escaped text, which is
-the same thing the `<pre>` block did and no worse than where this started.
+ordered items, a pipe table, and `**bold**` / `_italic_` / `` `code` `` inline. A general Markdown
+library would parse a superset — and would parse it over text a language model wrote and a user can
+edit on disk. Anything outside the dialect is rendered as escaped text, which is the same thing the
+`<pre>` block did and no worse than where this started.
+
+A checkbox marker is deliberately outside that list even though the writers emit one; `render/html.py`
+says why, and `test_a_checkbox_marker_renders_as_text_and_not_as_an_input` is where that decision is
+held. This file used to list "checkbox items" as part of the dialect while the module it tests did
+not and never implemented one — the two-docstrings-disagreeing form of the same defect class
+everything else here is about, written into the very commit that added both.
 
 **Escaping is structural, not a scrub.** Every tag in the output is one this module constructed; every
 byte that came from the document went through `html.escape` first. That is why there is no separate
@@ -134,6 +140,66 @@ def test_an_escaped_pipe_comes_back_as_a_pipe():
     assert "approve | reject" in html
 
 
+def test_a_pipe_block_with_no_header_degrades_instead_of_crashing():
+    """The dialect's floor is *escaped text*, never an exception.
+
+    A block of nothing but rule-shaped lines — a lone `|---|---|`, which a hand-edited artifact file
+    can easily carry — used to leave the table renderer with nothing to unpack, and the `ValueError`
+    went straight past every handler `create_app` registers, because it is not a `RequivoError`. The
+    artifact page answered a bare 500: the one outcome worse than the code block this replaced, on a
+    module whose docstring promises it can never be worse.
+    """
+    html = markdown_to_html(md("Some notes.", "", "|---|---|", "", "More notes."))
+
+    assert "<table>" not in html, "a block with no header is not a table"
+    assert "|---|---|" in _unescape(html), (
+        "the block has to survive as text — dropping it is the same absence one step quieter")
+    # must fire: the surrounding document is still rendered, so this is not asserting about a
+    # renderer that gave up on the whole file.
+    assert "<p>Some notes.</p>" in html and "<p>More notes.</p>" in html
+
+
+def test_a_body_row_that_looks_like_a_rule_is_still_a_row():
+    """A row is dropped only for being in the rule's *position*, never for its contents.
+
+    The separator used to be recognised by pattern anywhere in the block, so a genuine data row whose
+    cells held only dashes — a placeholder, an "n/a" written as `--` — matched it and vanished from
+    the rendered table with nothing raised and nothing said. A requirements table quietly one row
+    short is exactly the silent wrong answer this project is careful about everywhere else.
+    """
+    html = markdown_to_html(md("| ID | Priority |", "|----|----------|",
+                               "| R-1 | Must |", "|--|--|", "| R-3 | Should |"))
+
+    assert html.count("<tr>") == 4, (
+        "header plus three body rows; a row went missing: " + html)
+    assert "R-1" in html and "R-3" in html
+    assert "<td>--</td>" in html, "the placeholder row has to render as data: " + html
+
+
+def _unescape(html: str) -> str:
+    """Entities back to characters, so a test can ask what the reader sees rather than how it is
+    spelled on the wire."""
+    return html.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+
+
+def test_a_checkbox_marker_renders_as_text_and_not_as_an_input():
+    """`render/markdown.py` emits `- [ ] …` and `### [ ] …`, and both stay text on purpose.
+
+    Rendering a real checkbox would mean an `<input>`, which is an element carrying at least two
+    attributes — and "this renderer emits no attribute anywhere" is the property the artifact
+    template's `| safe` leans on and that
+    `test_an_attribute_break_out_cannot_reach_an_attribute` pins. A prettier checkbox is not worth
+    trading that for, so the decision is written down here rather than left for someone to
+    "fix" later.
+    """
+    html = markdown_to_html(md("### [ ] SC-1 — Manager approves", "", "- [ ] the request is approved"))
+
+    assert "<input" not in html and "=" not in html.split("<h3>")[1], (
+        "a checkbox brought an attribute into a renderer that has none: " + html)
+    assert "[ ] SC-1 — Manager approves" in html
+    assert "<li>[ ] the request is approved</li>" in html
+
+
 def test_an_ordered_step_list_becomes_an_ordered_list():
     html = markdown_to_html(md("1. Request leave", "2. Manager approves"))
     assert "<ol>" in html and "<li>Manager approves</li>" in html
@@ -204,7 +270,26 @@ def test_no_inline_style_is_emitted():
 
 def test_an_unclosed_fence_does_not_swallow_the_document():
     """A construct outside the dialect degrades to escaped text — the same thing the `<pre>` block
-    did, and never worse. What it must not do is consume everything after it."""
-    html = markdown_to_html(md("# Title", "", "```", "some code", "", "## Still rendered"))
+    did, and never worse. What it must not do is consume everything after it.
+
+    **No blank line before the heading, and that is the whole test.** The first version of this
+    fixture had one, and a blank line already ends a paragraph on its own — so it passed identically
+    with `_is_block_start` stubbed out to `False`, while citing that function as the thing it pinned.
+    A reference that resolves and guards nothing is the defect CLAUDE.md names at invariant 13, and
+    it was in a test written to demonstrate the opposite. `test_a_paragraph_stops_at_the_heading_that_follows_it`
+    is the same claim on the case the docstring actually describes.
+    """
+    html = markdown_to_html(md("# Title", "", "```", "some code", "## Still rendered"))
     assert "<h1>Title</h1>" in html
-    assert "<h2>Still rendered</h2>" in html
+    assert "<h2>Still rendered</h2>" in html, (
+        "the heading was swallowed by the paragraph that ran up to it: " + html)
+
+
+def test_a_paragraph_stops_at_the_heading_that_follows_it():
+    """The hazard `_is_block_start` is actually written for: no blank line between prose and the
+    block after it. Without the guard the paragraph loop runs on and the heading is rendered as words
+    inside it, which is the failure mode nothing else in this file can see."""
+    html = markdown_to_html(md("Some paragraph text.", "## A heading right after", "- and a bullet"))
+    assert "<p>Some paragraph text.</p>" in html
+    assert "<h2>A heading right after</h2>" in html
+    assert "<li>and a bullet</li>" in html

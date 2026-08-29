@@ -7,7 +7,16 @@ audience the web vocabulary exists for, at the exact moment the product delivers
 **A closed dialect, not a Markdown parser.** These documents are written by `render/markdown.py`, in
 this repository: three heading levels, a blockquote, bullets one level deep, ordered items, a pipe
 table, and `**bold**` / `_italic_` / `` `code` `` inline. That is the whole vocabulary, and it is
-enumerated below. A general library would parse a superset of it, over text a language model wrote
+enumerated below.
+
+A checkbox marker is deliberately **not** in that list, and saying so is the point rather than an
+omission: `render/markdown.py` really does emit `- [ ] …` bullets and `### [ ] …` headings, and they
+render as an ordinary bullet or heading whose text happens to begin with two brackets. That reads
+correctly and it keeps this renderer's one structural promise — it emits no attribute anywhere, which
+is what the artifact template's `| safe` leans on, and a real checkbox is an `<input>` with at least
+two. Pinned by `test_a_checkbox_marker_renders_as_text_and_not_as_an_input`.
+
+A general library would parse a superset of it, over text a language model wrote
 and a user can edit on disk — a larger attack surface and a new runtime dependency, bought to render
 constructs nothing here emits. Anything outside the dialect degrades to escaped text, which is
 exactly what the `<pre>` block did and never worse.
@@ -92,8 +101,25 @@ def _cells(line: str) -> list[str]:
 
 
 def _table(rows: list[str]) -> list[str]:
-    """A pipe table, or None-shaped: the caller only reaches here once it has seen a rule row."""
-    head, *body = [r for r in rows if not _TABLE_RULE.match(r)]
+    """A pipe table: a header row, the rule row under it, then the body.
+
+    **Positional, not content-matched, and both halves of that were wrong on their own.** This used
+    to filter every rule-shaped line out of the block and unpack the rest, which failed in two
+    opposite directions at once. A block whose lines were *all* rule-shaped left nothing to unpack
+    and raised `ValueError` — out of a function whose module promises that anything outside the
+    dialect degrades to escaped text and never worse, and straight past every handler `create_app`
+    registers, since `ValueError` is not a `RequivoError`. The artifact page became a bare 500, which
+    is the one outcome worse than the code block this renderer replaced. And in the other direction,
+    a genuine *body* row whose cells held only dashes, colons and spaces matched the same pattern and
+    was silently dropped: a row gone from a requirements table with nothing raised and nothing said.
+
+    Reading the rule by position fixes both. The caller has already established `rows[1]` is the rule
+    row, so this unpack is total — there is no input that reaches here and cannot be destructured.
+
+    Pinned by `test_a_pipe_block_with_no_header_degrades_instead_of_crashing` and
+    `test_a_body_row_that_looks_like_a_rule_is_still_a_row`.
+    """
+    head, _rule, *body = rows
     out = ["<table>", "<thead><tr>"]
     out += [f"<th>{_inline(c)}</th>" for c in _cells(head)]
     out += ["</tr></thead>", "<tbody>"]
@@ -172,10 +198,13 @@ def markdown_to_html(text: str) -> str:
             while i < len(lines) and lines[i].lstrip().startswith("|"):
                 rows.append(lines[i])
                 i += 1
-            # A rule row is what makes it a table rather than a paragraph that happens to open with a
-            # pipe. Without one there is no header to render, and guessing would turn the document's
-            # first line of data into a heading.
-            if any(_TABLE_RULE.match(r) for r in rows):
+            # A table is a header line, then a rule line, **in that order** — so the test is on
+            # `rows[1]` and not on "is there a rule row anywhere in here". Asking the looser question
+            # accepted a block with no header at all (a lone `|---|---|`, which a hand-edited file can
+            # easily carry) and handed `_table` nothing to unpack. A block that is not shaped like a
+            # table is prose that happens to open with a pipe, and prose degrades to escaped text —
+            # which is what this module promises and what the code block it replaced already did.
+            if len(rows) > 1 and _TABLE_RULE.match(rows[1]):
                 out += _table(rows)
             else:
                 out += [f"<p>{_inline(r)}</p>" for r in rows]
