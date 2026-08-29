@@ -27,8 +27,8 @@ pip install -e ".[dev]"              # deps + the `requivo` command + pytest + r
 
 ## The `.claude/` directory is maintainer tooling — you need none of it
 
-This repository tracks a `.claude/` directory: a `settings.json` naming the plugins the maintainer
-runs, and a `jit-context/` rule layer beneath it. One of those rules
+This repository tracks a `.claude/` directory: an empty `settings.json`, and a `jit-context/` rule
+layer beneath it. One of the rules
 (`jit-context/tools/01-oss/supertool-required.md`) declares `mode: block` over `Read`, `Edit`,
 `Write`, `Glob` and `Grep`, with a `match:` of everything, and names a `supertool` command as the
 replacement. Read cold, that looks like a repository which refuses to let you open a file unless you
@@ -36,11 +36,20 @@ have a tool you have never heard of.
 
 It is not, and the reason is mechanical. A jit-context rule is **data**. The only thing that reads it
 is a `PreToolUse` hook, and that hook ships inside the `claude-jit-context` plugin, registered from
-that plugin's own manifest. This repository registers no hooks of its own: `.claude/settings.json`
-carries exactly two keys — an `enabledPlugins` list and a `statusLine` command, neither of which is a
-hook — and no hook script is tracked anywhere under `.claude/`. Without that plugin installed there is no hook, nothing reads the layer, and every file
-operation behaves exactly as it normally does. `tests/test_agent_layer.py` is the guard that keeps
-that true, so it cannot quietly stop being true.
+that plugin's own manifest. This repository registers no hooks of its own, and it goes further than
+that: `.claude/settings.json` is tracked as an empty JSON object. No plugin enablement, no key naming
+a command, and no hook script tracked anywhere under `.claude/`. Without that plugin installed there
+is no hook, nothing reads the layer, and every file operation behaves exactly as it normally does.
+`tests/test_agent_layer.py` is the guard that keeps that true, so it cannot quietly stop being true.
+
+The file is empty rather than merely hook-free because it did stop being true once. A `statusLine`
+command pointing at a maintainer script *outside* `.claude/` sat in the tracked settings from #186
+until #215, executing on the machine of anyone who cloned `main` in between, while the guard — which
+read the `hooks` key and only the `hooks` key — stayed green. No tagged release carries it; the
+plugin enablement beside it shipped in every release from 0.10.0 to 1.2.0. Both live in
+`.claude/settings.local.json` now, which `.gitignore` excludes. If a key ever returns to the tracked
+file it has to be added to the allowlist in `tests/test_agent_layer.py` and described here, in the
+same change; the test fails otherwise.
 
 Three more tracked files belong to the same maintainer loop and are equally inert for a
 contributor: `.oss.json` and `.oss/` configure the `oss` plugin that runs this repository's
