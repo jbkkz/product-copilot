@@ -28,5 +28,19 @@ traceable to its source and version, not because the license demands it.
 
 **Why it is vendored rather than fetched:** Requivo Web sets a strict Content-Security-Policy that
 allows same-origin assets only, and it is meant to work offline. A CDN script tag would violate both.
-The copy is verbatim from the upstream release; to update it, replace the file, bump the version
-above, and re-run the web tests (`pytest tests/web -q`).
+
+**How it is updated, and who does it.** The maintainer, by hand, because nothing else can: a
+minified `.js` file appears in no dependency manifest, so `.github/dependabot.yml` cannot watch it
+and neither can any advisory scanner (#297). The version above is therefore the only record that
+this file has a version at all — which is why it is stated here rather than left to the file's own
+banner. The procedure:
+
+1. Download the release from <https://github.com/bigskysoftware/htmx/releases> (`htmx.min.js`).
+2. Replace `src/requivo/web/static/vendor/htmx.min.js` verbatim — no local edits, ever, or the
+   version above stops describing what is shipped.
+3. Bump the **Version** line above.
+4. Re-run the web tests: `pytest tests/web -q`.
+
+No Node toolchain is added for one file, and none should be. 1.9.12 is on the 1.x maintenance line,
+superseded by 2.x; moving is a deliberate decision rather than a routine bump, since 2.x changes
+default behaviours the templates rely on.
