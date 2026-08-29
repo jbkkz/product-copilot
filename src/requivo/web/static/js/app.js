@@ -76,6 +76,32 @@
   // finishing and quietly handing the reader live buttons while the second is still running.
   document.body.addEventListener("htmx:afterSwap", applyBusy);
 
+  // **Error responses have to reach the eye** (#203). The vendored htmx (1.9.12) swaps only
+  // 200-399, so every 4xx/5xx fragment this app builds was dropped on the floor: the progress bar
+  // completed, the buttons came back, the page did not change and nothing was said. A revision
+  // conflict from a second tab, the 413 that #30 built to preserve your typed answers, and a 502
+  // after a minutes-long *paid* call all looked identical to success-with-no-visible-effect — and on
+  // the paid one the natural next move is to click again and pay again. The whole server-side error
+  // architecture was unreachable, and the Python suite could not see it because `TestClient` runs no
+  // JavaScript.
+  //
+  // Opting in is safe because the server always returns something renderable for these: either a
+  // full region (the 413 answers path) or the small `errors/_error.html` fragment, which arrives with
+  // `HX-Retarget: #flash` so it lands in the always-present flash region instead of replacing the
+  // region that holds the reader's work. `isError` is cleared so an expected, handled response stops
+  // logging as an uncaught one.
+  //
+  // Pinned by `test_error_responses_are_swapped_into_the_page_rather_than_dropped`, which drives this
+  // file for real — asserting a literal string appears in the asset would pass against an
+  // implementation that swaps nothing.
+  document.body.addEventListener("htmx:beforeSwap", function (e) {
+    var status = e.detail.xhr ? e.detail.xhr.status : 0;
+    if (status >= 400) {
+      e.detail.shouldSwap = true;
+      e.detail.isError = false;
+    }
+  });
+
   // Plain full-page form submits (create session, run discovery). HTMX forms carry hx-post and are
   // handled above — skip them here to avoid starting the bar twice. No matching release: the page is
   // navigating away, and `pageshow` clears the state if the reader comes back to a cached copy.
