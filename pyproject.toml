@@ -133,7 +133,11 @@ requivo = ["assets/**/*", "web/templates/**/*", "web/static/**/*"]
 [tool.ruff]
 line-length = 120
 target-version = "py39"
-extend-exclude = ["out"]
+# `out` is the retired output root. `.oss` is vendored: /oss:scaffold replaces those files wholesale
+# on every run, so a finding there cannot be fixed — it comes back on the next refresh. CI already
+# scopes its own call (`ruff check src tests scripts`); this puts that scope in the tool's config,
+# where anything else linting the tree can see it too.
+extend-exclude = ["out", ".oss"]
 
 [tool.ruff.lint]
 # Real problems (F/B/E9), style (E/W), import order (I), modern-syntax nudges (UP).
