@@ -70,7 +70,9 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Lint
-        run: ruff check src tests
+        # The same scope as ci.yml's lint leg, deliberately: a release gate narrower than the merge
+        # gate is one that waves through exactly what the merge gate would have caught.
+        run: ruff check src tests scripts
 
       - name: Tests
         run: python -m pytest tests/ -q

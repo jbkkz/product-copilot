@@ -1,24 +1,41 @@
 ---
 name: Bug report
-about: Something behaves differently from what it says it does
-labels: bug
+about: Something broke, or behaves differently from what it says it does
+title: "[bug] "
+labels: ["bug"]
 ---
 
-**What happened**
+## What happened
 
-**What you expected instead**
+<!-- The exact command you ran and what went wrong. -->
 
-**How to reproduce it**
+```
+requivo <command> …
+```
 
-1.
-2.
+<!-- Paste the full error or traceback, as text rather than a screenshot where possible — it is
+searchable, and the line that matters is usually not the one in the frame. -->
 
-**Version and platform**
+## What you expected instead
 
-- Version:
+<!-- One or two lines. -->
+
+## To reproduce
+
+1. …
+2. …
+
+## Environment
+
+<!-- `requivo doctor --json` reports the version, Python, provider, streams and workspace in one
+paste. It contains no session content — no request text, no model, no artifacts. -->
+
+```
+$ requivo doctor --json
+```
+
 - OS and version:
 
-**Anything else**
+## Notes
 
-Logs or output, as text rather than a screenshot where possible -- it is searchable, and
-the line that matters is usually not the one in the frame.
+<!-- Anything else. If it involves a specific request, please anonymise client-confidential content. -->

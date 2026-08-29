@@ -1,7 +1,7 @@
 # Security
 
-Requivo is an early open-source beta. This document states what the tool does with your data
-and how to report a problem.
+Requivo is a solo-maintained open-source project. This document states what the tool does with your
+data and how to report a problem.
 
 ## What leaves your machine
 
@@ -40,12 +40,19 @@ generated artifacts before acting on them.
 
 ## Reporting a vulnerability
 
-Please **do not** open a public issue for a security problem. Instead, email the maintainer
-(see the repository owner's public profile) with:
+Please **do not** open a public issue for a security problem.
+
+Use **[GitHub private vulnerability reporting](https://github.com/jbkkz/requivo/security/advisories/new)**
+— it is enabled on this repository, it is the link the new-issue chooser already points at, and it
+gives you an authenticated private thread with the maintainer that does not depend on an email
+address being published anywhere. If you cannot use it, email the maintainer via the address on the
+repository owner's GitHub profile.
+
+Either way, please include:
 
 - a description of the issue and its impact;
 - steps to reproduce;
 - any suggested remediation.
 
-You will get an acknowledgement as soon as possible. As a solo-maintained beta there is no formal SLA,
-but security reports are prioritised over feature work.
+You will get an acknowledgement as soon as possible. This is a solo-maintained project with no formal
+SLA, but security reports are prioritised over feature work.

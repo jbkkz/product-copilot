@@ -604,7 +604,8 @@ the artifact write. `stories` and `estimate` are deliberately terminal-only anal
 (`DiscoveryService.reason()`). Adding a generator: prompt asset + contract + a function in
 `providers/anthropic/generators.py` (registered in `_GENERATORS` and `_OP_PROMPTS`, which stay one
 table each) + a writer in
-`render/markdown.py` (registered in `_WRITERS`) + a subcommand in `cli.py`. Any generator whose text is
+`render/markdown.py` (registered in `_WRITERS`, which lives in `services/discovery.py`) + a
+subcommand in `cli.py`. Any generator whose text is
 user-facing carries the **Voice** rule: no slot ids, percentages or confidence labels in prose.
 
 `brief_markdown` is deliberately half deterministic. Its *What is confirmed* and *Important

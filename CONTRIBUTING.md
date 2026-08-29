@@ -1,6 +1,6 @@
 # Contributing to Requivo
 
-Thanks for your interest. Requivo is an early open-source beta, solo-maintained. Contributions,
+Thanks for your interest. Requivo is a solo-maintained open-source project. Contributions,
 issues and real-world feedback are all welcome — the feedback we most want is *did the engine ask the
 questions a good PM/BA would ask?* (see the **Real-world discovery feedback** issue template).
 
@@ -9,8 +9,9 @@ Before a large change, please open an issue to discuss it first — it saves eve
 ## Project layout in one line
 
 Requivo is one engine behind three interfaces (CLI, Claude Code plugin, local Web). The layers form a
-strict DAG: `core/` (no LLM, no I/O) → `providers/` (the only LLM callers) → `services/` (the single
-validated apply path) → `render/` + `cli.py` + `web/`. The full map is in
+strict DAG: `core/` (no LLM, no provider, no argv/stdout — reading and writing files *is* core's
+job) → `providers/` (the only LLM callers) → `services/` (the single validated apply path) →
+`render/` + `cli.py` + `web/`. The full map is in
 [docs/architecture.md](docs/architecture.md), and the distribution boundary is in
 [docs/open-source-strategy.md](docs/open-source-strategy.md). Read those before a structural change.
 
@@ -19,7 +20,7 @@ validated apply path) → `render/` + `cli.py` + `web/`. The full map is in
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip setuptools        # a fresh venv often ships pip too old for editable installs
-pip install -e ".[dev]"              # deps + the `requivo`/`pc` command + pytest + ruff
+pip install -e ".[dev]"              # deps + the `requivo` command + pytest + ruff
 ```
 
 `uv run requivo …` also works without managing a venv.
@@ -36,10 +37,15 @@ have a tool you have never heard of.
 It is not, and the reason is mechanical. A jit-context rule is **data**. The only thing that reads it
 is a `PreToolUse` hook, and that hook ships inside the `claude-jit-context` plugin, registered from
 that plugin's own manifest. This repository registers no hooks of its own: `.claude/settings.json`
-carries an `enabledPlugins` list and nothing else, and no hook script is tracked anywhere under
-`.claude/`. Without that plugin installed there is no hook, nothing reads the layer, and every file
+carries exactly two keys — an `enabledPlugins` list and a `statusLine` command, neither of which is a
+hook — and no hook script is tracked anywhere under `.claude/`. Without that plugin installed there is no hook, nothing reads the layer, and every file
 operation behaves exactly as it normally does. `tests/test_agent_layer.py` is the guard that keeps
 that true, so it cannot quietly stop being true.
+
+Three more tracked files belong to the same maintainer loop and are equally inert for a
+contributor: `.oss.json` and `.oss/` configure the `oss` plugin that runs this repository's
+maintenance (see [.oss/README.md](.oss/README.md)), and `.supertool.json` configures its shell
+tooling. Nothing in the test suite, the build or the product reads any of them.
 
 So: **contributing needs Python, git and the setup above — nothing else.** If the directory bothers
 you, delete it in your working copy; just do not commit the deletion. A fresh git worktree takes its
@@ -63,12 +69,12 @@ but does **not** enforce `ruff format` — match the surrounding style rather th
 The changelog gate (`.github/workflows/oss-changelog.yml`, which requires a `changelog.d/` fragment)
 triggers on **`pull_request` only**. Direct pushes to `main` are never checked by it.
 
-That matters here because this is a solo-maintained repository whose own working style is to commit
-straight to `main`, so the gate covers pull-request-authored changes — delegated agent work, and
-outside contributions — and nothing the maintainer pushes directly. That uncovered class is not
-hypothetical and not rare: in every release cycle so far, some commits have reached `main` without a
-pull request and were therefore never subject to the gate. (A count is deliberately not quoted here —
-it changes with the next push, and a stale number is its own small version of this same problem.)
+That matters here because a direct push to `main` is not impossible, only rare. Every change now
+lands as a squash-merged pull request, with one deliberate exception: the `chore(release)` commit
+that cuts a version goes straight to `main`. So the uncovered class is small and known rather than
+hypothetical — and a release commit is precisely the one whose changelog entry a reader is most
+likely to go looking for. (A count is deliberately not quoted here — it changes with the next
+release, and a stale number is its own small version of this same problem.)
 
 So **a green board means the changelog gate passed on the commits it was shown**, not that every
 change in the release carries a fragment. Those are different claims, and nothing on the board
@@ -115,7 +121,7 @@ permanently red default branch, which is a worse lie than the one it fixes. If y
 - **Secrets** — API keys, tokens, passwords, `.env` files. `.env` is gitignored; keep it that way.
 - **Real, non-anonymised customer requests or data** — see the data boundary in
   [docs/open-source-strategy.md](docs/open-source-strategy.md#data-what-may-be-public-what-stays-private).
-- **Local sessions / generated output** — `.requivo/` and `out/` are gitignored.
+- **Local sessions / generated output** — `.requivo/`, `out/` and `demo-out/` are gitignored.
 
 If you accidentally commit a secret, tell the maintainer so the credential can be **revoked** — a key
 that has touched Git history must be considered compromised even after removal.

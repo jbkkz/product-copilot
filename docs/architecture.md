@@ -54,9 +54,12 @@ That second half was stated here for two releases before it was true. The CLI's 
 `discover` loop called the provider's `run()` and `advise()` itself and used the service only for the
 final write, so the primary surface held an orchestration of its own — one that would not have
 inherited the revision-zero gate or the snapshot discipline when those arrived (#77). It is guarded
-now rather than asserted: `tests/test_boundaries.py` allows `cli.py` exactly three provider names,
-each carrying the reason it is a surface concern rather than a reasoning one, and fails just as
-loudly on an allowlist entry nothing imports as on an import nothing allowed. The storage half of the
+now rather than asserted: `tests/test_boundaries.py` allows a surface only the provider names its
+`_SURFACE_PROVIDER_ALLOWLIST` entries name, each carrying the reason it is a surface concern rather
+than a reasoning one, and fails just as loudly on an allowlist entry nothing imports as on an import
+nothing allowed. The table is named rather than counted on purpose: a count in prose is invalidated
+by the next entry and nothing goes red when it is, which is exactly how this sentence came to claim
+three where the allowlist holds two. The storage half of the
 same shape — a surface reaching past `SessionRepository` to `core.persistence` — is #76, and it is
 guarded the same way now, over `cli.py`, `deterministic/` and `web/`, by an allowlist keyed on
 `(file, function)` rather than on the name alone.

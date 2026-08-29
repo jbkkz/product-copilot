@@ -6,7 +6,9 @@ Run as `requivo <command>` after an install, `uv run requivo <command>` with uv,
 `python scripts/requivo_cli.py <command>` from a bare clone. Commands that call the Anthropic API need
 the `anthropic` extra and `ANTHROPIC_API_KEY`; everything else is offline.
 
-Most verbs take a session **slug** or a path to a saved `model.json`.
+Verbs take a session **slug**. `status` and `impact` also accept a path to a saved `model.json`, so
+they can read a model that is not in a session store; every other verb resolves a session, because it
+writes a revision or an artifact back into one.
 
 ## Discovery and refinement
 
