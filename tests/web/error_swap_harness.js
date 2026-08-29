@@ -22,6 +22,9 @@ var appJsPath = process.argv[2];
 var src = fs.readFileSync(appJsPath, "utf8");
 
 var SUBMIT_SELECTOR = 'button[type="submit"]';
+// Queried by the elapsed-time signal (#236); modelled as no status nodes, for the reason
+// `busy_harness.js` gives — this harness is about the swap decision, not the status text.
+var SPINNER_SELECTOR = ".spinner";
 
 function makeButton() {
   return {
@@ -52,14 +55,23 @@ var documentStub = {
   },
   getElementById: function (id) { return id === "flash" ? flash : null; },
   querySelectorAll: function (sel) {
+    if (sel === SPINNER_SELECTOR) return [];
     if (sel !== SUBMIT_SELECTOR) {
-      throw new Error("the harness only models " + SUBMIT_SELECTOR + ", got: " + sel);
+      throw new Error("the harness only models " + SUBMIT_SELECTOR + " and " + SPINNER_SELECTOR
+        + ", got: " + sel);
     }
     return buttons;
   },
   addEventListener: on
 };
-var windowStub = { addEventListener: on };
+// Inert timers, for the reason `busy_harness.js` states: a real interval would outlive the timeline
+// this script writes and keep Node's event loop alive.
+var windowStub = {
+  addEventListener: on,
+  setInterval: function () { return 0; },
+  clearInterval: function () {},
+  setTimeout: function () { return 0; }
+};
 
 new Function("document", "window", src)(documentStub, windowStub);
 

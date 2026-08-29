@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from requivo.web.security import CSRF_FIELD, csrf_token
+from requivo.web.viewmodels.labels import human_time
 
 _HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = _HERE / "templates"
@@ -23,3 +24,7 @@ STATIC_DIR = _HERE / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["csrf_field"] = CSRF_FIELD
 templates.env.globals["csrf_token"] = csrf_token()
+# Registered here, decided in `labels.py`. A filter is a template mechanism; "3 days ago" is
+# user-facing wording, and the whole point of that module is that a term living in six templates
+# drifts in six directions (#237).
+templates.env.filters["human_time"] = human_time

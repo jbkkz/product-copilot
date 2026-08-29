@@ -30,7 +30,18 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
 
   <div class="toolbar">
     <button class="btn" type="submit">{{ "Analyse request" if provider.available else "Save request" }}</button>
-    {% if provider.available %}<span class="muted">Takes a few seconds.</span>{% endif %}
+    {# The duration a reader is told to expect has to be one this repo can stand behind: invariant 2
+       says provider calls take "seconds to minutes" and invariant 12 says "the call (which takes
+       minutes)". The copy this replaces promised a handful of seconds; it expired at second twenty
+       on a page that blocks, and what a reader does when a promise expires is resubmit — a second
+       session and a second paid call (#236). This is also the whole signal with JavaScript off,
+       which is why it says what the wait is *for* rather than only how long it is.
+       `test_no_provider_backed_button_still_promises_a_few_seconds` scans these files as raw text,
+       so it cannot tell a comment from the copy and this note deliberately does not quote the old
+       wording — the same care `test_no_template_carries_a_clipping_attribute` asks for above.
+       Pinned by that test and by `test_the_no_js_path_still_states_how_long_it_will_take`. #}
+    {% if provider.available %}<span class="muted">Usually under a minute — reading the request and
+      building a first understanding.</span>{% endif %}
     <span class="spinner" role="status">Reading the request…</span>
   </div>
 
@@ -84,7 +95,10 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
         {% elif s.state == 'unreadable' %}<span class="badge danger">{{ s.status_label }}</span>
         {% else %}<span class="badge warn">{{ s.status_label }}</span>{% endif %}
         {% if s.needs_update %}<span class="badge danger">Needs updating</span>{% endif %}
-        <span class="muted">{{ s.updated_at }}</span>
+        {# Translated, with the exact instant kept on the `title` — hiding here is presentational,
+           so nothing is dropped (#237). A row nobody could read carries no timestamp at all and
+           renders none, rather than a plausible one. #}
+        {% if s.updated_at %}<span class="muted" title="{{ s.updated_at }}">{{ s.updated_at | human_time }}</span>{% endif %}
       </span>
     </a>
     {% if s.state == 'unreadable' %}

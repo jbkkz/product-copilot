@@ -58,6 +58,13 @@ Every command that hits the API prints its footprint when it finishes — calls,
 share), latency, and an estimated cost — so you see the real number for *your* request. Tokens are
 exact; the cost is a labelled estimate from a dated rate table, never treated as authoritative.
 
+The Web reports the same figures (#253), and it is worth being precise about where, because "every
+command" above is a claim about the CLI and used to be read as a claim about the product. A paid
+action that answers with a fragment — folding in answers, generating a document — carries the
+footprint in that fragment. The two that answer with a redirect record it to the `requivo.web`
+logger instead: a 303 has no body, and the alternative would be carrying the numbers to the next
+request. Both channels go through the same `UsageLedger`, so a call is never billed and unrecorded.
+
 ## Adding a provider
 
 A provider implements the `ReasoningProvider` protocol in `providers/base.py`:

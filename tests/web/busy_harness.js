@@ -18,6 +18,10 @@ var appJsPath = process.argv[2];
 var src = fs.readFileSync(appJsPath, "utf8");
 
 var SUBMIT_SELECTOR = 'button[type="submit"]';
+// The elapsed-time signal (#236) queries this one too. Modelled as *no* status nodes on purpose:
+// this harness is about the buttons, and returning an empty list keeps that focus while still
+// letting `app.js` run. `elapsed_harness.js` is where the status text is actually watched.
+var SPINNER_SELECTOR = ".spinner";
 
 function makeButton(name) {
   return {
@@ -49,14 +53,24 @@ var documentStub = {
   },
   getElementById: function () { return null; },
   querySelectorAll: function (sel) {
+    if (sel === SPINNER_SELECTOR) return [];
     if (sel !== SUBMIT_SELECTOR) {
-      throw new Error("the harness only models " + SUBMIT_SELECTOR + ", got: " + sel);
+      throw new Error("the harness only models " + SUBMIT_SELECTOR + " and " + SPINNER_SELECTOR
+        + ", got: " + sel);
     }
     return buttons;
   },
   addEventListener: on
 };
-var windowStub = { addEventListener: on };
+// Timers are no-ops here, which is what keeps this harness clock-free (see the header): `app.js`
+// schedules an elapsed-time interval on every request, and a real one would keep Node's event loop
+// alive after the timeline has been written.
+var windowStub = {
+  addEventListener: on,
+  setInterval: function () { return 0; },
+  clearInterval: function () {},
+  setTimeout: function () { return 0; }
+};
 
 // app.js is an IIFE reading bare `document` and `window`; supply both as parameters.
 new Function("document", "window", src)(documentStub, windowStub);

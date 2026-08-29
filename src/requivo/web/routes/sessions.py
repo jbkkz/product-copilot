@@ -16,6 +16,7 @@ from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS, MAX_SLUG_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
 from requivo.web.routes.home import home_context
+from requivo.web.spend import track_web_usage
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 
@@ -129,17 +130,22 @@ def create_session(
         # reimplemented here; `run_discovery` is the same operation the pending page's own button
         # already posts to.
         new_slug = discovery.claim_session(text, cards=picked, slug=chosen_slug).slug
-        try:
-            discovery.run_discovery(new_slug, surface="web-discover")
-        except EngineError as e:
-            # The request is already safely captured at revision 0, and the page we are about to send
-            # them to *already* offers the retry button. Letting this propagate mapped it to a 502 and
-            # `errors/500.html` — "Something went wrong… check the server logs. Back to sessions." —
-            # which says nothing about the pasted email having been saved, so a first-time user on a
-            # transient API error reasonably concludes the product ate their request. The good outcome
-            # was one redirect away the whole time. Pinned by
-            # `test_a_failed_first_analysis_lands_on_the_session_that_was_saved`.
-            return analysis_failed(new_slug, e)
+        # Logged, not shown, for the reason `routes/discovery.py` states at its own copy of this call
+        # (#253): both doors onto a first analysis answer with a 303, and a redirect has no body to
+        # put a figure in. The operator's terminal is the channel that works on the success arm and
+        # the failure arm alike, and this is the very first paid call a new user ever makes.
+        with track_web_usage("web-discover"):
+            try:
+                discovery.run_discovery(new_slug, surface="web-discover")
+            except EngineError as e:
+                # The request is already safely captured at revision 0, and the page we are about to
+                # send them to *already* offers the retry button. Letting this propagate mapped it to
+                # a 502 and `errors/500.html` — "Something went wrong… check the server logs. Back to
+                # sessions." — which says nothing about the pasted email having been saved, so a
+                # first-time user on a transient API error reasonably concludes the product ate their
+                # request. The good outcome was one redirect away the whole time. Pinned by
+                # `test_a_failed_first_analysis_lands_on_the_session_that_was_saved`.
+                return analysis_failed(new_slug, e)
     else:
         new_slug = discovery.create_only(text, cards=picked, slug=chosen_slug)
     return RedirectResponse(url=f"/sessions/{new_slug}", status_code=303)

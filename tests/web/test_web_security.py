@@ -11,11 +11,21 @@ live in `tests/web/conftest.py`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
-from requivo.web.security import CSRF_FIELD, CSRF_HEADER, _same_trust_domain, csrf_token
+from requivo.web.security import (
+    CSRF_FIELD,
+    CSRF_HEADER,
+    MissingRequestTokenError,
+    _enforce,
+    _same_trust_domain,
+    csrf_token,
+)
 from tests.web.conftest import HIGH_EXPLICIT, _make_session, full_model
 
 # ── the headers every response carries ────────────────────────────────────────
@@ -63,6 +73,78 @@ def test_the_token_works_as_a_form_field(raw_client):
 
 def test_forms_render_the_request_token(client):
     assert csrf_token() in client.get("/").text
+
+
+def test_a_token_this_server_cannot_compare_is_refused_rather_than_crashing(raw_client):
+    """A token the comparison cannot read is a *wrong token*, not an unhandled exception (#212).
+
+    `secrets.compare_digest` on two `str` arguments raises `TypeError` unless both are ASCII-only, and
+    `_submitted_token` returns whatever the client sent: a form field decoded as UTF-8, or a header
+    Starlette decoded as latin-1. So one non-ASCII character turned the guard's clean 403 into a
+    `TypeError` that escaped `_guard`'s two `except` arms, propagated *past* the `security_headers`
+    middleware and landed on the outermost 500 handler — meaning the security module's only crash path
+    was also the one response class that shipped with no CSP, no nosniff and no Referrer-Policy.
+
+    The headers assertion is the point rather than a bonus. A fix that returned 403 by catching
+    `TypeError` at the wrong layer would satisfy the status code and still answer without them, which
+    is the half of the defect nobody would notice.
+    """
+    hostile = raw_client.post(
+        "/sessions",
+        data={"request_text": "x", "provider": "create_only", CSRF_FIELD: "é"})
+    assert hostile.status_code == 403, "a token that cannot be compared has to be refused, not crash"
+    assert "missing_request_token" in hostile.text
+    for header in ("Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy"):
+        assert header in hostile.headers, (
+            f"the refusal answered without {header} — it escaped the header middleware")
+
+    # Must fire. An ASCII wrong token already took this path before the fix, so without this control
+    # the assertions above would also pass against a guard that refused *every* token, headers and
+    # all, and told us nothing about the non-ASCII one.
+    control = raw_client.post(
+        "/sessions",
+        data={"request_text": "x", "provider": "create_only", CSRF_FIELD: "wrong"})
+    assert control.status_code == 403
+    assert "Content-Security-Policy" in control.headers
+
+    # …and the other must-fire half: a *valid* token still passes, so the fix did not close the door
+    # on the browser path it exists to serve.
+    ok = raw_client.post(
+        "/sessions",
+        data={"request_text": "x", "slug": "still-works", "provider": "create_only",
+              CSRF_FIELD: csrf_token()},
+        follow_redirects=False)
+    assert ok.status_code == 303
+
+
+def test_a_latin1_token_header_reaches_the_refusal_rather_than_the_comparison(app):
+    """The header half of the same defect, driven at the ASGI seam where it actually arrives.
+
+    Starlette decodes header bytes as latin-1, so a raw 0xe9 byte in `x-csrf-token` becomes a
+    one-character non-ASCII `str` before `_enforce` ever sees it — a value no HTTP client library will
+    let a test send through the ordinary API, because httpx encodes request headers as ASCII. Driving
+    the scope directly is what makes this leg assertable at all; it is the same input a proxy or a
+    mangling client can put on the wire.
+    """
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "path": "/sessions",
+        "raw_path": b"/sessions",
+        "query_string": b"",
+        "root_path": "",
+        "scheme": "http",
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"x-csrf-token", b"\xe9")],
+        "client": ("127.0.0.1", 1234),
+        "app": app,
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    with pytest.raises(MissingRequestTokenError):
+        asyncio.run(_enforce(Request(scope, receive)))
 
 
 def test_a_write_from_another_origin_is_refused(client):

@@ -18,9 +18,11 @@ from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
 from requivo.web.routes.sessions import analysis_failed
+from requivo.web.spend import track_web_usage
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 from requivo.web.viewmodels.status import impact_view
+from requivo.web.viewmodels.usage import usage_view
 
 router = APIRouter()
 
@@ -34,10 +36,16 @@ def run_discovery(slug: str = Depends(safe_slug),
     exists and this page already carries the retry button, so a transient provider error goes back to
     it with the cause stated, rather than to a 500 page that hides both.
     """
-    try:
-        discovery.run_discovery(slug, surface="web-discover")
-    except EngineError as e:
-        return analysis_failed(slug, e)
+    # The spend is logged rather than shown, and that asymmetry is deliberate (#253). This path
+    # answers with a 303 so a refresh cannot re-POST a paid call, and a redirect has no body to put a
+    # figure in; carrying one to the following GET would need cross-request state this app does not
+    # have. `track_web_usage` records it to the terminal the operator started the server in, which is
+    # the channel that also survives the failure arm below.
+    with track_web_usage("web-discover"):
+        try:
+            discovery.run_discovery(slug, surface="web-discover")
+        except EngineError as e:
+            return analysis_failed(slug, e)
     return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
 
 
@@ -71,9 +79,17 @@ def submit_answers(
             "answers_error_code": InputTooLargeError.code,
             "submitted_answers": text,
         }, status_code=413)
-    result = discovery.answer(slug, text, expected_revision=expected_revision, surface="web-answer")
+    # This answers with a fragment the reader stays on, so the footprint rides the response as well
+    # as the log (#253) — the same treatment artifact generation gets, and the opposite of the two
+    # redirecting paths, which have no body to put it in. The ledger is opened around the call and
+    # read after it: a view model over the ledger, never a second computation of the same numbers.
+    with track_web_usage("web-answer") as spend:
+        result = discovery.answer(slug, text, expected_revision=expected_revision,
+                                  surface="web-answer")
+        usage = usage_view(spend)
     return templates.TemplateResponse(request, "sessions/_session.html", {
         "s": session_detail(sessions, slug),
         "update": impact_view(result),
         "provider": provider_status(),
+        "usage": usage,
     })
