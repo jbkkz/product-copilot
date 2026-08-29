@@ -61,6 +61,34 @@ def test_missing_session_is_404(client):
     assert r.status_code == 404 and "Not found" in r.text
 
 
+def test_a_corrupt_model_is_the_malformed_session_page_not_a_generic_500(client):
+    """The web half of #204, and the reason it was a *generic* 500 rather than a bad one.
+
+    `GET /sessions/<slug>` reads the model. A pydantic `ValidationError` is not a `RequivoError`, so
+    it never reached the handler that already had a whole vocabulary for a malformed session --
+    eight mapped codes, each with a status chosen on the "is this about the request or about the
+    store?" question -- and landed in the catch-all instead, as "Something went wrong on the server"
+    with nothing to act on.
+
+    500 is the right number and always was: an unreadable model on disk is a fact about the store.
+    What changed is that the page can now say which fact.
+    """
+    _make_session("leave-approval", problem=HIGH_EXPLICIT)
+    from requivo.core import persistence as store
+    (store.canonical_dir("leave-approval") / "model.json").write_text("{", encoding="utf-8")
+
+    r = client.get("/sessions/leave-approval")
+    assert r.status_code == 500
+    assert "model_unreadable" in r.text, (
+        "the page names the code, so a reader can tell it from session_unreadable -- which is the "
+        "same status and a different situation with a different remedy")
+    assert "internal_error" not in r.text, "the catch-all is what this stopped being"
+
+    # The listing is deliberately unaffected: only the model is broken, and #7/#80's rule is that one
+    # unreadable member must not take the page down with it.
+    assert client.get("/").status_code == 200
+
+
 def test_export_returns_model_json(client):
     _make_session("leave-approval", problem=HIGH_EXPLICIT)
     r = client.get("/sessions/leave-approval/export")

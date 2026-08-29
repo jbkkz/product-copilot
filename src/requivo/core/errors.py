@@ -243,6 +243,26 @@ class SessionUnreadableError(InvalidSessionError):
     code = "session_unreadable"
 
 
+class ModelUnreadableError(InvalidSessionError):
+    """`model.json` (or a `revisions/NNNN-model.json`) is truncated, mis-encoded, not JSON, or does
+    not validate. `details`: `{path}`, plus `slug` and `revision` when the caller knew them.
+
+    A sibling of `session_unreadable` rather than a third condition under it, and the reason is the
+    remedy. When `session.json` will not parse the session cannot be opened at all and nothing on
+    disk recovers it; when the *model* will not parse the session opens, the listing is unaffected,
+    `session verify` answers, and `revisions/` holds every applied model. Those are different
+    situations to be in, so a consumer that branches on the code learns something — which is the
+    whole argument #82 made for eight codes over one, applied to the file this product calls its
+    durable output.
+
+    `details` carries only what was actually known: a bare `model.json` path has no session and no
+    revision, and padding those keys with nulls would state facts nobody measured (see the family
+    note in `docs/compatibility.md`).
+    """
+
+    code = "model_unreadable"
+
+
 class ArtifactRevisionOutOfRangeError(InvalidSessionError):
     """An artifact was recorded against a revision this session does not have. `details`:
     `{slug, source_revision, current_revision}`."""

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from requivo import __version__
 from requivo.core.contracts import EngineOutput, PersistedEngineOutput
@@ -23,6 +23,7 @@ from requivo.core.errors import (
     ArtifactRevisionOutOfRangeError,
     InvalidFilenameError,
     InvalidSlugError,
+    ModelUnreadableError,
     RevisionConflictError,
     SessionExistsError,
     SessionLockedError,
@@ -281,7 +282,50 @@ def load_model(path: Path) -> EngineOutput:
     The explicit codec is #11's and is not optional here either: `_atomic_write` writes UTF-8, so a
     read that takes the platform default decodes a model holding an accented value into mojibake that
     is still valid JSON, on exactly the platforms this repo now has CI legs for."""
-    return PersistedEngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
+    return _read_model(path)
+
+
+def _read_model(path: Path, *, slug: Optional[str] = None, revision: Optional[int] = None) -> EngineOutput:
+    """Read and validate a persisted model, turning every way that can fail into one structured error.
+
+    One helper rather than three call sites, and that is the point rather than tidiness: `load_model`,
+    `load_session_model` and `load_revision_model` each read a model the same way, so a guard added at
+    two of the three is a guard the third quietly does without -- and which of the three a given verb
+    reaches is not something a reader can see from the verb. `status`, `impact` and `model show` came
+    in by two different doors.
+
+    What was there before was the bare `model_validate_json`, which meant a truncated `model.json`
+    reached the operator as a raw pydantic traceback from three CLI verbs and a generic
+    "Something went wrong on the server" 500 from the web session page -- `ValidationError` is not a
+    `RequivoError`, so it sailed past the handler that already had a vocabulary for a malformed
+    session (#204). The remedy was on disk the whole time, in `revisions/`, and nothing said so.
+
+    `OSError` is caught alongside the parse failures because "the file is there but unreadable" is
+    the same fact about the store as "the file is there but unparseable"; a missing file is decided
+    by the callers above, which raise `SessionNotFoundError` instead, because that is a different
+    situation with a different remedy. Pinned by
+    `test_a_corrupt_model_is_a_structured_error_from_every_door`.
+    """
+    try:
+        return PersistedEngineOutput.model_validate_json(path.read_text(encoding="utf-8"))
+    except (ValidationError, ValueError, OSError) as e:
+        details: dict = {"path": str(path)}
+        if slug is not None:
+            details["slug"] = slug
+        if revision is not None:
+            details["revision"] = revision
+        what = f"revision {revision} of session '{slug}'" if revision is not None else (
+            f"the model of session '{slug}'" if slug is not None else "the model file")
+        remedy = (
+            f" Run `requivo session verify {slug}` for the full picture; the session's `revisions/` "
+            "directory holds every model that was applied, so an earlier one can be recovered from "
+            "there." if slug is not None else ""
+        )
+        raise ModelUnreadableError(
+            f"Could not read {what}: {path} is truncated, mis-encoded, or not a valid model "
+            f"({type(e).__name__}).{remedy}",
+            details=details,
+        ) from e
 
 
 # ── Canonical session store (.requivo/sessions/<slug>/) ────────────────────────
@@ -781,7 +825,7 @@ def load_session_model(slug: str) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
-    return PersistedEngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
+    return _read_model(p, slug=slug)
 
 
 def load_revision_model(slug: str, revision: int) -> EngineOutput:
@@ -790,7 +834,7 @@ def load_revision_model(slug: str, revision: int) -> EngineOutput:
     if not p.exists():
         raise SessionNotFoundError(
             f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
-    return PersistedEngineOutput.model_validate_json(p.read_text(encoding="utf-8"))
+    return _read_model(p, slug=slug, revision=revision)
 
 
 def session_request(slug: str) -> str:
@@ -1201,7 +1245,14 @@ def migrate_legacy(slug: str) -> SessionMeta:
             old = {}
     # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
     # leaving an empty session behind holding a name nothing can now use.
-    model = PersistedEngineOutput.model_validate_json((src / "model.json").read_text(encoding="utf-8"))
+    #
+    # Through `_read_model` like the other three, and it is the fourth door rather than an extra:
+    # #204 named `load_model` and `load_revision_model`, and this site reads a model exactly the same
+    # way. Wrapping three of four would be the defect the helper exists to prevent, one file later.
+    # `slug=` is deliberately not passed: the legacy `out/<slug>/` layout has no `revisions/`, so the
+    # recovery remedy would be a sentence about a directory that is not there. The path names the
+    # session by itself.
+    model = _read_model(src / "model.json")
 
     if request:
         req_hash = content_hash(request)

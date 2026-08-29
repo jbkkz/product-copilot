@@ -413,6 +413,7 @@ is unaffected and no caller has to enumerate ten names. Each arm carries its own
 | `unsupported_format_version` | `session.json` written by a newer Requivo | `{format_version, supported_format_version}` | 409 |
 | `unsupported_schema_version` | model authored against a newer slot schema | `{schema_version, supported_schema_version}` | 409 |
 | `session_unreadable` | `session.json` truncated, mis-encoded or not JSON, **or** the session's write lock could not be opened | `{slug}` | 500 |
+| `model_unreadable` | `model.json` or a `revisions/NNNN-model.json` truncated, mis-encoded, not JSON, or not a valid model | `{path}`, plus `slug` and `revision` when known | 500 |
 | `artifact_revision_out_of_range` | artifact recorded against a revision the session lacks | `{slug, source_revision, current_revision}` | 500 |
 | `unstated_source_revision` | `artifact save` stated no source revision | `{slug, type, source_revision, current_revision, cause}` | 400 |
 | `unreadable_source_revision` | the stated source revision cannot be read | the same five keys | 500 |
@@ -437,17 +438,20 @@ history was incomplete. Those are facts about the store.
 
 That sentence is **history and stays at nine**. #101 later added a tenth arm (`invalid_archive`),
 which changed no status — it was already 400 under `invalid_model` and is 400 now — so restating the
-split as "six of the ten" would claim something #82 did not do. The two numbers in this section count
+split as "six of the ten" would claim something #82 did not do. #204 added an eleventh
+(`model_unreadable`) for the same reason and with the same effect on the history: it is a condition
+that previously had *no* code at all, because a pydantic `ValidationError` escaped the vocabulary
+entirely, so nothing moved from one code to another. The two numbers in this section count
 different things on purpose, and the arithmetic only closes if you read which:
 
 | | Count | What it counts |
 |---|---|---|
 | six of **nine** | historical | what #82 moved, on the family as it stood then |
-| four keep 400 | **present** | the family as it stands now, including #101's tenth arm |
+| four keep 400 | **present** | the family as it stands now, including #101's tenth arm and #204's eleventh |
 
 So, present tense: a client that branched on 4xx should expect **409** for the two version frontiers
-and **500** for the four store-state arms (`session_unreadable`, `artifact_revision_out_of_range`,
-`unreadable_source_revision`, `import_move_failed`). **Four** conditions keep 400 and are the ones
+and **500** for the five store-state arms (`session_unreadable`, `model_unreadable`,
+`artifact_revision_out_of_range`, `unreadable_source_revision`, `import_move_failed`). **Four** conditions keep 400 and are the ones
 that really are about the request: the three archive arms, because the caller did hand us the
 archive, and `unstated_source_revision`, which never moved. The family base keeps a row at **500** — nothing raises
 it, but a nominal number is still one a reader sees, and 400 was the wrong one to leave there.

@@ -25,7 +25,6 @@ from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 # The one control in this repo that can actually move the ambient default encoding, measured rather
 # than assumed. Borrowed rather than restated: two copies of a probe like this drift, and the copy
@@ -36,7 +35,7 @@ from requivo.cli import _build_parser, _wrote
 from requivo.core import persistence as store
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.dependencies import ARTIFACT_FILENAMES
-from requivo.core.errors import RequivoError
+from requivo.core.errors import ModelUnreadableError, RequivoError, SessionNotFoundError
 from requivo.core.integrity import check_session
 from requivo.core.persistence import derive_slug, load_model
 from requivo.services.artifacts import ArtifactService
@@ -752,7 +751,76 @@ def test_invalid_slug_is_rejected_before_touching_the_filesystem():
 
 
 def test_load_model_rejects_invalid_model(tmp_path):
+    """Still a refusal, and no longer a `ValidationError` reaching the caller.
+
+    This test used to assert exactly that -- `pytest.raises(ValidationError)` -- which is the defect
+    #204 fixed, written down as an expectation. A pydantic error is not a `RequivoError`, so it went
+    past `cli.app()`'s handler as a traceback and past the web error handler into a generic 500, on
+    the file this product calls its durable output. What it *should* have been asserting all along
+    is that the refusal arrives in the vocabulary every other malformed-session condition uses.
+    """
     bad = tmp_path / "model.json"
     bad.write_text(json.dumps({"questions": [], "summary": {}}))  # required `model` missing
-    with pytest.raises(ValidationError):
+    with pytest.raises(ModelUnreadableError) as ei:
         load_model(bad)
+    assert isinstance(ei.value, RequivoError), "a traceback here is the bug, not the guard"
+    assert ei.value.details == {"path": str(bad)}, (
+        "a bare model.json has no session and no revision; padding those keys with nulls would "
+        "state facts nobody measured (see the family note in docs/compatibility.md)"
+    )
+
+
+@pytest.mark.parametrize("corruption", [
+    "",                                            # empty
+    "{",                                           # truncated mid-object
+    '{"model": {}, "questions": [], "summary"',    # truncated after a valid prefix
+    "not json at all",
+])
+def test_a_corrupt_model_is_a_structured_error_from_every_door(workspace, corruption):
+    """Four ways of being corrupt, and -- the load-bearing half -- every door into a model.
+
+    `load_model`, `load_session_model` and `load_revision_model` each read a model the same way, and
+    which one a given verb reaches is not visible from the verb: `status` and `impact` come in
+    through one, `model show` through another, an artifact freshness check through the third. A
+    guard on some of them is the same defect one door along, so the assertion is over all of them.
+    """
+    svc = SessionService()
+    slug = "corrupt-model"
+    svc.create_session("A leave approval system.", slug=slug)
+    svc.update_model(slug, _full_model())
+    d = store.canonical_dir(slug)
+
+    for target in (d / "model.json", d / "revisions" / "0001-model.json"):
+        target.write_text(corruption, encoding="utf-8")
+
+    for call in (lambda: store.load_session_model(slug),
+                 lambda: store.load_revision_model(slug, 1),
+                 lambda: load_model(d / "model.json")):
+        with pytest.raises(ModelUnreadableError) as ei:
+            call()
+        assert str(d) in str(ei.value), "the message names the file that could not be read"
+
+    # The two that know which session they are reading say so, and say where the history is.
+    with pytest.raises(ModelUnreadableError) as ei:
+        store.load_session_model(slug)
+    msg = str(ei.value)
+    assert f"requivo session verify {slug}" in msg
+    assert "revisions/" in msg, "the remedy was on disk the whole time and nothing said so"
+    assert ei.value.details["slug"] == slug
+
+    with pytest.raises(ModelUnreadableError) as ei:
+        store.load_revision_model(slug, 1)
+    assert ei.value.details["revision"] == 1
+
+
+def test_a_missing_model_is_not_reported_as_a_corrupt_one(workspace):
+    """The distinction the wrapping must not flatten.
+
+    "There is no model yet" is a session at revision 0 doing exactly what it should; "the model is
+    unreadable" is a fact about the store with a recovery path. Catching `OSError` inside the reader
+    would collapse the first into the second if the callers above stopped deciding it first, and the
+    remedy printed would be a `revisions/` directory that is empty by definition.
+    """
+    SessionService().create_session("A leave approval system.", slug="no-model-yet")
+    with pytest.raises(SessionNotFoundError):
+        store.load_session_model("no-model-yet")   # revision 0: no model.json has been written

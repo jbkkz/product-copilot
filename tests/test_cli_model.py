@@ -120,3 +120,49 @@ def test_model_apply_honours_the_expected_revision_precondition(workspace, tmp_p
     with pytest.raises(SystemExit) as exc:
         _run(["model", "apply", "s", str(p2), "--expected-revision", "1", "--json"])
     assert exc.value.code != 0
+
+
+def test_a_corrupt_model_reaches_the_operator_as_one_line_not_a_traceback(workspace, capsys):
+    """The end-to-end half of #204, from the three verbs a user actually types.
+
+    `status` and `impact` resolve a model through `_resolve_ref`; `model show` goes through the
+    service. Two different doors into the same file, which is why the assertion is over all three
+    rather than over whichever one the bug was reported against.
+
+    Asserting on **stderr** rather than on the exception is the point: a `ValidationError` reaching
+    `cli.app()` produces a traceback and exit 1, and a test that only checked the exit code would
+    have been green on the defect.
+    """
+    svc = SessionService()
+    svc.create_session("A leave approval system.", slug="corrupt")
+    svc.update_model("corrupt", _full_model())
+    (store.canonical_dir("corrupt") / "model.json").write_text("{", encoding="utf-8")
+
+    for argv in (["status", "corrupt"], ["impact", "corrupt"], ["model", "show", "corrupt"]):
+        with pytest.raises(SystemExit) as e:
+            _run(argv)
+        assert e.value.code == 1, argv
+        err = capsys.readouterr().err
+        assert "Traceback" not in err and "pydantic" not in err, (
+            f"{argv} still surfaces a raw parse failure: {err!r}")
+        assert "model.json" in err, argv
+        assert "requivo session verify corrupt" in err, argv
+        assert "revisions/" in err, f"{argv} does not mention the history that can recover it"
+
+
+def test_a_corrupt_model_gives_the_json_envelope_its_own_code(workspace):
+    """A caller reading `--json` branches on the code, and this condition had none to branch on.
+
+    `model_unreadable` rather than `session_unreadable`: the session opens, the listing is
+    unaffected, `session verify` answers, and `revisions/` holds every applied model — none of which
+    is true when `session.json` is the file that will not parse. Two situations, two remedies, two
+    codes.
+    """
+    svc = SessionService()
+    svc.create_session("A leave approval system.", slug="corrupt-json")
+    svc.update_model("corrupt-json", _full_model())
+    (store.canonical_dir("corrupt-json") / "model.json").write_text("{", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        _run_json(["status", "corrupt-json", "--json"])
+    assert e.value.code == 1
