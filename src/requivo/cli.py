@@ -20,6 +20,7 @@ from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError
 from requivo.core.persistence import load_model
+from requivo.core.selectors import display_text
 from requivo.deterministic import read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
@@ -202,12 +203,26 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
         replies = []
         try:
             for i, q in enumerate(out.questions, 1):
-                ans = input(f"  {i}. {q.q}\n     > ").strip()
+                # `q.q` is LLM-authored prose over an untrusted client request (SECURITY.md), and
+                # `render_turn` already neutralizes the identical field one call earlier -- this is
+                # the second interpretation site invariant 14 warns about, unapplied. `display_text`
+                # escapes embedded control characters per character rather than dropping them, so a
+                # multi-line forged question becomes one long readable line with a visible `\n`
+                # instead of writing a second line at column 0 that `input()`'s prompt cannot own.
+                # Reproduced through this loop, not through a renderer, by
+                # `test_a_forged_question_cannot_write_a_line_at_column_zero_of_the_input_prompt`
+                # (#330); the readability half is `test_an_ordinary_question_still_reads_at_the_input_prompt`.
+                safe_q = display_text(q.q)
+                ans = input(f"  {i}. {safe_q}\n     > ").strip()
                 if ans.lower() == "q":
                     print("Stopped.")
                     return Drafted(out, stopped=True)
                 if ans:
-                    replies.append(f"[slot: {q.slot}] Q: {q.q} → A: {ans}")
+                    # Same field folded back into the transcript sent to the provider -- an embedded
+                    # newline would break the `[slot: ...] Q: ... → A: ...` structure the next turn
+                    # reads. Pinned by
+                    # `test_a_forged_question_cannot_break_the_answer_folded_back_to_the_provider`.
+                    replies.append(f"[slot: {q.slot}] Q: {safe_q} → A: {ans}")
         except (EOFError, KeyboardInterrupt):
             print("\nStopped.")
             return Drafted(out, stopped=True)
