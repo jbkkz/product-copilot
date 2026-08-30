@@ -7,7 +7,6 @@ generation or fall back to 'create session only' — that boolean is all that cr
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 # Field length ceilings — a local app still bounds input so a pasted megabyte can't wedge a turn. Past
@@ -22,7 +21,7 @@ MAX_SLUG_CHARS = 80
 @dataclass(frozen=True)
 class ProviderStatus:
     sdk_installed: bool   # the `anthropic` extra is importable
-    key_present: bool     # ANTHROPIC_API_KEY is set in the server environment
+    key_present: bool     # a credential `new_client()` would authenticate from is set (#332)
 
     @property
     def available(self) -> bool:
@@ -40,10 +39,22 @@ class ProviderStatus:
 
 
 def provider_status() -> ProviderStatus:
-    """Probe the provider without importing a client or touching the key value itself."""
+    """Probe the provider without importing a client or touching the key value itself.
+
+    `key_present` reads `credential_present()` -- the same env-var names `new_client()` itself
+    authenticates from -- rather than a second, independent `os.getenv("ANTHROPIC_API_KEY")`. Before
+    #332 this probe checked only that one name while `new_client()` (widened by #201) also accepted
+    `ANTHROPIC_AUTH_TOKEN`, so a working bearer-token install reported `key_present=False` here,
+    `available` fell to False, and `routes/sessions.py` (which branches on `available`) silently
+    dropped every provider action to `create_only` for an install that would actually have worked.
+    Pinned by `test_a_bearer_token_alone_is_read_as_a_credential`.
+    """
     try:
-        from requivo.providers.anthropic import Anthropic  # the SDK handle, or None if not installed
+        # the SDK handle (or None if not installed) and the shared credential probe
+        from requivo.providers.anthropic import Anthropic, credential_present
         sdk = Anthropic is not None
+        key = credential_present()
     except Exception:
         sdk = False
-    return ProviderStatus(sdk_installed=sdk, key_present=bool(os.getenv("ANTHROPIC_API_KEY")))
+        key = False
+    return ProviderStatus(sdk_installed=sdk, key_present=key)

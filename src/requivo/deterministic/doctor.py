@@ -30,7 +30,7 @@ from requivo.core.integrity import IntegrityProblem, check_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
 from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
-from requivo.providers.anthropic import current_model_name
+from requivo.providers.anthropic import credential_present, current_model_name
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
@@ -110,7 +110,12 @@ def doctor_report() -> dict:
         "provider_anthropic": {
             "installed": provider_installed,
             "version": provider_version,
-            "api_key_present": bool(os.getenv("ANTHROPIC_API_KEY")),
+            # The same credential probe `new_client()` and the web surface read (#332) -- this used
+            # to be its own `os.getenv("ANTHROPIC_API_KEY")`, current when it was written and stale
+            # the day #201 widened the runner to accept `ANTHROPIC_AUTH_TOKEN` too, so a working
+            # bearer-token install reported no key here. Pinned by
+            # test_doctor_reports_a_bearer_token_as_a_credential_present.
+            "api_key_present": credential_present(),
         },
         # `locks` is here because a convention this verb does not report is a convention this verb
         # answers about the wrong shape (#113). The write lock moved out of the session directory to

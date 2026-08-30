@@ -39,10 +39,10 @@ requivo web \
   --reload             # auto-reload on code changes (development)
 ```
 
-By default the server binds to `127.0.0.1`, prints its URL, and opens your browser. The
-`ANTHROPIC_API_KEY` is read from the **server environment** — it is only needed for provider actions
-(discovery, generation); reviewing existing sessions needs no key. The key is never shown in the
-browser, never a form field, never logged.
+By default the server binds to `127.0.0.1`, prints its URL, and opens your browser. A credential
+(`ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` for a bearer-token setup) is read from the **server
+environment** — it is only needed for provider actions (discovery, generation); reviewing existing
+sessions needs no key. The credential is never shown in the browser, never a form field, never logged.
 
 ## The workflow
 

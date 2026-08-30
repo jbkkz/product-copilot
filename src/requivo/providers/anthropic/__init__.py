@@ -38,7 +38,14 @@ split ends up describing a structure nobody can see from a call site.
 
 from __future__ import annotations
 
-from requivo.providers.anthropic.client import MODEL_DEFAULT, Anthropic, APIError, current_model_name, new_client
+from requivo.providers.anthropic.client import (
+    MODEL_DEFAULT,
+    Anthropic,
+    APIError,
+    credential_present,
+    current_model_name,
+    new_client,
+)
 from requivo.providers.anthropic.completion import MAX_OUTPUT_TOKENS
 from requivo.providers.anthropic.generators import (
     advise,
@@ -70,6 +77,7 @@ __all__ = [
     "AnthropicProvider",
     "advise",
     "answer_turn",
+    "credential_present",
     "current_model_name",
     "derive_stories",
     "estimate",

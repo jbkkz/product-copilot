@@ -237,6 +237,30 @@ def test_a_bearer_token_alone_is_not_false_refused(monkeypatch):
     assert new_client() is not None
 
 
+# ── #332: one definition of "is there a credential", not three ──────────────
+
+
+def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
+    """web/config.py and doctor.py each kept their own `os.getenv("ANTHROPIC_API_KEY")`, so a
+    bearer-token install that `new_client()` accepted rendered as "no key" on both surfaces (#332).
+    `credential_present()` is meant to be the one definition every reader shares -- assert it agrees
+    with `new_client()` on *every* name in `_AUTH_ENV_VARS`, not just the historical
+    `ANTHROPIC_API_KEY` case, so a future widening of that tuple cannot repeat the drift silently.
+    """
+    from requivo.providers.anthropic.client import _AUTH_ENV_VARS, credential_present
+
+    _no_credentials(monkeypatch)
+    assert credential_present() is False
+    with pytest.raises(EngineError):
+        new_client()
+
+    for var in _AUTH_ENV_VARS:
+        _no_credentials(monkeypatch)
+        monkeypatch.setenv(var, "sk-ant-whatever")
+        assert credential_present() is True, f"{var} alone must read as present"
+        assert new_client() is not None, f"{var} alone must not be false-refused"
+
+
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
     """End to end, and the part that is not about the message: nothing is written and nothing is paid.
 

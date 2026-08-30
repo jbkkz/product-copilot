@@ -116,9 +116,15 @@ class _Block:
 
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
-    """Isolate every test's sessions under a fresh temp workspace; no API key by default."""
+    """Isolate every test's sessions under a fresh temp workspace; no credential by default.
+
+    Both names `credential_present()` reads (#332) -- not `ANTHROPIC_API_KEY` alone -- so a test
+    relying on "no provider" is not accidentally given one by a bearer token left set in whatever
+    shell ran the suite.
+    """
     monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     return tmp_path
 
 

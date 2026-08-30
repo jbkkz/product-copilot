@@ -37,7 +37,28 @@ MODEL_DEFAULT = "claude-sonnet-5"
 # The two environment variables the SDK will authenticate from. `ANTHROPIC_AUTH_TOKEN` is checked
 # alongside the key so a bearer-token setup is not false-refused by a guard meant to help; Requivo
 # does nothing else to support that flow, and does not need to.
+#
+# This is narrower than everything the installed SDK itself resolves credentials from -- its own
+# `Anthropic.__init__` docstring also documents `ANTHROPIC_PROFILE`, workload identity federation
+# env vars, and an on-disk active profile, none of which any Requivo surface checks for (#332,
+# filed as a follow-up rather than folded into this tuple: reading those is a design decision, not
+# a name to add here).
 _AUTH_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def credential_present() -> bool:
+    """Whether a credential is visible in the environment, by the same names `new_client()`
+    authenticates from -- the **one** definition every "is there a key" reader shares.
+
+    Before #332, `web/config.py` and `deterministic/doctor.py` each kept their own
+    `os.getenv("ANTHROPIC_API_KEY")`, current at the time `new_client()` read only that name too.
+    #201 widened `new_client()` to `_AUTH_ENV_VARS` for a bearer-token setup and left the other two
+    behind, so a working bearer-token install built a client from the CLI while both the web surface
+    and `requivo doctor --json` reported no key. This function is what both now read instead of a
+    second copy of the tuple above, so the two cannot drift again the next time this tuple widens.
+    Pinned by `test_credential_present_is_the_one_definition_new_client_reads`.
+    """
+    return any(os.getenv(var) for var in _AUTH_ENV_VARS)
 
 # Said once, here, because three surfaces used to say a version of it and the paid CLI path said
 # nothing at all.
@@ -72,7 +93,7 @@ def new_client() -> Anthropic:
             "(or `uv tool install 'requivo[anthropic]'`). You do NOT need it to use Requivo inside "
             f"Claude Code — that mode uses no API key. (import error: {_IMPORT_ERROR})"
         )
-    if not any(os.getenv(var) for var in _AUTH_ENV_VARS):
+    if not credential_present():
         raise EngineError(_NO_KEY_MESSAGE)
     return Anthropic()
 
