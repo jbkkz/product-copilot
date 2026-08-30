@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -84,6 +86,20 @@ def test_the_same_floor_declared_twice_is_not_a_contradiction():
 
 
 # ── against the real manifest ──────────────────────────────────────────────────────────────────
+
+def test_every_external_requirement_declares_a_lower_bound():
+    manifest = _real_pyproject()
+    project = manifest["project"]
+    groups = [manifest["build-system"]["requires"], project["dependencies"],
+              *project["optional-dependencies"].values()]
+    for requirements in groups:
+        for requirement in requirements:
+            parsed = Requirement(requirement)
+            if canonicalize_name(parsed.name) == canonicalize_name(project["name"]):
+                # Selecting this checkout's own extras is not an external version promise.
+                continue
+            _floor(requirement)
+
 
 def test_the_real_manifest_yields_every_runtime_dependency():
     """Named against the manifest rather than a count, so adding a dependency does not fail this

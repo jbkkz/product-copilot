@@ -83,7 +83,10 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # can install -- invisible until somebody hits the gap, which is the failure shape the floor leg
 # exists to prevent for versions. Needs pip>=21.2 / setuptools>=64, both already floors of this
 # repo's documented install paths.
-dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx",
+# HTTPX 0.25 adds transport socket_options, used by supported Anthropic SDKs.
+# 0.23.1 imports on Python 3.13 but fails client construction with SDK 0.49.
+# This is a tested dev-only floor, not a new runtime dependency (#312).
+dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx>=0.25.0,<1",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
        "pyright>=1.1.400,<2"]
 
