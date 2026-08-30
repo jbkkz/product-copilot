@@ -34,7 +34,12 @@ class ProviderStatus:
         if not self.sdk_installed:
             return "Install the provider: pip install 'requivo[anthropic]'."
         if not self.key_present:
-            return "Set ANTHROPIC_API_KEY in the server environment to enable provider actions."
+            # Names both names `credential_present()` reads (#332 review) -- a bearer-token-only
+            # reader must not be told to set a credential they already have a working equivalent of.
+            return (
+                "Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in the server environment to "
+                "enable provider actions."
+            )
         return ""
 
 

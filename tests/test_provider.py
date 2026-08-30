@@ -215,6 +215,11 @@ def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):
         new_client()
     msg = str(ei.value)
     assert "ANTHROPIC_API_KEY" in msg
+    assert "ANTHROPIC_AUTH_TOKEN" in msg, (
+        "the remedy must name every name the guard it is the remedy for actually accepts (#332 "
+        "review) -- naming one of two would send a bearer-token-only reader to set a credential "
+        "they already have a working equivalent of"
+    )
     assert ".env" in msg
     assert "requivo doctor" in msg
     assert "requivo demo" in msg, "the offline escape hatches are part of the remedy, not a footnote"

@@ -25,6 +25,11 @@ def test_no_credential_reports_absent(monkeypatch):
     assert status.key_present is False
     assert status.available is False
     assert "ANTHROPIC_API_KEY" in status.reason
+    assert "ANTHROPIC_AUTH_TOKEN" in status.reason, (
+        "the UI remedy must name every name `credential_present()` reads (#332 review), or a "
+        "bearer-token-only reader is told to set a credential they already have a working "
+        "equivalent of"
+    )
 
 
 def test_a_bearer_token_alone_is_read_as_a_credential(monkeypatch):

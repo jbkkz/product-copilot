@@ -61,12 +61,15 @@ def credential_present() -> bool:
     return any(os.getenv(var) for var in _AUTH_ENV_VARS)
 
 # Said once, here, because three surfaces used to say a version of it and the paid CLI path said
-# nothing at all.
+# nothing at all. Names both `_AUTH_ENV_VARS` (#332 review): the remedy has to name every name this
+# same guard accepts, or a bearer-token-only reader is told to set a credential they already have a
+# working equivalent of.
 _NO_KEY_MESSAGE = (
-    "No Anthropic API key found. Set ANTHROPIC_API_KEY in your environment, or put it in a `.env` "
-    "file in the directory you run from (see .env.example). `requivo doctor` reports whether a key "
-    "is visible. You do NOT need a key for `requivo demo`, for the offline verbs (status, impact, "
-    "session, model, artifact), or for Requivo inside Claude Code."
+    "No Anthropic credential found. Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN for a "
+    "bearer-token setup) in your environment, or put it in a `.env` file in the directory you run "
+    "from (see .env.example). `requivo doctor` reports whether a credential is visible. You do NOT "
+    "need one for `requivo demo`, for the offline verbs (status, impact, session, model, artifact), "
+    "or for Requivo inside Claude Code."
 )
 
 
