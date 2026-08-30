@@ -6,6 +6,665 @@ All notable changes to Requivo are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-30
+
+### Added
+
+- `requivo session rescope <slug> --context <cards>` re-scopes an existing session's context-card
+  selection (#168) — the documented recovery for a card that only exists on one machine used to be
+  hand-editing the `context_cards` key in `session.json`. Once the session has a model, the re-scope
+  is recorded as its own revision (the model carries forward unchanged; `surface: "session-rescope"`
+  is what tells it apart from a reasoning turn in the history), so `session.json` shows exactly where
+  the selection changed. Existing artifacts are left alone — context is not a dependency edge that
+  invalidates them — and nothing is re-run: only the *next* turn reasons against the new selection.
+
+- `requivo doctor` reports candidate residue under the write-lock root, `.requivo/locks/`
+  (#180). #113/#179 moved the per-session write lock outside the session directory it guards, and
+  there is no `session delete` verb, so a hand-deleted session — the ordinary way one goes here —
+  leaves its lock file behind. The `locks` block in `doctor`'s report now names the total lock-file
+  count and, of those, which slugs currently name no session, alongside anything under that root
+  that is not a `<slug>.lock` file at all. It never concludes "orphan": the lock scan and the
+  current session list it is checked against are two reads a moment apart, and it says only what
+  the directory can support, the same discipline `doctor` already applies to a non-session entry
+  under the session root (#67).
+
+- `requivo demo` now ends on the change-impact step (#223). It stopped at the decision brief, one
+  beat short of the only part of the walkthrough a strong prompt cannot also produce: a slot changes,
+  and Requivo reports which decisions have to be re-validated, which premises are back in question
+  and which documents go stale. The block is computed by walking the dependency graph the discovery
+  recorded, not reasoned, so the same change gives the same answer every time -- and it needs no API
+  key, which is why the keyless demo is where it belongs.
+- The demo's closing step now names something a reader without a key can do (#223). It ended on
+  `requivo discover`, which needs one, so the walkthrough written for a visitor with no key left that
+  visitor with nothing to try. `requivo web` and `requivo impact` are offered first; `discover` is
+  still there, marked as the one that costs something.
+
+- The repository ships visual proof of the product for the first time (#224). It contained zero
+  tracked images while a finished demo video sat untracked, and `docs/web.md` -- the page for what the
+  project calls its primary interface -- described that interface entirely in prose. Four screenshots
+  of Requivo Web now live in `docs/images/`: the home page, the session page, the open questions with
+  the readiness verdict, and the decision brief. The README carries the session page near the top,
+  through an absolute `raw.githubusercontent.com` URL so it renders on the PyPI project page too,
+  which is where a relative link would 404; `docs/web.md` carries all four.
+- They are lossless WebP at 2x, and none of them ships in the wheel or the sdist, so the package is
+  the same size it was.
+- `tests/test_doc_images.py` is the guard, because a broken image is invisible to the person who
+  broke it: the README renders on two sites the author is not looking at, and there is no import to
+  fail. It checks that every image URL pointing into this repository names a file that exists, that
+  no README image is relative, and that every relative image in `docs/` resolves.
+
+- The README now states how Requivo is built (#233): by AI coding agents, under maintainer direction
+  and review, with every change landing as a squash-merged pull request that passed every required
+  check. Most commits already carried an agent co-author trailer and nothing public said so, which
+  left the most interesting thing about the repository to be discovered rather than told. The
+  paragraph names the controls -- the pull-request-only flow, the required checks, and the hermetic
+  suite whose meta-guards exist to catch exactly the mistakes that development model makes -- and
+  invites the reader to judge those rather than the authorship.
+
+- `requivo status` ends by naming the single next command (#246). It is the verb you run coming back
+  to a session, and its human view stopped at the question list. Every other surface here already
+  followed the rule and said so -- `discover` closes with `requivo answer`, `answer` closes with
+  either `requivo brief` or "keep going", and the plugin's status skill states it outright as *point
+  at the next step, once*. The CLI's `status` was the one place it was written down and not done.
+- One line, never a menu, and the order is a judgment: open questions win over a stale artifact,
+  because regenerating a brief against a model that is about to move is a paid call thrown away; a
+  stale artifact wins over a missing brief. A converged session whose brief is fresh gets no pointer
+  at all, because there is no single next step and offering three would be the menu this refuses.
+- `--json` is untouched -- a machine consumer picks its own next step, and a line printed beside the
+  payload would break every caller that pipes it into `jq`.
+
+- `requivo --version` exists, and `requivo doctor` reports the OS and the model (#247). A bug
+  reporter's first reflex -- and what this repository's own bug template asks for -- is the version,
+  the OS and the model in use. `requivo --version` answered `the following arguments are required:
+  <command>` and exited 2, and `doctor` reported Python and Requivo but neither the platform nor
+  whether `MODEL` was overridden. Assembling a bug report meant three lookups; it is now one paste.
+- The version string is **read** from `requivo.__version__`, not written into `cli.py`.
+  `tests/test_version_sites.py` enforces agreement across the four files that declare the version and
+  does not scan `cli.py`, so a literal there would have been an unguarded fifth declaration added by
+  the change whose whole subject is telling people the right version.
+- `doctor` gains two additive `--json` keys, `os` and `model` (`{name, source}`), and two rows in the
+  human view. `model.source` distinguishes `env` from `default`, because a reporter with `MODEL` set
+  and forgotten is the case the row exists for and a resolved name alone reads identically in both.
+- `name` and `source` are read from the same fact, so they cannot disagree. An exported-but-empty
+  `MODEL` is an override, not the default -- the fallback in `current_model_name` fires on the
+  variable being *absent*, and testing the value for truth instead reported a name of `""` under a
+  source of `default`, naming neither the default it claimed nor the override really in force. The
+  human row also refuses to print a tick over an empty model id, because that is not a working
+  install: every provider call would send no model at all.
+- Compatibility: compatible - both `doctor` keys are additive, and no existing key changes shape.
+
+- The docs state what a run costs, in dollars, before the first paid command (#252). You paste your
+  own key and pay with your own money, and nothing readable beforehand named a figure: the README
+  never mentioned cost and `docs/providers.md` explained the caching mechanics without one. The CLI
+  printed the real number, but only after the spend -- the wrong side of the decision.
+- Roughly $0.03 to $0.06 per call, which puts a complete session under $1. `docs/providers.md` has
+  the per-step table with its call counts, token ranges, method and limits; the README carries the
+  headline where somebody decides whether to set a key at all.
+- **Every figure is derived, not typed.** `tests/test_cost_claims.py` recomputes each one from the
+  rate table in `providers/anthropic/pricing.py` and checks the published token ranges against the
+  prompts this repository assembles and the replies captured in `fixtures/golden/`. Editing the rate
+  table turns the docs red rather than quietly outdating them -- which is the failure this project
+  has already paid for once, when the table carried the wrong Sonnet rate for a release behind an
+  expiry nobody could falsify (#254).
+- One limit stated in the docs rather than glossed: the token counts are estimated at four characters
+  per token, because no real ledger capture is committed here and the suite makes no API calls. The
+  dollars are exact arithmetic over those estimates at the current rate.
+
+- Added (#253): the web says what a paid action cost. Every provider call made through a browser was
+  billed and recorded nowhere — `track_usage()` was opened in `cli.py` and nowhere else, and
+  `record_call()` is a no-op with no active ledger. The answers turn and a document generation now
+  carry their footprint in the fragment the reader lands on: exact tokens, and a cost labelled as an
+  estimate with the date of the rate table behind it. A model with no price on file says so rather
+  than borrowing a neighbour's rate, and a call the provider reported no usage for says nothing
+  rather than reporting zero. The two paths that answer with a redirect record it to the
+  `requivo.web` logger instead — a 303 has no body — and that line is written from a `finally`, so a
+  call that failed after spending tokens still leaves a trace.
+
+### Changed
+
+- The tracked `.claude/settings.json` no longer configures anything on a contributor's machine
+  (#215). It enabled four of the maintainer's own Claude Code plugins and registered a `statusLine`
+  command running `.oss/statusline.py` -- 1,922 lines of maintenance tooling whose refresh path forks
+  off forge calls with whatever credentials the machine holds -- for everyone who cloned the
+  repository and opened it in Claude Code. Scope, since the two halves differ: the plugin enablement
+  shipped in every release from 0.10.0 to 1.2.0, while the `statusLine` landed after 1.2.0 was tagged
+  and reached only clones of `main`. Both moved to the untracked `.claude/settings.local.json`,
+  which `.gitignore` already excluded for exactly this reason; the tracked file is now an empty JSON
+  object. Nothing in the product, the test suite or CI reads it.
+- The guard that was supposed to catch this could not see it, and now guards the class rather than
+  the instance (#215). `tests/test_agent_layer.py` promises that the tracked `.claude/` layer stays
+  inert for anyone without the maintainer's plugins, and it checked for a `hooks` key and nothing
+  else -- so the `statusLine` added beside it passed silently, pointing at a script outside
+  `.claude/` that the tracked-script scan could not see either. It now refuses any top-level key
+  outside an allowlist that is deliberately empty, any command named at any depth under any key
+  name, and any plugin enablement; it refuses to answer at all when its scan set is empty; and it
+  keeps `.claude/settings.local.json` out of the index. Each detector has a must-fire control, so a
+  clean run means the checks looked rather than that they were unable to.
+
+- GOVERNANCE.md, SECURITY.md and CODE_OF_CONDUCT.md agree with each other and with the repository's
+  live settings (#220). GOVERNANCE described a code of conduct as something that "can be introduced"
+  beside one that has shipped since 2026-08-18; SECURITY told reporters to find an email on a public
+  profile while GitHub private vulnerability reporting is enabled and the issue chooser already
+  pointed there — two instructions for one act, with the weaker one in the canonical file. All three
+  now name the same private channel.
+
+- The canonical `leave-approval` example was regenerated end to end (#223). Its committed model
+  carried no reasoning layer at all -- no decisions, no challenges, no opportunities -- so
+  `requivo impact` on the example the README calls "the one to read first" listed stale artifacts and
+  nothing else, while that same README promised it would name the decisions resting on the
+  integration topic. The differentiator was claimed on the canonical example and reproducible only on
+  the other one.
+- All nine files come from one run in one sitting: a real discovery, three answers, then the brief,
+  the PRD, the acceptance criteria, the epic with its three exports, and the release notes, every one
+  of them generated from the same model at the same revision. The decision brief that ships is
+  therefore the current one, and the example README's note apologising that it "predates the current
+  decision-brief layout" is gone with the thing it apologised for.
+- Two tests now hold the pair together with no API call: the brief's `What is confirmed` and
+  `Important assumptions` sections are projections of the model, so they are re-derived from the
+  committed `model.json` and compared; and `impact` on that model must return a decision, a premise
+  and an artifact for the integration topic. Neither could be written while the shipped assessment
+  was a frozen capture from an older run.
+- The example README's change-impact walkthrough now describes what the committed model actually
+  contains, and says where the reasoning layer comes from: the brief is what produces it, so `impact`
+  has decisions to report only after `requivo brief` has run.
+
+- The README's first runnable command no longer needs an API key (#225). "Start here" opened on
+  `uvx --from "requivo[web,anthropic]" requivo web`, which requires uv *and* an Anthropic key before
+  anything happens -- while `requivo demo`, the one asset that needs neither, was mentioned once,
+  parenthetically, sixty lines further down. The section now leads with `uvx --from requivo requivo
+  demo` (verified against a bare wheel install with no extras and no key), and the web command
+  follows it, saying in the same breath that analysing is what needs the key.
+- `requivo demo`'s closing block no longer points a wheel install at files it does not have (#225).
+  It proved "everything else is a view" by naming `examples/<slug>/epic.md` and
+  `acceptance-criteria.md` -- paths that exist in a clone and nowhere else, so the walkthrough's
+  closing evidence was two dead pointers for every install the README actually recommends. It prints
+  the browsable URL now, and the one command in that block that needs a key says so on the line below
+  it rather than leaving a keyless reader to find out.
+
+- The public copy states one maturity story and no version number (#230). README's Status said "at
+  **1.0**" while PyPI served 1.2.0 — prose that dates itself against the next release, which is the
+  class `tests/test_version_sites.py` exists for and cannot reach — and the PyPI classifier said
+  Beta while SECURITY.md and CONTRIBUTING.md said "early open-source beta". The classifier is now
+  Production/Stable and the prose is version-free.
+- The PyPI description names what Requivo does that a strong prompt does not, and drops the word
+  "validated" (#230): validation is `docs/product-validation.md`'s protocol, and it has not been run.
+- `docs/cli.md` no longer says most verbs accept a path to a saved `model.json`. Only `status` and
+  `impact` do; the seven generator verbs resolve a session, because they write a revision or an
+  artifact back into one (#230).
+- README links are written as references and resolved absolutely (#230). `pyproject` sets
+  `readme = README.md`, so PyPI renders this file as the project page and leaves relative hrefs
+  alone — every one of the fifteen 404'd there. Keeping the URLs in one block at the foot is what
+  stops the fix from costing the prose its line width.
+
+- Changed (#235): saved artifacts are rendered as formatted documents on the web instead of raw
+  Markdown in a code block. The decision brief is this product's stated primary deliverable, and the
+  audience the web vocabulary exists for was handed literal `# Decision Brief` and `**Objective:**` at
+  the exact moment the product delivers its value. No new dependency: the dialect is closed to what
+  `render/markdown.py` actually emits, and the renderer builds every tag itself around text it has
+  already escaped, so content a language model wrote or a user edited on disk cannot become live
+  markup and there is no sanitizer to keep in step with a parser. Anything outside the dialect
+  degrades to escaped text. The Download link still serves the exact bytes on disk.
+
+- Changed (#236): the web now tells the truth about how long a paid call takes. The copy beside a
+  provider-backed button promised "a few seconds" while this project's own invariants describe those
+  calls as taking seconds to minutes — an expectation that expires on a page that blocks, and what a
+  reader does when it expires is resubmit, buying a second session and a second paid call. It says
+  "usually under a minute" and what the wait is for, and after ten elapsed seconds the status text
+  starts reporting how long it has been running. Nothing changes before then, deliberately: a label
+  that churns from the start says nothing about a slow call, so the change itself is the signal. The
+  deferred-analysis page gained the status text it never had, and with JavaScript off the static copy
+  still stands on its own.
+
+- `requivo --help` is ordered around the user journey and marks the verbs that spend money (#244).
+  argparse renders subcommands in registration order, and the deterministic package registered first
+  -- so the six plumbing entries led and `demo` and `discover`, the two verbs a new user needs, sat
+  seventh and eighth. The order is now demo, discover, the refinement verbs, the generators, the
+  offline plumbing, then `web`.
+- Nine verbs carry an `(API)` marker and the other ten carry none, so it is possible to tell from
+  `--help` that `brief` will bill you and `status` will not. A closing paragraph names the first
+  command to run and says what the marker means -- a marker nobody defines is a decoration.
+- `tests/test_cli_help.py` checks the marker in **both** directions, and derives the expected set
+  from the provider's own operation table rather than listing it: a list in a test is a second copy
+  of a decision, and a generator added later would otherwise arrive unmarked with the guard still
+  green.
+
+- Session slugs are derived from the content words of a request, in any Latin language (#245). The
+  handle you retype into `answer`, `status`, `brief` and `prd` was the first five tokens of the
+  request verbatim, so the most common opening produced `we-need-a-way-to` -- unmemorable, and shared
+  by every other request that opens the same way, which then differed only by a collision hash.
+  Function words are dropped before the five are taken, so *"We need a way to track vendor invoices"*
+  becomes `track-vendor-invoices`.
+- Accents are folded first, which fixes a worse half of the same defect: `[a-z0-9]+` treated an
+  accented letter as a *separator*, so it split the word rather than losing the accent.
+  *"Nous aimerions un système d'approbation des congés"* produced `nous-aimerions-un-syst-me`; it now
+  produces `systeme-approbation-conges`. Letters that carry no combining mark for NFKD to strip --
+  eszett, the ligatures, the stroked letters -- are spelled out before the fold, or it would delete
+  them and mangle the word one letter along.
+- Compatibility: compatible - sessions already on disk keep their names, nothing re-derives a slug
+  for a session that exists, and the emitted alphabet is unchanged so every existing slug stays
+  valid. What changes is idempotent re-discovery: re-running `requivo discover` on a request first
+  analysed by an older Requivo now creates a second session instead of resolving to the first, where
+  it used to resolve and then be refused for free by the revision-zero gate.
+  `docs/compatibility.md` carries it, with the remedy.
+- Two limits are stated rather than left to be found. A request in a script the ASCII fold cannot
+  romanize -- Japanese, Cyrillic -- still lands on `discovery`, and the second on
+  `discovery-<hash>`. And matching is case-folded ASCII, so a short function word collides with an
+  acronym: `er` eats the ER in "an ER diagram", as do `im`, `am`, `us`, `et`, `est` and `par`.
+  Neither is fixable by pruning the list, and `session init --slug` is the way past both.
+- The rule that keeps the list honest -- a word is in it only if it is a function word in some
+  in-scope language and not a content word in any of them -- is a test rather than a paragraph.
+  `son` was in it anyway, two lines under the comment naming it as deliberately excluded.
+
+- The `anthropic` extra now accepts the SDK's 1.x major (`anthropic>=0.40.0,<2`), so
+  `pip install 'requivo[anthropic]'` resolves 1.x on Python 3.10 and above (#314). The ceiling had
+  been `<1` since before that major existed, and this repo's rule is that a ceiling states what we
+  have actually been run against -- so the widen carries that evidence rather than a bot's guess:
+  the suite green at 1.2.0 across the py3.10-3.13, macOS and Windows legs, and, because no CI leg
+  makes a wire call, one real discovery run and one real rejected-credential run against 1.2.0
+  exercising the paid path and the typed provider-error arms. Nothing in Requivo's use of the SDK
+  is touched by the 1.0 break: it constructs no `httpx` object and passes none in.
+- Because anthropic 1.x requires Python 3.10 while Requivo still declares 3.9, the installed SDK
+  major now depends on the interpreter -- 0.x on 3.9, 1.x above it. Both are supported and tested;
+  no action is needed. Users who want the SDK's move to the maintained `httpx2` fork need Python
+  3.10 or newer.
+
+### Fixed
+
+- `tests/test_narrative_references.py` never looked under `docs/` or `tests/`, and never recognised
+  a `.js` file, so a narrative reference living in any of those was invisible to the guard CLAUDE.md
+  names as the thing that keeps a reference honest (#156). `docs/` now joins the resolution scan
+  (8 references, all clean) and `.js` joins the recognised suffixes; the wrap check -- which has no
+  pointer-versus-mention ambiguity -- also now runs over `tests/`, where the motivating instance
+  (`tests/web/busy_harness.js`) originally sat. The *resolution* check is deliberately not widened
+  to `tests/`: measured, it turns up eleven apparent dangling references, all false positives (nine
+  historical mentions of a module name that no longer exists on purpose, two of this guard's own
+  fixture strings), and resolving that needs a rule that tells a pointer from a mention -- filed
+  separately rather than attempted here.
+
+- The golden harness's `training-budget` interactive request had 15 of its 29 answer-sheet layers
+  unreachable (#163): the engine asks almost exclusively about `business_rules`, `workflow`,
+  `permissions` and `edge_cases`, so those four ran dry by turn 4 and the loop converged for want of
+  anything left to say rather than because the engine was finished. `fixtures/golden/requests.md`
+  now carries ten layers on each of those four slots (up from 2-3), leaving every other slot as it
+  was, so a re-capture can reach five or more turns on all three runs instead of one in three.
+  `scripts/golden_lib.py`'s `AnswerSheet.remaining()`, removed as dead in #137, is wired back in as
+  `unreached_layers()`: on a capture that stayed SHALLOW, `golden_diff.py` now names which slots
+  still had something on the sheet the conversation never came back to ask, replacing the by-hand
+  diagnosis that explained the 4/5/4 depths in the first place. The re-capture itself (15 API calls)
+  is not run by this change and is left as a spend decision for the maintainer -- the committed
+  `training-budget.runs.json` baseline still measures the old, shallower request set until it is
+  re-captured.
+
+- The "Decision brief" rename now reaches `assets/framework/elicitation.md`, the human-readable
+  spec of the framework: it named the artifact "a solution assessment" after every user-facing
+  caption had already moved to "Decision brief" in #171 (#166). That file is not read by
+  `build_prompt()`/`load_context()` -- it is only printed by `requivo schema --framework`, for a
+  human or a Claude Code agent -- so nothing here is golden-measured and the rename cost no API
+  spend. `assets/prompts/brief.md`, the sibling asset the issue also named, is left as-is on
+  purpose: it is fed into the model's system prompt verbatim, so its wording is a golden-harness
+  spend decision, not a caption fix, and the reason it still says "solution assessment" is now
+  recorded at its call site (`providers/anthropic/generators.py:advise`).
+
+- `examples/event-checkin-reconciliation/solution-assessment.md` (and its bundled twin under
+  `requivo demo`) was stale against the current renderer: the readiness block named six blockers
+  where the live model now produces eight, and the banner was missing the `DRAFT ` prefix the
+  renderer prints for a model with blockers (#172). Both are corrected, and a new test,
+  `test_the_browsable_examples_deterministic_half_matches_the_renderer`, re-derives the readiness
+  block, the banner and its draft sub-line (now `render/terminal.py`'s `DRAFT_NOTE` constant, so
+  the test imports it rather than duplicating the literal) from the example's own `model.json` and
+  compares them against the captured file, so this class of drift is caught with no API call. The
+  LLM-authored prose (challenges, risks, opportunities, next steps) is unchanged and is not covered
+  by the new guard -- regenerating it is a separate spend decision.
+
+- `scripts/plugin_cli_drift.py` now survives a console that cannot encode a character in the
+  plugin-derived text it prints (a directory name, a released version string) instead of letting
+  the crash overwrite a real drift finding with a false could-not-look verdict (#174). Its own
+  `_harden_streams()` now also reports, on stderr, a stream it could not harden -- the third state
+  `requivo.streams.configure_stream` reports for the product -- rather than swallowing that case
+  silently.
+
+- `tests/test_boundaries.py`'s provider guard now scans `web/` and `deterministic/` in addition to
+  `cli.py` and `render/` (#183), so the two provider imports #167 called legitimate --
+  `web/config.py`'s SDK probe and `web/app.py`'s `EngineError` -- are now covered by an allowlist
+  entry instead of by nothing. Neither import changed; the guard just watches them now.
+
+- `tests/test_narrative_references.py`'s *resolution* check now covers `tests/` too, closing the
+  gap #156 opened and #188 measured but declined to close (#190). Widening the glob alone produced
+  eleven apparent dangling references and all eleven were false positives, of exactly two kinds:
+  eight files recount the same "Split out of `test_cli_deterministic.py`" provenance idiom, worded
+  slightly differently per file -- naming a module deleted on purpose, to recount what happened
+  rather than to point a reader at a guard -- and the guard's
+  own file supplied the other three, being unable to resolve its own wrap-detector fixtures and its
+  own prose quoting that idiom. Both are now recognised mechanically rather than left as coverage
+  that reads as more than it is: `_HISTORICAL_MENTION` exempts the established "Split out of
+  `X.py`" idiom (and only that idiom -- a rename that skips it is exactly as loud as any other
+  broken pointer), and the guard excludes its own module from resolution by identity, staying fully
+  in the wrap scan. `tests/web/busy_harness.js`, the motivating instance for #156, now resolves as
+  an ordinary subject like any other.
+
+- A provider verb run without an API key refuses in one line instead of a traceback (#201). This was
+  the most likely first failure of a fresh `pip install requivo[anthropic]`: run the command the demo
+  suggests before setting a key, and the SDK raised a bare `TypeError` out of its own auth resolution
+  — not an `APIError`, so the transport arm did not see it, and not a `RequivoError`, so `cli.app()`
+  did not either. It reached the operator as a stack naming neither `ANTHROPIC_API_KEY`, nor `.env`,
+  nor `requivo doctor`. `new_client()` now refuses upfront, before a session is claimed and before
+  anything is billed, and `ANTHROPIC_AUTH_TOKEN` is accepted so a bearer-token setup is not
+  false-refused.
+- Transport failures say which kind they are (#201). `AuthenticationError`, `PermissionDeniedError`
+  and `RateLimitError` are all `APIError` subclasses, so a rejected credential was answered with
+  "Retry the command in a moment" — advice that never works on a 401. A credential failure now names
+  the key remedy and does not suggest retrying; a rate limit says to wait for the reset; a connection
+  drop, a timeout or a 5xx keeps the original wording, which was right for those all along.
+
+- A failure at the end of an interactive `requivo discover` no longer discards the whole conversation
+  (#202). The loop drafts up to eight paid turns in memory and then made a ninth paid call for the
+  decision brief **before** anything was written, so one transient API error on that last call threw
+  away all eight turns, every answer the user had typed, and left the session at revision 0 -- with a
+  transport message that named neither the session nor a way back, so retrying meant restarting the
+  conversation at full price. The converged model is now persisted first and the brief is produced
+  through the same path every other surface uses, which makes that failure cost one call instead of
+  nine and names `requivo brief <slug>` as the retry.
+- A provider failure *mid-loop* keeps the turns that succeeded, too: the model is what the loop
+  carries, so the last good turn already holds every answer given so far. It is saved, and the output
+  names the session and the `requivo answer <slug> "..."` continuation. A turn-1 failure has nothing to
+  save and says so, pointing back at `discover` rather than at a verb with no model to refine.
+- Ctrl-C landing inside a provider call -- the several-second window where it is most likely to land --
+  no longer produces a raw traceback. It reports the claimed session and keeps the drafted turns.
+- A finished interactive discovery now lands on revision 2 rather than revision 1: the converged model
+  is one revision and the assessment's absorbed reasoning is the next, which is what `requivo brief`
+  has always done on an existing session. Revision numbers are provenance, not a promise about their
+  value.
+- Stopping the loop on purpose (`q`, or Ctrl-C at a question) keeps its turns too. It used to discard
+  them and leave the session at revision 0, which is the same loss as a failed turn wearing a friendlier
+  word. A stopped discovery now lands exactly where `--once` already landed -- revision 1, questions
+  still open, `requivo answer <slug> "..."` named -- so the two entry points leave one shape of session
+  rather than two. The accepted cost: re-running `discover` on that same request is now refused, and
+  that refusal already names both ways on (refine it, or use another slug).
+
+- Error messages in Requivo Web are visible again -- until now every single one was dropped on the
+  floor in a real browser (#203). The vendored htmx swaps only 2xx/3xx responses and nothing opted in,
+  so a revision conflict from a second tab, the oversized-answers refusal, and a provider failure after
+  a minutes-long **paid** generation all produced the same thing: the progress bar completed, the
+  buttons came back, the page did not change, and nothing was said. On the paid one the natural next
+  move is to click the button again and pay again. The whole server-side error architecture was
+  unreachable past the network boundary, and the Python suite could not see it because its test client
+  runs no JavaScript.
+- Where each error lands is now part of the design rather than an accident. The one-line error notice
+  is retargeted into a dedicated flash region, so it can never replace the region holding answers you
+  have typed -- which is the destruction #30 was filed to stop, and which a naive fix would have
+  reintroduced. The oversized-answers refusal keeps returning the full region with your submission
+  still in it.
+- A Node harness drives the real `app.js` against htmx's own swap gate, so the fix is pinned by effect
+  rather than by spelling; it goes red if the opt-in is removed. A 204 "nothing to render" is still
+  honoured, and ordinary successful swaps are untouched.
+
+- A truncated or corrupt `model.json` is a structured error instead of a traceback (#204). The file
+  this product calls its durable output was read through `PersistedEngineOutput.model_validate_json`
+  with nothing around it, so a pydantic `ValidationError` — which is not a `RequivoError` — went
+  straight past `cli.app()` as a stack trace from `status`, `impact` and `model show`, and past the
+  web error handler into a generic "Something went wrong on the server" 500. The new
+  `model_unreadable` code names the file, the session, `requivo session verify <slug>`, and the fact
+  that `revisions/` holds every applied model — a remedy that was on disk the whole time with nothing
+  saying so. `session verify` and `session list` are unchanged.
+- Compatibility: compatible - `model_unreadable` is a new arm of the `invalid_session` family for a
+  condition that previously carried no code at all, so nothing moved from one code to another. Added
+  to the published table in `docs/compatibility.md` at HTTP 500.
+
+- Fixed (#205): the web answers turn no longer pays for an analysis whose result is already
+  guaranteed to be discarded. When a second tab, the CLI or a back-button submit had moved the
+  session past the revision the form was rendered at, the conflict was certain the moment the
+  snapshot was read — but it was only raised after a full provider call, so the user was billed for a
+  turn nothing would ever read. The check now runs before the call; the precondition on the apply
+  stays, because the session moving *during* the call is a different race.
+
+- A first analysis that fails no longer dead-ends on an error page that hides the request it just saved
+  (#207). Requivo Web claims the session *before* the provider call, deliberately, so a transient API
+  failure left the pasted email safe on disk and the session's own page already offering an "Analyse
+  request" retry button -- and then sent the user to "Something went wrong... check the server logs.
+  Back to sessions." Nothing said the request had been saved or where, so a first-time user on a
+  transient error could only conclude the product had eaten it. Both doors onto a first analysis now
+  land on that session's page with the cause stated and the retry button in reach.
+
+- Every command in the two examples' "Reproduce it" blocks now runs on a fresh clone (#222). They
+  opened with `requivo brief examples/leave-approval/model.json`, and all seven generator verbs
+  raised `SessionNotFoundError` there: a generator writes a revision and an artifact back into a
+  session, so it resolves a slug and requires it to exist, while `.requivo/` is gitignored and no
+  such session ships. The commands worked only on a machine that happened to have run them before,
+  which is the first thing an evaluator tries. Both blocks now bootstrap the session offline in two
+  commands -- `requivo session init` on the example's request, then `requivo model apply` on its
+  committed `model.json` -- and run the generators against the slug.
+- The leave-approval example no longer claims its output lands in `out/<slug>/`, a root retired in
+  0.9.8 and opened since by nothing but `requivo session migrate`. Documents land in
+  `.requivo/sessions/<slug>/artifacts/`, and both blocks now say so.
+- The documented sequence is read out of the READMEs and executed by the test suite, so a block that
+  stops working goes red on the edit that broke it rather than on the first reader who tries it.
+
+- The README's Claude Code quickstart no longer dead-ends (#227). Adding a marketplace does not
+  install a plugin, so the printed sequence reached `/requivo:discover` before the skill existed and
+  failed as an unknown command at the moment of first use. It now gives the same three steps
+  `docs/getting-started.md` and the plugin README already gave.
+
+- Fixed (#237): the home page's "Recent" list is now actually recent. Rows came off
+  `SessionService.list_entries()`, which sorts by slug, so with a handful of sessions the one touched
+  five minutes ago could sit at the bottom while an abandoned experiment led the page. The web view
+  model orders them newest-first; a session nobody could read sorts last rather than first, since it
+  states no timestamp at all and an empty string is the smallest string. Timestamps read as "3 days
+  ago" or "25 Aug 2026" instead of "2026-08-25T12:36:48Z", with the exact instant kept on the row.
+  `requivo session list` is unchanged: its slug order is a public surface.
+
+- The Claude Code plugin no longer offers the CLI's provider-backed generators as if they were
+  keyless (#242). Its catalog description said a reader could "hand the same model to the requivo CLI
+  for acceptance criteria and tracker epics" and, in the same paragraph, that "there is no API key to
+  configure"; the README's *Beyond the six skills* section listed the same generators with no mention
+  of what they need. Both statements about the plugin are true, and the verbs are not covered by
+  them: `criteria`, `epic`, `release`, `stories` and `estimate` call the Anthropic API directly, so a
+  marketplace reader who followed the pointer met the missing-SDK error first and the missing-key
+  error second, having been told twice that neither applied.
+- The description now says those generators run in Requivo's optional API mode and do need a key, and
+  the README section names both the `requivo[anthropic]` extra and `ANTHROPIC_API_KEY`, alongside why
+  that is the opposite of what its own install section says and why both are right.
+- `tests/test_plugin_copy.py` holds it. The storefront is two hand-edited files saying one thing, and
+  it checks both: a description claiming "no API key" while naming a CLI generator must also name the
+  API mode, and the README section that lists them must name the extra and the key. The section is
+  read on its own rather than the whole file, because the install section mentions the same key in
+  order to say it is *not* needed, so a whole-file scan would have passed on the defect.
+
+- Every CLI route to "there is no such session" now names the sessions root it searched and the
+  command that lists what is there (#243). There were five wordings across three modules; exactly one
+  named a root, none named `requivo session list`, and two leaked the word *canonical* -- engine
+  vocabulary for "not the retired `out/` layout", which names a distinction a user cannot act on.
+- Naming the root is the fix rather than a nicety. The plugin README spends two paragraphs on the
+  trap it calls *fails in no visible way*: sessions live under the workspace you run from, so a valid
+  session is invisible from one directory and present from another. `no model file or session found
+  for 'leave-aproval'` said nothing about which of the two you were in.
+- `--json` is untouched: `code` is still `session_not_found` and the reference is still in `details`.
+  Only the human sentence changed, and `docs/compatibility.md` already places terminal output
+  outside the stability promise.
+- `tests/test_session_not_found.py` sweeps the thirteen verbs rather than the five raising sites,
+  because each site was individually defensible and what was wrong was the set -- a test per verb
+  would have passed on all five wordings, and the sixth site added later would have arrived with a
+  sixth.
+
+- Cost estimates for `claude-sonnet-5` now use its confirmed standard rate of $2/$10 per million
+  tokens (#254). The table carried $3/$15 behind a launch row expiring 2026-08-31 — Sonnet 4.6's
+  rate, inherited from the previous Sonnet generation rather than confirmed — so from September 1
+  every printed estimate would have over-reported by exactly 50%. Anthropic's pricing page now
+  states that the introductory $2/$10 is the standard price and the scheduled increase will not
+  occur; the table records where the rate was read and when.
+
+- CONTRIBUTING.md no longer states four things that are not true (#279): the removed `pc` alias, a
+  `core/` layer with "no I/O" that CLAUDE.md's invariant 7 explicitly retracts, a working style of
+  committing straight to `main` that has not held since every change started landing as a
+  squash-merged pull request, and a `.claude/settings.json` said to carry one key when it carries
+  two. The inertness argument in that section rests on the enumeration being complete, so an
+  incomplete one weakened the claim it was making.
+
+- The GitHub new-issue chooser offers one Bug report and one Feature request instead of two of each
+  (#280). The older pair is gone and their better fields are merged into the survivors; the bug
+  template asks for `requivo doctor --json` — one paste covering version, Python, provider, streams
+  and workspace, with no session content in it — rather than a hand-filled environment checklist,
+  and no template prompts for the `pc` command removed in 0.9.8. The chooser's contact links all
+  resolve: the Discussions link 404'd because Discussions was disabled, which is now enabled, and a
+  documentation link sits beside it.
+
+- `demo-out/` is gitignored (#281). It held the demo video, poster frames and a nested session store,
+  was referenced by nothing in `src/`, `scripts/` or `docs/`, and was the only untracked entry in
+  `git status` — one `git add .` away from committing multi-megabyte media into a library repo,
+  permanently.
+- CONTRIBUTING.md names `.oss.json`, `.oss/` and `.supertool.json`, says a contributor needs none of
+  them, and links `.oss/README.md` (#281). They are tracked maintainer tooling, and the reassurance
+  already written for `.claude/` did not extend to them.
+
+- Dependabot's pip ecosystem is pinned to `versioning-strategy: increase-if-necessary`, so it only
+  edits a requirement that cannot already accept the new version (#297). On the default it rewrites
+  the *floor* of every range, and a floor here is the promise `pip install requivo` makes — the one
+  thing `scripts/dependency_floor.py` exists to measure. The first run proposed `anthropic>=0.40.0,<1`
+  → `>=1.0.0,<2` straight through a deliberate major ceiling, `fastapi>=0.110,<1` → `>=0.141.1,<1`
+  cutting off every user in between, and `python-dotenv>=1.2.3` whose releases require Python 3.10
+  against a package that declares 3.9.
+
+- Five stale facts in the packaging surfaces are corrected (#303): a ruff per-file-ignores block for
+  `src/engine.py`, deleted at 0.9.8, whose comment pointed at the module docstring of a module that
+  no longer exists; two CI comments directing a reader to a standalone pyright config file that does
+  not exist and that `[tool.pyright]`'s own comment says must not; a CI leg count stated as a number
+  in `scripts/dependency_floor.py`; and a release gate that linted a narrower scope than the merge
+  gate, so a lint error in `scripts/` could reach a publish having never been seen by the workflow
+  that publishes it.
+- The `dev` extra references `requivo[anthropic,web]` instead of restating their five pins (#303).
+  They matched, and a duplicated ceiling is one that can move on one side only — after which CI
+  tests a dependency set no user can install, invisibly, which is the failure shape the floor leg
+  exists to prevent for versions.
+- `docs/architecture.md` names `_SURFACE_PROVIDER_ALLOWLIST` rather than counting its entries, and
+  CLAUDE.md's generator checklist says where `_WRITERS` actually lives (#303). Both had drifted: the
+  count said three where the allowlist holds two after #167, and `_WRITERS` is in
+  `services/discovery.py`, not `render/markdown.py`. The narrative-reference guard checks that names
+  resolve and cannot check a fact, which is why a name is the durable form.
+
+- The privacy marker that keeps sessions out of git could be switched off permanently by one
+  transient error (#320, hardening #211). The store decided whether to write `.requivo/.gitignore` by
+  asking whether `.requivo/` already existed -- read *before* the write. So if the directory was
+  created and the marker write then failed (a full disk, a permissions error, a Windows scanner
+  holding a handle), the failure was visible but left the store present and unignored, and every
+  later run took the "already exists" branch and never tried again. Creating the directory is now
+  what decides it, and a failed marker write removes the directory again, so the two states are
+  "store and marker" or "neither" and a retry starts clean.
+- The same probe re-raised a permissions error from an unreadable parent directory, and that is not a
+  structured Requivo error -- so the first command run in such a workspace ended in a stack trace
+  instead of a refusal. Nothing probes now, and every failure creating the store is reported as
+  itself rather than as "could not open the write lock".
+- Ctrl-C during the decision-brief call is no longer a raw traceback (#320, hardening #202). That
+  guarantee shipped for the discovery turns and not for the one remaining long provider call -- the
+  call that step was moved for. A failure while saving rescued turns now says so and still names the
+  provider failure that stopped the run, instead of replacing it.
+- An error notice in Requivo Web is cleared when the next request starts (#320, hardening #203).
+  Nothing emptied it, so an error from one action stayed on screen through a later successful one,
+  and a resolved failure went on being displayed as a current one.
+- Also corrected: `docs/cli.md` still described the old stop-loses-your-turns behaviour, `CLAUDE.md`
+  still described a service method nothing calls, an invariant cited a test that passes without the
+  guard it claimed to name, and the guard against creating store directories outside the one safe
+  helper scanned a hardcoded three-file list -- it walks the package now, refuses an empty scan, and
+  recognises `os.makedirs`.
+
+- `requivo doctor --json` and Requivo Web's provider probe report a credential as present by the
+  same rule `new_client()` authenticates from, instead of each keeping its own copy (#332). #201
+  widened the runner to accept `ANTHROPIC_AUTH_TOKEN` alongside `ANTHROPIC_API_KEY`, but left
+  `web/config.py` and `deterministic/doctor.py` reading `ANTHROPIC_API_KEY` alone — so a working
+  bearer-token install built a client fine from the CLI while `requivo doctor --json` reported
+  `"api_key_present": false` and the web surface silently fell back to "create session only" for
+  every provider action. Both now call the one function `new_client()` itself reads from.
+
+### Security
+
+- Sessions no longer land in your git repository by default (#211). `.requivo/` is written into the
+  workspace you run from, which for the Claude Code plugin is your project repository by construction,
+  and `request.md` holds the originating request verbatim -- for most users a client's own words, often
+  material they are under an obligation not to publish. A routine `git add .` published it silently,
+  against the local-first confidentiality this product states as its wedge. Requivo now writes
+  `.requivo/.gitignore` containing `*` on the call that first creates the store, so git ignores the
+  whole directory and the user's own `.gitignore` is never edited.
+- It is written **once**, on creation, and never restored: the trigger is the store root not existing
+  yet, not the ignore file being absent. Deleting it to commit sessions deliberately keeps them
+  committed, and editing it keeps the edit. `requivo session export` / `session import` remain the way
+  to share a single session, and an import into a workspace that has no `.requivo/` yet writes the
+  ignore file too.
+- Compatibility: compatible - no session format change and no behaviour change for an existing
+  workspace, whose `.requivo/` already exists and is therefore left exactly as it is. A workspace that
+  was already committing sessions goes on committing them.
+
+- Fixed (#212): a request token containing any non-ASCII character turned the web cross-site guard's
+  403 into a 500. `secrets.compare_digest` refuses two non-ASCII `str` arguments, and the `TypeError`
+  escaped the guard's own handlers and the security-header middleware with it — so the one crash path
+  in the security module was also the one response served without Content-Security-Policy, nosniff or
+  Referrer-Policy. Tokens are compared as bytes now, so a wrong token of any spelling gets the
+  ordinary refusal. No behaviour change for any ASCII token, valid or invalid, and no bypass existed:
+  it failed closed.
+
+- LLM-authored prose can no longer write a line of the terminal render path (#213). A client request
+  is untrusted business data by SECURITY.md's own framing, and the engine turns it into questions,
+  challenges, opportunities and brief prose that `render/terminal.py` printed through bare f-strings.
+  A steered reply carrying an embedded newline wrote the line after it at column zero, in Requivo's
+  own voice -- a forged `Ready` verdict -- and a raw escape sequence cleared the screen or moved the
+  cursor outright.
+- The diagnostic verbs were already covered (`doctor`, `session verify`, `session show`,
+  `artifact list`, `impact`, per #40). The primary path -- what a first-time user sees on `discover`,
+  `status`, `brief`, `stories` and `estimate` -- was the one place the guard had never been applied.
+- `streams.py` was no defence and it is worth saying why, because it looks as though it should be:
+  `errors="backslashreplace"` acts on characters the console cannot *encode*, and ESC encodes
+  perfectly well in UTF-8.
+- `core.selectors.display_text` is the neutralizer -- the prose sibling of the `display_token` those
+  diagnostic sites already call, escaping per character rather than quoting the whole value, because
+  `repr()`-ing a two-hundred-character challenge over one stray byte would be a worse outcome than
+  the injection and would ship green.
+- `tests/test_render_untrusted_output.py` pins each named field and then **sweeps**: every
+  LLM-authored string forged at once, every terminal renderer run, so a field added later and printed
+  raw goes red under its renderer's name. A byte-for-byte control test pins that ordinary prose is
+  unchanged.
+- Known gap, stated rather than left to be found: `render/markdown.py` is out of scope here and its
+  output reaches the terminal on `prd`, `criteria`, `epic` and `release`. Escaping there would change
+  the bytes written to disk, which `core/integrity.py` hashes, so it needs its own change.
+- Compatibility: compatible - terminal output only, no saved artifact bytes change, and prose with no
+  control characters renders exactly as before.
+
+- The PyPI publish workflow pins every action to a commit SHA instead of a mutable tag or branch
+  (#214). That job holds `id-token: write` — it mints the short-lived OIDC identity PyPI trusts in
+  place of a stored token — so whatever runs inside it can publish `requivo` irreversibly, and it
+  consumed `pypa/gh-action-pypi-publish@release/v1`, a branch. A version comment beside each SHA
+  names what it pins, and dependabot continues to move them with a reviewable PR.
+- Compatibility: compatible - a workflow-internal change; no published interface, session format or
+  command surface is touched.
+
+- Dependabot watches Python dependencies, not only GitHub Actions (#297). Nothing opened an update or
+  advisory PR for pydantic, anthropic or the web stack — jinja2 and python-multipart both have CVEs
+  fixed above the floors this project declares — so a published advisory in that stack would have
+  gone unnoticed indefinitely. Updates are grouped, because a `labeled` trigger turns one bot PR into
+  a burst of workflow runs (#293), and split dev-tooling from runtime because the two are not
+  reviewed the same way. `pyproject.toml`'s claim that "dependabot moves both where a maintainer can
+  review the move" is true now; it was half false while pip was unconfigured.
+- THIRD-PARTY-NOTICES.md documents how the vendored htmx is updated and by whom. Dependabot cannot
+  watch a minified `.js` file — it appears in no manifest — so the written procedure is the whole
+  mechanism, and saying that plainly is better than implying something is watching it.
+
+- #330: `requivo discover`'s interactive prompt printed a client request's LLM-authored question
+  text (`Question.q`) straight into `input()`'s prompt, unescaped -- one statement after
+  `render_turn` neutralized the identical field. A steered request could carry an embedded newline
+  and a live escape sequence, forging a second line of Requivo's own output (a fake readiness
+  verdict, a screen clear) at column 0. Both interpretation sites -- the prompt itself, and the
+  `[slot: ...] Q: ... -> A: ...` line folded back into the next turn's answers -- now route the
+  question text through the same `display_text` neutralizer `render_turn` already used.
+
+- #331: the terminal-render sweep in `tests/test_render_untrusted_output.py` only ever ran the six
+  renderers explicitly imported from `render/terminal.py`, so `cli.py`'s own interactive loop --
+  where #330's forged line actually reached a terminal -- sat outside a guard whose stated job was
+  exactly that discipline. The renderer sweep now checks itself against every `render_*` function
+  `render/terminal.py` declares (a renderer that starts touching model text and is left off both the
+  sweep and its documented exemption list now fails by name), and a new static scan walks every
+  `.py` file under the terminal-facing surface tree (`render/`, `cli.py`, `deterministic/`, `web/`)
+  for any read of a `Question`'s `q` or `why` field whose direct parent isn't
+  `display_text`/`display_token` -- not gated on sitting inside a `print()`/`input()` call, so
+  `msg = q.q` followed by a `print(f"{msg}")` several lines later is caught too -- so a future
+  surface that renders a question is inside the guard on the day it is written, not the day someone
+  remembers to add it to a list.
+
 ## [1.2.0] - 2026-08-23
 
 ### Added
@@ -3365,7 +4024,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/jbkkz/requivo/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jbkkz/requivo/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jbkkz/requivo/releases/tag/v1.1.0
 [1.0.1]: https://github.com/jbkkz/requivo/releases/tag/v1.0.1
