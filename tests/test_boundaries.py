@@ -613,6 +613,15 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "Building a client and reasoning with it both stay behind DiscoveryService; this call site "
         "never does either."
     ),
+    ("web/config.py", "credential_present"): (
+        "a read of the same environment-variable names `new_client()` itself authenticates from, to "
+        "answer the same boolean the entry above answers for the SDK -- is a credential visible? -- "
+        "that crosses to the template as `ProviderStatus.key_present`, never the value itself. It "
+        "orchestrates nothing: no client is built and no call is made. Weighed against #167's rule "
+        "the same way the `deterministic/doctor.py` entry below is: the alternative is this file "
+        "keeping its own `os.getenv('ANTHROPIC_API_KEY')`, which is exactly what drifted (#332) the "
+        "day `new_client()`'s own set of names widened and this file's copy did not move with it."
+    ),
     ("web/app.py", "EngineError"): (
         "an exception type, not a call, same as the cli.py entry above -- caught at the HTTP "
         "boundary and turned into an error response. Importing a class the app never calls "
@@ -637,6 +646,15 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "alternative -- doctor re-deriving the same getenv with its own copy of the default -- is "
         "worse in the specific way this file exists to prevent: it would be correct until the day "
         "the default moved, and then quietly wrong in the verb people paste into bug reports."
+    ),
+    ("deterministic/doctor.py", "credential_present"): (
+        "the same reasoning as `current_model_name` immediately above, for the "
+        "`provider_anthropic.api_key_present` row: the set of env-var names a credential can come "
+        "from is Anthropic's own fact (`new_client()`'s `_AUTH_ENV_VARS`), not a neutral one waiting "
+        "to be relocated out of `providers/`. Doctor keeping its own `os.getenv('ANTHROPIC_API_KEY')` "
+        "is exactly what #332 found: it was correct until #201 widened the runner to accept "
+        "`ANTHROPIC_AUTH_TOKEN` too, and then quietly wrong in the verb whose whole job is to report "
+        "on the runner. Orchestrates nothing: no client is built, no call is made."
     ),
     ("web/routes/discovery.py", "EngineError"): (
         "the second door onto the same first analysis, and it must fail into the same page as the "

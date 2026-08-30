@@ -38,11 +38,25 @@ def workspace(tmp_path, monkeypatch):
 
 def test_doctor_runs_without_api_key(workspace, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     r = _run_json(["doctor", "--json"])
     assert r["schema"]["ok"] and r["schema"]["slots"] > 0
     # Missing key / SDK must never be reported as a hard failure.
     assert r["provider_anthropic"]["api_key_present"] is False
     assert "sessions" in r["workspace"]
+
+
+def test_doctor_reports_a_bearer_token_as_a_credential_present(workspace, monkeypatch):
+    """#332: doctor read `ANTHROPIC_API_KEY` alone while the runner (`new_client`) also accepts
+    `ANTHROPIC_AUTH_TOKEN` (#201), so a working bearer-token install reported
+    `api_key_present: false`. Paired with `test_doctor_runs_without_api_key` above, whose negative
+    assertion this positive one keeps honest -- a probe that always said "present" would pass that
+    test too.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-whatever")
+    r = _run_json(["doctor", "--json"])
+    assert r["provider_anthropic"]["api_key_present"] is True
 
 
 # ── doctor's own failures must not render as green ticks (#12) ──────────────────

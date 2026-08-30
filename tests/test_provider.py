@@ -215,6 +215,11 @@ def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):
         new_client()
     msg = str(ei.value)
     assert "ANTHROPIC_API_KEY" in msg
+    assert "ANTHROPIC_AUTH_TOKEN" in msg, (
+        "the remedy must name every name the guard it is the remedy for actually accepts (#332 "
+        "review) -- naming one of two would send a bearer-token-only reader to set a credential "
+        "they already have a working equivalent of"
+    )
     assert ".env" in msg
     assert "requivo doctor" in msg
     assert "requivo demo" in msg, "the offline escape hatches are part of the remedy, not a footnote"
@@ -235,6 +240,30 @@ def test_a_bearer_token_alone_is_not_false_refused(monkeypatch):
     _no_credentials(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-whatever")
     assert new_client() is not None
+
+
+# ── #332: one definition of "is there a credential", not three ──────────────
+
+
+def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
+    """web/config.py and doctor.py each kept their own `os.getenv("ANTHROPIC_API_KEY")`, so a
+    bearer-token install that `new_client()` accepted rendered as "no key" on both surfaces (#332).
+    `credential_present()` is meant to be the one definition every reader shares -- assert it agrees
+    with `new_client()` on *every* name in `_AUTH_ENV_VARS`, not just the historical
+    `ANTHROPIC_API_KEY` case, so a future widening of that tuple cannot repeat the drift silently.
+    """
+    from requivo.providers.anthropic.client import _AUTH_ENV_VARS, credential_present
+
+    _no_credentials(monkeypatch)
+    assert credential_present() is False
+    with pytest.raises(EngineError):
+        new_client()
+
+    for var in _AUTH_ENV_VARS:
+        _no_credentials(monkeypatch)
+        monkeypatch.setenv(var, "sk-ant-whatever")
+        assert credential_present() is True, f"{var} alone must read as present"
+        assert new_client() is not None, f"{var} alone must not be false-refused"
 
 
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
