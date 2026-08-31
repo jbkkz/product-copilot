@@ -192,9 +192,49 @@ def test_complete_wraps_api_errors_as_a_clean_engine_error():
 # ── #201: refusing before the SDK can traceback ──────────────────────────────
 
 
-def _no_credentials(monkeypatch):
-    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+# Every environment variable the SDK resolves a credential from, not just the two Requivo used to
+# check. Since #334 the guard asks the SDK rather than reading a list, so a test that clears only
+# `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is not describing a credential-free install on a
+# machine whose developer has a profile on disk -- it is describing whatever that machine happens to
+# have, and it would go green or red for reasons no diff explains.
+_CREDENTIAL_ENV = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE",
+    "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+)
+
+
+def _clear_credential_env(monkeypatch):
+    """Unset every credential variable, and leave the SDK's own discovery running.
+
+    For the tests that are *about* discovery: they set one source up and assert the guard sees what
+    the SDK resolved. Neutralising the chain there would assert against the stub instead of against
+    the SDK, which is the one thing those tests exist to check.
+    """
+    for var in _CREDENTIAL_ENV:
         monkeypatch.delenv(var, raising=False)
+
+
+def _no_credentials(monkeypatch):
+    """An install with no credential from *any* source the SDK reads, on any developer's machine.
+
+    The environment half is the tuple above. The on-disk half -- the active profile under the SDK's
+    config directory -- cannot be cleared by unsetting anything, so the SDK's own discovery entry
+    point is neutralised instead.
+
+    **`ANTHROPIC_CONFIG_DIR` is not the lever it looks like**, and that is worth the line it costs:
+    pointing it at an empty or absent directory does not mean "find no profiles here", it makes the
+    SDK *raise* `Config file not found ... (profile 'default')` out of the constructor -- and it does
+    so even when federation environment variables are set, which would otherwise have resolved. A
+    helper built on it turns every credential-free test into a test about a misconfigured config
+    directory, which is a different thing that happens to also fail.
+
+    `raising=False` because `default_credentials` does not exist on the older majors in
+    `anthropic>=0.40.0,<2`: there is no discovery chain there to neutralise, and its absence is the
+    same isolated state rather than an error.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
 
 
 def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):
@@ -264,6 +304,93 @@ def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
         monkeypatch.setenv(var, "sk-ant-whatever")
         assert credential_present() is True, f"{var} alone must read as present"
         assert new_client() is not None, f"{var} alone must not be false-refused"
+
+
+# ── #334: the guard asks the SDK, instead of keeping a list of the names it reads ─────────────
+
+
+def test_a_federation_install_is_not_false_refused(monkeypatch):
+    """The #334 defect itself, and the reason this file no longer keeps a list of variable names.
+
+    `new_client()` pre-flighted on `_AUTH_ENV_VARS` -- two entries against the five sources the SDK
+    documents. An install authenticating by workload identity federation therefore hit a refusal
+    telling it to set `ANTHROPIC_API_KEY`, while a bare `Anthropic()` in the same shell resolved a
+    credentials provider and would have made the call. Widening the tuple was rejected as the fix:
+    the resolution order belongs to the SDK, so a copy of it here is a copy that goes stale on the
+    SDK's schedule rather than on ours. Goes red on the tuple-based guard.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "an-identity-token")
+    monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "rule-1")
+    monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-1")
+
+    from requivo.providers.anthropic.client import credential_present
+
+    assert credential_present() is True, "the SDK resolves a federation credential; the guard must see it"
+    assert new_client() is not None
+
+
+def test_the_resolved_credential_attributes_are_read_through_getattr_defaults():
+    """Two halves of one promise, because each fails silently on its own.
+
+    The names must be *real* -- an SDK that renamed `credentials` would make every install read as
+    credential-free, which is a refusal nobody can argue with. And they must be read through a
+    default, because the supported range is `anthropic>=0.40.0,<2` and the older majors have no
+    `credentials` attribute at all; a bare `client.credentials` would turn the whole provider into an
+    `AttributeError` on the floor this repository tests against.
+    """
+    import anthropic as sdk
+
+    from requivo.providers.anthropic.client import _CREDENTIAL_ATTRS, _resolve_client
+
+    for attr in _CREDENTIAL_ATTRS:
+        assert hasattr(sdk.Anthropic(api_key="sk-ant-whatever"), attr), (
+            f"the SDK no longer exposes `{attr}`; the guard is reading a name that is gone and will "
+            f"report every install as credential-free"
+        )
+
+    class _OldSdkClient:  # only the two attributes every supported major has
+        api_key = None
+        auth_token = "bearer"
+
+    assert all(getattr(_OldSdkClient(), a, None) is None for a in _CREDENTIAL_ATTRS) is False
+    assert _resolve_client is not None
+
+
+def test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason(monkeypatch):
+    """A third state the env-var guard could not reach: configured, and unloadable.
+
+    `ANTHROPIC_PROFILE` naming a file that is not there makes the SDK raise out of its own
+    constructor. Nothing here expected construction to fail -- the guard's whole premise was that
+    `Anthropic()` never raises -- so it escaped `new_client()` as a traceback. It is an `EngineError`
+    now, quoting the SDK, which names the missing file and the variable to change; and it is
+    deliberately *not* the no-credential message, because telling someone to set `ANTHROPIC_API_KEY`
+    when they have a profile pointed at the wrong path is the wrong remedy for the right symptom.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    with pytest.raises(EngineError) as ei:
+        new_client()
+    msg = str(ei.value)
+    assert "could not load the credential configuration" in msg
+    assert "a-profile-that-does-not-exist" in msg, "the SDK's own reason names the profile; keep it"
+    assert "No Anthropic credential found" not in msg, (
+        "a configured-but-unloadable profile is not an absent credential, and must not be given the "
+        "remedy for one"
+    )
+
+
+def test_credential_present_does_not_raise_on_an_unloadable_profile(monkeypatch):
+    """`deterministic/doctor.py` calls `credential_present()` bare, so the verb that answers *is this
+    install healthy* would traceback on exactly the unhealthy install it exists to describe. False,
+    not an exception -- the detail belongs to `new_client()`, which has somewhere to put it."""
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    from requivo.providers.anthropic.client import credential_present
+
+    assert credential_present() is False
 
 
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
