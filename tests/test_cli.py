@@ -12,6 +12,7 @@ render-safety class that runs across all of them (#141).
 """
 import argparse
 import json
+import os
 import shutil
 import sys
 
@@ -515,6 +516,72 @@ def test_cli_help_exits_cleanly():
     with pytest.raises(SystemExit) as ei:
         app(["--help"])
     assert ei.value.code == 0
+
+def test_a_wildcard_bind_is_not_auto_allowlisted_and_the_warning_names_the_env_var(monkeypatch, capsys):
+    """#217: `--host 0.0.0.0` used to `os.environ.setdefault(REQUIVO_WEB_ALLOWED_HOSTS, "0.0.0.0")` --
+    the literal string `"0.0.0.0"`, which no browser's `Host` header is ever going to equal, since a
+    browser addresses the server by the reachable interface it actually connected to. So the flag
+    appeared to bind wide and then 403'd every LAN request with no clue why. A wildcard bind address
+    is meaningless as a `Host` value and must not be auto-allowlisted; the warning has to say what to
+    do instead, by name, with a copy-pasteable example.
+
+    Driven straight at `_cmd_web` (the same seam `test_the_missing_web_extra_keeps_its_published_error_code`
+    uses) rather than through a real server: `uvicorn` is stubbed out so the function raises before it
+    would ever bind a port, and the host-handling logic under test runs entirely before that import.
+    """
+    monkeypatch.delenv("REQUIVO_WEB_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    args = argparse.Namespace(host="0.0.0.0", port=8000, no_open=True, reload=False)
+
+    with pytest.raises(RequivoError):
+        _cmd_web(args, None)
+
+    assert "REQUIVO_WEB_ALLOWED_HOSTS" not in os.environ, (
+        "the literal wildcard address must not be allowlisted -- no Host header will ever equal it")
+    warning = capsys.readouterr().err
+    assert "REQUIVO_WEB_ALLOWED_HOSTS" in warning, "the warning has to name the env var, not just hint at it"
+    assert "0.0.0.0" in warning              # the copy-pasteable example names the flag that was passed
+
+    # must-fire control, same fixture: a real (non-wildcard) LAN address IS a legitimate Host value, so
+    # it keeps being auto-allowlisted exactly as before -- this is not a tightening of that path.
+    monkeypatch.delenv("REQUIVO_WEB_ALLOWED_HOSTS", raising=False)
+    args_lan = argparse.Namespace(host="192.168.1.50", port=8000, no_open=True, reload=False)
+    with pytest.raises(RequivoError):
+        _cmd_web(args_lan, None)
+    assert os.environ["REQUIVO_WEB_ALLOWED_HOSTS"] == "192.168.1.50"
+    capsys.readouterr()  # drain this leg's own warning before the next assertion reads stderr
+
+    # and the loopback default is untouched: no warning, no env var written.
+    monkeypatch.delenv("REQUIVO_WEB_ALLOWED_HOSTS", raising=False)
+    args_default = argparse.Namespace(host="127.0.0.1", port=8000, no_open=True, reload=False)
+    with pytest.raises(RequivoError):
+        _cmd_web(args_default, None)
+    assert "REQUIVO_WEB_ALLOWED_HOSTS" not in os.environ
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("spelling", ["::0", "0000:0000:0000:0000:0000:0000:0000:0000", "0:0:0:0:0:0:0:0"])
+def test_an_equivalent_spelling_of_the_wildcard_address_is_caught_too(monkeypatch, capsys, spelling):
+    """A string-literal check for `"::"` alone recognises exactly one spelling of the IPv6 unspecified
+    address and none of its equivalents -- `::0`, the fully-expanded all-zeros form, and every other
+    way to write "every interface" in IPv6 all mean the identical bind address (`ipaddress.ip_address`
+    agrees they are all `is_unspecified`), and a socket layer binds them identically. `--host ::0`
+    would otherwise fall into the "real address" branch, get auto-allowlisted verbatim, and reproduce
+    #217's exact symptom -- every LAN request 403ing with no diagnostic pointing at the cause -- under
+    a spelling the literal-string guard simply does not recognise (flagged by this diff's own review,
+    #217's audit)."""
+    monkeypatch.delenv("REQUIVO_WEB_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    args = argparse.Namespace(host=spelling, port=8000, no_open=True, reload=False)
+
+    with pytest.raises(RequivoError):
+        _cmd_web(args, None)
+
+    assert "REQUIVO_WEB_ALLOWED_HOSTS" not in os.environ, (
+        f"{spelling!r} is the same address as '::' and must not be allowlisted verbatim either")
+    warning = capsys.readouterr().err
+    assert "REQUIVO_WEB_ALLOWED_HOSTS" in warning
+
 
 def test_the_missing_web_extra_keeps_its_published_error_code(monkeypatch):
     """A missing `[web]` extra reports `provider_unavailable`, and that is a decision, not an oversight

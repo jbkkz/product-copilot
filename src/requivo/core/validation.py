@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from requivo.core.contracts import EngineOutput, ModelProposal, missing_required_slots, unknown_slots
-from requivo.core.errors import InvalidModelError, MissingRequiredSlotError, UnknownSlotError
+from requivo.core.contracts import MAX_INPUT_CHARS, EngineOutput, ModelProposal, missing_required_slots, unknown_slots
+from requivo.core.errors import InputTooLargeError, InvalidModelError, MissingRequiredSlotError, UnknownSlotError
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,24 @@ def completeness_gap(out: ModelProposal) -> Incompleteness | None:
             "summary.objective is empty — state in one line what this is meant to achieve.",
             path="summary.objective")
     return None
+
+
+def require_input_within_bounds(text: str, *, field: str, limit: int = MAX_INPUT_CHARS) -> None:
+    """Refuse `text` over `limit` characters before it reaches a provider call or is persisted.
+
+    Invariant 3 (refuse, don't truncate): a request or an answer silently cut mid-paste is reasoned
+    over as if it were the whole thing, and the caller never learns which half the engine saw — so
+    this raises rather than slicing anything. Invariant 14 (the service layer is the integrity
+    boundary, not the interfaces): before #255 this cap existed only in `web/config.py`, checked by
+    the Web routes alone, so `DiscoveryService`/`SessionService` called directly -- the CLI, Claude
+    Code, a future consumer -- accepted unbounded text straight through to a billed provider call.
+
+    `field` names what was too long (`"request"`, `"answers"`) so the message and the structured
+    `details` tell a caller which one to shorten, rather than making them guess from a bare count.
+    """
+    if len(text) > limit:
+        raise InputTooLargeError(
+            f"{field} exceeds {limit:,} characters", details={"limit": limit, "field": field})
 
 
 def validate_proposal(data: dict | str, *, require_complete: bool = True,

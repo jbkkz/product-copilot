@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from requivo.core.errors import InputTooLargeError
 from requivo.web.security import (
     CSRF_FIELD,
     CSRF_HEADER,
@@ -135,7 +136,8 @@ def test_a_latin1_token_header_reaches_the_refusal_rather_than_the_comparison(ap
         "query_string": b"",
         "root_path": "",
         "scheme": "http",
-        "headers": [(b"host", b"127.0.0.1:8765"), (b"x-csrf-token", b"\xe9")],
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"content-length", b"0"),
+                    (b"x-csrf-token", b"\xe9")],
         "client": ("127.0.0.1", 1234),
         "app": app,
     }
@@ -145,6 +147,86 @@ def test_a_latin1_token_header_reaches_the_refusal_rather_than_the_comparison(ap
 
     with pytest.raises(MissingRequestTokenError):
         asyncio.run(_enforce(Request(scope, receive)))
+
+
+# ── the body cap (#216) ────────────────────────────────────────────────────────
+
+def test_a_chunked_body_is_refused_before_being_read(app):
+    """#216: `MAX_BODY_BYTES` used to be checked only against a *declared* `Content-Length` -- a
+    chunked request (no such header) sailed past that check and was read in full by
+    `await request.body()`, with the size only measured *after* the whole thing was already in
+    memory. The comment above the constant claimed the body was "Bounded before the body is read,
+    let alone parsed", which was simply false for this case.
+
+    An instrumented `receive` reproduces exactly what a chunked POST looks like at the ASGI layer:
+    no `content-length` header, one `http.request` event after another. Asserting the eventual
+    status code is not enough -- the old code also answers 413 for this, just after paying to buffer
+    the whole thing -- so what is asserted is that `receive` is never even called: the refusal has to
+    land before a single byte is pulled off the stream, not after.
+    """
+    import asyncio
+
+    from starlette.requests import Request
+
+    from requivo.web.security import MAX_BODY_BYTES, _enforce, csrf_token
+
+    receive_calls = []
+
+    async def instrumented_receive():
+        # However many bytes are behind it, this body must never be asked for one of them. Bounded
+        # at MAX_BODY_BYTES worth of chunks (plus one) rather than genuinely unbounded, so a version
+        # of the guard that does not refuse in time fails this test in finite time instead of hanging
+        # the suite -- MAX_BODY_BYTES is comfortably exceeded well before the generator runs out.
+        receive_calls.append(len(receive_calls))
+        more = len(receive_calls) <= MAX_BODY_BYTES // 1_000 + 1
+        return {"type": "http.request", "body": b"x" * 1_000, "more_body": more}
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/sessions", "query_string": b"",
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"sec-fetch-site", b"same-origin"),
+                    (b"content-type", b"application/x-www-form-urlencoded"),
+                    (b"x-csrf-token", csrf_token().encode())],
+        "app": app,
+    }
+    with pytest.raises(InputTooLargeError):
+        asyncio.run(_enforce(Request(scope, instrumented_receive)))
+    assert receive_calls == [], "the body was read before the missing Content-Length was refused"
+
+
+def test_a_declared_length_post_is_unaffected(app):
+    """Must-fire control for the refusal above: a real client always declares a length (the app's own
+    forms, curl, httpx, requests all do), and that path must still work exactly as before -- this is
+    not a tightening of what a legitimate caller can do."""
+    control = TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
+    control.headers[CSRF_HEADER] = csrf_token()
+    accepted = control.post(
+        "/sessions", data={"request_text": "x", "slug": "declared-length-still-fine",
+                           "provider": "create_only"}, follow_redirects=False)
+    assert accepted.status_code == 303
+
+
+def test_a_request_with_no_body_and_no_content_length_is_still_refused(app):
+    """The refusal is keyed on the *header*, not on whether bytes actually follow -- an unsafe method
+    carrying no declared length at all is refused the same way regardless of what a real chunked
+    stream would eventually contain, which is the point: the check must never need to look."""
+    import asyncio
+
+    from starlette.requests import Request
+
+    from requivo.web.security import _enforce, csrf_token
+
+    async def empty_receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/sessions", "query_string": b"",
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"sec-fetch-site", b"same-origin"),
+                    (b"content-type", b"application/x-www-form-urlencoded"),
+                    (b"x-csrf-token", csrf_token().encode())],
+        "app": app,
+    }
+    with pytest.raises(InputTooLargeError):
+        asyncio.run(_enforce(Request(scope, empty_receive)))
 
 
 def test_a_write_from_another_origin_is_refused(client):

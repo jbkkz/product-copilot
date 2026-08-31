@@ -28,6 +28,17 @@ _Item = TypeVar("_Item")
 # is genuinely duplicated — deliberately, and it is a floor-and-ceiling hint there rather than a cap.
 MAX_QUESTIONS = 6
 
+# The ceiling on a raw text input the engine reasons over: a discovery request, or the answers a
+# refinement turn folds in. It used to live only in `web/config.py`, enforced by the Web routes alone
+# — a rule enforced by one interface is not enforced (invariant 14), and any caller reaching
+# `DiscoveryService`/`SessionService` directly (the CLI, Claude Code, a future Postgres-backed
+# consumer) sent unbounded text straight to a billed provider call. `claude-sonnet-5`'s 1M-token
+# context window means a multi-megabyte paste does not even fail at the API — it just bills, and the
+# interactive loop resends the request on every turn, multiplying the cost by however many turns it
+# takes to converge (#255). Enforced by `require_input_within_bounds` in `core/validation.py`;
+# `web/config.py` re-exports it under its own names so the routes keep their friendly re-render on top.
+MAX_INPUT_CHARS = 20_000
+
 
 class StrictModel(BaseModel):
     """Base for every contract an LLM fills.

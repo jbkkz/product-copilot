@@ -26,7 +26,7 @@ from requivo.core.dependencies import (
 )
 from requivo.core.errors import SessionExistsError, SessionNotFoundError
 from requivo.core.persistence import SessionMeta
-from requivo.core.validation import validate_proposal
+from requivo.core.validation import require_input_within_bounds, validate_proposal
 from requivo.services.repository import SessionRepository, default_repository
 
 
@@ -230,7 +230,13 @@ class SessionService:
         them — but "the interfaces are careful" is not an integrity boundary, and an external consumer calls
         exactly this layer. An unknown card recorded on a session is not inert: every later turn reads
         the selection back, and an empty resolved selection means *every* card, so a bad name silently
-        widens the context instead of narrowing it."""
+        widens the context instead of narrowing it.
+
+        The same argument holds for the request's *size* (#255): the Web checks `MAX_REQUEST_CHARS`
+        in `routes/sessions.py` for its own friendly re-render, but that is the interface being
+        careful, not a guarantee — this is the one place every request is captured before it can
+        reach a provider or land on disk, so this is where the cap actually has to live."""
+        require_input_within_bounds(request, field="request")
         context_cards = resolve_cards(context_cards) if context_cards else None
         base = slug or self.slug_hint(request)
         for candidate in (base, f"{base}-{self._identity_hash(request, context_cards)}"):

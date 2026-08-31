@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import RevisionConflictError
 from requivo.core.persistence import ArtifactStatus
+from requivo.core.validation import require_input_within_bounds
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
@@ -266,7 +267,17 @@ class DiscoveryService:
         `reuse_system=True` because this is the one operation on this service that a caller repeats:
         a drafting loop makes several calls off a byte-identical system prompt (the CLI's caps at
         eight), so the cache breakpoint is genuinely read back and earns its 1.25x write. Every other
-        operation here is one call per invocation and says the opposite (#9, #58)."""
+        operation here is one call per invocation and says the opposite (#9, #58).
+
+        **The size cap runs here too, not only where a session is finally created (#255).** This is
+        an interactive surface's own un-persisted turn -- the request is resent on every call and
+        nothing here is claimed or written yet -- so relying on `SessionService.create_session`'s
+        check alone would let a wide request pay for up to `GOLDEN_TURNS` billed calls before the
+        loop ever reaches `finalize_discovery`. `request` is checked on every call since every call
+        resends it; `answers` only when a caller actually supplied one."""
+        require_input_within_bounds(request, field="request")
+        if answers is not None:
+            require_input_within_bounds(answers, field="answers")
         return self._need_provider().analyze(
             request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
 
@@ -319,7 +330,13 @@ class DiscoveryService:
         migrated first, so there is always a real revision to hold it to.
 
         A caller-supplied precondition that is *already* stale against the snapshot is refused here,
-        before the call — see `_require_no_conflict_yet` (#205)."""
+        before the call — see `_require_no_conflict_yet` (#205).
+
+        The size cap on `answers` runs first, before any of the above: a caller past the Web's own
+        friendly re-render (invariant 14) still needs the refusal, and it costs nothing to check
+        before a snapshot read or a revision comparison that an oversized answer would waste (#255).
+        """
+        require_input_within_bounds(answers, field="answers")
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_no_conflict_yet(slug, expected_revision, snap)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -702,6 +703,29 @@ def _cmd_release(a, client) -> None:
     _wrote(slug, result, "release notes")
 
 
+def _is_wildcard_bind_address(host: str) -> bool:
+    """Does `host` name "every interface" — the IPv6 unspecified address as well as the IPv4 one?
+
+    A literal check against `"0.0.0.0"` and `"::"` alone recognises exactly those two spellings and
+    none of their equivalents: `::0`, the fully-expanded `0000:...:0000`, and every other all-zeros
+    IPv6 literal name the identical bind address (`ipaddress.ip_address(...).is_unspecified` agrees
+    they all are, and a socket layer binds them identically). Missing one meant `--host ::0` fell into
+    the "real address" branch below, got auto-allowlisted verbatim, and reproduced #217's exact
+    symptom under a spelling the original literal-string guard did not recognise — found by this
+    diff's own review before it shipped.
+
+    `ipaddress.ip_address` raises `ValueError` on anything that is not a literal IP at all — a
+    hostname (`localhost`, `app.internal`), which is never a wildcard and is handled by the plain
+    `"0.0.0.0"` check for IPv4's own single spelling (IPv4 has no equivalent-notation problem: unlike
+    IPv6's abbreviation rules, "0.0.0.0" has no other literal spelling)."""
+    if host == "0.0.0.0":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_unspecified
+    except ValueError:
+        return False
+
+
 def _cmd_web(a, client) -> None:
     """Launch the local, single-user web interface (the `[web]` extra). Binds to localhost by default;
     the Anthropic key is read from the server environment and is only needed for provider actions —
@@ -709,12 +733,32 @@ def _cmd_web(a, client) -> None:
     import, and the FastAPI app is a factory so nothing binds a port until this runs."""
     host, port = a.host, a.port
     if host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"⚠  Binding to {host}: Requivo Web has NO authentication and must not be exposed on an "
-              "untrusted network. Prefer 127.0.0.1 unless you fully control the network.", file=sys.stderr)
-        # The app only answers to hosts it recognises (the DNS-rebinding guard in web/security.py), and
-        # loopback is all it recognises by default. A deliberate bind elsewhere is the operator saying
-        # this address is legitimate, so record it — without silently widening the default.
-        os.environ.setdefault("REQUIVO_WEB_ALLOWED_HOSTS", host)
+        if _is_wildcard_bind_address(host):
+            # A wildcard bind address names every interface the machine has, not one a browser could
+            # ever send back in a `Host` header — no client addresses a server as "0.0.0.0", it
+            # addresses whatever IP or hostname it actually connected to. Auto-allowlisting the
+            # literal wildcard string used to make `--host 0.0.0.0` *look* like it worked (the process
+            # bound, printed a URL, opened a browser on loopback) while every LAN client got 403
+            # `host_not_allowed` with no clue why (#217). The guard staying fail-closed here is right;
+            # the gap was that the one thing an operator actually needs to do next — name the address
+            # LAN clients will use — was never said.
+            print(f"⚠  Binding to {host} (every interface): Requivo Web has NO authentication and "
+                  "must not be exposed on an untrusted network. A wildcard bind address is not a "
+                  "valid Host header, so it is NOT auto-allowlisted — every request will be refused "
+                  "until you set REQUIVO_WEB_ALLOWED_HOSTS to the hostname or IP LAN clients will "
+                  f"actually use, e.g.:\n"
+                  f"    REQUIVO_WEB_ALLOWED_HOSTS=192.168.1.50 requivo web --host {host}",
+                  file=sys.stderr)
+        else:
+            print(f"⚠  Binding to {host}: Requivo Web has NO authentication and must not be exposed "
+                  "on an untrusted network. Prefer 127.0.0.1 unless you fully control the network.",
+                  file=sys.stderr)
+            # The app only answers to hosts it recognises (the DNS-rebinding guard in web/security.py),
+            # and loopback is all it recognises by default. A deliberate bind elsewhere is the operator
+            # saying this specific address is legitimate, so record it — without silently widening the
+            # default. Unlike the wildcard case above, `host` here IS a real address a browser could
+            # send as `Host`, so auto-allowlisting it is not the bug #217 found.
+            os.environ.setdefault("REQUIVO_WEB_ALLOWED_HOSTS", host)
     try:
         import uvicorn
 

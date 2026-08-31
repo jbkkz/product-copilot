@@ -9,12 +9,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from requivo.core.contracts import MAX_INPUT_CHARS
+
 # Field length ceilings — a local app still bounds input so a pasted megabyte can't wedge a turn. Past
 # the ceiling the field is *refused*, never trimmed to fit: half a request folded into the model reads
 # exactly like a whole one, so the user would never learn which half the engine saw. (The body itself
 # is capped earlier still, in `security.py`, before anything is parsed.)
-MAX_REQUEST_CHARS = 20_000
-MAX_ANSWERS_CHARS = 20_000
+#
+# `MAX_REQUEST_CHARS`/`MAX_ANSWERS_CHARS` are aliases for the one cap Core defines (#255) --
+# `require_input_within_bounds` enforces it at the service layer, which is the integrity boundary
+# (invariant 14) and where it holds for the CLI and any other caller too, not only this route's own
+# early check. They stay as two names here because the routes import them for two different fields
+# and a route-level rename is a bigger diff than this alias is worth; the *value* is one number now,
+# not two hand-kept ones that could drift apart.
+MAX_REQUEST_CHARS = MAX_INPUT_CHARS
+MAX_ANSWERS_CHARS = MAX_INPUT_CHARS
 MAX_SLUG_CHARS = 80
 
 
