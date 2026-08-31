@@ -31,6 +31,7 @@ exist are true and findable.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -121,9 +122,40 @@ _REFERENCE = re.compile(r"\btest_[a-z0-9_]{10,}\b")
 _DECISION_REF = re.compile(r"`decision:\s*([a-z0-9-]+)`")
 DECISIONS = REPO_ROOT / "docs" / "decisions"
 
+# `docs/decisions/` is a *subject* -- a record's own references are resolved like any other file's --
+# and it is deliberately **not a referrer** (#384). Reachability here means reachable from the
+# documentation a reader actually enters through: `CLAUDE.md`, `docs/*.md`, `src/`, `scripts/`,
+# `tests/`, plus `.github/`. Leaving the records inside their own referrer set turned the orphan
+# check off for the shape a record normally has, not for an edge case: a record usually explains
+# *where its pointer belongs*, and to say that it has to quote its own slug -- at which point it
+# satisfies its own reachability and the guard is green. Measured, not reasoned: at `3245e7e`
+# `0002-elicitation-schema-hand-kept.md` was referenced from nowhere but itself and this guard
+# passed.
+#
+# The whole directory comes out rather than only self-reference, which was the design question
+# inside #384. Excluding self alone still passes a two-record cycle that cites nothing outside
+# itself, and that unreachable island is exactly the failure the guard is named for. The cost is
+# stated rather than hidden: a record whose only pointer is a sibling record now reads as an orphan,
+# and the remedy is to leave the pointer where a reader will meet it. Pinned by
+# `test_a_record_that_only_quotes_its_own_slug_is_an_orphan`,
+# `test_a_record_reachable_only_from_a_sibling_record_is_an_orphan` and
+# `test_the_records_are_resolution_checked_but_are_not_their_own_referrers`.
+REFERRER_EXEMPT_ROOTS = (DECISIONS,)
+
 # The wrap: an identifier that ends a line on a trailing underscore. A Python identifier never
 # legitimately ends in `_` here — the suite has none — so this is the split, not a naming style.
 _WRAPPED = re.compile(r"\btest_[a-z0-9_]*_$", re.MULTILINE)
+
+# The same rule for a decision slug, detected by the *missing closing backtick* rather than by a
+# trailing hyphen. `_WRAPPED` has to settle for a heuristic because a bare identifier gives it
+# nothing else; an inline code span does, and a span that opens on a line and does not close on it
+# is broken wherever the break happened to fall. The `[a-z0-9-]*[a-z0-9-]` requires at least one
+# slug character before the break, which is what leaves the harmless shape alone: a wrap between the
+# prefix and the slug keeps the slug whole and greppable, and `_DECISION_REF` still resolves it.
+# See `test_no_decision_reference_is_split_across_a_line` for the whole argument, and
+# `test_the_decision_wrap_detector_leaves_the_shape_that_still_resolves_alone` for the must-not-fire
+# half.
+_WRAPPED_DECISION = re.compile(r"`decision:[ \t]*[a-z0-9-]*[a-z0-9-](?=[^`\n]*$)", re.MULTILINE)
 
 
 def _scan_subjects(roots: tuple[Path, ...], extra: tuple[Path, ...] = ()) -> list[Path]:
@@ -146,6 +178,27 @@ def subjects() -> list[Path]:
 def wrap_subjects() -> list[Path]:
     """Every file the *wrap* check reads — wider than `subjects()` on purpose. See `WRAP_ROOTS`."""
     return _scan_subjects(WRAP_ROOTS, EXTRA_SUBJECTS)
+
+
+def _referrers_among(paths: Iterable[Path], exempt_roots: tuple[Path, ...]) -> list[Path]:
+    """The subset of `paths` that may vouch for a decision record's reachability. Pure over its
+    arguments so the selection rule is assertable against a fixture tree rather than only against
+    this repository's own three records."""
+    return [p for p in paths if not any(root in p.parents for root in exempt_roots)]
+
+
+def referrer_subjects() -> list[Path]:
+    """Every file that counts as *pointing at* a decision record -- `subjects()` minus the records
+    themselves. See `REFERRER_EXEMPT_ROOTS` for why those are not the same list."""
+    return _referrers_among(subjects(), REFERRER_EXEMPT_ROOTS)
+
+
+def _orphan_slugs(declared: set[str], referrers: Iterable[Path]) -> list[str]:
+    """The declared slugs nothing in `referrers` points at. Pure over its arguments for the same
+    reason `_referrers_among` is."""
+    referenced = {slug for path in referrers
+                  for slug in _DECISION_REF.findall(path.read_text(encoding="utf-8"))}
+    return sorted(declared - referenced)
 
 
 def declared_test_names() -> set[str]:
@@ -339,18 +392,54 @@ def test_the_decision_records_are_reachable_from_somewhere():
     """A record nothing points at is a document nobody opens, which is the failure mode the whole
     rule was written to avoid. Not a hard requirement of the convention and it is checked anyway,
     because an unreferenced record is a signal that a narrative was moved out of the code and the
-    pointer was never left behind."""
+    pointer was never left behind.
+
+    The referrer set is `referrer_subjects()`, never `subjects()` -- a record is not a referrer for
+    itself or for its siblings (#384). See `REFERRER_EXEMPT_ROOTS` for what that changes and why.
+    """
     if not DECISIONS.is_dir():
         pytest.skip("no docs/decisions/ yet")
-    referenced = {slug for path in subjects()
-                  for slug in _DECISION_REF.findall(path.read_text(encoding="utf-8"))}
+    referrers = list(referrer_subjects())
     # `.github/` is outside `src/`, and it is where the first record's referrer lives.
-    for extra in sorted((REPO_ROOT / ".github").rglob("*.yml")):
-        referenced.update(_DECISION_REF.findall(extra.read_text(encoding="utf-8")))
-    orphans = sorted(declared_slugs() - referenced)
+    referrers.extend(sorted((REPO_ROOT / ".github").rglob("*.yml")))
+    orphans = _orphan_slugs(declared_slugs(), referrers)
     assert not orphans, (
-        f"these records are referenced from nowhere: {orphans}. Leave a `decision: <slug>` line at "
-        f"whatever the record explains, or the move traded a paragraph for a file nobody opens."
+        f"these records are referenced from nowhere a reader enters through: {orphans}. Leave a "
+        f"`decision: <slug>` line at whatever the record explains -- in CLAUDE.md, in docs/, or at "
+        f"the call site -- or the move traded a paragraph for a file nobody opens. A pointer from "
+        f"another decision record does not count: see REFERRER_EXEMPT_ROOTS."
+    )
+
+
+def test_no_decision_reference_is_split_across_a_line():
+    """The slug half of the wrap rule, and #384's second open question answered with the mechanism
+    rather than by analogy.
+
+    A `decision:` reference can break in two places and they are not the same case:
+
+    * **inside the slug** -- the slug is then not in the repository as a string, exactly like a
+      wrapped test name, and it is *worse*: `_DECISION_REF` requires the closing backtick after the
+      slug and `[a-z0-9-]+` cannot cross a newline, so the reference matches nothing at all.
+      `test_every_decision_reference_resolves_to_a_record` never sees it, and the record it was
+      meant to point at silently loses a pointer. This is what `_WRAPPED_DECISION` catches.
+    * **after the prefix** -- the pattern's whitespace class does span a newline, so the reference
+      still resolves and the slug is still on one line, still greppable. Deliberately left alone;
+      that shape is what #384 had in mind when it weighed declining this check entirely.
+
+    Detected by the missing closing backtick rather than by a trailing hyphen: an inline code span
+    that opens on a line and does not close on it is broken wherever the break fell, which is a
+    stronger signal than `_WRAPPED` can get from a bare identifier.
+    """
+    split = sorted(
+        f"{path.relative_to(REPO_ROOT).as_posix()}:"
+        f"{path.read_text(encoding='utf-8')[:m.start()].count(chr(10)) + 1} -> {m.group(0)}…"
+        for path in wrap_subjects()
+        for m in _WRAPPED_DECISION.finditer(path.read_text(encoding="utf-8"))
+    )
+    assert not split, (
+        "these `decision:` references are split by a line wrap, so the slug cannot be found by "
+        "grep and the reference resolves to nothing at all:\n  " + "\n  ".join(split) +
+        "\nReflow the surrounding text so the slug is on one line."
     )
 
 
@@ -439,3 +528,104 @@ def test_the_wrap_detector_does_not_fire_on_an_intact_reference(tmp_path):
     p.write_text("# pinned by `test_the_persisted_mirror_copies_every_constraint_it_restates`\n"
                  "# which is why it cannot drift.\n", encoding="utf-8")
     assert not _WRAPPED.search(p.read_text(encoding="utf-8"))
+
+
+def _record(path: Path, slug: str, body: str) -> None:
+    """One decision record, in the only two respects this guard reads it: the `**Slug:**` line
+    `declared_slugs()` parses, and whatever prose the reference patterns then run over."""
+    path.write_text(f"**Slug:** `{slug}`\n\n{body}\n", encoding="utf-8")
+
+
+def test_a_record_that_only_quotes_its_own_slug_is_an_orphan(tmp_path):
+    """#384's motivating instance, as a fixture rather than as a fact about one commit.
+
+    A record that explains where its pointer belongs has to quote its own slug to say so, which
+    makes this the *normal* shape of a record rather than an edge case — and while the records were
+    inside their own referrer set it meant the orphan check could not fire for the whole class.
+    """
+    decisions = tmp_path / "decisions"
+    decisions.mkdir()
+    record = decisions / "0002-only-itself.md"
+    _record(record, "only-itself",
+            "A `decision: only-itself` pointer belongs in CLAUDE.md's Extending section.")
+    entry = tmp_path / "CLAUDE.md"
+    entry.write_text("The Extending section, with no pointer in it.\n", encoding="utf-8")
+
+    referrers = _referrers_among([record, entry], (decisions,))
+    assert _orphan_slugs({"only-itself"}, referrers) == ["only-itself"]
+
+    # The must-not-fire half, on the same fixture: the guard is not simply always red. One pointer
+    # from a file a reader enters through is all it ever wanted.
+    entry.write_text("Kept by hand: `decision: only-itself` says why.\n", encoding="utf-8")
+    assert _orphan_slugs({"only-itself"}, referrers) == []
+
+
+def test_a_record_reachable_only_from_a_sibling_record_is_an_orphan(tmp_path):
+    """Why the whole directory comes out of the referrer set and not only self-reference (#384).
+
+    Excluding self alone still passes a cluster of records that cite each other and nothing outside,
+    and that unreachable island is exactly the failure the guard is named for. Both records here
+    point at a real, declared sibling, so every reference resolves; what none of them has is a
+    reader who could arrive.
+    """
+    decisions = tmp_path / "decisions"
+    decisions.mkdir()
+    first, second = decisions / "0001-a.md", decisions / "0002-b.md"
+    _record(first, "slug-a", "Superseded by `decision: slug-b`.")
+    _record(second, "slug-b", "Supersedes `decision: slug-a`.")
+    entry = tmp_path / "CLAUDE.md"
+    entry.write_text("No pointer at either of them.\n", encoding="utf-8")
+
+    referrers = _referrers_among([first, second, entry], (decisions,))
+    assert _orphan_slugs({"slug-a", "slug-b"}, referrers) == ["slug-a", "slug-b"]
+
+
+def test_the_records_are_resolution_checked_but_are_not_their_own_referrers():
+    """Two scans over one directory, on the real tree. A record's own `decision:` and test-name
+    references still have to resolve — it stays a *subject* — and it still cannot vouch for anybody's
+    reachability, its own included. The assertion that there are records at all is the positive
+    control: with an empty `docs/decisions/` the loop below would pass having checked nothing."""
+    records = sorted(p for p in DECISIONS.glob("*.md") if p.name != "README.md")
+    assert records, "no decision records — the exclusion asserted below would be vacuous"
+    subject_paths = {p.resolve() for p in subjects()}
+    referrer_paths = {p.resolve() for p in referrer_subjects()}
+    for record in records:
+        assert record.resolve() in subject_paths, (
+            f"{record.name} dropped out of the resolution scan — its own references would stop "
+            f"being checked, which is not what #384 asked for"
+        )
+        assert record.resolve() not in referrer_paths, (
+            f"{record.name} is still counted as a referrer — see REFERRER_EXEMPT_ROOTS"
+        )
+    assert referrer_paths < subject_paths
+
+
+def test_the_decision_wrap_detector_sees_a_slug_split_across_the_break(tmp_path):
+    """The positive control for `_WRAPPED_DECISION`, and the measurement behind #384's second
+    question. The reference below is invisible to `_DECISION_REF` — the closing backtick is on the
+    far side of the newline and `[a-z0-9-]+` cannot cross one — so nothing else in this module would
+    have said a word about it."""
+    p = tmp_path / "wrapped.md"
+    p.write_text("kept by hand: see `decision: elicitation-schema-\nhand-kept` for the measurement\n",
+                 encoding="utf-8")
+    text = p.read_text(encoding="utf-8")
+    assert _WRAPPED_DECISION.search(text)
+    assert _DECISION_REF.findall(text) == [], (
+        "if this ever finds the slug, the resolution check covers the case and the wrap detector "
+        "should be weighed again rather than kept out of habit"
+    )
+
+
+def test_the_decision_wrap_detector_leaves_the_shape_that_still_resolves_alone(tmp_path):
+    """The must-not-fire half, and the half #384 was right about. A break *before* the slug keeps
+    the slug whole on one line, so the only thing anybody greps is still there and `_DECISION_REF`
+    still resolves the reference. An intact one-line reference must not fire either."""
+    wrapped_prefix = tmp_path / "prefix.md"
+    wrapped_prefix.write_text("see `decision:\nelicitation-schema-hand-kept` for why\n", encoding="utf-8")
+    text = wrapped_prefix.read_text(encoding="utf-8")
+    assert not _WRAPPED_DECISION.search(text)
+    assert _DECISION_REF.findall(text) == ["elicitation-schema-hand-kept"]
+
+    intact = tmp_path / "intact.md"
+    intact.write_text("see `decision: elicitation-schema-hand-kept` for why\n", encoding="utf-8")
+    assert not _WRAPPED_DECISION.search(intact.read_text(encoding="utf-8"))
