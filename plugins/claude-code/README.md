@@ -192,4 +192,4 @@ plugin created needs none.
 - [Requivo Web](https://github.com/jbkkz/requivo/blob/main/docs/web.md)
 - [Repository and issues](https://github.com/jbkkz/requivo)
 
-MIT licensed.
+Licensed under the Apache License 2.0.
