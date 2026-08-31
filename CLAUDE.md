@@ -219,7 +219,7 @@ bug that looked like correct behaviour.
    Reading alone left `resolve()` dropping the key on the next turn — the visible refusal traded for
    a silent loss, which is the worse of the two. See invariant 10.
 9. **A precondition is held across the writes it authorises.** `save_revision` checks
-   `expected_revision` and then performs five writes; without `session_lock` around both, two writers
+   `expected_revision` and then writes more than once; without `session_lock` around both, two writers
    pass the same check and the second overwrites the first — the check reads as protection while
    providing none. Every compound mutation runs under `repo.lock(slug)`, taken by the service so the
    whole sequence is one unit. The lock is re-entrant per thread, and OS-held, so a crash releases it.
