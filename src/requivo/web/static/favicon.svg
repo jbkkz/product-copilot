@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The surveyor's-station brand mark (base.html), standalone: a rounded-square chip in --ink
+       (#10131a) with the mark drawn in --surface (#ffffff), matching the in-app header rendering
+       (#241). -->
+  <rect width="32" height="32" rx="7" fill="#10131a"/>
+  <g transform="translate(4,4)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round">
+    <path d="M12 2v20M2 12h20"/>
+    <circle cx="12" cy="12" r="5.5"/>
+  </g>
+</svg>
