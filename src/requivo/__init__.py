@@ -7,4 +7,4 @@ model.json are the single source of truth; see CLAUDE.md for the architecture an
 the invariants a change must not break.
 """
 
-__version__ = "1.3.0"
+__version__ = "2.0.0"
