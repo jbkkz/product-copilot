@@ -128,8 +128,11 @@ fixture workspace and compares the top level of what it printed with a recorded 
 The two failure directions are reported separately, because they are not the same event — a key that
 vanished or changed type is a break, and a key that appeared wants one line added to the record.
 
-The record shows why membership alone was not enough. Four of the breaking changes below shipped
-inside about five weeks, each caught by a person reading a diff and none of them red anywhere.
+Why membership alone was not enough: four of the breaking changes below (#87, #84, #88, #107)
+shipped in the 1.0.0 release alone. All four were deliberate and all four are correctly recorded
+here, because somebody audited this surface by hand while the 1.0 contract was being cut — which is
+the point rather than a mitigation. Nothing in the tree would have gone red if a fifth had been made
+by accident, or made deliberately and its row forgotten.
 
 **One payload on this page is conditional, and nothing said so until now.** `requivo status --json`
 carries `slug`, `readiness`, `understanding`, `questions`, `summary` and `remaining_gaps` always;

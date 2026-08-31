@@ -7,11 +7,17 @@ it. Until this file the only thing enforcing that was `test_every_json_verb_is_i
 which is a **membership** check: it asserts, in both directions, that the page names every verb the
 parser gives a `--json` to. It says nothing whatever about what those verbs print.
 
-So the promise most likely to be believed was the one with the weakest guard, and the record shows
-what that cost. Four breaking changes to "public" payloads in about five weeks: `session list`
-became an object (#87), `session import` renamed two keys (#84), `doctor` respelled an enum value
-(#88), `artifact list` gained an envelope (#107). Every one of them is a ledger row on that page,
-written after the fact by a person who noticed. None of them went red anywhere.
+So the promise most likely to be believed was the one with the weakest guard. Four breaking changes
+to these payloads shipped in the 1.0.0 release alone (2026-08-20): `session list` became an object
+(#87), `session import` renamed two keys (#84), `doctor` respelled an enum value (#88),
+`artifact list` gained an envelope (#107).
+
+That number is the argument for this guard rather than against it, and it is worth being exact about
+because the issue that asked for this file was not. All four were **deliberate**, and all four are
+correctly recorded on that page -- they are there because somebody audited the payload surface by
+hand while cutting the 1.0 contract. Nothing in the tree would have gone red if a fifth had been
+made by accident, or made deliberately and its row forgotten. The gap is not that these four
+escaped; it is that the audit that caught them was a person choosing to look.
 
 The consumers are real and drift by construction. The Claude Code plugin is pinned to a marketplace
 SHA that advances independently of PyPI, its skills read these payloads semantically, and
