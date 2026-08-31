@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from requivo.core.errors import SessionNotFoundError
 from requivo.core.validation import validate_proposal
-from requivo.deterministic._shared import _print_json, _read_document
+from requivo.deterministic._shared import _read_document, print_json
 from requivo.services.sessions import SessionService
 
 
@@ -53,7 +53,7 @@ def _cmd_model_validate(a, client) -> None:
     out = validate_proposal(data, require_complete=require)
     n_slots = len(out.model)
     if a.json:
-        _print_json({"status": "valid", "slots": n_slots})
+        print_json({"status": "valid", "slots": n_slots})
         return
     print(f"✅ Proposal is valid ({n_slots} slots).")
 
@@ -69,7 +69,7 @@ def _cmd_model_apply(a, client) -> None:
     result = svc.update_model(slug, data, expected_revision=a.expected_revision,
                               provenance={"provider": "claude-code", "surface": "cli-apply"})
     if a.json:
-        _print_json(result.to_dict())
+        print_json(result.to_dict())
         return
     print(f"✅ Applied → revision {result.revision}")
     print(f"   changed slots: {', '.join(result.changed_slots) or '(none)'}")
@@ -92,7 +92,7 @@ def _cmd_model_diff(a, client) -> None:
     # `apply` would refuse must not be previewed here as though it would land.
     result = svc.diff(slug, data)
     if a.json:
-        _print_json(result.to_dict())
+        print_json(result.to_dict())
         return
     print(f"Would apply as revision {result.revision}")
     print(f"  changed slots: {', '.join(result.changed_slots) or '(none)'}")

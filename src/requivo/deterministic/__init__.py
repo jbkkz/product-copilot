@@ -38,14 +38,17 @@ in. The help text is a public surface, so the order is not free to change.
 
 from __future__ import annotations
 
-from requivo.deterministic._shared import EXIT_DEGRADED, read_user_text
+from requivo.deterministic._shared import EXIT_DEGRADED, is_file_argument, print_json, read_user_text
 from requivo.deterministic.artifacts import register_artifacts
 from requivo.deterministic.doctor import register_doctor
 from requivo.deterministic.model import register_model
 from requivo.deterministic.sessions import register_sessions
 
-# Re-exported because they are read from outside the package: `cli.py` imports `read_user_text`, and
-# the suite imports `EXIT_DEGRADED` to assert the code a degraded run exits with.
+# Re-exported because they are read from outside the package: `cli.py` imports `read_user_text` and,
+# since #301, `is_file_argument` (the file-vs-text check `discover` used to re-implement under its
+# own name) and `print_json` (`status --json` and `app()`'s own error envelope used to call
+# `json.dumps` directly, a second copy of the #70 `ensure_ascii` contract this function carries); the
+# suite imports `EXIT_DEGRADED` to assert the code a degraded run exits with.
 #
 # `docs/compatibility.md` publishes the **value 4**, never this name — the page lists
 # `requivo.deterministic` among the internals that are explicitly not stable (#144), so nothing may
@@ -61,7 +64,7 @@ from requivo.deterministic.sessions import register_sessions
 # `requivo.deterministic._validate_extracted` would go green having patched nothing. That is this
 # repository's own defect class, and a compatibility shim is not worth installing one. A `_`-prefixed
 # name is imported from the module that defines it.
-__all__ = ["EXIT_DEGRADED", "read_user_text", "register"]
+__all__ = ["EXIT_DEGRADED", "is_file_argument", "print_json", "read_user_text", "register"]
 
 
 def register(sub) -> None:

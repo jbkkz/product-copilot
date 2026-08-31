@@ -37,7 +37,7 @@ import golden_lib  # noqa: E402
 import golden_run  # noqa: E402
 from golden_lib import Turn  # noqa: E402
 
-from requivo.core.analysis import _label  # noqa: E402
+from requivo.core.analysis import slot_label  # noqa: E402
 from requivo.core.contracts import (  # noqa: E402
     Brief,
     Challenge,
@@ -122,7 +122,7 @@ def test_the_assessment_lens_runs_when_the_slot_consensus_held_still(diff):
 
     lost = _line(lines, "no longer raised")
     assert lost is not None, lines
-    assert _label("problem") in lost, lost
+    assert slot_label("problem") in lost, lost
     assert verdict == "moved", lines
     # The short-circuit still decides the *slot* section, and only that: the flat line is the honest
     # readout for a consensus that held still, and removing it would trade one silence for another.

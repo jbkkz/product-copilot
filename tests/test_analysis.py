@@ -6,7 +6,7 @@ because a slot is empty, it asks where information value is high.
 """
 from _fakes import out, slot
 
-from requivo.core.analysis import _readiness_blockers, _state_of, estimate_confidence, soft_slots
+from requivo.core.analysis import estimate_confidence, readiness_blockers, soft_slots, state_of
 from requivo.core.contracts import EngineOutput, Slot
 
 
@@ -36,7 +36,7 @@ def test_readiness_blockers_are_high_impact_unconfirmed():
         "business_rules": slot(80, "inferred", "high"),  # high but inferred → blocker
         "success_metrics": slot(0, "empty", "medium"),   # medium → not blocking
     })
-    assert _readiness_blockers(model) == ["business_rules"]
+    assert readiness_blockers(model) == ["business_rules"]
 
 
 def test_readiness_flags_a_missing_high_impact_slot_as_blocker():
@@ -49,7 +49,7 @@ def test_readiness_flags_a_missing_high_impact_slot_as_blocker():
     del model_dict["business_rules"]  # a high-impact dimension goes missing
     model = EngineOutput.model_validate({"model": model_dict, "questions": [], "summary": {}})
     # business_rules is absent, high-impact by default → it is still a blocker, not invisible.
-    assert "business_rules" in _readiness_blockers(model)
+    assert "business_rules" in readiness_blockers(model)
 
 
 def test_readiness_blocks_a_thin_high_impact_slot_even_when_explicit():
@@ -60,12 +60,50 @@ def test_readiness_blocks_a_thin_high_impact_slot_even_when_explicit():
         "business_rules": slot(5, "explicit", "high"),   # explicit but thin → still a blocker
         "problem": slot(90, "explicit", "high"),         # explicit AND covered → not blocking
     })
-    blockers = _readiness_blockers(model)
+    blockers = readiness_blockers(model)
     assert "business_rules" in blockers
     assert "problem" not in blockers
 
 
 def test_state_of_maps_confidence():
-    assert _state_of(Slot(completeness=90, confidence="explicit", impact="high")) == "confirmed"
-    assert _state_of(Slot(completeness=50, confidence="inferred", impact="high")) == "inferred"
-    assert _state_of(Slot(completeness=0, confidence="empty", impact="low")) == "unknown"
+    assert state_of(Slot(completeness=90, confidence="explicit", impact="high")) == "confirmed"
+    assert state_of(Slot(completeness=50, confidence="inferred", impact="high")) == "inferred"
+    assert state_of(Slot(completeness=0, confidence="empty", impact="low")) == "unknown"
+
+
+def test_the_four_slot_projections_all_read_from_one_schema_parse(monkeypatch):
+    """#301. `schema_slot_ids`/`_schema_order` (core/contracts.py) and `slot_meta`/
+    `_default_impacts` (core/analysis.py) used to each open and `json.loads` `model_schema.json`
+    independently -- one file, parsed four times on a cold cache. All four now project from
+    `schema_slots()`, the one cached parse both modules share.
+
+    Every cache below `schema_slots()` is cleared explicitly, not assumed cold -- a cache another
+    test left warm would let this pass having read nothing, which is the same silent-pass shape a
+    positive control exists to catch elsewhere in this suite. Spies on `contracts.json.loads`, the
+    one remaining call site that ever touches the file, so what is measured is the parse itself
+    rather than a proxy for it.
+    """
+    from requivo.core import analysis, contracts
+
+    for fn in (contracts.schema_slots, contracts.schema_slot_ids, contracts._schema_order,
+               analysis.slot_meta, analysis._default_impacts):
+        fn.cache_clear()
+
+    calls = []
+    original = contracts.json.loads
+
+    def spy(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    monkeypatch.setattr(contracts.json, "loads", spy)
+
+    contracts.schema_slot_ids()
+    contracts._schema_order()
+    analysis.slot_meta()
+    analysis._default_impacts()
+
+    assert len(calls) == 1, (
+        f"the schema file was parsed {len(calls)} time(s) across four projections, not the one "
+        f"`schema_slots()` is meant to unify them onto"
+    )

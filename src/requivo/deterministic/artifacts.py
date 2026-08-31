@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from requivo.core import persistence as store
 from requivo.core.selectors import display_token
-from requivo.deterministic._shared import _print_json, _read_document
+from requivo.deterministic._shared import _read_document, print_json
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
 
@@ -27,7 +27,7 @@ def _cmd_artifact_save(a, client) -> None:
         # `stale` is reported on the *save*, not only on a later `artifact list`. Saving an artifact
         # reasoned from a superseded revision is legitimate and now recorded honestly — but the caller
         # that just did it is the one who can act on it, and it should not have to ask again to find out.
-        _print_json({"type": a.type, "filename": st.filename, "revision": st.revision,
+        print_json({"type": a.type, "filename": st.filename, "revision": st.revision,
                      "stale": st.stale})
         return
     # Through the chokepoint, not re-joined here (#36). This line only prints the path, which is
@@ -58,7 +58,7 @@ def _cmd_artifact_list(a, client) -> None:
         # indirection. `slug` is the only key the new top level carries — every sibling verb
         # answers it and this one had nowhere to put it — and deliberately the only one, because a
         # top level nobody needs yet is still worth having, and filling it speculatively is not.
-        _print_json({"slug": slug, "artifacts": items})
+        print_json({"slug": slug, "artifacts": items})
         return
     if not items:
         print(f"No artifacts saved for '{slug}'.")

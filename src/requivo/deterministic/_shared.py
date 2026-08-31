@@ -45,7 +45,12 @@ from requivo.core.selectors import display_token
 EXIT_DEGRADED = 4
 
 
-def _print_json(obj) -> None:
+def print_json(obj) -> None:
+    """Print `obj` as indented JSON, with `ensure_ascii`'s protective default preserved (#70, below).
+
+    Public since #301: `cli.py`'s `--json` output (`status`, and `app()`'s own error envelope) used
+    to call `json.dumps` directly, its own second copy of the same call with no way to inherit this
+    function's guarantee -- or the #70 fix, had it landed here first instead."""
     # `ensure_ascii` is left at its default and that is load-bearing (#70) — for a narrower set of
     # characters than `session list` and `session show` claim between them. JSON's own grammar
     # forbids a literal control character below U+0020 inside a string, so a newline is escaped
@@ -91,15 +96,35 @@ def read_user_text(path: Path) -> str:
         ) from None
 
 
+def is_file_argument(arg: str) -> bool:
+    """True if `arg` names an existing *file*, safe against the three pathlib traps a naive
+    `Path(arg).is_file()` falls into on this kind of argument -- one that is legitimately either a
+    path or the content itself.
+
+    A blank string makes `Path("")` resolve to the current directory, which exists; a bare
+    directory name exists too, and `.exists()`/`.is_file()` do not distinguish that from a file a
+    caller then reads with `read_text()`, which raises; and an argument longer than the OS filename
+    limit makes the check itself *raise* rather than return False. All three must read as 'not a
+    file' here, so the caller falls back to treating the argument as literal text.
+
+    Public since #301: `cli.py`'s `discover` re-implemented these same three traps under its own
+    name (`_is_file_arg`) rather than sharing this one -- the classic two-session duplicate, where a
+    future fix to one copy has no way to reach the other. `_read_source` below is this function's
+    other caller.
+    """
+    if not arg.strip():
+        return False
+    try:
+        return Path(arg).is_file()
+    except OSError:
+        return False
+
+
 def _read_source(arg: str) -> str:
     """A request/answers argument that may be an inline string, a path to a file, or `-` for stdin."""
     if arg == "-":
         return _read_stdin()
-    try:
-        is_file = bool(arg.strip()) and Path(arg).is_file()
-    except OSError:
-        is_file = False
-    return read_user_text(Path(arg)) if is_file else arg
+    return read_user_text(Path(arg)) if is_file_argument(arg) else arg
 
 
 def _read_stdin() -> str:

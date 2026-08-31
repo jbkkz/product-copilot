@@ -604,13 +604,18 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "never does either."
     ),
     ("web/config.py", "credential_present"): (
-        "a read of the same environment-variable names `new_client()` itself authenticates from, to "
+        "since #334 asks the SDK's own resolution chain rather than reading env-var names itself, to "
         "answer the same boolean the entry above answers for the SDK -- is a credential visible? -- "
-        "that crosses to the template as `ProviderStatus.key_present`, never the value itself. It "
-        "orchestrates nothing: no client is built and no call is made. Weighed against #167's rule "
-        "the same way the `deterministic/doctor.py` entry below is: the alternative is this file "
-        "keeping its own `os.getenv('ANTHROPIC_API_KEY')`, which is exactly what drifted (#332) the "
-        "day `new_client()`'s own set of names widened and this file's copy did not move with it."
+        "that crosses to the template as `ProviderStatus.key_present`, never the value itself. "
+        "Since #334 this DOES construct a client -- `_resolve_client()` builds a transient "
+        "`Anthropic()` to read the SDK's own resolution and discards it (measured by spying on "
+        "`Anthropic.__init__`, #374, which is what caught this reason's stale predecessor). It makes "
+        "no call, though, which is the boundary #167's rule actually turns on. Weighed the same way the "
+        "`deterministic/doctor.py` entry below is: the alternative is this file keeping its own "
+        "`os.getenv('ANTHROPIC_API_KEY')`, which is exactly what drifted (#332) the day "
+        "`new_client()`'s own set of names widened and this file's copy did not move with it. "
+        "`test_an_allowlist_reason_claiming_no_client_is_built_is_true_of_the_function_it_names` in "
+        "tests/test_provider.py checks that this entry no longer makes the claim it just made."
     ),
     ("web/app.py", "EngineError"): (
         "an exception type, not a call, same as the cli.py entry above -- caught at the HTTP "
@@ -653,8 +658,12 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "`providers/`. #365 is the same drift #332 found one function along: `credential_present()` "
         "alone is right for a caller that only wants a yes/no, and wrong for the verb whose whole job "
         "is naming the remedy -- it read the bool and told a reader with an unloadable profile to set "
-        "a variable that was never the fault. Orchestrates nothing: no client is built, no call is "
-        "made."
+        "a variable that was never the fault. Since #334 this DOES construct a client, the same way "
+        "the `web/config.py` entry above does and for the same reason (`_resolve_client()`, measured "
+        "by spying on `Anthropic.__init__`, #374 -- see "
+        "`test_an_allowlist_reason_claiming_no_client_is_built_is_true_of_the_function_it_names` in "
+        "tests/test_provider.py) -- it makes no call, which is the boundary that actually matters "
+        "here."
     ),
 }
 
