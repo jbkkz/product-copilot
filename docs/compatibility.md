@@ -921,12 +921,15 @@ migrate` still converts them, and it is now the only thing that reads that layou
   is unaffected: it is published in the `--json` envelope and is promised above, independently of
   which module defines the class.
 
-  `requivo.deterministic`'s `__all__` is three names, every one of them read from
+  `requivo.deterministic`'s `__all__` is five names, every one of them read from
   inside this repository and none of them promised outside it: `register(sub)`, the argparse wiring
-  `cli.py` binds the offline verbs through; `read_user_text`, which `cli.py` also imports; and
-  `EXIT_DEGRADED`, which the suite imports to assert the code a degraded run exits with. That is
-  internal plumbing for the offline verbs rather than an interface. What those verbs promise is on
-  this page already: the CLI exit codes, the `--json` payloads and the session format.
+  `cli.py` binds the offline verbs through; `read_user_text`, which `cli.py` also imports;
+  `is_file_argument` and `print_json`, added by #301 when `cli.py`'s own duplicate file-vs-text
+  check and its own raw `json.dumps` call were replaced by the shared copies -- the same "`cli.py`
+  reads from here" shape as `read_user_text`, not a new kind of promise; and `EXIT_DEGRADED`, which
+  the suite imports to assert the code a degraded run exits with. That is internal plumbing for the
+  offline verbs rather than an interface. What those verbs promise is on this page already: the CLI
+  exit codes, the `--json` payloads and the session format.
   Those are promises about what the command does when you run it, not about names you can import. A
   downstream consumer that depends on any of these five deliberately tracks the repo.
 - **The slug derived from a request.** `derive_slug` turns request text into a session directory

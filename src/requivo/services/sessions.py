@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from requivo.core import persistence as store
-from requivo.core.analysis import _readiness_blockers, model_status
+from requivo.core.analysis import model_status, readiness_blockers
 from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import (
@@ -133,7 +133,7 @@ class UpdateResult:
 
 
 def _readiness(model: EngineOutput) -> Readiness:
-    blockers = _readiness_blockers(model)
+    blockers = readiness_blockers(model)
     return Readiness(ready=not blockers, blocking_slots=blockers)
 
 

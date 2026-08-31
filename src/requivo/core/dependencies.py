@@ -20,13 +20,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from requivo.core.analysis import _label, _slot_meta
+from requivo.core.analysis import slot_label, slot_meta
 from requivo.core.contracts import EngineOutput
 from requivo.core.selectors import normalize_tokens
 
 
 def _all_slot_ids() -> set[str]:
-    return set(_slot_meta()[1])  # (pillars, labels) — labels is keyed by every slot id
+    return set(slot_meta()[1])  # (pillars, labels) — labels is keyed by every slot id
 
 
 # Which slots materially shape each artifact. Deliberate, not "everything": an over-broad map makes
@@ -104,7 +104,7 @@ def resolve_slots(tokens: list[str]) -> tuple[list[str], list[str]]:
     reads as a precise answer to a specific question rather than as a failure. The refusal is
     `normalize_tokens`, shared with the context-card selectors so the rule is stated once.
     """
-    _, labels = _slot_meta()
+    _, labels = slot_meta()
     # Materialised before the helper iterates it: a generator handed in here would be exhausted by
     # `normalize_tokens` and the `zip` below would then pair nothing, returning ([], []) — no slots
     # and no complaint, which is the same silent absence this function is being fixed for.
@@ -168,17 +168,17 @@ def propagate(out: EngineOutput, changed: list[str]) -> ImpactReport:
     go stale. Decisions rest on slots via `derived_from`; challenges contest slots via `contests` —
     the same DAG edge, the other direction of reasoning."""
     changed_set = set(changed)
-    report = ImpactReport(changed=[_label(sid) for sid in changed])
+    report = ImpactReport(changed=[slot_label(sid) for sid in changed])
 
     for d in out.decisions:
         hit = [sid for sid in d.derived_from if sid in changed_set]
         if hit:
-            report.decisions.append(DecisionImpact(d.decision, [_label(sid) for sid in hit]))
+            report.decisions.append(DecisionImpact(d.decision, [slot_label(sid) for sid in hit]))
 
     for c in out.challenges:
         hit = [sid for sid in c.contests if sid in changed_set]
         if hit:
-            report.challenges.append(ChallengeImpact(c.headline, [_label(sid) for sid in hit]))
+            report.challenges.append(ChallengeImpact(c.headline, [slot_label(sid) for sid in hit]))
 
     amap = artifact_slots()
     report.artifacts = [name for name in _ARTIFACT_SLOTS_RAW if amap[name] & changed_set]

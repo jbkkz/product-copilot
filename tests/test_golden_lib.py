@@ -170,7 +170,7 @@ def test_a_challenge_only_some_runs_raise_is_not_stable():
 def test_a_headline_used_as_a_theme_label_cannot_forge_a_line():
     """The other half of #137's sweep, and the one the print sites could not cover.
 
-    A theme label is normally `_label(slot_id)` — a validated slot id through the schema's table, so
+    A theme label is normally `slot_label(slot_id)` — a validated slot id through the schema's table, so
     it cannot carry anything. The fallback path for a capture predating `contests` is different: it
     keys themes on the **challenge headline**, which is provider-written prose, and `golden_diff`
     prints those labels straight (`assessment + challenge(s) now raised: …`). Squashed here rather

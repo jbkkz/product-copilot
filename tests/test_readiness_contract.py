@@ -43,7 +43,7 @@ def _model_with(n_blockers: int):
     """A complete model whose only unresolved high-impact topics are the first `n_blockers` ones.
 
     Every required slot is high-impact so that the count is exactly what the caller asked for:
-    `_readiness_blockers` blocks on a high-impact slot that is not both `explicit` and covered.
+    `readiness_blockers` blocks on a high-impact slot that is not both `explicit` and covered.
     """
     _, required = schema_slot_ids()
     ordered = [sid for sid in _schema_order() if sid in required]

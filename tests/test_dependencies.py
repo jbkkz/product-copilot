@@ -117,8 +117,8 @@ def test_diff_models_flags_a_removed_slot():
 
 
 def test_artifact_slots_reference_only_real_slot_ids():
-    from requivo.core.analysis import _slot_meta
-    valid = set(_slot_meta()[1])
+    from requivo.core.analysis import slot_meta
+    valid = set(slot_meta()[1])
     for name, slots in artifact_slots().items():
         assert slots <= valid, f"{name} references unknown slot ids: {slots - valid}"
 

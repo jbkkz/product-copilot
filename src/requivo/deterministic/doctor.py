@@ -28,7 +28,7 @@ from requivo.core.context import available_cards, check_selection
 from requivo.core.errors import InvalidModelError, SessionLockedError
 from requivo.core.integrity import SEVERITY_NOTE, IntegrityProblem, blocking, inspect_session
 from requivo.core.selectors import display_token
-from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
+from requivo.deterministic._shared import _NO_DETAIL, _resolve_cards, print_json
 from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
 from requivo.providers.anthropic import credential_diagnosis, current_model_name
 from requivo.services.sessions import SessionService
@@ -424,7 +424,7 @@ def _cmd_context(a, client) -> None:
 def _cmd_doctor(a, client) -> None:
     r = doctor_report()
     if a.json:
-        _print_json(r)
+        print_json(r)
         return
     ok = "✅"
     warn = "🟡"

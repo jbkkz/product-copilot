@@ -53,15 +53,21 @@ class ProviderStatus:
 
 
 def provider_status() -> ProviderStatus:
-    """Probe the provider without importing a client or touching the key value itself.
+    """Probe the provider without touching the key value itself, or making a call.
 
-    `key_present` reads `credential_present()` -- the same env-var names `new_client()` itself
+    `key_present` reads `credential_present()` -- the one definition `new_client()` itself
     authenticates from -- rather than a second, independent `os.getenv("ANTHROPIC_API_KEY")`. Before
     #332 this probe checked only that one name while `new_client()` (widened by #201) also accepted
     `ANTHROPIC_AUTH_TOKEN`, so a working bearer-token install reported `key_present=False` here,
     `available` fell to False, and `routes/sessions.py` (which branches on `available`) silently
     dropped every provider action to `create_only` for an install that would actually have worked.
     Pinned by `test_a_bearer_token_alone_is_read_as_a_credential`.
+
+    **Not "without importing a client"**, corrected here for the same reason
+    `tests/test_boundaries.py`'s allowlist entry for this call was corrected (#374): since #334,
+    `credential_present()` asks the SDK's own resolution chain, which does construct a transient
+    `Anthropic()` to answer -- it never makes a call, which is what this docstring actually needs to
+    promise.
     """
     try:
         # the SDK handle (or None if not installed) and the shared credential probe

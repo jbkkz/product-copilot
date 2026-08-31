@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import json
 import os
 import re
 import sys
@@ -15,14 +14,14 @@ from dotenv import load_dotenv
 from requivo import __version__
 from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
-from requivo.core.analysis import _label, model_status
+from requivo.core.analysis import model_status, slot_label
 from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
 from requivo.core.selectors import display_text
-from requivo.deterministic import read_user_text
+from requivo.deterministic import is_file_argument, print_json, read_user_text
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
 
@@ -261,20 +260,6 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
 # the API build one, so `requivo status` runs fully offline.
 
 
-def _is_file_arg(arg: str) -> bool:
-    """True if arg names an existing *file*. Three pathlib traps to sidestep: a blank string makes
-    Path("") resolve to the current directory, which exists; a bare directory name exists too, and
-    `.exists()` accepts both — the next line then calls `read_text()` on a directory and raises. And a
-    request longer than the OS filename limit makes the check *raise* rather than return False. All
-    three must read as 'not a file', so the request is used as text — the point of discover."""
-    if not arg.strip():
-        return False
-    try:
-        return Path(arg).is_file()
-    except OSError:
-        return False
-
-
 def _why(e: BaseException) -> str:
     """What to print for a failure that may be a structured error or a bare interrupt. A
     `KeyboardInterrupt` stringifies to the empty string, so it needs a word of its own rather than a
@@ -362,7 +347,7 @@ def _cmd_discover(a, client) -> None:
               "containing one.", file=sys.stderr)
         raise SystemExit(2)
     client = client or new_client()
-    is_file = _is_file_arg(a.request)
+    is_file = is_file_argument(a.request)
     request = read_user_text(Path(a.request)) if is_file else a.request
 
     # One resolver, in Core, shared with the deterministic verbs and the Web: an unknown card is a hard
@@ -485,7 +470,7 @@ def _cmd_answer(a, client) -> None:
     render_turn(out)
     if result.stale_artifacts:
         pairs = [(t, ARTIFACT_FILENAMES[t]) for t in result.stale_artifacts]
-        render_stale(pairs, [_label(sid) for sid in result.changed_slots])
+        render_stale(pairs, [slot_label(sid) for sid in result.changed_slots])
     n_reasoning = len(result.invalidated_decisions) + len(result.invalidated_challenges)
     if n_reasoning:
         print(f"\n⚠  This change unseats {n_reasoning} piece(s) of the decision brief's reasoning "
@@ -554,7 +539,10 @@ def _cmd_status(a, client) -> None:
     if getattr(a, "json", False):
         # `--json` deliberately gets no pointer (#246): a machine consumer picks its own next step,
         # and a line printed beside the payload would break every caller that pipes this into `jq`.
-        print(json.dumps(payload, indent=2))
+        # `print_json`, not a second `json.dumps(..., indent=2)` (#301): it carries the #70
+        # `ensure_ascii` contract, and a call site duplicating the arguments has no way to inherit a
+        # fix to it.
+        print_json(payload)
         return
     render_turn(out)
     # A cumulative "what has this session cost so far" line, from the token/rate provenance stamped
@@ -1016,7 +1004,7 @@ def app(argv: list[str] | None = None, client=None) -> None:
             # caller (e.g. Claude Code) gets the structured envelope; otherwise a one-line message.
             _render_usage_safely(ledger)
             if want_json:
-                print(json.dumps(e.to_dict(), indent=2))
+                print_json(e.to_dict())
             else:
                 safe_write(sys.stderr, f"\n{e}\n")
             raise SystemExit(1) from None

@@ -51,7 +51,7 @@ from requivo.core.errors import (
 from requivo.core.integrity import SEVERITY_NOTE, blocking, check_session_dir, inspect_session
 from requivo.core.persistence import ensure_store_dir
 from requivo.core.selectors import display_token
-from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _print_json, _read_source, _resolve_cards
+from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _read_source, _resolve_cards, print_json
 from requivo.deterministic.doctor import _REPAIR_HINT, _RESTORABLE_CARD_CODES, _RESTORE_HINT, _card_health
 from requivo.paths import session_root
 from requivo.services.repository import SessionRepository
@@ -74,7 +74,7 @@ def _cmd_session_init(a, client) -> None:
         # `revision` is 0 for a genuinely new session — but init is idempotent, so re-running it on the
         # same request returns an *existing* session that may already carry a model. A caller about to
         # apply needs to know which of the two it got, and this is where it finds out.
-        _print_json({"slug": meta.slug, "session_id": meta.session_id,
+        print_json({"slug": meta.slug, "session_id": meta.session_id,
                      "path": str(store.canonical_dir(meta.slug)), "context_cards": meta.context_cards,
                      "revision": meta.current_revision})
         return
@@ -205,7 +205,7 @@ def _cmd_session_list(a, client) -> None:
         # read or not, so the count has always been derivable from the rows. What the key buys is
         # that exit 4 is readable on stdout rather than only signalled, which is the same argument
         # that makes a degraded row name its session instead of disappearing.
-        _print_json({"sessions": [_session_list_row(e) for e in entries],
+        print_json({"sessions": [_session_list_row(e) for e in entries],
                      "degraded": len(degraded), "session_root": str(session_root())})
     elif not entries:
         print(f"No sessions under {session_root()}.")
@@ -300,7 +300,7 @@ def _cmd_session_show(a, client) -> None:
         raise svc.no_session(slug)
     meta = svc.meta(slug)
     if a.json:
-        _print_json(meta.model_dump())
+        print_json(meta.model_dump())
         return
     print(f"Session '{display_token(meta.slug)}'  (id {display_token(meta.session_id[:12])}…)")
     print(f"  created  {display_token(meta.created_at)}")
@@ -458,7 +458,7 @@ def _cmd_session_migrate(a, client) -> None:
         migrated.append(slug)
     degraded = bool(errors or interrupted)
     if a.json:
-        _print_json({"migrated": migrated, "skipped_already_present": skipped,
+        print_json({"migrated": migrated, "skipped_already_present": skipped,
                      "interrupted": interrupted, "errors": errors, "source": str(root)})
     else:
         print(f"Legacy sessions under {root}:")
@@ -523,7 +523,7 @@ def _cmd_session_export(a, client) -> None:
     finally:
         tmp.unlink(missing_ok=True)
     if a.json:
-        _print_json({"slug": slug, "archive": str(dest)})
+        print_json({"slug": slug, "archive": str(dest)})
         return
     print(f"Exported session '{slug}' → {dest}")
 
@@ -614,7 +614,7 @@ def _cmd_session_verify(a, client) -> None:
         # both. Branch on `session.checked`, never on the emptiness of `problems` — or, since #260,
         # of `notes`, which is empty in that arm for exactly the same reason and says exactly as
         # little.
-        _print_json({"slug": slug, "ok": ok, "session": session_probe,
+        print_json({"slug": slug, "ok": ok, "session": session_probe,
                      "problems": [p.to_dict() for p in problems],
                      "notes": [n.to_dict() for n in notes], "context_cards": cards})
         if exit_code:
@@ -666,7 +666,7 @@ def _cmd_session_rescope(a, client) -> None:
     cards = _resolve_cards(a.context)
     result = svc.rescope(slug, cards)
     if a.json:
-        _print_json(result.to_dict())
+        print_json(result.to_dict())
         return
     previous = (", ".join(display_token(c) for c in result.previous_context_cards)
                if result.previous_context_cards else "all cards")
@@ -1029,7 +1029,7 @@ def _cmd_session_import(a, client) -> None:
         # `replaced` keeps the meaning it always had — *did this import replace an existing session*
         # — and is now the guard's own answer rather than a second observation taken after the
         # extraction. Those two used to be able to disagree, and the disagreement was #111.
-        _print_json({"slug": slug, "path": str(target), "replaced": occupied})
+        print_json({"slug": slug, "path": str(target), "replaced": occupied})
         return
     # Same as `session init`: the line's subject is where the session landed on this machine.
     print(f"Imported session '{slug}' → {store.canonical_dir(slug)}"

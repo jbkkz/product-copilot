@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import textwrap
 
-from requivo.core.analysis import _label, _readiness_blockers, _state_of
+from requivo.core.analysis import readiness_blockers, slot_label, state_of
 from requivo.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
 from requivo.core.selectors import display_text
 from requivo.usage import UsageLedger
@@ -60,7 +60,7 @@ def _labeled(label: str, text: str, lw: int = 9, width: int = 80, indent: str = 
 def render_understanding(out: EngineOutput) -> None:
     print("UNDERSTANDING")
     for state, label in STATE_ROWS:
-        names = [_label(sid) for sid, s in out.model.items() if _state_of(s) == state]
+        names = [slot_label(sid) for sid, s in out.model.items() if state_of(s) == state]
         if names:
             print(textwrap.fill(" · ".join(names), width=80, initial_indent=f"  {label}   ", subsequent_indent=" " * 15))
 
@@ -72,13 +72,13 @@ def render_readiness(out: EngineOutput) -> None:
     # contract, the Web and the plugin all forbid (#165). Pinned across surfaces by
     # `test_readiness_renders_as_one_boolean_on_every_surface`.
     print("ARE WE READY?")
-    blockers = [_label(b) for b in _readiness_blockers(out)]
+    blockers = [slot_label(b) for b in readiness_blockers(out)]
     status = "Not ready" if blockers else "Ready"
     print(f"  {'Status':<20} {status}")
     if blockers:
         print(_labeled("Blocking decision", "Confirm " + ", ".join(b.lower() for b in blockers), lw=20))
     gaps = [
-        _label(sid)
+        slot_label(sid)
         for sid, s in out.model.items()
         if s.impact is not Impact.high and s.confidence is not Confidence.explicit
     ]
@@ -90,7 +90,7 @@ def render_turn(out: EngineOutput) -> None:
     """Lightweight per-turn view: what's understood + what's being asked."""
     print()
     render_understanding(out)
-    blockers = [_label(b) for b in _readiness_blockers(out)]
+    blockers = [slot_label(b) for b in readiness_blockers(out)]
     # Same rule as `render_readiness`, and the count is gone from the verdict for the same reason: it
     # is what the deleted "nearly" arm branched on, and the blockers are named on the line already.
     verdict = "⛔ Not ready" if blockers else "✅ Ready"
@@ -99,7 +99,7 @@ def render_turn(out: EngineOutput) -> None:
         print("\nPRIORITY QUESTIONS")
         for i, q in enumerate(out.questions, 1):
             print(f"  {i}. {display_text(q.q)}")
-            print(f"     → {_label(q.slot)}")   # a schema-validated slot id, not free text
+            print(f"     → {slot_label(q.slot)}")   # a schema-validated slot id, not free text
 
 
 def next_command(payload: dict) -> str | None:
@@ -245,7 +245,7 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     still `requivo brief`, and the file on disk is still `solution-assessment.md` (#166)."""
     # While a blocking decision is unresolved the brief rests on unconfirmed ground — label it a
     # draft so the reader knows it is not yet ready to build from, honestly rather than in the prose.
-    draft = bool(_readiness_blockers(out))
+    draft = bool(readiness_blockers(out))
     print("\n" + "═" * 64)
     print("DRAFT DECISION BRIEF" if draft else "DECISION BRIEF")
     if draft:
@@ -263,7 +263,7 @@ def render_brief(out: EngineOutput, brief: Brief) -> None:
     if brief.risks:
         more = f"   (+{len(brief.risks) - 1} more below)" if len(brief.risks) > 1 else ""
         print(_labeled("Risks", brief.risks[0] + more))
-    unknowns = [_label(b) for b in _readiness_blockers(out)] + brief.open_decisions
+    unknowns = [slot_label(b) for b in readiness_blockers(out)] + brief.open_decisions
     if unknowns:
         print(_labeled("Unknowns", " · ".join(unknowns)))
     if brief.next_steps:
@@ -362,7 +362,7 @@ def render_estimate(draft: EstimateDraft, soft: list[str], confidence: str) -> N
     print(f"{'─' * 43:<44} {'':<5} {'─' * 9:<11}")
     print(f"{'TOTAL':<44} {'':<5} {total_low:g}–{total_high:g} d")
     if soft:
-        print(f"\nSpread driven by unresolved slots: {', '.join(_label(s) for s in soft)}")
+        print(f"\nSpread driven by unresolved slots: {', '.join(slot_label(s) for s in soft)}")
     if draft.risks:
         print("Risks / unknowns:")
         for r in draft.risks:
@@ -413,7 +413,7 @@ def render_dependency_map(out: EngineOutput) -> None:
         rep = propagate(out, [sid])
         if rep.empty:
             continue
-        print(f"\n{_label(sid)}")
+        print(f"\n{slot_label(sid)}")
         if rep.decisions:
             print(f"  decisions: {'; '.join(display_text(d.decision) for d in rep.decisions)}")
         if rep.challenges:

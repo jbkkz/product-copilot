@@ -498,6 +498,89 @@ def test_credential_diagnosis_agrees_with_credential_present_when_a_key_is_set(m
     assert problem is None
 
 
+# ── #374: an allowlist reason claiming "no client is built" is a claim this suite checks ─────
+#
+# `tests/test_boundaries.py`'s `_SURFACE_PROVIDER_ALLOWLIST` justifies several entries with the
+# words "no client is built" -- a factual claim about the function the entry names, not a style
+# note. Measured once by spying on `Anthropic.__init__`: since #334, `credential_present()` and
+# `credential_diagnosis()` both route through `_resolve_client()`, which does construct a client
+# (transient, discarded, no network call) to ask the SDK's own resolution chain. The allowlist
+# reasons for those two no longer make the claim (see the entries themselves); `current_model_name`
+# still does, correctly, and stays registered below so the check has something to hold true.
+#
+# A reason nothing re-checks is prose (#374's own point, made about #364's incomplete sweep one
+# entry over). This ties the claim to the actual call so the next stale one is a failing test
+# instead of a paragraph nobody re-reads.
+
+
+def _no_client_claims() -> dict[tuple[str, str], object]:
+    """Every `_SURFACE_PROVIDER_ALLOWLIST` entry whose reason claims "no client is built",
+    resolved to the `requivo.providers.anthropic.client` function it names.
+
+    Derived from the allowlist's own text rather than hand-copied, so a future entry reusing this
+    exact phrase is picked up automatically -- and a name this function cannot resolve fails loudly
+    rather than being silently left unchecked, which is the failure mode #374 is itself an instance
+    of (`credential_diagnosis`'s reason went stale and nothing re-read it).
+    """
+    from test_boundaries import _SURFACE_PROVIDER_ALLOWLIST
+
+    from requivo.providers.anthropic import client as client_module
+
+    claims = {}
+    for (label, name), reason in _SURFACE_PROVIDER_ALLOWLIST.items():
+        if "no client is built" not in reason:
+            continue
+        fn = getattr(client_module, name, None)
+        assert fn is not None, (
+            f"{label}:{name}'s allowlist reason claims 'no client is built', but {name!r} is not a "
+            f"requivo.providers.anthropic.client function this check knows how to call -- extend "
+            f"_no_client_claims rather than leaving the claim unchecked"
+        )
+        claims[(label, name)] = fn
+    return claims
+
+
+def test_an_allowlist_reason_claiming_no_client_is_built_is_true_of_the_function_it_names(monkeypatch):
+    """#374. Two of three entries making this claim were wrong: `credential_present()` and
+    `credential_diagnosis()` both build a client via `_resolve_client()` (since #334), and were
+    corrected as part of this fix. `current_model_name` genuinely builds none and stays a claim.
+
+    Positive control in the same fixture, and the must-fire half: `credential_present()` is known
+    to construct a client and is deliberately *not* a registered claim after this fix, so calling it
+    through the same spy proves the spy detects a real construction -- without this, a spy that
+    silently caught nothing would make every assertion below pass for the wrong reason.
+    """
+    calls = []
+    original_init = anthropic.Anthropic.__init__
+
+    def spy(self, *a, _orig=original_init, **kw):
+        calls.append(1)
+        return _orig(self, *a, **kw)
+
+    monkeypatch.setattr(anthropic.Anthropic, "__init__", spy)
+    _no_credentials(monkeypatch)
+
+    from requivo.providers.anthropic.client import credential_present
+
+    credential_present()
+    assert calls, "the spy did not see a construction it is known to make -- the check below is inert"
+    calls.clear()
+
+    claims = _no_client_claims()
+    assert claims, (
+        "no _SURFACE_PROVIDER_ALLOWLIST entry claims 'no client is built' any more -- if that is "
+        "not expected, the claim-detection above has drifted from the allowlist's wording"
+    )
+    for (label, name), fn in claims.items():
+        fn()
+        assert not calls, (
+            f"{label}:{name}'s allowlist reason says 'no client is built', but calling {name}() "
+            f"constructed {len(calls)} Anthropic client(s) -- fix the allowlist reason (or the "
+            f"function, if it should build none)"
+        )
+        calls.clear()
+
+
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
     """End to end, and the part that is not about the message: nothing is written and nothing is paid.
 

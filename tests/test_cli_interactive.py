@@ -620,9 +620,9 @@ def test_an_interrupt_in_the_once_path_names_the_claimed_session_and_the_retry(m
 def test_an_interrupt_before_a_session_is_claimed_names_no_slug(monkeypatch, capsys):
     """The trap on the other side of the fix above (#206): an abort point that has genuinely claimed
     nothing must not invent a session to name -- a message naming a slug that does not exist is worse
-    than the traceback it replaces. `_is_file_arg` runs before any session is claimed on every
+    than the traceback it replaces. `is_file_argument` runs before any session is claimed on every
     `discover` call, so patching it to interrupt reproduces the earliest realistic abort point."""
-    monkeypatch.setattr("requivo.cli._is_file_arg",
+    monkeypatch.setattr("requivo.cli.is_file_argument",
                         lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     with pytest.raises(SystemExit) as exit_:

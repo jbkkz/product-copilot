@@ -87,11 +87,29 @@ def _reject_duplicate_ids(label: str, ids: list[str]) -> None:
 
 
 @functools.lru_cache(maxsize=1)
+def schema_slots() -> tuple[dict, ...]:
+    """`framework/model_schema.json`'s `slots` list, parsed once and cached.
+
+    Public since #301: this file and `core/analysis.py` each read and `json.loads`'d the same file
+    independently, at four call sites (`schema_slot_ids`/`_schema_order` here, `slot_meta`/
+    `_default_impacts` there) -- one file, parsed four times, on every cold cache. This is the one
+    parse every projection below now reads from; each stays its own cached projection (allowed/
+    required ids, schema order, pillar+label, baseline impact) rather than folding into a single
+    shape, because they slice the same rows differently and a caller wanting `_schema_order()`'s
+    tuple should not have to reconstruct it from `slot_meta()`'s dicts.
+
+    Returned as a tuple of the raw dicts, in file order -- not keyed by id -- because two of the
+    four projections need that order preserved, and a dict comprehension would have already lost it.
+    """
+    return tuple(json.loads((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))["slots"])
+
+
+@functools.lru_cache(maxsize=1)
 def schema_slot_ids() -> tuple[frozenset[str], frozenset[str]]:
     """(allowed, required) slot ids from framework/model_schema.json. `required` excludes any slot
     flagged `optional`. Cached — the schema is read once. This is the single source of the slot
     vocabulary the model must speak; the contract and readiness both defer to it."""
-    slots = json.loads((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))["slots"]
+    slots = schema_slots()
     allowed = frozenset(s["id"] for s in slots)
     required = frozenset(s["id"] for s in slots if not s.get("optional", False))
     return allowed, required
@@ -111,8 +129,7 @@ def unknown_slots(present: set[str]) -> list[str]:
 
 @functools.lru_cache(maxsize=1)
 def _schema_order() -> tuple[str, ...]:
-    slots = json.loads((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))["slots"]
-    return tuple(s["id"] for s in slots)
+    return tuple(s["id"] for s in schema_slots())
 
 
 class Confidence(str, Enum):

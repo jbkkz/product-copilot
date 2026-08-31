@@ -1,15 +1,33 @@
 from __future__ import annotations
 
 import functools
-import json
 
-from requivo.core.contracts import SOFT_COMPLETENESS, Confidence, EngineOutput, Impact, Slot, schema_slot_ids
-from requivo.paths import FRAMEWORK
+from requivo.core.contracts import (
+    SOFT_COMPLETENESS,
+    Confidence,
+    EngineOutput,
+    Impact,
+    Slot,
+    schema_slot_ids,
+    schema_slots,
+)
 
 
 @functools.lru_cache(maxsize=1)
-def _slot_meta() -> tuple[dict, dict]:
-    slots = json.loads((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))["slots"]
+def slot_meta() -> tuple[dict, dict]:
+    """`(pillars, labels)`, both keyed by slot id, projected from the framework schema and cached.
+
+    Public since #302: four other modules (`core/dependencies.py`, `cli.py`, `render/terminal.py`,
+    `render/markdown.py`) already imported this under its underscore name -- the privacy marker was
+    false everywhere it mattered, and a rename inside this module broke four files with no
+    deprecation surface. It is genuinely shared API: the schema projection every one of those
+    callers needs, not a detail any single caller could sensibly own instead.
+
+    Reads `schema_slots()` rather than parsing the file itself (#301): this and `_default_impacts`
+    below were two of the four sites across this file and `contracts.py` that each re-read and
+    re-parsed the same `model_schema.json` independently.
+    """
+    slots = schema_slots()
     return ({s["id"]: s["pillar"] for s in slots}, {s["id"]: s["label"] for s in slots})
 
 
@@ -17,22 +35,23 @@ def _slot_meta() -> tuple[dict, dict]:
 def _default_impacts() -> dict[str, Impact]:
     """Each slot's baseline impact from the schema — used to judge a slot the model omitted entirely
     (where there's no live impact to read)."""
-    slots = json.loads((FRAMEWORK / "model_schema.json").read_text(encoding="utf-8"))["slots"]
-    return {s["id"]: Impact(s["impact_default"]) for s in slots}
+    return {s["id"]: Impact(s["impact_default"]) for s in schema_slots()}
 
 
-def _label(slot_id: str) -> str:
-    return _slot_meta()[1].get(slot_id, slot_id)
+def slot_label(slot_id: str) -> str:
+    """The human label for one slot id. Public since #302, for the same reason `slot_meta` is: four
+    modules outside this one already called it under its underscore name."""
+    return slot_meta()[1].get(slot_id, slot_id)
 
 
 def slot_labels(slot_ids: list[str]) -> list[str]:
-    """Human labels for slot ids, in the order given — the public form of `_label`.
+    """Human labels for slot ids, in the order given — the list-form convenience over `slot_label`.
 
     Every surface that reports a change reports it in slot ids (`UpdateResult.changed_slots`), and
     every surface that shows it to a reader has to translate. Doing that translation here rather than
     in each interface is what keeps a slot id out of the Web's prose: the schema's `label` is the one
     the engine's own Voice rule already writes in."""
-    return [_label(sid) for sid in slot_ids]
+    return [slot_label(sid) for sid in slot_ids]
 
 
 def soft_slots(out: EngineOutput) -> list[str]:
@@ -61,8 +80,11 @@ def _is_deferred(s: Slot) -> bool:
     return s.impact is Impact.low and s.completeness < SOFT_COMPLETENESS
 
 
-def _readiness_blockers(out: EngineOutput) -> list[str]:
+def readiness_blockers(out: EngineOutput) -> list[str]:
     """High-impact slots not yet confirmed AND covered — what stands between here and build.
+
+    Public since #302, for the same reason `slot_meta` is: `render/terminal.py` and
+    `render/markdown.py` already called this under its underscore name.
 
     Iterates the schema's required slots, not just the ones the model returned: a required slot the
     model omitted is treated as unknown at its baseline impact, so a missing high-impact dimension
@@ -85,10 +107,14 @@ def _readiness_blockers(out: EngineOutput) -> list[str]:
         )
         if impact is Impact.high and not confirmed:
             blockers.append(sid)
-    return [sid for sid in _slot_meta()[1] if sid in set(blockers)]  # schema order
+    return [sid for sid in slot_meta()[1] if sid in set(blockers)]  # schema order
 
 
-def _state_of(s: Slot) -> str:
+def state_of(s: Slot) -> str:
+    """`confirmed` / `inferred` / `unknown` for one slot's confidence. Public since #302:
+    `render/terminal.py` already called this under its underscore name, and the alternative --
+    inlining the confidence-to-state mapping there -- would duplicate a core classification rule in
+    a render module rather than share it."""
     if s.confidence is Confidence.explicit:
         return "confirmed"
     if s.confidence is Confidence.inferred:
@@ -102,12 +128,12 @@ def model_status(out: EngineOutput) -> dict:
     session) and `SessionService.status` (a session) build on this, so the presentation logic lives in
     exactly one place; the session-only fields (revision, artifacts, context cards) are layered on by
     each caller. Everything here needs only the model, so it works for a bare model.json too."""
-    blockers = _readiness_blockers(out)
-    gaps = [{"slot": s, "label": _label(s)} for s in blockers]
+    blockers = readiness_blockers(out)
+    gaps = [{"slot": s, "label": slot_label(s)} for s in blockers]
     return {
         "readiness": {"ready": not blockers, "blocking_slots": gaps},
         "understanding": understanding_view(out),
-        "questions": [{"q": q.q, "slot": q.slot, "label": _label(q.slot), "why": q.why}
+        "questions": [{"q": q.q, "slot": q.slot, "label": slot_label(q.slot), "why": q.why}
                       for q in out.questions],
         "summary": out.summary.model_dump(),
         "remaining_gaps": gaps,
@@ -120,12 +146,12 @@ def understanding_view(out: EngineOutput) -> dict[str, list[dict]]:
     the JSON status and the Web read the same computed view rather than rebuilding the
     presentation logic. `thin` marks a confirmed-but-below-coverage slot — the exact case readiness now
     still blocks on, surfaced so a client can render 'stated but partial' without re-deriving it."""
-    pillars, _labels = _slot_meta()
+    pillars, _labels = slot_meta()
     groups: dict[str, list[dict]] = {"confirmed": [], "inferred": [], "unknown": []}
     for sid, s in out.model.items():
-        groups[_state_of(s)].append({
+        groups[state_of(s)].append({
             "slot": sid,
-            "label": _label(sid),
+            "label": slot_label(sid),
             "pillar": pillars.get(sid),
             "completeness": s.completeness,
             "impact": s.impact.value,

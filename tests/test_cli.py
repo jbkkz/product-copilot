@@ -19,11 +19,12 @@ import sys
 import pytest
 from _fakes import _ENGINE_REPLY, FakeClient, _model_in_out, _run_app, full_slots, slot
 
-from requivo.cli import _cmd_web, _is_file_arg, app
+from requivo.cli import _cmd_web, app
 from requivo.core import persistence as store
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import RequivoError
 from requivo.core.persistence import load_model
+from requivo.deterministic import is_file_argument
 from requivo.services.artifacts import ArtifactService
 
 
@@ -186,7 +187,7 @@ def test_the_browsable_examples_deterministic_half_matches_the_renderer():
     from contextlib import redirect_stdout
 
     from requivo.cli import _fenced_text
-    from requivo.core.analysis import _readiness_blockers
+    from requivo.core.analysis import readiness_blockers
     from requivo.core.persistence import load_model
     from requivo.paths import DEMO
     from requivo.render.terminal import DRAFT_NOTE, render_readiness
@@ -200,7 +201,7 @@ def test_the_browsable_examples_deterministic_half_matches_the_renderer():
     assessment = _fenced_text((example_dir / "solution-assessment.md").read_text(encoding="utf-8"))
     lines = assessment.splitlines()
 
-    draft = bool(_readiness_blockers(out))
+    draft = bool(readiness_blockers(out))
     expected_banner = "DRAFT DECISION BRIEF" if draft else "DECISION BRIEF"
     actual_banner = lines[1].strip()
     assert actual_banner == expected_banner, (
@@ -242,7 +243,7 @@ def test_the_leave_approval_brief_still_projects_its_own_model():
     earlier run, against an earlier layout, and its own README said so. Regenerating the example's
     whole chain from one model in one sitting is what makes the pair checkable at all.
     """
-    from requivo.core.analysis import _readiness_blockers
+    from requivo.core.analysis import readiness_blockers
     from requivo.core.contracts import Confidence
     from requivo.core.persistence import load_model
     from requivo.paths import DEMO
@@ -261,7 +262,7 @@ def test_the_leave_approval_brief_still_projects_its_own_model():
     # `- **Label** —` lines are the projection, which is what `section` selects.
     assert section("Important assumptions") == _stated(out, Confidence.inferred)
     # The draft banner is the same rule `brief_markdown` applies, from the same model.
-    draft = " — Draft: unresolved topics remain" if _readiness_blockers(out) else ""
+    draft = " — Draft: unresolved topics remain" if readiness_blockers(out) else ""
     assert brief.splitlines()[0] == f"# Decision Brief{draft}"
     assert f"**Objective:** {out.summary.objective}" in brief
 
@@ -429,24 +430,27 @@ def test_pc_discover_once_saves_model():
 def test_discover_file_check_survives_a_real_length_request():
     # A real client request is a paragraph — longer than the OS filename limit. The file-vs-text
     # heuristic must treat that as text, not crash (Path.exists() raises OSError above the limit).
+    # `is_file_argument` (moved to `deterministic/_shared.py` and shared with it by #301) is
+    # `discover`'s own file-vs-text check -- exercised here through the name `cli.py` imports it as,
+    # not re-implemented.
     long_request = "When a contract is signed we want everything to reconcile. " * 20
-    assert _is_file_arg(long_request) is False
+    assert is_file_argument(long_request) is False
 
 
 def test_discover_file_check_rejects_blank_arg():
     # Path("") resolves to the current directory, which exists — so a naive .exists() check would
     # treat a blank request as a readable file and then blow up on read_text. Blank must read as text.
-    assert _is_file_arg("") is False
-    assert _is_file_arg("   \n\t ") is False
+    assert is_file_argument("") is False
+    assert is_file_argument("   \n\t ") is False
 
 
 def test_discover_file_check_rejects_a_directory(tmp_path):
     # A directory `exists()` too. Accepting one means calling read_text() on it a line later, which
     # raises IsADirectoryError as a traceback instead of treating the argument as a request.
-    assert _is_file_arg(str(tmp_path)) is False
+    assert is_file_argument(str(tmp_path)) is False
     f = tmp_path / "request.md"
     f.write_text("Build a leave approval system.")
-    assert _is_file_arg(str(f)) is True
+    assert is_file_argument(str(f)) is True
 
 
 def test_discover_from_a_file_slugifies_its_name(tmp_path, monkeypatch):

@@ -195,7 +195,7 @@ _SWEPT_RENDERERS = {
 # reason rather than silently absent from `_SWEPT_RENDERERS` -- the same discipline
 # `_SURFACE_STORAGE_ALLOWLIST` in `tests/test_boundaries.py` already uses.
 _NON_PROSE_RENDERERS = {
-    "render_understanding": "labels are schema slot ids (via _label), not model-authored prose",
+    "render_understanding": "labels are schema slot ids (via slot_label), not model-authored prose",
     "render_readiness": "a fixed verdict string plus schema slot id labels",
     "render_next_command": "a fixed command template plus a slug and an artifact type, no model text",
     "render_usage": "the API usage ledger -- tokens, cost, latency -- never model prose",

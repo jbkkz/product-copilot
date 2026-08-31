@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from requivo.core.analysis import _label, _state_of  # noqa: E402
+from requivo.core.analysis import slot_label, state_of  # noqa: E402
 from requivo.core.contracts import Brief, EngineOutput  # noqa: E402
 from requivo.core.selectors import display_token  # noqa: E402
 from requivo.streams import configure_streams, safe_write  # noqa: E402
@@ -170,7 +170,7 @@ def consensus(models: list[EngineOutput]) -> dict:
     for sid in slot_ids:
         impacts = [str(getattr(m.model[sid].impact, "value", m.model[sid].impact))
                    for m in models if sid in m.model]
-        states = [_state_of(m.model[sid]) for m in models if sid in m.model]
+        states = [state_of(m.model[sid]) for m in models if sid in m.model]
         out["slots"][sid] = {
             "impact": _mode(impacts),
             "state": _mode(states),
@@ -184,7 +184,7 @@ def _stable_themes(models: list[EngineOutput]) -> set[str]:
     n = len(models)
     counts: Counter = Counter()
     for m in models:
-        for lab in {_label(q.slot) for q in m.questions}:
+        for lab in {slot_label(q.slot) for q in m.questions}:
             counts[lab] += 1
     return {lab for lab, c in counts.items() if c > n / 2}
 
@@ -258,7 +258,7 @@ def _cluster_headlines(per_run: list[list[str]], threshold: float = 0.4) -> dict
             else:
                 clusters.append({"words": words, "label": headline, "runs": {run_idx}})
     # `display_token` at the point provider prose becomes a *label*. Every other theme label is
-    # `_label(slot_id)` — a validated slot id through the schema's table — and this fallback is the
+    # `slot_label(slot_id)` — a validated slot id through the schema's table — and this fallback is the
     # one path where a headline is the label, so it is the one path where `golden_diff`'s
     # `assessment + challenge(s) now raised: …` can be handed a newline and write what reads as a
     # second line of the readout at column 0. Squashed where the value enters rather than at each of
@@ -293,7 +293,7 @@ def _challenge_themes(briefs: list[Brief]) -> dict[str, int]:
         for challenge in brief.challenges:
             for slot_id in challenge.contests:
                 runs_per_slot.setdefault(slot_id, set()).add(run_idx)
-    return {_label(slot_id): len(runs) for slot_id, runs in runs_per_slot.items()}
+    return {slot_label(slot_id): len(runs) for slot_id, runs in runs_per_slot.items()}
 
 
 def brief_consensus(briefs: list[Brief]) -> dict:
@@ -369,7 +369,7 @@ def movements(old: list[EngineOutput], new: list[EngineOutput]) -> dict:
                 continue
             if n_agree < majority:                     # the new runs don't even agree — pure noise
                 continue
-            entry = {"slot": _label(sid), "dim": dim, "from": o_val, "to": n_val,
+            entry = {"slot": slot_label(sid), "dim": dim, "from": o_val, "to": n_val,
                      "old_agree": o_agree, "new_agree": n_agree, "n": n_new}
             (strong if n_agree == n_new else weak).append(entry)
     return {
@@ -530,7 +530,7 @@ def _reasked_in(run: list[Turn]) -> set[str]:
     out: set[str] = set()
     for turn in run:
         if turn.index >= DEEP_TURN:
-            out |= {_label(q.slot) for q in turn.model.questions if q.slot in covered}
+            out |= {slot_label(q.slot) for q in turn.model.questions if q.slot in covered}
         # after, not before: a turn's `answered` is the reply *to* that turn's questions, so it is
         # only "already covered" from the following turn on.
         covered.update(turn.answered)
@@ -545,8 +545,8 @@ def _lost_in(run: list[Turn]) -> set[str]:
     difference between the two grounding shapes, stated as an outcome."""
     early = {s for t in run if t.index < DEEP_TURN for s in t.answered}
     final = run[-1].model.model
-    return {_label(sid) for sid in early
-            if sid not in final or _state_of(final[sid]) != "confirmed"}
+    return {slot_label(sid) for sid in early
+            if sid not in final or state_of(final[sid]) != "confirmed"}
 
 
 def _regressed_in(run: list[Turn]) -> set[str]:
@@ -556,7 +556,7 @@ def _regressed_in(run: list[Turn]) -> set[str]:
         if after.index < DEEP_TURN:
             continue
         later = after.model.model
-        out |= {_label(sid) for sid, slot in before.model.model.items()
+        out |= {slot_label(sid) for sid, slot in before.model.model.items()
                 if sid in later and later[sid].completeness < slot.completeness}
     return out
 
@@ -586,7 +586,7 @@ def unreached_layers(layers: dict[str, list[str]], runs: list[list[Turn]]) -> di
     for sid in layers:
         left = min(r.get(sid, 0) for r in per_run) if per_run else 0
         if left:
-            out[_label(sid)] = left
+            out[slot_label(sid)] = left
     return out
 
 
