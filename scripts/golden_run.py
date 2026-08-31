@@ -10,9 +10,15 @@ no sampling controls, so noise can't be pinned, only measured. See ``golden_lib`
 Workflow:
     1. baseline committed (``fixtures/golden/*.runs.json`` in HEAD)
     2. edit a prompt (``prompts/engine.md``) or add/change a context card
-    3. python scripts/golden_run.py        # re-capture the K-run baseline
+    3. python scripts/golden_run.py        # re-capture every single-pass baseline
     4. python scripts/golden_diff.py        # only changes above the noise floor are shown
     5. commit the new baseline if the change is intended
+
+A bare invocation (step 3 above) captures only **single-pass** requests and skips every
+**interactive** one, naming each skip and the command to capture it alone — an interactive request
+costs K × ``GOLDEN_TURNS`` calls on its own (15 at the defaults) and does not belong folded into a
+full-set run's cost (#276). Name the slug explicitly, or pass ``--all``, to capture it anyway; see
+``select_runs``.
 
 ``--brief`` additionally captures the **assessment** for each run — the deliverable, not just the
 discovery state. It watches the complexity verdict and the challenge headlines (what the engine chose
@@ -30,11 +36,13 @@ re-sent the whole transcript, and turns 1 and 2 are byte-identical between the t
 
 Cost: K API calls per request (default 3 × 6 single-pass requests = 18), doubled where ``--brief`` is
 on, and K × ``GOLDEN_TURNS`` for an interactive one (15 at the defaults) — so capture an interactive
-request on its own rather than as part of a full-set run. Needs ANTHROPIC_API_KEY in ``.env``.
+request on its own rather than as part of a full-set run: the bare invocation now does this by
+default, rather than only recommending it in prose. Needs ANTHROPIC_API_KEY in ``.env``.
 
 Usage:
-    python scripts/golden_run.py              # every request
-    python scripts/golden_run.py <slug>...    # only the named one(s)
+    python scripts/golden_run.py              # every single-pass request; interactive ones skipped
+    python scripts/golden_run.py <slug>...    # only the named one(s), interactive included
+    python scripts/golden_run.py --all        # every request, interactive ones included
     python scripts/golden_run.py <slug> --brief   # also capture the assessment
     GOLDEN_K=5 python scripts/golden_run.py   # override runs-per-request
     GOLDEN_TURNS=8 python scripts/golden_run.py <slug>   # override turns-per-run
@@ -166,6 +174,27 @@ def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
               f"{'; '.join(stable) or '—'}")
 
 
+def select_runs(runs: list[dict], wanted: set[str], capture_all: bool) -> tuple[list[dict], list[dict]]:
+    """Which of the parsed requests to actually capture, and which interactive ones were skipped.
+
+    A bare invocation -- no slugs named, no ``--all`` -- captures every single-pass request and
+    skips every interactive one: CLAUDE.md's own cost guidance says an interactive request
+    (K x GOLDEN_TURNS calls, 15 at the defaults) belongs in a capture of its own, never folded into
+    a full-set run, and this is what makes a bare run actually honour that rather than contradict it
+    (#276). Naming a slug explicitly, or passing ``--all``, captures interactive requests exactly as
+    before -- the skip is the bare-invocation default, not a restriction on what can be captured.
+
+    Pure and offline: no client, no network, no write. Returns ``(selected, skipped)``.
+    """
+    if wanted:
+        return [r for r in runs if r["slug"] in wanted], []
+    if capture_all:
+        return runs, []
+    selected = [r for r in runs if not is_interactive(r)]
+    skipped = [r for r in runs if is_interactive(r)]
+    return selected, skipped
+
+
 def main(argv: list[str]) -> int:
     # First, before anything can print: this script spends real API calls and writes each request's
     # baseline before it reports on it, so a glyph the console cannot encode must not be able to kill
@@ -175,13 +204,19 @@ def main(argv: list[str]) -> int:
         print(f"Missing request set: {REQUESTS}", file=sys.stderr)
         return 1
     with_brief = "--brief" in argv
-    argv = [a for a in argv if a != "--brief"]
-    runs = parse_requests(REQUESTS)
+    capture_all = "--all" in argv
+    argv = [a for a in argv if a not in ("--brief", "--all")]
+    all_runs = parse_requests(REQUESTS)
     wanted = set(argv)
     if wanted:
-        runs = [r for r in runs if r["slug"] in wanted]
-        for slug in sorted(wanted - {r["slug"] for r in runs}):
+        for slug in sorted(wanted - {r["slug"] for r in all_runs}):
             print(f"  ! unknown slug (skipped): {slug}", file=sys.stderr)
+    runs, skipped = select_runs(all_runs, wanted, capture_all)
+    for r in skipped:
+        slug = r["slug"]
+        print(f"  ! skipped {slug:<20} interactive request (K x GOLDEN_TURNS = "
+              f"{K * TURNS} calls) -- capture it on its own: "
+              f"python scripts/golden_run.py {slug}", file=sys.stderr)
     if not runs:
         print("Nothing to capture.", file=sys.stderr)
         return 1

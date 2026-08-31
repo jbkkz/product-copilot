@@ -12,7 +12,10 @@ python scripts/golden_diff.py <slug> --questions   # the questions and challenge
 ```
 
 Edit an asset → `golden_run` → `golden_diff` → commit the new baseline if the change is intended.
-`fixtures/golden/requests.md` is the fixed request set — one per problem *form*.
+`fixtures/golden/requests.md` is the fixed request set — one per problem *form*. A bare
+`golden_run.py` captures only single-pass requests; every interactive one (see below) is skipped
+by default and named, with the command to capture it alone -- pass a slug explicitly, or `--all`,
+to include it (#276).
 
 ## Two shapes of request
 
@@ -87,3 +90,13 @@ Re-capture the targeted request first and the full set only before committing a 
 harness's own logic is unit-tested in `tests/test_golden_lib.py`, its capture loop in
 `tests/test_golden_capture.py`, and what it prints — the per-lens states and the union verdict — in
 `tests/test_golden_readout.py` (no API calls in any of them).
+
+## Known stale baseline (2026-08-31)
+
+`fixtures/golden/training-budget.runs.json` is stale: its committed answer sheet predates #193's
+deepening of `training-budget`'s interactive layers in `requests.md` (2–3 layers per slot in the
+baseline, up to 10 in the current request set). `tests/test_golden_baselines.py` checks every
+committed baseline against `requests.md` and would refuse this one outright, so it is named as a
+declared exception there (`_DECLARED_DRIFT["training-budget"] = "#194"`) until the 15-call
+re-capture (K × `GOLDEN_TURNS`) lands. Read `golden_diff.py training-budget --questions` after that
+capture, and remove the exception in the same change.
