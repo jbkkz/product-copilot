@@ -676,6 +676,96 @@ def test_the_console_chokepoint_degrades_rather_than_dropping_the_glyph(tmp_path
     )
 
 
+def _seed_a_usage_bearing_session(tmp_path, monkeypatch, *, priced_as_of):
+    """A session with one revision carrying token/rate provenance (#292), written directly through
+    `core.persistence` -- no provider, no ledger, just the persisted shape `render_session_cost`
+    reads. `priced_as_of` is a list: one entry leaves `render_session_cost`'s "rates as of" stamp a
+    single date (no separator to join), two distinct entries make it a middle-dot-joined list, and
+    `None` leaves the revision unpriced entirely, which is the renderer's *other* non-ASCII branch
+    (an em dash on "no price on file"). Returns the slug."""
+    from _fakes import out as build_model
+    from _fakes import slot
+
+    from requivo.core import persistence as store
+
+    monkeypatch.chdir(tmp_path)
+    slug = "usage-bearing"
+    store.create_session(slug, "a leave approval system")
+    engine_output = build_model({"problem": slot(80, "explicit", "high")})
+    if priced_as_of is None:
+        store.save_revision(slug, engine_output, provenance={
+            "usage_input_tokens": 1000, "usage_output_tokens": 200,
+            "usage_cache_read_tokens": 0, "usage_cache_write_tokens": 0,
+        })
+    else:
+        for i, date in enumerate(priced_as_of):
+            tokens = ({"usage_input_tokens": 1000, "usage_output_tokens": 200} if i == 0
+                     else {"usage_input_tokens": 500, "usage_output_tokens": 100})
+            store.save_revision(slug, engine_output, provenance={
+                **tokens, "usage_rate_per_mtok": [2.0, 10.0], "usage_priced_as_of": date,
+            })
+    return slug
+
+
+@pytest.mark.parametrize("scenario,priced_as_of,glyph", [
+    ("unpriced", None, "—"),                          # em dash: "n/a — no price on file"
+    ("multi_dated", ["2026-01-01", "2026-06-01"], "·"),  # middle dot: "... as of X · Y"
+])
+def test_requivo_status_survives_a_console_that_cannot_encode_the_session_cost_line(
+    scenario, priced_as_of, glyph, tmp_path, monkeypatch
+):
+    """#292, found in audit on this branch. `render_session_cost` prints an em dash (a revision with
+    no price on file) or a middle dot (revisions priced under two different rate-table dates) -- the
+    identical non-ASCII pattern that needed this whole file's guard for `render_usage`. Its one call
+    site is dispatched inside `_cmd_status`, through `app()`'s own `configure_streams()`-protected
+    entry point, same as `doctor`/`schema`/`demo` above -- so this is that same sweep, extended to the
+    one verb whose crash-worthy content only exists once a session actually carries usage provenance.
+
+    **Discriminating, not merely surviving**: asserting only `returncode == 0` would also pass if the
+    session were never usage-bearing at all (`render_session_cost` returns immediately on an
+    unpriced-free session, per its own early return) -- exactly the vacuous case this repo keeps
+    finding in itself. The escaped glyph is asserted present in stdout, which only happens if
+    `render_session_cost` actually ran and actually emitted the non-ASCII content -- see
+    `test_render_session_cost_alone_raises_on_a_stream_nothing_can_fix` immediately below for the
+    positive control proving that content really is unencodable outside this guarded dispatch."""
+    slug = _seed_a_usage_bearing_session(tmp_path, monkeypatch, priced_as_of=priced_as_of)
+    r = _cli(["status", slug], _ASCII_CONSOLE, tmp_path)
+    detail = r.stderr.decode("ascii", "backslashreplace")
+    assert b"UnicodeEncodeError" not in r.stderr, (
+        f"`requivo status` died rendering the SESSION COST line ({scenario}) on a console that "
+        f"cannot encode its glyphs: {detail}"
+    )
+    assert r.returncode == 0, detail
+    text = r.stdout.decode("ascii", "strict")  # it must be pure ascii on an ascii console
+    assert "SESSION COST" in text, (
+        f"render_session_cost never ran for the {scenario} scenario -- the sweep proved nothing "
+        f"about it. stdout: {text}"
+    )
+    escaped = glyph.encode("ascii", "backslashreplace").decode("ascii")
+    assert escaped in text, (
+        f"the {scenario} glyph was dropped rather than escaped, or the guarded path never reached "
+        f"it. Expected {escaped!r} in: {text}"
+    )
+
+
+def test_render_session_cost_alone_raises_on_a_stream_nothing_can_fix(tmp_path, monkeypatch):
+    """The positive control the test above depends on: called directly -- outside `_cmd_status`,
+    outside `app()`'s `configure_streams()` reconfigure, outside every guard -- against a stream that
+    genuinely cannot be made safe (`_unconfigurable_stdout`, this file's own fixture for "the last
+    line of defence has nothing left to stand on"), `render_session_cost`'s em dash really does raise
+    `UnicodeEncodeError`. Without this, the sweep test above proving "no crash" would be unfalsifiable
+    -- passing whether or not the renderer's content is actually dangerous."""
+    slug = _seed_a_usage_bearing_session(tmp_path, monkeypatch, priced_as_of=None)
+    from requivo.render.terminal import render_session_cost
+    from requivo.services.sessions import SessionService
+
+    revisions = SessionService().repo.read_meta(slug).revisions
+    stream = _unconfigurable_stdout()
+    monkeypatch.setattr(sys, "stdout", stream)
+    with pytest.raises(UnicodeEncodeError):
+        render_session_cost(revisions)
+
+
 # --------------------------------------------------------------------------------------------------
 # The chokepoint's own three states. `doctor` reports these, and a state that is only ever produced
 # by an environment no test can reach is a state nobody has checked.
