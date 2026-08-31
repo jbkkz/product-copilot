@@ -111,6 +111,35 @@ The promise is additive, not a freeze: nothing here says an output may never gai
 says is that a populated field will not quietly change meaning, and that a change of shape is
 announced. That is cheap to keep for fifteen outputs and was never the expensive half.
 
+**What "public" means for a payload, in one testable sentence: a payload's top-level key set, and
+the JSON types of those values, are the contract.** Removing a top-level key, renaming one, or
+changing the type a key holds is breaking, and needs a row in the ledger below. Adding one is free,
+and still gets a row, because every additive change on this page already has one.
+
+Nested shapes are deliberately outside that sentence. The behavioural tests exercise the fields that
+carry weight, and a contract reaching two levels down would be a restatement of the code rather than
+a promise about it.
+
+`test_every_public_json_payload_keeps_its_recorded_top_level_shape` is what stops that being a
+sentence, and it is a *second* guard rather than a widening of the first: the one above
+(`test_every_json_verb_is_inside_the_promise`) checks that this page names every verb, which is
+membership and says nothing about what a verb prints. The new one runs each of the fifteen against a
+fixture workspace and compares the top level of what it printed with a recorded key-and-type table.
+The two failure directions are reported separately, because they are not the same event — a key that
+vanished or changed type is a break, and a key that appeared wants one line added to the record.
+
+Why membership alone was not enough: four of the breaking changes below (#87, #84, #88, #107)
+shipped in the 1.0.0 release alone. All four were deliberate and all four are correctly recorded
+here, because somebody audited this surface by hand while the 1.0 contract was being cut — which is
+the point rather than a mitigation. Nothing in the tree would have gone red if a fifth had been made
+by accident, or made deliberately and its row forgotten.
+
+**One payload on this page is conditional, and nothing said so until now.** `requivo status --json`
+carries `slug`, `readiness`, `understanding`, `questions`, `summary` and `remaining_gaps` always;
+`revision`, `context_cards` and `artifacts` are layered on **only when the reference resolves to a
+canonical session**, because a bare `model.json` has no session to read them from. Both forms are
+public and both are pinned. A consumer that passes a file path must not read the three.
+
 **A code carries one fact, and one `details` shape.** That is what makes the advice above safe to
 follow: matching a code and then reading a key out of `details` has to work for every payload
 carrying it. Two changes in 0.10.0 were needed to make it true.
@@ -622,6 +651,15 @@ section appear to contain a surface with no verdict in a section that says each 
 flow — so declaring it unstable would contradict the code that declares it stable. Changing the shape
 of `epic` inside it is breaking; the escape hatch is `version`, and bumping it is itself breaking and
 announced here.
+
+The same rule as the `--json` payloads applies inside it, one level deeper because this envelope has
+one: the key skeleton of the envelope, of the `epic` object, and of each entry in `issues` is the
+contract. `test_the_epic_export_skeleton_is_pinned_to_its_version` records that skeleton **per
+version number**, so changing a key is red until `EPIC_EXPORT_VERSION` moves and the new number gets
+a skeleton of its own beside the old one. Until #267 the only assertion on this envelope compared
+`version` with the constant it was read from, which is true whatever the keys are — a version number
+nothing forced to move, on the one payload whose stated consumer lives outside this repository and
+cannot be grepped for breakage.
 
 The **tracker plans** from `--github` and `--gitlab` are stable in the same way, with one asymmetry
 worth stating: they describe somebody else's API. A change we make to their shape is breaking. A
