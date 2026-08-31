@@ -9,7 +9,7 @@
   },
   "homepage": "https://requivo.com",
   "repository": "https://github.com/jbkkz/requivo",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "requirements",
     "discovery",

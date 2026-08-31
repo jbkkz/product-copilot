@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/requivo)](https://pypi.org/project/requivo/)
 [![Python](https://img.shields.io/pypi/pyversions/requivo)](https://pypi.org/project/requivo/)
 [![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml?query=branch%3Amain)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)][license]
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)][license]
 
 > Find what could change the solution before you commit to the scope.
 
@@ -235,10 +235,10 @@ authorship.
 ## Contributing and license
 
 Contributions are welcome — see [CONTRIBUTING.md][contributing]. The Core, CLI and Claude Code
-integration are open source under [MIT][license]. The Requivo **name and identity** are separate from
+integration are open source under [Apache-2.0][license]. The Requivo **name and identity** are separate from
 the code license — see [TRADEMARKS.md][trademarks].
 
-[MIT][license] © jbkkz
+[Apache-2.0][license] © jbkkz
 
 > _Requivo was previously named Product Copilot._
 

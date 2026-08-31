@@ -8,13 +8,13 @@ version = "1.3.0"
 description = "Turn a vague product request into a versioned requirements model: ask only the questions that change the solution, generate the brief and PRD from it, and compute exactly what a changed answer invalidates."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 keywords = ["requirements", "product", "llm", "anthropic", "claude", "prd", "discovery", "elicitation"]
 authors = [{ name = "jbkkz" }]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -135,12 +135,15 @@ Changelog = "https://github.com/jbkkz/requivo/blob/main/CHANGELOG.md"
 requivo = "requivo.cli:app"
 
 [tool.setuptools]
-# THIRD-PARTY-NOTICES.md rides along with the license into the wheel's dist-info. The wheel carries a
-# verbatim copy of htmx, and a redistributed file should be traceable to its source and version even
-# though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather than PEP 639's
-# `[project] license-files`, which would raise the build-time setuptools floor and the metadata version
-# for no gain here.
-license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+# NOTICE and THIRD-PARTY-NOTICES.md ride along with the license into the wheel's dist-info. NOTICE is
+# not decoration: Apache-2.0 section 4(d) requires a redistribution to carry the NOTICE file, and a
+# wheel is a redistribution, so omitting it here would put every `pip install` out of compliance with
+# the licence this file declares. THIRD-PARTY-NOTICES.md is here for a different reason — the wheel
+# carries a verbatim copy of htmx, and a redistributed file should be traceable to its source and
+# version even though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather
+# than PEP 639's `[project] license-files`, which would raise the build-time setuptools floor and the
+# metadata version; whether that trade-off still binds is #337, deliberately not settled here.
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

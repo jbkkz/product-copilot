@@ -2,7 +2,7 @@
 
 This document explains how Requivo is distributed: what is open source today and what is deliberately
 kept private. It is a **product and distribution** document, not a legal one — the code license is
-[MIT](../LICENSE), and the trademark boundary is in [TRADEMARKS.md](../TRADEMARKS.md).
+[Apache-2.0](../LICENSE), and the trademark boundary is in [TRADEMARKS.md](../TRADEMARKS.md).
 
 ## Why open source
 
@@ -65,7 +65,7 @@ like* lives. Nothing in Lab is published automatically (see the data boundary be
 
 ## The public / private boundary
 
-| Concern | Public (MIT) | Private |
+| Concern | Public (Apache-2.0) | Private |
 |---|---|---|
 | Reasoning engine, schema, validation | ✅ | — |
 | CLI, Claude Code plugin, local Web, generic providers | ✅ | — |
@@ -103,7 +103,18 @@ it — which is why the service layer holds the integrity rules instead of the i
 
 ## License and trademark
 
-The code is MIT ([LICENSE](../LICENSE)) and stays MIT — including the local Web interface. A move to a
-different license (e.g. AGPL) would be a separate, explicit decision, never automatic; none is planned.
-The **Requivo name and identity** are separate from the code license; see
+The code is under the [Apache License 2.0](../LICENSE), including the local Web interface. That is a
+decision taken, recorded here rather than promised forever: it grants use, modification,
+redistribution, self-hosting and commercial use, and it adds an explicit patent grant that MIT, the
+licence up to v1.3.0, did not. Any future move would be a separate, explicit decision, never
+automatic; none is planned.
+
+Apache-2.0 also lets **third parties host Requivo as a service**, and that is accepted rather than
+worked around. A future Requivo Cloud would be sold on the hosting itself — operations, updates,
+storage, backups, availability, security, easier configuration, possibly collaboration and support —
+never on a core held back from this repository. A licence that restricted commercial hosting would
+buy protection at the cost of the thing this document opens with, and the trade is refused.
+
+What is protected separately is the **name**: the Requivo identity is not covered by the code
+licence, and Apache-2.0 section 6 says as much in its own words. See
 [TRADEMARKS.md](../TRADEMARKS.md).
