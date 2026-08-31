@@ -40,7 +40,7 @@ updates:
       # Two groups rather than one: a dev-tooling bump is a change to how the repo is checked and a
       # runtime bump is a change to what a user installs, and they are not reviewed the same way.
       # Add newly added runtime dependencies to the runtime list, as nothing enforces it automatically.
-      # A new dependency added to pyproject.toml and not to this file lands in the dev-tooling group silently.
+      # A new dependency added to pyproject.toml and not to this file matches neither group and gets its own individual PR.
       dev-tooling:
         patterns:
           - "pytest"
@@ -49,6 +49,7 @@ updates:
           - "tomli"
           - "packaging"
           - "httpx"
+          - "setuptools"
       runtime:
         patterns:
           - "python-dotenv"
