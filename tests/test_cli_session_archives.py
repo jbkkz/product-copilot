@@ -526,7 +526,7 @@ def test_a_failed_forced_replacement_puts_the_original_back(workspace, tmp_path,
 def _paused_between_the_writes(monkeypatch, slug: str, at_the_gate, release):
     """Freeze `save_revision` on `slug` between its file writes and its metadata write.
 
-    That gap is where the damage lands: model.json and revisions/NNNN-model.json are already on
+    That gap is where the damage lands: revisions/NNNN-model.json and model.json are already on
     disk, `session.json` is about to be written through a freshly resolved `canonical_dir(slug)`,
     and the lock is held across the whole of it. Patching `write_meta` rather than sleeping keeps
     the window deterministic on every leg instead of timing-dependent on the slow ones."""
