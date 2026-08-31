@@ -46,6 +46,7 @@ from requivo.render.terminal import (
     render_estimate,
     render_impact,
     render_next_command,
+    render_session_cost,
     render_stale,
     render_stories,
     render_turn,
@@ -556,6 +557,15 @@ def _cmd_status(a, client) -> None:
         print(json.dumps(payload, indent=2))
         return
     render_turn(out)
+    # A cumulative "what has this session cost so far" line, from the token/rate provenance stamped
+    # onto each provider-backed revision (#292) -- silent when nothing on the session carries one, so
+    # a bare model.json (no `slug` in the payload) or a session applied entirely through Claude Code
+    # prints nothing rather than a misleading $0.00.
+    slug = payload.get("slug")
+    if slug:
+        svc = SessionService()
+        if svc.exists(slug):
+            render_session_cost(svc.meta(slug).revisions)
     render_next_command(payload)
 
 

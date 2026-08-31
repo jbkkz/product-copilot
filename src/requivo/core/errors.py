@@ -425,9 +425,22 @@ class ImportDestinationOccupiedError(RequivoError):
 
 
 class SessionLockedError(RequivoError):
-    """Another writer holds the session lock and did not release it within the timeout. Distinct from
-    `RevisionConflictError`: nothing raced to a conclusion here, the write never got to start, so
-    retrying it unchanged is the correct response."""
+    """Raised from two distinct lock sites, both answering "the write never got to start, so
+    retrying it unchanged is the correct response" — distinct from `RevisionConflictError`, where
+    something *did* race to a conclusion.
+
+    `core.persistence.session_lock` raises it after a genuine writer holds the session's write lock
+    for the full `_LOCK_TIMEOUT_SECONDS` (30s) poll-and-retry window.
+
+    `services.discovery._discovery_guard` raises it too, for a materially different circumstance
+    (#209, found in review): a *second, concurrent first-discovery call* on the same session, refused
+    immediately and non-blockingly (no retry, no timeout) rather than after any wait, against its own
+    lock file (`.requivo/locks/<slug>.discovering`), never the session's write lock. Reused rather
+    than given a code of its own because the fact it states — nothing about the caller's own request
+    was wrong, and resubmitting once the other side finishes is the correct next step — is identical
+    to the write-lock case; a reader who branches on this code should read the message for which of
+    the two it is, the same discipline `docs/compatibility.md` already asks for the family whose
+    `details` shape varies under one code."""
 
     code = "session_locked"
 
@@ -439,3 +452,20 @@ class ProviderOutputError(RequivoError):
     surface as a bare traceback."""
 
     code = "provider_output_invalid"
+
+
+class ArtifactWriteFailedError(RequivoError):
+    """A generated artifact's content was produced — paid for, on every path that raises this — and
+    the write meant to record it failed at the filesystem: a full disk, a permissions error, or any
+    other `OSError` `_atomic_write` did not itself turn into a structured refusal (#208).
+
+    Raised at the one seam that turns "the write raised" into a clean, structured message instead of
+    a bare traceback surfacing out from under a paid provider call. The content itself is not
+    recoverable from here — it was never handed back to a caller that could retry the save on its
+    own — so the honest remedy is "regenerate", not a guess at what a partial write left behind.
+    `details`: `{slug, type, path, cause}` — `path` is the resolved target through the same
+    `artifact_path` chokepoint every successful write's own printed path goes through, `None` only
+    when `artifact_type` itself is not one this build's `ARTIFACT_FILENAMES` knows.
+    """
+
+    code = "artifact_write_failed"

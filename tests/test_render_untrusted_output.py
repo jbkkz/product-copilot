@@ -200,6 +200,8 @@ _NON_PROSE_RENDERERS = {
     "render_next_command": "a fixed command template plus a slug and an artifact type, no model text",
     "render_usage": "the API usage ledger -- tokens, cost, latency -- never model prose",
     "render_stale": "artifact filenames from ARTIFACT_FILENAMES and schema slot labels, no model text",
+    "render_session_cost": "token counts, a cost estimate and pricing.py's own rate-table dates -- "
+                           "the per-session sibling of render_usage, never model prose",
 }
 
 

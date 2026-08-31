@@ -177,6 +177,65 @@ def render_usage(ledger: UsageLedger) -> None:
     print(f"  {'Est. cost':<11} ~${cost:.3f}   ({model} — estimate{stamp})")
 
 
+def render_session_cost(revisions: list) -> None:
+    """The cumulative cost of every provider-backed apply a session has made so far, from the
+    token/rate provenance `RevisionRecord` carries per revision (#292) -- `render_usage`'s three-state
+    shape (exact tokens, a labelled estimate, or "no price on file"), applied across a session's whole
+    history rather than one run.
+
+    `revisions` is `SessionMeta.revisions` — passed as a plain list rather than importing the type,
+    so this stays a projection over data the caller already holds, the same shape every other
+    renderer in this module takes.
+
+    Silent when no revision carries usage: an old session, one applied entirely through Claude Code
+    (which spends no API tokens), or a workspace that never opened a `track_usage()` scope around the
+    calls that produced it. Never `$0.00` -- invariant 6's rule about provenance, applied across a
+    session instead of one call.
+
+    **Partial by construction, and the printed line says so (#292, found in review).** Only a
+    provider-backed *model apply* creates a `RevisionRecord` at all -- `prd`/`criteria`/`epic`/
+    `release` are real, billed `provider.generate()` calls that produce no revision (they save an
+    artifact, not a model change) and so have no `RevisionRecord` to carry usage on. A session that
+    ran those after discovering would otherwise see a "SESSION COST" figure quietly undercounting its
+    real spend with no visible sign anything was left out; the parenthetical on the header line is
+    what keeps the number honest about what it does and does not cover. Stamping those calls' spend
+    too is a real, reachable gap -- it needs `ArtifactStatus` to grow the same fields `RevisionRecord`
+    just did, which is its own change."""
+    priced_revisions = [r for r in revisions if r.usage_input_tokens is not None]
+    if not priced_revisions:
+        return
+    input_tokens = sum(r.usage_input_tokens or 0 for r in priced_revisions)
+    output_tokens = sum(r.usage_output_tokens or 0 for r in priced_revisions)
+    cache_read = sum(r.usage_cache_read_tokens or 0 for r in priced_revisions)
+    cache_write = sum(r.usage_cache_write_tokens or 0 for r in priced_revisions)
+    total = 0.0
+    fully_priced = True
+    as_of: list[str] = []
+    for r in priced_revisions:
+        if r.usage_rate_per_mtok is None:
+            fully_priced = False
+            continue
+        in_rate, out_rate = r.usage_rate_per_mtok
+        total += ((r.usage_input_tokens or 0) * in_rate
+                  + (r.usage_cache_read_tokens or 0) * in_rate * 0.1
+                  + (r.usage_cache_write_tokens or 0) * in_rate * 1.25
+                  + (r.usage_output_tokens or 0) * out_rate) / 1_000_000
+        if r.usage_priced_as_of and r.usage_priced_as_of not in as_of:
+            as_of.append(r.usage_priced_as_of)
+    processed = input_tokens + cache_read + cache_write
+    plural = "s" if len(priced_revisions) != 1 else ""
+    print(f"\nSESSION COST  (cumulative, {len(priced_revisions)} revision{plural} -- excludes prd/"
+         "criteria/epic/release generation, which is not a revision)")
+    cached = f"  ({cache_read:,} served from cache)" if cache_read else ""
+    print(f"  {'Input':<11} {processed:,} tokens{cached}")
+    print(f"  {'Output':<11} {output_tokens:,} tokens")
+    if not fully_priced:
+        print(f"  {'Est. cost':<11} n/a — some revisions have no price on file (tokens above are exact)")
+        return
+    stamp = f", rates as of {' · '.join(as_of)}" if as_of else ""
+    print(f"  {'Est. cost':<11} ~${total:.3f}   (estimate{stamp})")
+
+
 def render_brief(out: EngineOutput, brief: Brief) -> None:
     """The deliverable: a two-tier decision brief — an executive summary a PM reads in seconds, then
     the full analysis below (including what to *challenge*, not just what was learned). Written in a
