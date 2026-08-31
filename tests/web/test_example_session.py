@@ -21,10 +21,10 @@ from __future__ import annotations
 import json
 
 import pytest
-from requivo.web.example import EXAMPLE_SLUG, example_proposal, example_request, seed_example
 
 from requivo.core.persistence import canonical_dir, list_session_slugs
 from requivo.services.sessions import SessionService
+from requivo.web.example import EXAMPLE_SLUG, example_proposal, example_request, seed_example
 from requivo.web.viewmodels.labels import EXAMPLE_BADGE
 from tests.web.conftest import full_model
 
