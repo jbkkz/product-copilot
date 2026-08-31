@@ -336,7 +336,23 @@ def lock_path(slug: str) -> Path:
     dot segment unrepresentable; `is_contained` is the belt to that pair of braces, and it is the
     one shared statement of that rule rather than a fourth local one."""
     root = lock_root()
-    p = root / (validate_slug(slug) + ".lock")
+    slug = _slug_shape(slug)
+    # Checked against the *session* root, never against `root` above (#372). A lock file is not
+    # itself a session, and what decides whether #221's refusal still applies is whether a session
+    # already claims this name -- not whether a `<slug>.lock` file happens to, which it never does on
+    # a first lock. Without this, taking the read-consistency lock `session export` holds would be
+    # the one thing standing between an already-on-disk reserved name and the data filed under it,
+    # even though locking creates nothing under that name.
+    #
+    # `<slug>.lock` is itself a reserved-stem-shaped name on Windows -- `con.lock` matches the same
+    # before-the-first-dot rule `validate_filename` enforces for artifact names (raised in review).
+    # Not a live gap: the precondition for reaching this line at all is a session already occupying
+    # `slug` on disk, and Windows's own `CreateDirectory` refuses to *materialize* a directory named
+    # `con` in the first place -- independent of anything this file does, and true before #221 ever
+    # shipped. So a reserved-named session cannot exist on a real Windows filesystem for this branch
+    # to be reached from, which is also why the sibling tests that build one are POSIX-only.
+    _refuse_new_reserved_slug(slug, session_root() / slug)
+    p = root / (slug + ".lock")
     if not is_contained(p, root):
         raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
                                details={"slug": slug})
@@ -369,15 +385,18 @@ def session_lock(slug: str) -> Iterator[None]:
 
     **The check before the open stays, and is deliberately not authoritative.** It buys one thing
     and decides nothing: a slug with no session refuses without leaving an empty lock file behind.
-    A reserved Windows device name (`con`, `nul`, `lpt1`) never reaches this far in the first place —
-    `session_exists` resolves through `canonical_dir`, which calls `validate_slug`, and that now
-    refuses such a slug directly (#221, `test_reserved_windows_device_names_are_refused_as_slugs`)
-    rather than being caught here by `os.open` failing on a console handle. It can be wrong in
-    exactly one direction — `_swap_in` holds this lock across two renames and `<root>/<slug>` does
-    not exist for the microseconds between them, so a caller sampling that instant refuses
-    `session_not_found` about a session that is merely being replaced. That window is the one the
-    pre-#113 code already had at its `os.open`, and a refusal is the safe direction: this check can
-    decline a lock, never grant one.
+    A reserved Windows device name (`con`, `nul`, `lpt1`) never reaches this far when nothing already
+    exists under it — `session_exists` resolves through `canonical_dir`, which refuses a genuinely
+    *new* one exactly as before (#221, `test_reserved_windows_device_names_are_refused_as_slugs`).
+    One that already exists on disk *does* reach this far, deliberately (#372): `session_exists`
+    answers True for it, and `lock_path` applies the identical existing-session exception, so a verb
+    like `session export` — which locks for read-consistency rather than to write anything new — can
+    still take this lock for data that predates #221's refusal rather than being blocked by it. It
+    can be wrong in exactly one direction — `_swap_in` holds this lock across two renames and
+    `<root>/<slug>` does not exist for the microseconds between them, so a caller sampling that
+    instant refuses `session_not_found` about a session that is merely being replaced. That window is
+    the one the pre-#113 code already had at its `os.open`, and a refusal is the safe direction: this
+    check can decline a lock, never grant one.
 
     Neither the lock file nor a session directory is ever removed here. Unlinking a lock file a
     concurrent process may be holding is legal on POSIX and silently breaks mutual exclusion — the
@@ -716,6 +735,11 @@ _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 # `com0`/`lpt0` and a bare `com`/`lpt`/`console` etc. are deliberately absent -- only `com1`-`com9`
 # and `lpt1`-`lpt9` are reserved devices, and a check wider than the real set is the kind of guard
 # that refuses a name nobody needed refused.
+#
+# This refuses *creation* -- a name nothing yet occupies. A session already on disk under a reserved
+# name (from before this shipped, or from a platform that never refused it) is data rather than a
+# request to make anything, and reading it is a narrower, conditional exception -- see
+# `_refuse_new_reserved_slug` (#372).
 _RESERVED_DEVICE_NAMES = frozenset(
     {"con", "prn", "aux", "nul"}
     | {f"com{n}" for n in range(1, 10)}
@@ -733,21 +757,25 @@ def _reserved_stem(name: str) -> bool:
     return stem.lower() in _RESERVED_DEVICE_NAMES
 
 
-def validate_slug(slug: str) -> str:
-    """Return `slug` if it is a safe session identifier, else raise `InvalidSlugError`. Lives in Core
-    so every surface (CLI, provider, a future web service) inherits the same directory-traversal guard,
-    not just FastAPI. Belt-and-suspenders: callers additionally confirm the resolved path stays under
-    the root, but the pattern alone already makes a separator or dot segment unrepresentable."""
+def _raise_reserved_slug(slug: str) -> None:
+    """The one wording for "this slug is a reserved Windows device name" -- shared by `validate_slug`
+    (which raises it unconditionally) and `_refuse_new_reserved_slug` (which raises it only when
+    nothing already claims the name, #372), so the two paths cannot drift into two different
+    sentences for what is, from the caller's side, the identical refusal."""
+    raise InvalidSlugError(
+        f"invalid session slug {slug!r}: {slug.lower()!r} is a reserved Windows device name and "
+        "cannot be created as a directory there",
+        details={"slug": slug})
+
+
+def _slug_shape(slug: str) -> str:
+    """Pattern and length -- the parts of slug validity that hold regardless of what is already on
+    disk. `validate_slug` layers the reserved-device-name refusal on top of this unconditionally;
+    `_child_of` and `lock_path` layer a *conditional* version of it instead (#372, see
+    `_refuse_new_reserved_slug`)."""
     if not isinstance(slug, str) or not _SLUG_RE.match(slug):
         raise InvalidSlugError(
             f"invalid session slug {slug!r}; expected kebab-case [a-z0-9-], e.g. 'leave-approval'",
-            details={"slug": slug})
-    # A slug never carries a dot (the pattern above forbids it), so this is a whole-slug check --
-    # see `_reserved_stem` and #221.
-    if _reserved_stem(slug):
-        raise InvalidSlugError(
-            f"invalid session slug {slug!r}: {slug.lower()!r} is a reserved Windows device name and "
-            "cannot be created as a directory there",
             details={"slug": slug})
     # Length is part of validity, not a separate concern: an over-long slug is a directory name the
     # filesystem rejects, and it fails deep inside a write as an OSError instead of at the boundary.
@@ -757,6 +785,49 @@ def validate_slug(slug: str) -> str:
             f"session slug is {len(slug)} characters; the maximum is {MAX_SLUG_LENGTH}",
             details={"slug": slug[:MAX_SLUG_LENGTH], "length": len(slug),
                      "max_length": MAX_SLUG_LENGTH})
+    return slug
+
+
+def _refuse_new_reserved_slug(slug: str, existing_check: Path) -> None:
+    """Refuse a reserved Windows device name (#221) unless something already occupies
+    `existing_check` -- the creation/read split #372 draws. `canonical_dir` reaches this through
+    `_child_of` with `existing_check` set to the very directory a caller is naming, so a genuinely
+    *new* reserved slug is refused exactly as strictly as before: nothing is there yet, `_probe`
+    answers False, and the refusal fires -- #221's guarantee that a fresh 'con' directory is never
+    materialized, on any platform, is unweakened.
+
+    What changes is a name a session already occupies on disk: created before #221 shipped, carried
+    over from a platform that never refused it, or simply read again on the machine that made it. That
+    is data, not a request to create anything, and letting the read through is what stops it being
+    stranded behind the very guard meant to keep it *portable* -- exactly what #221's own changelog
+    and `docs/compatibility.md` already claimed was the behaviour (#372).
+
+    Routed through `_probe` rather than a bare `.exists()` so the third answer stays a third answer:
+    a stat this cannot make (`EACCES`) surfaces as `SessionUnreadableError` -- the real problem --
+    instead of this function silently picking a side of a question nobody could actually decide."""
+    if _reserved_stem(slug) and not _probe(existing_check, slug):
+        _raise_reserved_slug(slug)
+
+
+def validate_slug(slug: str) -> str:
+    """Return `slug` if it is a safe session identifier, else raise `InvalidSlugError`. Lives in Core
+    so every surface (CLI, provider, a future web service) inherits the same directory-traversal guard,
+    not just FastAPI. Belt-and-suspenders: callers additionally confirm the resolved path stays under
+    the root, but the pattern alone already makes a separator or dot segment unrepresentable.
+
+    **The reserved-device-name refusal here is unconditional, on purpose** (#372). This is the
+    strict, creation-time check: a caller who *names* a slug directly -- an explicit `--slug`, a web
+    form field, the slug `session import` derives from an archive's own top-level directory -- is
+    asking to create or address one deliberately, and gets the same refusal whether or not anything
+    already exists on disk under that name. `_child_of` (via `canonical_dir`) and `lock_path` are
+    where an *existing* session earns a narrower, read-only exception instead; see
+    `_refuse_new_reserved_slug`. Widening this function would also widen every one of those creation
+    paths, which is exactly what must not happen."""
+    slug = _slug_shape(slug)
+    # A slug never carries a dot (the pattern above forbids it), so this is a whole-slug check --
+    # see `_reserved_stem` and #221.
+    if _reserved_stem(slug):
+        _raise_reserved_slug(slug)
     return slug
 
 
@@ -914,8 +985,18 @@ def is_contained(child: Path, parent: Path) -> bool:
 def _child_of(root: Path, slug: str) -> Path:
     """`root / slug`, having validated the slug and confirmed the result is genuinely a child of
     `root` — the defence-in-depth check the traversal guard is built around. `is_contained` carries
-    the reasoning for both halves of that confirmation, and for why it is one function."""
-    d = root / validate_slug(slug)
+    the reasoning for both halves of that confirmation, and for why it is one function.
+
+    **The reserved-device-name refusal is conditional here, and `validate_slug` itself stays
+    unconditional** (#372). `canonical_dir` — built on this function — is exactly what
+    `create_session` calls, so a genuinely new reserved slug is refused exactly as strictly as
+    before: `_refuse_new_reserved_slug` probes the very directory about to be created, finds
+    nothing there, and refuses. What changes is a name a session already occupies: it reads through
+    instead of being refused a second time on every access after the one that (rightly) refused its
+    creation."""
+    slug = _slug_shape(slug)
+    d = root / slug
+    _refuse_new_reserved_slug(slug, d)
     if not is_contained(d, root):
         raise InvalidSlugError(f"slug {slug!r} does not resolve to a path inside the session root",
                                details={"slug": slug})
@@ -1491,9 +1572,12 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     `_scan_session_root`, one root over.
 
     **A `<slug>.lock` regular file is the only thing this store ever writes here.** `lock_path`
-    joins `lock_root()` with `validate_slug(slug) + ".lock"`, so anything else under this root —
-    a stray file with a different name, a directory, a symlink at a `.lock` name — did not come
-    from `session_lock` and is reported as `unexpected` rather than folded into the lock count.
+    joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always, and the
+    reserved-device-name refusal only when nothing already occupies the matching *session* name
+    (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
+    against `session_root()`, not this root) -- so anything else under this root — a stray file with
+    a different name, a directory, a symlink at a `.lock` name — did not come from `session_lock`
+    and is reported as `unexpected` rather than folded into the lock count.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
 

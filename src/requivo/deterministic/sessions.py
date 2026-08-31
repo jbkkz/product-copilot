@@ -392,21 +392,54 @@ def _cmd_session_migrate(a, client) -> None:
     legacy `model.json` (unrelated to this migration, or itself a symptom of an interrupted write of
     some other kind), and it sat outside any per-slug guard: an unreadable canonical session for an
     already-occupied legacy slug aborted the whole pass exactly the way the unparseable-legacy-model
-    case did before this issue was filed. It is wrapped the same way `migrate_legacy` is below."""
+    case did before this issue was filed. It is wrapped the same way `migrate_legacy` is below.
+
+    **Wrapping `read_meta` alone was not the whole of that isolation, and shipped believing it was**
+    (#371). `repo.request_text(slug)` and `_legacy_request_text(root / slug)` — the two reads that
+    decide `interrupted` vs. `skipped` once `read_meta` has succeeded — each do their own
+    `p.exists()` + `p.read_text(encoding="utf-8")`, outside the `try` above them, in the version that
+    shipped in 2.0.0. Neither `UnicodeDecodeError` nor an `EACCES` `Path.exists()` re-raises is a
+    `RequivoError`, so an undecodable legacy `request.md` escaped this guard exactly the way an
+    unparseable `model.json` used to: a raw traceback, no receipt printed at all, and a healthy
+    session sorted after the bad one in the same sweep neither migrated nor reported. Both reads are
+    inside the same `try` now, widened to `(RequivoError, OSError, UnicodeDecodeError)`."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
     migrated, skipped, interrupted, errors = [], [], [], []
     repo = SessionService().repo
     for slug in slugs:
-        if repo.exists(slug):
+        try:
+            # `repo.exists(slug)` itself belongs inside a per-slug guard, not only the reads past it
+            # (found in review of this same change, #371). It resolves through `canonical_dir`, and
+            # since #372 that can refuse a *legacy-only* slug that is a reserved Windows device name
+            # (`con`, `nul`, ...) with no canonical counterpart yet -- correctly, migrating one would
+            # be `create_session` materializing a brand-new reserved-name directory, which invariant
+            # 11 and #221 both say must stay refused. What must not happen is that refusal escaping
+            # this loop uncaught: with no canonical session to read `meta` from, the exception fired
+            # here, before the `try` a few lines down was ever reached, aborting the whole pass with
+            # no receipt -- the identical shape #371 closed for the two reads past this check.
+            occupied = repo.exists(slug)
+        except RequivoError as e:
+            errors.append({"slug": slug, "error": str(e)})
+            continue
+        if occupied:
             try:
                 meta = repo.read_meta(slug)
-            except RequivoError as e:
+                # Both reads that decide `interrupted` vs. `skipped` belong inside the same try as
+                # `read_meta` above -- #371. `repo.request_text` and `_legacy_request_text` each do
+                # their own `p.exists()` + `p.read_text(encoding="utf-8")`, and neither
+                # `UnicodeDecodeError` nor an `EACCES` `Path.exists()` re-raises is a `RequivoError`,
+                # so a legacy `request.md` that is not valid UTF-8 (or unreadable) used to escape this
+                # per-slug guard entirely: a raw traceback, no receipt printed at all, and every slug
+                # sorted after the bad one -- however many had already migrated -- silently unreported.
+                # This is invariant 15's own class, one read below where #262 already closed it once.
+                is_interrupted = (meta.current_revision == 0
+                                   and repo.request_text(slug) == _legacy_request_text(root / slug))
+            except (RequivoError, OSError, UnicodeDecodeError) as e:
                 errors.append({"slug": slug, "error": str(e)})
                 continue
-            if (meta.current_revision == 0
-                    and repo.request_text(slug) == _legacy_request_text(root / slug)):
+            if is_interrupted:
                 interrupted.append(slug)
             else:
                 skipped.append(slug)
@@ -462,7 +495,15 @@ def _cmd_session_export(a, client) -> None:
     `.lock` and the scratch files of an interrupted write are excluded: they are local artefacts of
     *this* machine's coordination, meaningless in an archive, and the lock file in particular would
     import as a session component. The archive itself is written beside its destination and renamed
-    into place, so an interrupted export leaves no half-written .zip looking like a real one."""
+    into place, so an interrupted export leaves no half-written .zip looking like a real one.
+
+    **The default `<slug>.requivo.zip` destination shares its reserved-stem shape with a slug
+    already refused for creation, and that is not a live gap** (raised in review, #372): a reserved
+    slug can only reach this verb by already occupying a session directory on disk, and Windows
+    itself refuses to *materialize* one under that name in the first place -- so on the one platform
+    where `con.requivo.zip` would also be a reserved-stem-shaped filename, there is no `con` session
+    to reach this line from. A caller who genuinely needs a portable archive name still has
+    `--output`."""
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
     if not svc.exists(slug):
