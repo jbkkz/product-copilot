@@ -444,29 +444,42 @@ def test_workspace_after_the_command_reaches_the_session_store(tmp_path):
 
 
 def _real_flags(parser: argparse.ArgumentParser, prefix: str = "",
-                inherited: frozenset[str] = frozenset()):
+                global_flags: frozenset[str] | None = None):
     """Yield (verb path, action) for every argparse action that carries a real option string --
     `-h`/`--help` excluded, since every verb has it and documenting it would be noise.
 
-    `inherited` carries the option strings already bound *above* this parser, and an action that
-    re-declares one of them is skipped rather than yielded (#249). A global flag re-declared on
-    every subparser so that its position stops mattering is still one flag: it is documented once,
-    on its own top-level row, and that row is checked by this same walk when the recursion is at the
-    root. Demanding a per-verb row for it would ask docs/cli.md for thirty-three lines that all say
-    the same sentence, which is not what "documented" means to a reader.
+    `global_flags` is the option strings the **root** parser binds, computed once on the outermost
+    call and passed down unchanged. Below the root, an action re-declaring one of them is skipped
+    rather than yielded (#249): a global flag re-declared on every subparser so that its position
+    stops mattering is still one flag, documented once on its own top-level row -- which this same
+    walk checks when the recursion is at the root. Demanding a per-verb row for it would ask
+    docs/cli.md for thirty-three lines that all say the same sentence, which is not what
+    "documented" means to a reader.
 
-    Deliberately keyed on *inherited from an ancestor*, not on `help=argparse.SUPPRESS`: hiding a
-    flag from `--help` would then be enough to escape this guard, and a hidden flag is the one most
-    in need of being written down. Only `--version` and `--workspace` are bound at the root, so the
-    exemption cannot reach a flag that is genuinely a verb's own.
+    **Root, not any ancestor, and the difference is the whole safety of the exemption.** The first
+    version of this accumulated `inherited | own` at every level, so a flag bound on an intermediate
+    group parser (`session`, `model`, `artifact`) would have silently exempted an *unrelated* flag
+    of the same name on that group's own leaves -- the "ship silently undocumented" class this guard
+    exists to catch, reintroduced by the fix for a different one. Found in review of #249; today no
+    group parser binds an option of its own, so nothing was actually hidden, which is exactly what
+    makes it the kind of gap nobody notices later. Pinned by
+    `test_the_inherited_flag_exemption_skips_only_a_re_declared_global_flag`, whose fixture is two
+    levels deep for that reason.
+
+    Deliberately keyed on *bound at the root*, not on `help=argparse.SUPPRESS`: hiding a flag from
+    `--help` would then be enough to escape this guard, and a hidden flag is the one most in need of
+    being written down.
     """
-    own = {opt for a in parser._actions for opt in a.option_strings}
+    if global_flags is None:
+        global_flags = frozenset(opt for a in parser._actions for opt in a.option_strings)
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
             for name, sub in action.choices.items():
-                yield from _real_flags(sub, f"{prefix} {name}".strip(), inherited | own)
+                yield from _real_flags(sub, f"{prefix} {name}".strip(), global_flags)
         elif set(action.option_strings) - {"-h", "--help"}:
-            if set(action.option_strings) & inherited:
+            # `prefix` is empty only at the root, where the flag is the one being documented rather
+            # than a copy of it -- so the root's own `--workspace` is still demanded.
+            if prefix and (set(action.option_strings) & global_flags):
                 continue
             yield (prefix, action)
 
@@ -474,17 +487,49 @@ def _real_flags(parser: argparse.ArgumentParser, prefix: str = "",
 def test_the_inherited_flag_exemption_skips_only_a_re_declared_global_flag():
     """The must-fire control on `_real_flags`' one exemption. Skipping a re-declared global flag is
     only safe while it cannot reach a flag a verb genuinely owns -- and a walk that quietly stopped
-    yielding would make the guard below pass over an undocumented CLI."""
+    yielding would make the guard below pass over an undocumented CLI.
+
+    **Two levels deep on purpose.** A one-level fixture cannot tell "bound at the root" from "bound
+    at any ancestor", and the first version of `_real_flags` accumulated the latter: a flag on the
+    `grp` parser would have exempted an unrelated same-named flag on `grp leaf`. The `grp --dry-run`
+    / `grp leaf --dry-run` pair below is that case, and it is the assertion the one-level fixture
+    could not make. `requivo`'s own `session`, `model` and `artifact` groups are exactly this shape.
+    """
     p = argparse.ArgumentParser(prog="x")
     p.add_argument("--workspace")
-    sp = p.add_subparsers().add_parser("go")
+    sub = p.add_subparsers()
+    sp = sub.add_parser("go")
     sp.add_argument("--workspace", default=argparse.SUPPRESS)   # the position-independence copy
     sp.add_argument("--only-here")                              # genuinely this verb's own
+
+    grp = sub.add_parser("grp")
+    grp.add_argument("--dry-run")                               # an intermediate group's own flag
+    leaf = grp.add_subparsers().add_parser("leaf")
+    leaf.add_argument("--dry-run")                              # unrelated, and the leaf's own
+    leaf.add_argument("--workspace", default=argparse.SUPPRESS)
 
     yielded = {(verb, tuple(a.option_strings)) for verb, a in _real_flags(p)}
     assert ("go", ("--only-here",)) in yielded, "a verb's own flag must still be demanded"
     assert ("go", ("--workspace",)) not in yielded, "the re-declared global copy is not a new flag"
     assert ("", ("--workspace",)) in yielded, "and the global flag is still demanded, once, at root"
+    assert ("grp", ("--dry-run",)) in yielded, "an intermediate group's own flag is still demanded"
+    assert ("grp leaf", ("--dry-run",)) in yielded, (
+        "a leaf flag was hidden by a same-named flag on its parent -- the exemption is keyed on any "
+        "ancestor rather than on the root, which is the gap that lets a real flag ship undocumented")
+    assert ("grp leaf", ("--workspace",)) not in yielded
+
+
+def test_every_workspace_copy_carries_the_same_help_text():
+    """`--workspace` is one flag with thirty-odd declarations, and `cli.py` says so in as many words
+    ("One string, bound to every copy of the flag, so the global one and the per-verb ones cannot
+    describe two different things"). `web`'s copy predates the walk and is skipped by it -- the walk
+    only *adds* where the option is absent, because adding twice is an argparse conflict -- so it
+    was the one copy free to drift, and it had (#249, found in review). Asserted rather than argued,
+    because the next hand-written copy will be free in exactly the same way."""
+    helps = {(a.help or "") for _verb, a in _real_flags(_build_parser(), global_flags=frozenset())
+             if "--workspace" in a.option_strings}
+    assert len(helps) == 1, f"the --workspace copies describe the flag {len(helps)} different ways: {helps}"
+    assert "before or after the command" in helps.pop()
 
 
 def test_the_only_flags_the_root_parser_binds_are_the_two_global_ones():

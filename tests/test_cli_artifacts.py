@@ -173,6 +173,13 @@ def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
     inherited = {opt for a in root._actions for opt in a.option_strings}
     save = _subparser(_subparser(root, "artifact"), "save")
     own = [a for a in save._actions if not (set(a.option_strings) & inherited)]
+    # Must fire, and specifically on `--revision`: a count alone still passes if a future change to
+    # `inherited` swallows the one flag this test is named for -- `own` merely drops from five to
+    # four and the sweep reads a set that no longer contains the thing it is guarding (found in
+    # review of #249). The count stays as the blunt half; this line is the sharp one.
+    assert any("--revision" in a.option_strings for a in own), (
+        "must fire: `--revision` fell out of the set this sweep reads, so the flag the test is "
+        "named for is no longer being checked at all")
     assert len(own) >= 4, f"must fire: the walk found only {len(own)} option(s) on `artifact save`"
     offenders = [(a.option_strings or a.dest, form)
                  for a in own for form in ("default:", "defaults to")

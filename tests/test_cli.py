@@ -546,6 +546,45 @@ def test_an_empty_stdin_is_refused_rather_than_discovered_on(monkeypatch):
     assert fake.calls == []
 
 
+def test_a_dash_is_stdin_even_when_a_file_of_that_name_exists(monkeypatch, tmp_path):
+    """The one input where the two halves of `_cmd_discover`'s branch could disagree, found in
+    review of this diff. `read_source` reads stdin for `-` unconditionally, but `is_file_argument`
+    answers the ordinary path question -- and a file literally named `-` in the working directory
+    makes it True. Computed independently, the slug would then be suggested by a file whose content
+    was never read. The control below is the same directory, one argument different."""
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "-").write_text("FILE CONTENT THAT MUST NOT BE READ", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("We would like a leave approval system."))
+    _run_app(["discover", "-"], client=FakeClient(_ENGINE_REPLY))
+    slug = _only_slug()
+    assert "leave approval system" in _saved_request(slug)
+    assert "MUST NOT BE READ" not in _saved_request(slug)
+    # The observable half, and the reason `slug != "-"` would not have been an assertion at all:
+    # `slug_hint("-")` does not fail, it returns the generic fallback `discovery`. So the divergence
+    # does not crash -- it quietly replaces a slug derived from the client's own words with a
+    # placeholder, which is the shape that survives review. Measured: with the two halves computed
+    # independently this session lands under `discovery`.
+    assert slug != "discovery", (
+        "the slug came from `slug_hint(Path('-').stem)`, i.e. from a file whose content was never "
+        "read, instead of from the request that was actually discovered on")
+    assert "leave" in slug
+
+
+def test_a_path_that_merely_ends_in_a_dash_is_still_a_file(monkeypatch, tmp_path):
+    """The must-fire half of the case above: `-` is stdin, and `./-` is a file. A fix that refused
+    every argument containing a dash, or that stopped consulting `is_file_argument` at all, would
+    satisfy the test above and break this one."""
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "-").write_text("We would like a leave approval system.", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("STDIN THAT MUST NOT BE READ"))
+    _run_app(["discover", "./-"], client=FakeClient(_ENGINE_REPLY))
+    assert "leave approval system" in _saved_request(_only_slug())
+
+
 def test_a_file_path_argument_still_behaves_exactly_as_before(monkeypatch, tmp_path):
     """The third arm of the same branch, kept honest: routing `-` through the shared reader must not
     disturb the file case, whose filename is also what suggests the slug."""

@@ -44,11 +44,16 @@ from requivo.deterministic.doctor import register_doctor
 from requivo.deterministic.model import register_model
 from requivo.deterministic.sessions import register_sessions
 
-# Re-exported because they are read from outside the package: `cli.py` imports `read_user_text` and,
-# since #301, `is_file_argument` (the file-vs-text check `discover` used to re-implement under its
-# own name) and `print_json` (`status --json` and `app()`'s own error envelope used to call
-# `json.dumps` directly, a second copy of the #70 `ensure_ascii` contract this function carries); the
-# suite imports `EXIT_DEGRADED` to assert the code a degraded run exits with.
+# Re-exported because they are read from outside the package: since #301, `is_file_argument` (the
+# file-vs-text check `discover` used to re-implement under its own name) and `print_json`
+# (`status --json` and `app()`'s own error envelope used to call `json.dumps` directly, a second
+# copy of the #70 `ensure_ascii` contract this function carries); the suite imports `EXIT_DEGRADED`
+# to assert the code a degraded run exits with, and `tests/test_encoding.py` imports
+# `read_user_text` to assert the refusal it raises on a file that is not UTF-8.
+#
+# `read_user_text` was `cli.py`'s import until #360, and that sentence stood here after it stopped
+# being true: `cli.py` now imports `read_source`, which calls `read_user_text` internally. Corrected
+# in the same change that made it stale rather than left for whoever next believed it.
 #
 # `read_source` joined them in #360, and it is the same story a third time: `cli.py`'s `discover`
 # documents its argument as "the client request, or a path to a file containing it" and reached for

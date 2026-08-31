@@ -353,7 +353,14 @@ def _cmd_discover(a, client) -> None:
         print(f"discover needs a request: {_REQUEST_SHAPES}", file=sys.stderr)
         raise SystemExit(2)
     client = client or new_client()
-    is_file = is_file_argument(a.request)
+    # `a.request != "-"` first, so this agrees with where `read_source` below actually reads from.
+    # `is_file_argument("-")` is True when a file literally named `-` exists in the working
+    # directory -- and `read_source` reads stdin for `-` regardless -- so computing the two
+    # independently would derive the slug hint from a file whose content was never used. Narrow, and
+    # introduced by this very diff: before it, `-` was never stdin and the two agreed by
+    # construction. Found in review of #360. Pinned by
+    # `test_a_dash_is_stdin_even_when_a_file_of_that_name_exists`.
+    is_file = a.request != "-" and is_file_argument(a.request)
     # `read_source`, the shared reader, and not `read_user_text` alone: the argument has *three*
     # shapes, not two, and the third is `-` (#360). `is_file_argument("-")` is False -- correctly,
     # `-` is not a file -- so reading the file case here and letting everything else fall through as
@@ -1013,8 +1020,13 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, localhost only)")
     web.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
     # SUPPRESS so an absent web --workspace does not overwrite a global `requivo --workspace … web`.
-    web.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS,
-                     help="workspace root for sessions (default: cwd)")
+    # This copy is hand-written and predates `_accept_workspace_after_the_command`, which only *adds*
+    # the option where it is absent (adding it twice is an argparse conflict) -- so it is the one
+    # copy free to describe the flag differently from the other thirty, and it did until #249's own
+    # review caught it. It reads `_WORKSPACE_HELP` like every other copy now, and
+    # `test_every_workspace_copy_carries_the_same_help_text` is what stops the next hand-written one
+    # drifting the same way.
+    web.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS, help=_WORKSPACE_HELP)
     web.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
     web.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
     web.set_defaults(func=_cmd_web)
