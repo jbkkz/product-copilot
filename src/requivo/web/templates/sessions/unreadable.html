@@ -11,7 +11,9 @@
 <p><a class="backlink" href="/">← All requests</a></p>
 
 <h1>{{ slug }}</h1>
-<p><span class="badge danger">Could not be read</span></p>
+{# The same constant the home row's badge comes from, via `templating.py` -- not the literal, which
+   would let the two surfaces drift apart while each looked right on its own. #}
+<p><span class="badge danger">{{ unreadable_badge }}</span></p>
 
 <div class="notice danger" role="alert">
   <p>Requivo found this session on disk and could not open it. Nothing has been changed or deleted.</p>

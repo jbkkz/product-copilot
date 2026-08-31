@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 
+from requivo.core.errors import RevisionConflictError
 from requivo.paths import DEMO
 from requivo.services.sessions import SessionService
 
@@ -116,11 +117,26 @@ def seed_example(sessions: SessionService) -> str:
     and it would overwrite a session the reader had since refined with a key of their own. Pinned by
     `test_a_second_click_returns_to_the_same_session_rather_than_making_another`.
 
+    **`expected_revision` is what makes that a guarantee rather than a sequential accident.** The
+    `current_revision` read is outside any lock, and this route is a plain `def`, which Starlette
+    runs on a worker thread — so two first clicks arriving together (a double submit before the 303
+    lands, two tabs) can both see revision 0 through `create_session`'s idempotent-identity return
+    and both go on to apply. The precondition is what turns the loser of that race into a no-op
+    instead of a spurious revision 2 of identical content: exactly invariant 9's rule that a check
+    not held across the write it authorises is not a check. The conflict is *swallowed* rather than
+    raised, uniquely here, and only because of what it means at this one call site: somebody else
+    just seeded the very session this call was going to seed, which is the outcome asked for. Every
+    other caller of `update_model` must let a `RevisionConflictError` reach its reader, because
+    there the other writer applied something *different*.
+
     No existence check precedes the create: `create_session` is the atomic claim (invariant 11), and
     a check here would be the preceding-existence-check that invariant exists to refuse.
     """
     meta = sessions.create_session(example_request(), slug=EXAMPLE_SLUG)
     if meta.current_revision == 0:
-        sessions.update_model(meta.slug, example_proposal(),
-                              provenance={"surface": EXAMPLE_SURFACE})
+        try:
+            sessions.update_model(meta.slug, example_proposal(), expected_revision=0,
+                                  provenance={"surface": EXAMPLE_SURFACE})
+        except RevisionConflictError:
+            pass  # a concurrent click seeded it first — see the docstring
     return meta.slug

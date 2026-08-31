@@ -50,20 +50,60 @@ EXAMPLE_BADGE = "Example"
 # prints "could not be read", `doctor` and `session verify` agree with it) — one thing described two
 # ways across two surfaces is how a reader stops trusting either.
 #
-# `UNREADABLE_HINT` is what replaced `str(e)` under the row. The engine's own words were correct and
-# were the wrong register for the primary screen: a pydantic class name, an absolute path, or
-# `[Errno 21] Is a directory` — jargon leading a page whose whole design rule is that engine
-# vocabulary never does. What it costs is real and is worth stating rather than glossing: the
-# remedy that used to ride the row (*upgrade requivo*, for a session from a newer format) is now one
-# click away instead of on the first screen. The full text is not discarded — the session page
-# states it and the server log records it, which are the two places somebody acting on it is
-# already standing.
+# `UNREADABLE_HINT` is what replaced `str(e)` under the row where `str(e)` was the wrong register
+# for the primary screen: a pydantic class name, an absolute path, `[Errno 21] Is a directory` —
+# jargon leading a page whose whole design rule is that engine vocabulary never does.
 #
-# **No apostrophe, deliberately.** Autoescaping turns one into `&#39;`, so the sentence a test
-# asserts on and the sentence on the page would stop being the same string.
+# **Where it was not, the store's own sentence stays**, and that clause exists because the first
+# draft of this change did not have it. `read_meta` refusing a newer `format_version` says *session
+# format v2 is newer than this Requivo understands (v1) — upgrade requivo*: one line, no path, no
+# class name, and it carries the one thing a generic sentence cannot — what to do. Replacing that
+# was not a trade, it was a strict loss, and it is the exact over-correction #240 had to avoid.
+# Found by the positive control in `_the_leak_is_reachable`, which asked whether the row's raw text
+# had anything to leak and answered *no* for that arm.
+#
+# **No apostrophe in either string, deliberately.** Autoescaping turns one into `&#39;`, so the
+# sentence a test asserts on and the sentence on the page would stop being the same string.
 UNREADABLE_BADGE = "Could not be read"
 UNREADABLE_HINT = ("Requivo could not read the files for this session. "
                    "Open it for the full detail.")
+# Appended to a message shown as-is, so the row always points at where the rest of it is.
+_OPEN_IT = " Open it for the full detail."
+
+# How long a failure may be and still lead a row, and what disqualifies it. Both are conservative
+# and both fail *towards* the generic sentence, which is the safe direction: a message wrongly
+# hidden costs one click, and a message wrongly shown puts the thing this issue is about back on
+# the page. The two separators catch an absolute path on either platform (`.requivo/sessions/...`,
+# `C:\Users\...`); `Errno` catches the OSError family, whose text is machine-shaped everywhere even
+# though the exception type is not the same one on every platform.
+_MAX_ROW_FAILURE_CHARS = 160
+_MACHINE_MARKERS = ("/", "\\", "Errno")
+
+
+def unreadable_hint(error: str | None) -> str:
+    """The one line a degraded home row shows for a session nobody could read.
+
+    Two answers, and the second is the point: a failure already written for a reader is handed
+    through with a pointer appended, and anything else is replaced by `UNREADABLE_HINT`. The full
+    text is never discarded either way — the session page states it and the server log records it.
+
+    This is deliberately a test on the *text* rather than on the exception type. The view model is
+    handed `str(e)` and nothing else (`SessionEntry.error`, and `session_list`'s own catch), and
+    reaching back for the type would mean widening a shared service dataclass to make a caption
+    decision. It is also the more honest of the two tests: `RequivoError` is not a promise of
+    readable prose — `model_unreadable` is one, and it interpolates an absolute path and a pydantic
+    class name into its own sentence.
+
+    Pinned by `test_a_failure_already_written_for_a_reader_survives_to_the_row` and
+    `test_a_degraded_row_shows_one_human_line_and_no_engine_internals`.
+    """
+    if not error:
+        return UNREADABLE_HINT
+    text = error.strip()
+    if (len(text) <= _MAX_ROW_FAILURE_CHARS and "\n" not in text
+            and not any(m in text for m in _MACHINE_MARKERS)):
+        return text + _OPEN_IT
+    return UNREADABLE_HINT
 
 
 def artifact_label(artifact_type: str) -> str:

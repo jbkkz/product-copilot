@@ -26,6 +26,7 @@ import pytest
 from requivo.core.errors import InvalidSessionError
 from requivo.core.persistence import SESSION_FORMAT_VERSION, canonical_dir
 from requivo.services.sessions import SessionService
+from requivo.web.viewmodels.labels import UNREADABLE_HINT
 from tests.web.conftest import full_model
 
 HEALTHY_ANALYSED = "healthy-analysed"
@@ -318,15 +319,59 @@ def test_an_entry_that_could_not_be_examined_is_a_row_and_not_a_broken_page(clie
 # with one that the row is still visibly the third state, and one that the detail did not vanish
 # from the product entirely.
 
-# What must never appear on the home page. Machine text, an absolute path, and the exception class
-# names that reach this row through the two non-`RequivoError` break modes.
-_ENGINE_INTERNALS = ("Errno", "Traceback", "ValidationError", "IsADirectoryError", "pydantic")
+# What must never appear on the home page: machine text, and — separately asserted — the absolute
+# path.
+#
+# **Every token here occurs in `str(exc)` for at least one break mode, and that is the whole
+# selection rule.** An earlier draft also listed `IsADirectoryError` and `Traceback`, which cannot
+# occur: `OSError.__str__` renders `[Errno 21] Is a directory: '…'` and never the class name — only
+# `repr()` would, and nothing in this codebase renders or logs a `repr` — and a traceback never
+# reaches a template at all. Both would have passed against the pre-#240 code that printed `str(e)`
+# raw, so they were coverage this file did not have, spelled as coverage it did. `Errno` is real for
+# `IsADirectoryError` and for the `PermissionError` Windows raises in its place; `ValidationError`
+# is real because `ModelUnreadableError` interpolates `type(e).__name__` into its own sentence; and
+# `pydantic` is real via the `errors.pydantic.dev` URL a pydantic `ValidationError` carries.
+#
+# `_the_leak_is_reachable` below is the positive control that keeps this honest on every platform.
+_ENGINE_INTERNALS = ("Errno", "ValidationError", "pydantic")
 
 
-def _row_hint(slug: str) -> str:
-    """The one line rendered under a degraded row, as the page shows it."""
+def _row(slug: str) -> dict:
+    """One home-page row, as the view model builds it."""
     from requivo.web.viewmodels.sessions import session_list
-    return next(r["hint"] for r in session_list(SessionService()) if r["slug"] == slug)
+    return next(r for r in session_list(SessionService()) if r["slug"] == slug)
+
+
+def _leaks(slug: str) -> bool:
+    """Whether this break mode's untruncated failure actually contains anything the page is then
+    checked not to print. Not every one does — and finding that out is what corrected the fix; see
+    `test_a_failure_already_written_for_a_reader_survives_to_the_row`."""
+    raw = _row(slug)["error"]
+    return any(t in raw for t in _ENGINE_INTERNALS) or str(canonical_dir(slug)) in raw
+
+
+def test_the_leak_this_section_checks_for_is_reachable_at_all():
+    """Must fire, and it is the control the first draft of this section did not have.
+
+    Every assertion below is a *negative* one — this string is not on the page — and a negative
+    assertion over something that could never have been there passes against the unfixed code too.
+    Two of the five tokens originally listed were exactly that: `OSError.__str__` renders
+    `[Errno 21] Is a directory: '…'` and never the class name (only `repr()` would, and nothing
+    here renders or logs a `repr`), and a traceback never reaches a template at all.
+
+    So: at least one break mode must have something to leak, or this whole section is decorative.
+    It is deliberately a claim about the *set* rather than about each member, because one member
+    genuinely has nothing to leak, and asserting per-arm would make this test fail for the one
+    reason that is not a defect.
+    """
+    for slug in sorted(BREAKERS):
+        _seed(slug, analysed=True)
+        BREAKERS[slug](slug)
+    leaky = [slug for slug in sorted(BREAKERS) if _leaks(slug)]
+    assert leaky, (
+        "no break mode produces text carrying an engine token or an absolute path, so nothing in "
+        "this section can fail: " + repr({s: _row(s)["error"] for s in sorted(BREAKERS)})
+    )
 
 
 @pytest.mark.parametrize("slug", sorted(BREAKERS))
@@ -338,13 +383,44 @@ def test_a_degraded_row_shows_one_human_line_and_no_engine_internals(client, slu
     assert r.status_code == 200
     for token in _ENGINE_INTERNALS:
         assert token not in r.text, f"{slug}: the home page is still printing {token}"
-    # An absolute path is the other half of the same leak, and the one that survives a check
-    # written only against exception class names.
+    # An absolute path is the other half of the same leak, and the half that carries every arm —
+    # including the Windows one, whose exception text shares no token with the POSIX one.
     assert str(canonical_dir(slug)) not in r.text
 
-    hint = _row_hint(slug)
-    assert hint.count(".") <= 2, f"{slug}: the row hint is not one line — {hint!r}"
+    hint = _row(slug)["hint"]
+    assert "\n" not in hint, f"{slug}: the row hint is not one line — {hint!r}"
+    assert len(hint) <= 200, f"{slug}: the row hint is a paragraph, not a line — {hint!r}"
     assert hint in r.text
+
+
+def test_a_failure_already_written_for_a_reader_survives_to_the_row(client):
+    """The over-correction this issue had to avoid, and the first draft of the fix walked into it.
+
+    `read_meta` refusing a newer `format_version` says *session format v2 is newer than this
+    Requivo understands (v1) — upgrade requivo*: one line, no path, no class name, and it carries
+    the one thing a generic sentence cannot — what to do about it. Replacing that with *Requivo
+    could not read the files for this session* was not a trade, it was a strict loss, and nothing
+    in the humanising assertions above could see it: there was no engine vocabulary in that message
+    to catch, so every one of them passed.
+
+    `test_the_metadata_failure_is_reported_as_the_error_it_was` already pins the service layer
+    keeping this text. This pins it reaching the reader.
+    """
+    _seed(BROKEN_META, analysed=True)
+    break_meta(BROKEN_META)
+
+    hint = _row(BROKEN_META)["hint"]
+    assert "upgrade requivo" in hint.lower(), hint      # the remedy, on the first screen
+    assert "format" in hint.lower()
+    assert hint != UNREADABLE_HINT                       # must fire: not the generic sentence
+
+    r = client.get("/")
+    assert "upgrade requivo" in r.text.lower()
+
+    # …and the control, one row over: a failure that IS machine-shaped is still replaced.
+    _seed(BROKEN_MODEL, analysed=True)
+    break_model(BROKEN_MODEL)
+    assert _row(BROKEN_MODEL)["hint"] == UNREADABLE_HINT
 
 
 @pytest.mark.parametrize("slug", sorted(BREAKERS))
@@ -399,16 +475,30 @@ def test_opening_an_unreadable_session_answers_with_the_status_it_always_did(cli
     assert r.status_code == expected
 
 
-def test_the_unreadable_session_page_is_logged_for_whoever_has_to_fix_it(client, caplog):
+@pytest.mark.parametrize("slug", sorted(BREAKERS))
+def test_the_unreadable_session_page_is_logged_for_whoever_has_to_fix_it(client, caplog, slug):
     """The page is for the reader; the log is for the operator. Both, or the humanising has simply
-    moved the detail somewhere nobody looks."""
+    moved the detail somewhere nobody looks.
+
+    **The assertion is on all three of slug, phrase and detail, and that is not belt-and-braces.**
+    Asserting the slug alone passes without this route logging anything at all: `create_app`'s own
+    handlers already log the request *path*, which contains the slug, for every arm here. The
+    phrase is what only this line writes, and the detail is what the `OSError` arm's old
+    `logger.exception` put in `exc_info` rather than in the message — so a reader grepping the
+    terminal for what went wrong found the class name and not the file.
+    """
     import logging
 
-    _seed(BROKEN_MODEL, analysed=True)
-    break_model(BROKEN_MODEL)
+    _seed(slug, analysed=True)
+    BREAKERS[slug](slug)
     with caplog.at_level(logging.ERROR, logger="requivo.web"):
-        client.get(f"/sessions/{BROKEN_MODEL}")
-    assert any(BROKEN_MODEL in rec.getMessage() for rec in caplog.records)
+        client.get(f"/sessions/{slug}")
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any(slug in m and "could not be read" in m for m in messages), messages
+    # …and the failure itself, not only that one happened.
+    detail = _row(slug)["error"]
+    assert any(detail in m for m in messages), (detail, messages)
 
 
 def test_a_healthy_session_page_is_untouched(client):

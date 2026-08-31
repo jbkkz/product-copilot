@@ -97,8 +97,10 @@ is not on any of these screens; the translation is defined once in `web/viewmode
 
 ![The decision brief: what is confirmed, what is being assumed, the decisions on record and the premises worth contesting.](images/web-brief.webp)
 
-- **Explore a worked example** — one button under the request box, and the only thing on this
-  interface that does something without a key. It materialises the bundled sample — the messy
+- **Explore a worked example** — one button under the request box, and the way to see a finished
+  analysis without a key. (It is not the only keyless thing here: with no provider configured the
+  main form still captures a request, and the button says *Save request* rather than *Analyse
+  request* to say so.) It materialises the bundled sample — the messy
   client email `requivo demo` replays — as a real session in your workspace, through the same
   `SessionService.create_session` + `update_model` path everything else uses. It is not a read-only
   exhibit and not a mock: it has a revision, a frozen copy under `revisions/`, a readiness verdict
@@ -114,9 +116,12 @@ is not on any of these screens; the translation is defined once in `web/viewmode
   session that cannot be read — written by a newer Requivo, or left with a truncated file by a crash
   mid-write — is a **row that says so and names itself**, not an error over the whole page: one bad
   session used to hide the list of every other, and neither surface said which one it was (#7). The
-  row shows one human line and links to the session, where the failure is stated in full with what to
-  run next; the engine's own words used to lead the row itself — a pydantic class name, an absolute
-  path, `[Errno 21] Is a directory` — on the page whose design rule is that they never do (#240).
+  row shows one line and links to the session, where the failure is stated in full with what to run
+  next. That line is the store's own sentence when the store already wrote one for a reader — *this
+  session came from a newer Requivo, upgrade requivo* keeps its remedy on the first screen — and a
+  plain sentence when it did not: a pydantic class name, an absolute path or `[Errno 21] Is a
+  directory` used to lead the row, on the page whose design rule is that engine vocabulary never
+  does (#240).
   Opening that session answers with the status it always did (409 for a session from a newer
   Requivo, 500 for a store that could not answer), and the same failure is logged in the terminal
   you started the server in.

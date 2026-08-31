@@ -257,7 +257,15 @@ def _unreadable_session(request: Request, slug: str, exc: BaseException):
 
     status = _status_for(exc) if isinstance(exc, RequivoError) else 500
     code = exc.code if isinstance(exc, RequivoError) else "session_unreadable"
-    logger.error("session '%s' could not be read (%s): %s", slug, code, exc)
+    # **The traceback rides the non-`RequivoError` arm and only that arm**, because the catch above
+    # is deliberately open and therefore also catches what nobody anticipated. A `RequivoError` is a
+    # state this build has a code and a sentence for, and a stack under it is noise; anything else
+    # may be a defect in this codebase, and without `exc_info` the operator's log renders "the store
+    # is broken" and "we have a bug" as one identical line carrying `str(exc)` and nothing else.
+    # `app.py`'s sibling handler for the same unanticipated family already uses `logger.exception`
+    # for this reason; this is that decision, kept rather than quietly dropped one route along.
+    logger.error("session '%s' could not be read (%s): %s", slug, code, exc,
+                 exc_info=None if isinstance(exc, RequivoError) else exc)
     return templates.TemplateResponse(request, "sessions/unreadable.html", {
         "slug": slug, "status": status, "code": code, "detail": str(exc),
     }, status_code=status)
@@ -266,10 +274,25 @@ def _unreadable_session(request: Request, slug: str, exc: BaseException):
 @router.get("/sessions/{slug}")
 def session_page(request: Request, slug: str = Depends(safe_slug),
                  sessions: SessionService = Depends(get_sessions)):
-    if not sessions.exists(slug):
-        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+    """One session, or the page for one nobody could read (#240).
+
+    **The guard wraps the reads and stops there.** `_session_view` returns a template name and a
+    context and renders nothing; the render happens below, outside the `try`. That split is the
+    whole of this guard's correctness, because Starlette renders a `Jinja2Templates.TemplateResponse`
+    *eagerly*, inside `_TemplateResponse.__init__` — so a `try` that spans the render catches
+    Jinja's own `UndefinedError` from a context key a route forgot to pass, and reports a defect in
+    this codebase to the reader as *your session is corrupt on disk* and to the operator as the
+    same. An absence produced by the guard, dressed as an absence in the world.
+
+    **The existence check is inside the `try` and that is not tidiness.** `sessions.exists` reaches
+    `core.persistence._probe`, which raises `SessionUnreadableError` for any `OSError` that is not
+    "no such thing" — an `EACCES` on a parent directory, say. That is precisely a session that is
+    there and could not be read, and outside the guard it fell to the app-wide handler and the
+    generic page this route exists to replace. None of the three break modes in
+    `tests/web/test_degraded_listing.py` reach it, which is how it survived the first draft.
+    """
     try:
-        return _session_page(request, slug, sessions)
+        template, context = _session_view(request, slug, sessions)
     except SessionNotFoundError:
         # Re-raised deliberately: "there is no such session" is a 404 the app already renders well,
         # and it is not the third state. Only a session that *is* there and could not be read gets
@@ -282,13 +305,21 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
         # (`RequivoError`). Naming a family here is how the guard ends up nominally on and
         # effectively off for the next failure mode.
         return _unreadable_session(request, slug, exc)
+    return templates.TemplateResponse(request, template, context)
 
 
-def _session_page(request: Request, slug: str, sessions: SessionService):
-    """Everything `session_page` reads, so its guard sits above all of it rather than around the
-    first call. Splitting the two is what makes the third state cover the whole page: wrapping only
-    `sessions.meta(slug)` would leave `session_detail`'s own reads — the model, the status — outside
-    it, which is the shape of #7 one route along."""
+def _session_view(request: Request, slug: str, sessions: SessionService) -> tuple[str, dict]:
+    """Everything this route *reads*, and nothing it renders — (template name, context).
+
+    Its guard therefore sits above all of the reads rather than around the first one: wrapping only
+    `sessions.meta(slug)` would leave `session_detail`'s own reads — the model, the status, the
+    request — outside it, which is the shape of #7 one route along. And it stops short of the
+    render, for the reason `session_page` states.
+
+    `request` is read for its query parameters only; nothing here renders with it.
+    """
+    if not sessions.exists(slug):
+        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
     meta = sessions.meta(slug)
     # Popped unconditionally: `None` on every ordinary page view (nothing was ever stashed for this
     # slug), and the one figure a create/discover redirect just stashed on the landing view right
@@ -303,7 +334,7 @@ def _session_page(request: Request, slug: str, sessions: SessionService):
         # a first analysis spent tokens and then failed: the model never advanced past revision 0, but
         # the spend is real and already logged, so the retry page states it rather than the silence a
         # bare "your request was saved" would otherwise leave.
-        return templates.TemplateResponse(request, "sessions/detail.html", {
+        return "sessions/detail.html", {
             "pending": True, "slug": slug,
             "request_text": request_text, "context_cards": meta.context_cards,
             "provider": provider_status(),
@@ -321,9 +352,9 @@ def _session_page(request: Request, slug: str, sessions: SessionService):
             # without a path to attach.
             "analysis_failed_path": request.query_params.get("analysis_failed_path"),
             "usage": usage,
-        })
+        }
     detail = session_detail(sessions, slug)
-    return templates.TemplateResponse(request, "sessions/detail.html", {
+    return "sessions/detail.html", {
         "pending": False, "s": detail,
         # Lifted to the top level so `detail.html` can announce the sample once, above the branch
         # that splits on `pending` (#226). Both branches answer the same question and a template
@@ -331,7 +362,7 @@ def _session_page(request: Request, slug: str, sessions: SessionService):
         "is_example": detail["is_example"],
         "provider": provider_status(),
         "usage": usage,
-    })
+    }
 
 
 @router.get("/sessions/{slug}/export")

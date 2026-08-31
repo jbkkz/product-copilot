@@ -11,7 +11,7 @@ from requivo.core.errors import SessionNotFoundError
 from requivo.services.discovery import GENERATABLE
 from requivo.services.sessions import SessionService
 from requivo.web.example import is_example
-from requivo.web.viewmodels.labels import PRIMARY_ARTIFACT, UNREADABLE_BADGE, UNREADABLE_HINT, artifact_label
+from requivo.web.viewmodels.labels import PRIMARY_ARTIFACT, UNREADABLE_BADGE, artifact_label, unreadable_hint
 from requivo.web.viewmodels.status import PRIORITY_QUESTIONS, readiness_view, understanding_view, understood_view
 
 # How much of the request a home-page row shows. A session is recognised by what was asked, not by its
@@ -56,9 +56,11 @@ def _unreadable_row(slug: str, error: str | None) -> dict:
 
     **`hint` and `error` are two fields because they answer two readers** (#240). `error` is what the
     failure said, kept in full and unchanged — it is what the session page states and what the
-    server logs; `hint` is the one line the home page shows. They used to be the same value, so the
-    primary screen carried a pydantic class name, an absolute path, or `[Errno 21] Is a directory`
-    under a row, which is engine vocabulary leading the page that exists not to have any.
+    server logs; `hint` is the one line the home page shows, which is `error` itself when the store
+    already wrote it for a reader and a plain sentence when it did not (`unreadable_hint`). They
+    used to be the same value unconditionally, so the primary screen carried a pydantic class name,
+    an absolute path, or `[Errno 21] Is a directory` under a row — engine vocabulary leading the
+    page that exists not to have any.
 
     Flattening the state itself was the over-correction to avoid, and the row is deliberately no
     friendlier than before: the badge still says *could not be read*, still in the danger style, and
@@ -72,7 +74,8 @@ def _unreadable_row(slug: str, error: str | None) -> dict:
     """
     return {"slug": slug, "title": slug, "updated_at": "", "state": "unreadable",
             "status_label": UNREADABLE_BADGE, "open_questions": None, "needs_update": False,
-            "error": error or "no further detail", "hint": UNREADABLE_HINT, "is_example": False}
+            "error": error or "no further detail", "hint": unreadable_hint(error),
+            "is_example": False}
 
 
 def _readable_row(sessions: SessionService, meta) -> dict:
