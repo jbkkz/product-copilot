@@ -14,6 +14,11 @@
 {# The whole point of #207: the request below is saved, and the button below that still works. #}
 <div class="notice danger" role="alert">
   <strong>Your request was saved.</strong> The analysis did not run: {{ analysis_failed }}
+  {% if analysis_failed_path %}
+  {# The saved-reply path (#283) rides its own query parameter, untruncated, precisely so it is
+     never cut off mid-filename the way it was inside the notice above (#362). #}
+  <br>The reply that failed validation was saved to <code>{{ analysis_failed_path }}</code>.
+  {% endif %}
   <br>Retry it below, or analyse it from the CLI or Claude Code — they read the same session.
 </div>
 {# A failed analysis can still have spent tokens (#253) — the model never advanced past revision 0,

@@ -52,9 +52,29 @@ def analysis_failed(slug: str, exc: EngineError | ProviderOutputError) -> Redire
     `exc` is one of `_PROVIDER_FAILURE` -- both members are `RequivoError`s with the same `.message`
     shape, and this function reads only that, never the code, so the two failure classes render
     identically here on purpose.
+
+    **The saved-reply path (#283) is carried separately, and deliberately excluded from what gets
+    truncated (#362).** `ProviderOutputError.message` puts that path at its own *tail* -- see
+    `completion.py`'s give-up exit -- so a message this long simply loses it: on a realistic contract
+    violation the full message runs past a thousand characters and the path never reaches the first
+    `_MAX_NOTICE_CHARS` of it; on the shortest possible cause the notice ends *mid-filename*, at a
+    path that does not resolve. Neither is a message that has merely lost some words -- the second is
+    actively worse than no path, since it looks complete and is not. `exc.details["raw_reply_path"]`
+    (only `ProviderOutputError` ever sets it) rides as its own query parameter, untruncated, and is
+    stripped from the text `notice` is sliced from -- an `endswith` check on the path itself, not on
+    the sentence around it, so a future reword of that sentence does not silently stop matching. The
+    CLI is unaffected: `exc.message` itself is never touched, only what this function derives from a
+    local copy of it.
     """
-    notice = quote(exc.message[:_MAX_NOTICE_CHARS])
-    return RedirectResponse(url=f"/sessions/{slug}?analysis_failed={notice}", status_code=303)
+    message = exc.message
+    saved_path = exc.details.get("raw_reply_path") if isinstance(exc, ProviderOutputError) else None
+    if saved_path and message.endswith(str(saved_path)):
+        message = message[: -len(str(saved_path))].rstrip()
+    notice = quote(message[:_MAX_NOTICE_CHARS])
+    url = f"/sessions/{slug}?analysis_failed={notice}"
+    if saved_path:
+        url += f"&analysis_failed_path={quote(str(saved_path))}"
+    return RedirectResponse(url=url, status_code=303)
 
 
 @router.post("/sessions")
@@ -188,6 +208,11 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
             # local single-user server with no authentication is not a boundary worth defending -- and
             # Jinja escapes it either way.
             "analysis_failed": request.query_params.get("analysis_failed"),
+            # The saved-reply path (#283), carried outside the truncated notice above and rendered in
+            # full (#362) -- absent whenever the failure was an `EngineError` or the debug write
+            # itself failed, in which case `analysis_failed`'s own sentence already covers the cause
+            # without a path to attach.
+            "analysis_failed_path": request.query_params.get("analysis_failed_path"),
             "usage": usage,
         })
     return templates.TemplateResponse(request, "sessions/detail.html", {

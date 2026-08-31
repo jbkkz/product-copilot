@@ -444,6 +444,60 @@ def test_credential_present_does_not_raise_on_an_unloadable_profile(monkeypatch)
     assert credential_present() is False
 
 
+# ── #365: `doctor` is a second reader, and needs more than the bool ─────────
+
+
+@_NEEDS_CHAIN
+def test_credential_diagnosis_names_the_unloadable_profile_the_bool_hides(monkeypatch):
+    """The must-fire half. `credential_present()` collapses "no credential" and "a credential that
+    is configured and unloadable" onto the same False -- correct for a caller that only ever wanted
+    a yes/no, and the wrong answer for `doctor`, whose whole job is naming the remedy. This is the
+    second reader's version: `present` is still False, but `problem` names the SDK's own reason,
+    the same text `new_client()` raises with (`test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason`).
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    from requivo.providers.anthropic.client import credential_diagnosis
+
+    present, problem = credential_diagnosis()
+    assert present is False
+    assert problem is not None
+    assert "could not load the credential configuration" in problem
+    assert "a-profile-that-does-not-exist" in problem, "the SDK's own reason names the profile"
+    assert "No Anthropic credential found" not in problem, (
+        "an unloadable profile is not an absent credential and must not carry that remedy"
+    )
+
+
+def test_credential_diagnosis_leaves_a_genuinely_missing_credential_unnamed(monkeypatch):
+    """The must-not-fire twin. A "must not say X" assertion alone passes on a harness that produces
+    no message at all -- this is the "must say nothing extra" case genuinely reached: no credential
+    anywhere, so there is no SDK exception to report, and `problem` must stay `None` rather than
+    manufacture one. Without this, a `credential_diagnosis()` that always returned some placeholder
+    string would satisfy the positive test above and still be wrong here.
+    """
+    _no_credentials(monkeypatch)
+
+    from requivo.providers.anthropic.client import credential_diagnosis
+
+    present, problem = credential_diagnosis()
+    assert present is False
+    assert problem is None
+
+
+def test_credential_diagnosis_agrees_with_credential_present_when_a_key_is_set(monkeypatch):
+    _no_credentials(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-whatever")
+
+    from requivo.providers.anthropic.client import credential_diagnosis, credential_present
+
+    assert credential_present() is True
+    present, problem = credential_diagnosis()
+    assert present is True
+    assert problem is None
+
+
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
     """End to end, and the part that is not about the message: nothing is written and nothing is paid.
 
