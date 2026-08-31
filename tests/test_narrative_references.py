@@ -34,6 +34,7 @@ import re
 from pathlib import Path
 
 import pytest
+from _scan import list_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "requivo"
@@ -126,21 +127,12 @@ _WRAPPED = re.compile(r"\btest_[a-z0-9_]*_$", re.MULTILINE)
 
 
 def _scan_subjects(roots: tuple[Path, ...], extra: tuple[Path, ...] = ()) -> list[Path]:
-    """Every file under `roots` that may carry a reference, plus `extra`.
-
-    An empty result is an error rather than an answer, which is `test_boundaries.py`'s rule (#10) and
-    it applies with more force here: this guard's whole job is a negative assertion, and a rename of
-    `src/requivo` would turn it into a green test over nothing.
-    """
-    found = [p for root in roots for p in sorted(root.rglob("*"))
-             if p.suffix in SUBJECT_SUFFIXES and p.is_file() and "__pycache__" not in p.parts]
-    found.extend(p for p in extra if p.is_file())
-    if not found:
-        raise AssertionError(
-            f"the narrative-reference guard found no files under {roots}. This is 'could not look', "
-            f"not 'looked and found nothing' — fix the path, never the assertion."
-        )
-    return found
+    """Every file under `roots` that may carry a reference, plus `extra`. An empty result is an
+    error rather than an answer (#10) -- `_scan.py`'s `list_files` now (#288), shared with the two
+    boundary guards; this file had re-derived the refusal a third time with no positive control of
+    its own, see `test_the_guard_refuses_a_scan_it_could_not_make` below."""
+    return list_files(roots, suffixes=SUBJECT_SUFFIXES, label="the narrative-reference guard",
+                       extra=extra)
 
 
 def subjects() -> list[Path]:
@@ -225,6 +217,18 @@ def test_the_guard_reads_the_real_tree():
         "never be swept"
     )
     assert len(declared_test_names()) > 100
+
+
+def test_the_guard_refuses_a_scan_it_could_not_make(tmp_path):
+    """#288's own positive control: this guard had none before. Exercised through `_scan_subjects`
+    directly, since `subjects()`/`wrap_subjects()` hard-code this file's real roots."""
+    missing = tmp_path / "not-here"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    (empty / "irrelevant.txt").touch()                       # no subject suffix lives here
+    for root in (missing, empty):
+        with pytest.raises(AssertionError, match="could not look"):
+            _scan_subjects((root,))
 
 
 def test_the_wrap_scan_still_reaches_one_file_further_than_the_resolution_scan():

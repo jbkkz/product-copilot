@@ -27,12 +27,24 @@ reading ("only the layers a violation has already been found in") is exactly the
 cheapest one to scan and the one a narrower rule would leave out again next time.
 
 The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
-`core.persistence` -- is #76, and it is guarded now, over all three surfaces. It needed a different
-extractor rather than a second table: every surface writes `from requivo.core import persistence as
-store`, so the import set is one entry for a file making eighteen calls, and a name-only guard would
-let one reviewed line stand in for all of them. `persistence_names` resolves the alias first and
-collects the attributes taken off it, which is what makes `_SURFACE_STORAGE_ALLOWLIST` per-function
-and keyed by file.
+`core.persistence` -- is #76, and it is guarded now, over cli.py, `deterministic/` and `web/`. It
+needed a different extractor rather than a second table: every surface writes `from requivo.core
+import persistence as store`, so the import set is one entry for a file making eighteen calls, and a
+name-only guard would let one reviewed line stand in for all of them. `persistence_names` resolves
+the alias first and collects the attributes taken off it, which is what makes
+`_SURFACE_STORAGE_ALLOWLIST` per-function and keyed by file.
+
+`providers/` joined the same scan set with #355, and it is not the same join as `render/` (#167) or
+`web/`/`deterministic/` (#183): a provider is not a surface -- it never touches argv, stdout or HTTP
+-- so its inclusion here is not automatic the way theirs was. What is automatic is the property this
+particular guard protects: only `services/` holds storage as an injected seam, and anything outside
+it that reaches `core.persistence` directly bypasses that seam whether or not it is a UI layer.
+Reviewed and found already true: `providers/anthropic/completion.py` reaches `_atomic_write` and
+`ensure_store_dir` to preserve a malformed reply for a bug report (#283) -- a private,
+underscore-prefixed name, crossing a module boundary, with no allowlist entry and nothing watching
+for a second one. The import itself is not the defect (the alternative is a second atomic-write
+implementation, which invariant 16 exists to prevent); the allowlist entries below are what
+"watching for a second one" now looks like.
 
 Where the line sits
 -------------------
@@ -73,10 +85,10 @@ from __future__ import annotations
 
 import ast
 import importlib
-import textwrap
 from pathlib import Path
 
 import pytest
+from _scan import list_python_files, parse_utf8, write_tree
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORE = REPO_ROOT / "src" / "requivo" / "core"
@@ -117,15 +129,7 @@ _FORBIDDEN_ATTRIBUTES = {
 }
 
 
-def _parse(path: Path) -> ast.Module:
-    """Parse a source file.
-
-    The encoding is explicit because every module in core contains at least one em dash, and
-    `read_text()` with no encoding decodes with the *locale* codepage. Under `LC_ALL=C` in a bare
-    container, or a DBCS Windows shell, that raises `UnicodeDecodeError` and the guard dies instead
-    of running. CI is Linux/UTF-8 only, so nothing here would ever have shown it.
-    """
-    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+_parse = parse_utf8  # was its own duplicate of test_encoding.py's copy; see _scan.py (#288)
 
 
 def _package_for(path: Path, root: Path, root_package: str) -> str:
@@ -145,21 +149,11 @@ def _resolve_relative(package: str, level: int) -> str:
 def scan(root: Path, package: str) -> list[tuple[Path, str]]:
     """Every Python file under `root`, recursively, paired with the dotted package it lives in.
 
-    The walk is recursive so a future `core/<subpackage>/` cannot be silently unscanned, and an
-    empty result is an error rather than an answer: `Path.glob` on a directory that does not exist
-    returns `[]`, which is what let this guard pass green while checking nothing (#10).
+    The recursive walk and the refusal on an unscannable or empty root are `_scan.py`'s
+    `list_python_files` now (#288); pairing each file with the dotted package its relative imports
+    resolve against is this function's own job, specific to the import-boundary guards below.
     """
-    if not root.is_dir():
-        raise AssertionError(
-            f"boundary guard could not scan {root}: no such directory. This is 'could not look', not "
-            f"'looked and found nothing' -- fix the path, never the assertion."
-        )
-    found = sorted(root.rglob("*.py"))
-    if not found:
-        raise AssertionError(
-            f"boundary guard scanned {root} and found no Python files. An empty scan set cannot "
-            f"support a 'no offenders' verdict."
-        )
+    found = list_python_files(root, label="boundary guard")
     return [(p, _package_for(p, root, package)) for p in found]
 
 
@@ -234,11 +228,7 @@ def _core_offenders(table: dict) -> dict:
     return offenders
 
 
-def _write_tree(root: Path, sources: dict) -> None:
-    for name, source in sources.items():
-        target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(textwrap.dedent(source), encoding="utf-8")
+_write_tree = write_tree  # was its own duplicate of test_encoding.py's copy; see _scan.py (#288)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -898,6 +888,9 @@ SURFACE_MODULE = REPO_ROOT / "src" / "requivo" / "cli.py"
 SURFACE_TREES = (
     (REPO_ROOT / "src" / "requivo" / "deterministic", "requivo.deterministic"),
     (REPO_ROOT / "src" / "requivo" / "web", "requivo.web"),
+    # #355. Not a surface by this guard's own name -- see the module docstring for the argument --
+    # but the one other tree outside `services/` capable of reaching `core.persistence` directly.
+    (REPO_ROOT / "src" / "requivo" / "providers", "requivo.providers"),
 )
 PERSISTENCE_MODULE = "requivo.core.persistence"
 
@@ -967,13 +960,28 @@ _SURFACE_STORAGE_ALLOWLIST = {
     ("web/routes/sessions.py", "validate_slug"): (
         "same rule at the route that takes a slug from a form field. See web/dependencies.py."
     ),
+    ("providers/anthropic/completion.py", "_atomic_write"): (
+        "writes the final malformed reply the JSON retry loop gave up on into `.requivo/debug/`, so "
+        "a bug report is one paste (#283). Not a session and not routable through the repository -- "
+        "`.requivo/debug/` is a human-read debugging aid with no repository method and none should "
+        "exist for it, the same argument the `deterministic/sessions.py` entries above make for "
+        "`.requivo/sessions/`. Reached by its private, underscore-prefixed name rather than a "
+        "promoted public one (#355): the alternative was a second atomic-write implementation, which "
+        "invariant 16 exists to prevent, and this is the one caller outside `core/persistence.py` "
+        "that needs it."
+    ),
+    ("providers/anthropic/completion.py", "ensure_store_dir"): (
+        "creates `.requivo/debug/` before the first failed reply is written into it, the same "
+        "reasoning as the `deterministic/sessions.py` entry above -- a repository with no filesystem "
+        "has no debug root to create."
+    ),
 }
 
 
 def surface_subjects() -> list[tuple[Path, str, str]]:
     """Every surface file, as (path, package, label). The label is the allowlist key.
 
-    `cli.py` is named individually and the other two are walked, for the reason `scan` walks core
+    `cli.py` is named individually and the other three are walked, for the reason `scan` walks core
     recursively: `deterministic/` became a package five days ago (#73) and `web/` gains route
     modules, so a guard listing files by hand would go quietly narrower with each one. Both
     helpers refuse an absent or empty subject, so a renamed package is 'could not look' here too.
@@ -1135,8 +1143,16 @@ def test_the_storage_guard_does_not_fire_on_what_a_surface_legitimately_does(tmp
 def test_the_storage_guard_names_what_it_scanned():
     """The #10 rule, for this scan set. Everything above is a negative assertion, and `deterministic/`
     is a package rather than a module as of #73 -- a walk that silently found nothing under it would
-    be an all-clear over the surface with the most direct calls in the repository."""
+    be an all-clear over the surface with the most direct calls in the repository.
+
+    `providers/anthropic/completion.py` is here since #355: before that fix `SURFACE_TREES` held only
+    `deterministic/` and `web/`, so this assertion is what would have gone red the moment `providers/`
+    dropped out of the tuple above -- the same "could not look" the module docstring points at,
+    applied to one directory this scan set used to skip entirely."""
     labels = sorted(label for _, _, label in surface_subjects())
     assert "cli.py" in labels
-    for expected in ("deterministic/sessions.py", "deterministic/doctor.py", "web/dependencies.py"):
+    for expected in (
+        "deterministic/sessions.py", "deterministic/doctor.py", "web/dependencies.py",
+        "providers/anthropic/completion.py",
+    ):
         assert expected in labels, f"the storage guard did not scan {expected}; it scanned {labels}"

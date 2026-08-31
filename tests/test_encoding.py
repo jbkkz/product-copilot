@@ -69,6 +69,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from _scan import list_python_files, parse_utf8, write_tree
 
 from requivo import cli, streams
 from requivo.core.errors import InvalidModelError
@@ -113,32 +114,13 @@ _EXEMPT_RECEIVERS = {
 }
 
 
-def _parse(path: Path) -> ast.Module:
-    """Parse a source file.
-
-    Explicitly UTF-8, and the reason is this file's own subject: every module in the package carries
-    at least one em dash, so a guard that read its own scan set with a bare `read_text()` would die
-    instead of running under exactly the locale it exists to protect against. That is not
-    hypothetical -- it is what happened to the #10 guard, which had the defect it was written to
-    catch.
-    """
-    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+_parse = parse_utf8  # was its own duplicate of test_boundaries.py's copy; see _scan.py (#288)
 
 
 def scan(root: Path) -> list[Path]:
-    """Every Python file under `root`, recursively. An empty result is an error, not an answer."""
-    if not root.is_dir():
-        raise AssertionError(
-            f"the encoding guard could not scan {root}: no such directory. That is 'could not "
-            f"look', not 'looked and found nothing' -- fix the path, never the assertion."
-        )
-    found = sorted(root.rglob("*.py"))
-    if not found:
-        raise AssertionError(
-            f"the encoding guard scanned {root} and found no Python files. An empty scan set "
-            f"cannot support a 'no offenders' verdict."
-        )
-    return found
+    """Every Python file under `root`, recursively. An empty result is an error, not an answer --
+    `_scan.py`'s `list_python_files` now, shared with `test_boundaries.py` (#288)."""
+    return list_python_files(root, label="the encoding guard")
 
 
 def _has_keyword(node: ast.Call, name: str) -> bool:
@@ -441,11 +423,7 @@ def test_the_fixture_rule_fires_exactly_where_it_should(tmp_path):
     }, verdicts
 
 
-def _write_tree(root: Path, sources: dict) -> None:
-    for name, source in sources.items():
-        target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(textwrap.dedent(source), encoding="utf-8")
+_write_tree = write_tree  # was its own duplicate of test_boundaries.py's copy; see _scan.py (#288)
 
 
 # --------------------------------------------------------------------------------------------------
