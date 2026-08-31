@@ -214,10 +214,11 @@ def main(argv=None) -> int:
     skill's runtime Bash grant -- see the module docstring.
 
     `tests/test_plugin_version_skew.py` exercises this function's exception handling directly, by
-    monkeypatching `subprocess.run` -- so the three `except` arms below are unit-tested, even
-    though none of them spawns a real process. What stays untested by any suite is a *real* spawn
-    against an actual `requivo` binary; that is inherently a manual/platform check, which is why
-    this function is still not asserted against by any CI leg's exit code.
+    monkeypatching `subprocess.run` -- so the three `except` arms below, and the exit code each
+    produces, are unit-tested, even though none of them spawns a real process. What stays untested
+    by any suite is a *real* spawn against an actual `requivo` binary; no CI leg runs
+    `python3 version_skew.py` itself as a subprocess and checks its process exit status, which is
+    inherently a manual/platform check.
 
     Three `except` arms, not two (#363): `subprocess.TimeoutExpired` inherits `SubprocessError ->
     Exception`, not `OSError`, so it does not land in `except OSError` below -- it used to escape
