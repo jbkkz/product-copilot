@@ -18,7 +18,7 @@ from requivo.core import persistence as store
 from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
-from requivo.core.integrity import check_session, inspect_session
+from requivo.core.integrity import check_session, inspect_session, newest_readable_revision
 from requivo.core.persistence import _atomic_write
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
@@ -1042,3 +1042,49 @@ def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(work
     assert check_session(slug) == [], "integrity must not depend on what this machine has installed"
     # …and the environment check, which is where it belongs, does see it.
     assert check_selection(store.read_meta(slug).context_cards) is not None
+
+
+# ── newest_readable_revision: the repair-target search (#210) ─────────────────
+#
+# `session verify`'s remedy line and `session restore`'s default target both come from here. It is
+# deliberately not a verdict about the session -- it never raises -- only a fact about which history
+# this build can actually open, read newest first because a repair wants the most recent trustworthy
+# state.
+
+
+def test_newest_readable_revision_returns_the_latest_when_everything_parses(workspace):
+    _healthy()  # revision 1, then 2 (see _healthy's own docstring)
+    d = store.canonical_dir("s")
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 2
+    # byte-for-byte, not a re-serialized model -- restoring from this payload must reproduce the
+    # revision file's own content_hash (see ReadableRevision's docstring).
+    assert found.payload == (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+
+def test_newest_readable_revision_skips_a_broken_file_and_returns_an_older_one(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    (d / "revisions" / "0002-model.json").write_text("{not json", encoding="utf-8")
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 1
+
+
+def test_newest_readable_revision_treats_a_missing_file_the_same_as_an_unreadable_one(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    (d / "revisions" / "0002-model.json").unlink()
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 1
+
+
+def test_newest_readable_revision_returns_none_when_nothing_in_range_is_readable(workspace):
+    """The honest third answer -- must be able to say plainly that there is nothing to restore from,
+    never invent one. The must-fire control above already proves the same session's revision 2 is
+    found when it is readable; corrupting every file is what earns the None here rather than a bug
+    in the search."""
+    _healthy()
+    d = store.canonical_dir("s")
+    for f in (d / "revisions").glob("*.json"):
+        f.write_text("{not json", encoding="utf-8")
+    assert newest_readable_revision(d, 2) is None

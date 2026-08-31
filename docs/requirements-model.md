@@ -83,6 +83,13 @@ and the artifacts that would go **stale**; a discovery turn that materially move
 already-generated files that no longer match it. An unrelated (or completeness-only) change leaves an
 artifact fresh — staleness follows the dependency graph, not the revision number.
 
+Every required slot is guaranteed to reach at least one artifact's staleness check — a specific one
+(prd, stories, estimate, criteria, epic, release) when it shapes that artifact's content, or the
+solution assessment's judgment over the whole model when it does not. A slot reaching neither used to
+be possible without anyone noticing: nothing marked the specific artifacts stale when it changed, only
+the assessment. A test now catches it — see CLAUDE.md's "Adding a slot" checklist when introducing a
+new one.
+
 ## Readiness
 
 Readiness is binary: a high-impact slot must be both `explicit` **and** covered above the soft

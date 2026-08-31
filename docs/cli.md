@@ -140,6 +140,7 @@ these apply.
 | `requivo session migrate` | `--json` | Migrate ALL legacy `out/` sessions into `.requivo/sessions/` |
 | `requivo session export <session>` | `-o`/`--output`, `--json` | Export a session as a `.zip` archive; `--output` sets the destination path |
 | `requivo session verify <session>` | `--json` | Check that a session's files agree with each other |
+| `requivo session restore <session>` | `--revision N` | Copy a readable `revisions/NNNN-model.json` over `model.json` — the recovery path for a torn or inconsistent session; see [Recovering a torn or inconsistent session](#recovering-a-torn-or-inconsistent-session). Defaults to the newest revision this build can read |
 | `requivo session rescope <session>` | `--context`/`--cards` (required), `--json` | Re-scope an existing session's context cards — see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards) |
 | `requivo session import <archive>` | `--force`, `--json` | Import a session archive into the workspace; `--force` replaces a session of the same slug — see [Importing a session](#importing-a-session) |
 
@@ -370,6 +371,39 @@ and #101's archive-vs-model split is [compatibility.md](compatibility.md#the-imp
 from an interrupted write, and a legacy `.lock` left inside a session by an earlier Requivo. The write
 lock itself lives at `.requivo/locks/<slug>.lock`, outside every session directory; see
 [session-format.md](session-format.md#layout) for why.
+
+### Recovering a torn or inconsistent session
+
+`doctor` and `session verify` are read-only by design — they diagnose and never write. That used to
+be where the story stopped: a session where `model.json` no longer matches the revision it claims to
+be, or is simply gone, got a code and a message and no next step, and the fact that `revisions/`
+holds every model ever applied — a complete history a healthy repair could be built from — lived
+nowhere a user reading the output would find it.
+
+`session restore <session> [--revision N]` is that repair. It copies a readable
+`revisions/NNNN-model.json` over `model.json`, under the session's write lock, and nothing else:
+
+- **The revision history is untouched.** No new revision is recorded, `current_revision` does not
+  move, and no new `revisions/` file is written. This is not `model apply` under a different name —
+  it is `model.json` catching up with a history that was already the truth.
+- **Defaults to the newest revision this build can still read**, skipping over one that is itself
+  corrupt rather than stopping at it, and says which one it picked. `session verify`'s own remedy
+  line, printed beside a restorable problem, names the same revision — the two searches are the same
+  function.
+- **`--revision N` picks one explicitly**, and is refused rather than silently substituted when that
+  revision does not exist, is missing on disk, or does not parse. A repair tool that quietly restored
+  from something other than what you asked for would be the wrong kind of helpful.
+- **Refuses outright** when the session has no applied revision yet (`current_revision` is 0 — there
+  is nothing to restore *from*), or when nothing in the requested range can be read at all. Recovery
+  in that state is manual JSON surgery, or restoring the session from a backup — this verb does not
+  invent a repair where there genuinely is none, the same caution `session import --force`'s own swap
+  is built on.
+
+Only the codes `session restore` can actually address get a remedy line from `session verify`:
+`invalid_model`, `model_is_not_the_last_revision` and `missing_model` — model.json disagreeing with,
+or absent against, a revision history that is otherwise intact. A broken revision log or a corrupt
+`session.json` is a different kind of problem, and copying a revision over `model.json` does nothing
+about either — naming a fix that would not fix the problem is worse than naming none.
 
 ## Sessions from the `out/` layout
 

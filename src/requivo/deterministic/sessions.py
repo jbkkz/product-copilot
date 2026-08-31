@@ -1,4 +1,5 @@
-"""`requivo session`: create, list, show, migrate, export, verify, rescope and import sessions.
+"""`requivo session`: create, list, show, migrate, export, verify, restore, rescope and import
+sessions.
 
 The session directory is the interface between every surface and it is public at `format_version` 1
 (invariant 8), so this is the largest of the deterministic modules and the one whose output shape is
@@ -34,13 +35,17 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from pydantic import ValidationError
+
 from requivo.core import persistence as store
+from requivo.core.contracts import PersistedEngineOutput
 from requivo.core.errors import (
     ImportDestinationOccupiedError,
     ImportMoveFailedError,
     InconsistentArchiveError,
     InvalidArchiveError,
     InvalidModelError,
+    ModelUnreadableError,
     RequivoError,
     SessionExistsError,
     SessionLockedError,
@@ -48,7 +53,7 @@ from requivo.core.errors import (
     SessionUnreadableError,
     UnreadableArchiveError,
 )
-from requivo.core.integrity import SEVERITY_NOTE, blocking, check_session_dir, inspect_session
+from requivo.core.integrity import SEVERITY_NOTE, blocking, check_session_dir, inspect_session, newest_readable_revision
 from requivo.core.persistence import ensure_store_dir
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _read_source, _resolve_cards, print_json
@@ -528,6 +533,42 @@ def _cmd_session_export(a, client) -> None:
     print(f"Exported session '{slug}' → {dest}")
 
 
+# Problem codes `session restore` (#210) can actually repair -- model.json disagreeing with, or
+# missing against, a revision history that is otherwise intact. Every other integrity code names
+# something restore does not touch: a broken revision log, a corrupt session.json, a revision file
+# gone -- copying a revision over model.json does nothing about any of those. `session verify`'s
+# remedy line below is scoped to exactly this set on purpose: naming a fix that would not fix the
+# problem is worse than naming none, the same reasoning `_RESTORABLE_CARD_CODES` in `doctor.py`
+# already applies one finding-family over.
+_RESTORABLE_MODEL_CODES = frozenset({"invalid_model", "model_is_not_the_last_revision", "missing_model"})
+
+
+def _restore_remedy_line(slug: str, problems: list, svc: SessionService) -> Optional[str]:
+    """The one line #210 was filed to add: which revision `session restore` would copy over
+    model.json, if any of `problems` is a code that verb can fix (see `_RESTORABLE_MODEL_CODES`).
+
+    Text-only, like the card-health hints beside it -- `--json` already carries the `code`s a
+    consumer can act on programmatically, and every existing hint in this verb follows the same
+    split (see the module's own docstring on `display_token` for the parallel). `None` when nothing
+    here is restorable, or when the search itself could not run: a session whose own metadata cannot
+    be read is a state this function must not paper over with a plausible-looking line, and the
+    caller already reports that separately as `session.checked`.
+    """
+    if not ({p.code for p in problems} & _RESTORABLE_MODEL_CODES):
+        return None
+    try:
+        n = svc.meta(slug).current_revision
+        found = newest_readable_revision(store.canonical_dir(slug), n) if n > 0 else None
+    except RequivoError:
+        return None
+    if found is None:
+        return ("    No revision file in this session's history could be read -- there is nothing "
+                "for `session restore` to copy from. Recovery here is manual JSON surgery, or "
+                "restoring this session from a backup.")
+    return (f"    revisions/{found.revision:04d}-model.json parses cleanly and can replace it: "
+            f"`requivo session restore {display_token(slug)}` (defaults to revision {found.revision})")
+
+
 def _cmd_session_verify(a, client) -> None:
     """Check that a session tells the truth about itself, and that the product context it names is
     still there. Exits non-zero when either is wrong, so it can gate a script.
@@ -566,6 +607,15 @@ def _cmd_session_verify(a, client) -> None:
     bump, and a verb that answered "broken" there would be measuring a session written by a newer
     Requivo against a rule that version no longer follows. `problems` keeps its meaning exactly, so a
     consumer gating on it is unaffected.
+
+    **A diagnosis is not the end of the story** (#210). Before this, the remedy for a torn model.json
+    stopped at "run verify again" — the fact that `revisions/` holds every applied model, and that an
+    earlier one can be copied over the broken one, lived nowhere a user reading this output would
+    find it. When `problems` carries a code `session restore` can actually fix, the human render
+    names the newest revision this build can still read and the exact command to run — see
+    `_restore_remedy_line`. `--json` is unchanged: the codes were already enough for a script to act
+    on, and this line is convenience for a human reading the terminal, the same split every other
+    hint in this verb already makes.
     """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
@@ -630,6 +680,9 @@ def _cmd_session_verify(a, client) -> None:
         print(f"❌ Session '{slug}' has {len(problems)} problem(s):")
         for p in problems:
             print(f"  · [{p.code}] {p.message}")
+        remedy = _restore_remedy_line(slug, problems, svc)
+        if remedy is not None:
+            print(remedy)
     if notes:
         # Printed under the tick rather than instead of it: the session *is* consistent, and this is
         # a fact about it worth naming (#260). Not a glyph of its own — ✅/❌/🟡 already spell the
@@ -648,6 +701,99 @@ def _cmd_session_verify(a, client) -> None:
         print(f"🟡 Could not check '{slug}'s product context: {display_token(cards['error'])}")
     if exit_code:
         raise SystemExit(exit_code)
+
+
+def _cmd_session_restore(a, client) -> None:
+    """Copy a readable `revisions/NNNN-model.json` over `model.json` -- the explicit, user-invoked
+    repair for a torn or inconsistent session (#210).
+
+    This is **consent, not automation**. `doctor` and `session verify` diagnose and never write --
+    invariant 14's report-not-repair rule binds them, not this verb, whose name on the command line
+    is the consent. It changes exactly one file.
+
+    **The revision history is untouched.** This is not `model apply`/`save_revision` under a new
+    name: no entry is appended to `session.json`'s revision log, `current_revision` does not move,
+    and no new `revisions/NNNN-model.json` is written. Restoring is model.json catching up with a
+    history that was already the truth, not a new fact about the session -- `session verify` should
+    read clean afterwards on exactly the content-hash check it already runs
+    (`model_is_not_the_last_revision`), because model.json's bytes now equal the chosen revision
+    file's, byte for byte.
+
+    **A named target is refused, never silently substituted.** `--revision N` that does not exist,
+    or whose file cannot be read or does not parse, raises rather than quietly falling back to
+    another revision -- silently repairing from something the caller did not ask for is the wrong
+    kind of helpful in a tool whose whole job is a deliberate, auditable repair. Only the *default*
+    (no `--revision`) searches for the newest revision this build can read
+    (`newest_readable_revision`, the same search `session verify`'s remedy line names), and says
+    which one it picked.
+
+    **No `--json`, and that is a scoping decision, not an oversight.** Every sibling verb in this
+    module has one; this one does not, because `docs/compatibility.md`'s `--json` promise and its
+    two guards (`test_every_json_verb_is_inside_the_promise`,
+    `test_every_public_json_payload_keeps_its_recorded_top_level_shape`) are a heavier commitment
+    than #210's own stated scope (`deterministic/sessions.py`, `docs/cli.md`, tests) asked for. The
+    human output already states everything this verb does.
+
+    **No repository seam for this, and that is scoped the same way.** `SessionRepository.save_revision`
+    always advances the revision log; there is no protocol method for "replace model.json and touch
+    nothing else", and `core/persistence.py`/`services/` are outside #210's own stated scope, so
+    inventing one was not this change to make. This reaches `store.canonical_dir` for the directory
+    -- already a justified direct call in this file -- and reads/writes the two files with plain
+    `Path` operations, the same shape `_cmd_session_export` already uses for directory-level work the
+    repository has no method for either. The lock is still taken through the repository
+    (`svc.repo.lock`), never `store.session_lock` directly, so the one direct reach past the seam
+    here is the file operations themselves, not the serialisation around them.
+    """
+    svc = SessionService()
+    slug = svc.resolve_slug(a.session)
+    with svc.repo.lock(slug):
+        meta = svc.meta(slug)
+        n = meta.current_revision
+        if n <= 0:
+            raise InvalidModelError(
+                f"session '{slug}' has no applied revision to restore from (current_revision is {n})",
+                details={"slug": slug, "current_revision": n})
+        d = store.canonical_dir(slug)
+        if a.revision is not None:
+            target_rev = a.revision
+            if not 1 <= target_rev <= n:
+                raise ModelUnreadableError(
+                    f"session '{slug}' has revisions 1..{n}; {target_rev} is out of range",
+                    details={"slug": slug, "revision": target_rev, "current_revision": n})
+            f = d / "revisions" / f"{target_rev:04d}-model.json"
+            if not f.is_file():
+                raise ModelUnreadableError(
+                    f"revisions/{target_rev:04d}-model.json is missing -- nothing to restore from",
+                    details={"slug": slug, "revision": target_rev})
+            payload = f.read_text(encoding="utf-8")
+            try:
+                PersistedEngineOutput.model_validate_json(payload)  # permissive, matching integrity.py
+            except (ValidationError, ValueError) as e:
+                raise ModelUnreadableError(
+                    f"revisions/{target_rev:04d}-model.json is not a valid model, refusing to "
+                    f"restore from it: {e}",
+                    details={"slug": slug, "revision": target_rev}) from e
+        else:
+            found = newest_readable_revision(d, n)
+            if found is None:
+                raise ModelUnreadableError(
+                    f"session '{slug}' has no readable revision file (1..{n}) to restore from",
+                    details={"slug": slug, "current_revision": n})
+            target_rev, payload = found.revision, found.payload
+        model_path = d / "model.json"
+        # Temp file + rename, the same shape `_cmd_session_export` already uses for a write this
+        # module's own repository seam has no method for: a crash mid-write can never leave
+        # model.json half-written, because the rename is atomic on the same filesystem and nothing
+        # else on disk ever points at the temp file's name.
+        tmp = model_path.with_name(f".{model_path.name}.{os.getpid()}.restore.tmp")
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(model_path)
+        finally:
+            tmp.unlink(missing_ok=True)
+    print(f"✅ Restored model.json for '{display_token(slug)}' from revision {target_rev}.")
+    print("  The revision history is untouched — this is not a new revision.")
+    print(f"  requivo session verify {display_token(slug)}")
 
 
 def _cmd_session_rescope(a, client) -> None:
@@ -1040,7 +1186,7 @@ def register_sessions(sub) -> None:
     """Attach the `session` verb group to the main `requivo` subparser."""
     # session
     sp = sub.add_parser("session",
-                        help="create, list, show, verify, rescope, migrate, export/import sessions")
+                        help="create, list, show, verify, restore, rescope, migrate, export/import sessions")
     ss = sp.add_subparsers(dest="subcommand", required=True, metavar="<action>")
 
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
@@ -1075,6 +1221,13 @@ def register_sessions(sub) -> None:
     sv.add_argument("session", help="session slug or path")
     sv.add_argument("--json", action="store_true")
     sv.set_defaults(func=_cmd_session_verify)
+
+    srt = ss.add_parser("restore", help="copy a readable revision over model.json — the recovery "
+                        "path for a torn or inconsistent session (#210)")
+    srt.add_argument("session", help="session slug or path")
+    srt.add_argument("--revision", type=int, default=None,
+                     help="restore from this revision instead of the newest one this build can read")
+    srt.set_defaults(func=_cmd_session_restore)
 
     sr = ss.add_parser("rescope", help="re-scope an existing session's context cards")
     sr.add_argument("session", help="session slug or path")

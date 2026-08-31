@@ -394,6 +394,176 @@ def test_session_verify_exits_one_when_the_cards_were_checked_and_are_broken(wor
     assert report["context_cards"]["problem"]["code"] == "unknown_context_card"
 
 
+# ── session restore: the documented recovery path (#210) ────────────────────
+# Before this, `session verify` diagnosed a torn model.json and stopped there -- the fact that
+# `revisions/` holds every applied model, and that an earlier one can be copied over the broken one,
+# lived nowhere a user reading the output would find it. `session restore` is the explicit,
+# user-invoked repair; `session verify`'s remedy line is what points a reader at it.
+
+
+def _apply_two_revisions(workspace, tmp_path):
+    """Init a session and apply two revisions, the second changing `workflow` -- the fixture every
+    test below builds on. Returns the slug."""
+    _run(["session", "init", "Something.", "--slug", "s"])
+    p1, p2 = tmp_path / "p1.json", tmp_path / "p2.json"
+    p1.write_text(json.dumps(_full_model()))
+    p2.write_text(json.dumps(_full_model(**{"workflow": _slot(80, "explicit", "high", "moved")})))
+    _run(["model", "apply", "s", str(p1)])
+    _run(["model", "apply", "s", str(p2)])
+    return "s"
+
+
+def test_session_verify_names_the_restorable_revision_and_restore_repairs_it(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    rev2 = (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+    # tear model.json out from under its own hash -- the exact scenario #210 was filed about
+    (d / "model.json").write_text((d / "revisions" / "0001-model.json").read_text(encoding="utf-8"))
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", slug], client=None)
+    assert e.value.code == 1
+    text = buf.getvalue()
+    assert "model_is_not_the_last_revision" in text
+    # the recovery path is named, not just the diagnosis -- the file and the exact command
+    assert "revisions/0002-model.json" in text
+    assert f"requivo session restore {slug}" in text
+
+    out = _run(["session", "restore", slug])
+    assert "revision 2" in out
+    assert (d / "model.json").read_text(encoding="utf-8") == rev2
+
+    assert _run_json(["session", "verify", slug, "--json"])["ok"] is True
+
+
+def test_session_verify_names_no_remedy_for_a_problem_restore_cannot_fix(workspace, tmp_path):
+    """The must-fire control for the test above: the remedy line is scoped to the codes `session
+    restore` can actually address, not printed for every problem. A missing revision *file* is a
+    broken history, which restoring model.json does nothing about."""
+    slug = _apply_two_revisions(workspace, tmp_path)
+    (store.canonical_dir(slug) / "revisions" / "0001-model.json").unlink()
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", slug], client=None)
+    assert e.value.code == 1
+    text = buf.getvalue()
+    assert "missing_revision_file" in text
+    assert "session restore" not in text
+
+
+def test_session_restore_defaults_to_the_newest_readable_revision(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    (d / "model.json").write_text((d / "revisions" / "0001-model.json").read_text(encoding="utf-8"))
+
+    _run(["session", "restore", slug])
+    assert (d / "model.json").read_text(encoding="utf-8") == \
+        (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+
+def test_session_restore_skips_a_broken_revision_when_searching_for_the_default(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    p3 = tmp_path / "p3.json"
+    p3.write_text(json.dumps(_full_model(**{"permissions": _slot(80, "explicit", "high", "HR only")})))
+    _run(["model", "apply", slug, str(p3)])  # revision 3
+
+    (d / "revisions" / "0003-model.json").write_text("{not json", encoding="utf-8")  # broken
+    (d / "model.json").write_text((d / "revisions" / "0001-model.json").read_text(encoding="utf-8"))
+
+    out = _run(["session", "restore", slug])
+    assert "revision 2" in out
+    assert (d / "model.json").read_text(encoding="utf-8") == \
+        (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+
+def test_session_restore_accepts_an_explicit_revision_even_when_a_newer_one_is_healthy(workspace,
+                                                                                        tmp_path):
+    """A named target is honoured exactly, never silently upgraded to the newest -- the whole point
+    of `--revision` is picking one deliberately."""
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+
+    _run(["session", "restore", slug, "--revision", "1"])
+    assert (d / "model.json").read_text(encoding="utf-8") == \
+        (d / "revisions" / "0001-model.json").read_text(encoding="utf-8")
+
+
+def test_session_restore_refuses_an_out_of_range_revision(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    before = (d / "model.json").read_text(encoding="utf-8")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "restore", slug, "--revision", "99"], client=None)
+    assert e.value.code == 1
+    assert (d / "model.json").read_text(encoding="utf-8") == before, \
+        "a refused restore must not touch model.json"
+
+
+def test_session_restore_refuses_a_missing_target_revision_file(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    (d / "revisions" / "0001-model.json").unlink()
+    before = (d / "model.json").read_text(encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        app(["session", "restore", slug, "--revision", "1"], client=None)
+    assert e.value.code == 1
+    assert (d / "model.json").read_text(encoding="utf-8") == before
+
+
+def test_session_restore_refuses_an_unparseable_target_revision_file(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    (d / "revisions" / "0001-model.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        app(["session", "restore", slug, "--revision", "1"], client=None)
+    assert e.value.code == 1
+
+
+def test_session_restore_refuses_when_nothing_in_the_history_is_readable(workspace, tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    for f in (d / "revisions").glob("*.json"):
+        f.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        app(["session", "restore", slug], client=None)
+    assert e.value.code == 1
+
+
+def test_session_restore_refuses_a_session_with_no_applied_revision_yet(workspace):
+    _run(["session", "init", "Something.", "--slug", "s"])
+    with pytest.raises(SystemExit) as e:
+        app(["session", "restore", "s"], client=None)
+    assert e.value.code == 1
+
+
+def test_session_restore_does_not_touch_the_revision_log(workspace, tmp_path):
+    """The acceptance criterion, checked directly: restoring is model.json catching up with a history
+    that was already the truth, not a new fact about the session -- no new revision file, no bump to
+    `current_revision`, no new entry in the provenance log."""
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    (d / "model.json").write_text((d / "revisions" / "0001-model.json").read_text(encoding="utf-8"))
+
+    before = store.read_meta(slug)
+    revision_files_before = sorted(p.name for p in (d / "revisions").glob("*.json"))
+
+    _run(["session", "restore", slug])
+
+    after = store.read_meta(slug)
+    assert after.current_revision == before.current_revision == 2
+    assert [r.model_dump() for r in after.revisions] == [r.model_dump() for r in before.revisions]
+    assert sorted(p.name for p in (d / "revisions").glob("*.json")) == revision_files_before
+
+
 # ── session rescope (#168) ───────────────────────────────────────────────────
 # The verb `docs/context-cards.md` used to say did not exist: re-scoping a session's context cards
 # without hand-editing `session.json`.

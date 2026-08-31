@@ -20,7 +20,7 @@ import pytest
 from _fakes import FakeClient, _model_in_out, _run_app, full_slots, out, slot
 
 from requivo.core import persistence as store
-from requivo.core.contracts import Challenge, DesignDecision, EngineOutput
+from requivo.core.contracts import Challenge, DesignDecision, EngineOutput, schema_slot_ids
 from requivo.core.dependencies import artifact_slots, diff_models, propagate, resolve_slots
 from requivo.services.artifacts import ArtifactService
 
@@ -121,6 +121,64 @@ def test_artifact_slots_reference_only_real_slot_ids():
     valid = set(slot_meta()[1])
     for name, slots in artifact_slots().items():
         assert slots <= valid, f"{name} references unknown slot ids: {slots - valid}"
+
+
+# ── the coverage direction: does every slot reach some artifact? (#269) ───────
+#
+# The test above only checks the subset direction -- every id an artifact set names is real. Nothing
+# checked the other one: that a slot the *schema* defines is named by at least one of them. A slot
+# that reaches none of prd/stories/estimate/criteria/epic/release -- only `brief`'s '*' catch-all --
+# marks nothing stale for any specific deliverable when it changes. That is invariant 1's exact
+# failure shape, and it was reachable by the most routine change the schema will ever see: adding a
+# slot and forgetting to add it to `_ARTIFACT_SLOTS_RAW`.
+#
+# Slots that genuinely feed no specific artifact -- only the assessment's judgment over the whole
+# model, via `brief` -- are named here with a reason, the same allowlist idiom `tests/test_boundaries.py`
+# already uses for its own two guards. A slot lands in this dict because someone checked *why* no
+# artifact needs it, not because the guard below was in the way.
+_SLOTS_WITH_NO_SPECIFIC_ARTIFACT = {
+    "current_process": (
+        "the as-is process shapes the assessment's judgment (brief, via '*') but no buildable "
+        "artifact has a field for 'how it's done today' -- prd/stories/estimate/criteria/epic/"
+        "release all describe the target state, never the process being replaced."
+    ),
+    "reporting": (
+        "filters/exports/dashboards/audit trails inform the assessment's read of the request but map "
+        "onto no dedicated field in any single artifact contract -- a reporting need important enough "
+        "to build usually surfaces through workflow, business_rules or acceptance instead, which are "
+        "already consumed."
+    ),
+}
+
+
+def test_every_required_slot_is_consumed_by_a_specific_artifact_or_is_exempted():
+    """#269. `schema_slot_ids()` is the single source of the required set (it already excludes
+    `optional: true` slots -- `config_vs_custom` is a platform edge some products never populate, and
+    requiring it in some artifact's set the way a normal slot is required would assert a fact the
+    schema itself does not claim).
+
+    A required slot must appear in some `artifact_slots()` value that is not `brief`'s `*` entry
+    (every slot is trivially in that one), or be named in `_SLOTS_WITH_NO_SPECIFIC_ARTIFACT` with a
+    reason. A slot in neither is the silent gap #269 found."""
+    _, required = schema_slot_ids()
+    amap = artifact_slots()
+    specific = set().union(*(slots for name, slots in amap.items() if name != "brief"))
+    exempt = set(_SLOTS_WITH_NO_SPECIFIC_ARTIFACT)
+
+    uncovered = required - specific - exempt
+    assert not uncovered, (
+        f"these required slot(s) are consumed by no specific artifact and are not exempted: "
+        f"{sorted(uncovered)} -- add each to an artifact's set in _ARTIFACT_SLOTS_RAW, or to "
+        f"_SLOTS_WITH_NO_SPECIFIC_ARTIFACT with a reason.")
+
+    # The mirror direction: a stale exemption -- naming a slot that no longer exists, or one an
+    # artifact-map edit has since started consuming -- must fail too, or the list silently stops
+    # meaning anything (the same reasoning docs/compatibility.md's own #14 gives for a stale allowlist
+    # entry: a promise about something that is no longer the case).
+    stale = (exempt - required) | (exempt & specific)
+    assert not stale, (
+        f"_SLOTS_WITH_NO_SPECIFIC_ARTIFACT names slot(s) that are gone or now consumed by a specific "
+        f"artifact: {sorted(stale)} -- remove the stale exemption(s).")
 
 
 def test_pc_impact_reports_blast_radius_offline():

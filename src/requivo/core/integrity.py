@@ -130,6 +130,48 @@ def _is_revision(filename: str, n: int) -> bool:
     return head.isdigit() and 1 <= int(head) <= n
 
 
+@dataclass(frozen=True)
+class ReadableRevision:
+    """One revision this build could parse, found while searching for a repair target (#210) — the
+    pair `newest_readable_revision` returns. `payload` is the exact bytes read off disk, not a
+    round-trip through a pydantic model: a caller that writes it back onto `model.json` unchanged
+    reproduces the revision file's own `content_hash`, which is what lets `check_session_dir`'s
+    `model_is_not_the_last_revision` check pass afterwards without this module recomputing anything.
+    Re-serializing a parsed model instead would risk silently dropping a field this build cannot
+    name — exactly the loss invariant 8 warns `resolve()` about, one file along."""
+    revision: int
+    payload: str
+
+
+def newest_readable_revision(d: Path, n: int) -> ReadableRevision | None:
+    """The highest revision number in `1..n` whose `revisions/NNNN-model.json` exists and parses
+    under the same permissive contract `inspect_session_dir` checks it against below — read newest
+    first, because a repair wants the most recent state this build can trust, not the oldest one
+    that happens to still parse. `None` when nothing in that range is readable, which is the answer
+    a documented recovery path has to be able to give honestly rather than invent one for.
+
+    Exists for `session verify` (names the file its remedy line points at) and `session restore`
+    (#210) — deliberately *not* a verdict about the session. It never raises and does not decide
+    whether a torn `model.json` should be repaired, only which history this session actually has
+    that this build can open. It re-validates each candidate independently rather than reusing
+    `inspect_session_dir`'s own findings, whose per-revision loop keeps going past the *first*
+    problem in reading order rather than returning "which revisions parsed" in a form a caller could
+    recover without re-deriving this same loop from them — at which point two statements of the
+    check exist regardless of which file holds the second one.
+    """
+    for i in range(n, 0, -1):
+        f = d / "revisions" / f"{i:04d}-model.json"
+        if not f.is_file():
+            continue
+        try:
+            payload = f.read_text(encoding="utf-8")
+            PersistedEngineOutput.model_validate_json(payload)  # permissive, as below
+        except (OSError, ValidationError, ValueError):
+            continue
+        return ReadableRevision(i, payload)
+    return None
+
+
 def inspect_session_dir(d: Path, *, expected_slug: str | None = None) -> list[IntegrityProblem]:
     """Every finding about the session directory `d`, in reading order — notes included.
 
