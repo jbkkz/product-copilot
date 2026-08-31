@@ -438,6 +438,40 @@ def test_session_verify_names_the_restorable_revision_and_restore_repairs_it(wor
     assert _run_json(["session", "verify", slug, "--json"])["ok"] is True
 
 
+def test_session_verify_says_it_could_not_check_whether_restore_would_help(workspace, tmp_path,
+                                                                            monkeypatch):
+    """Found in review: `_restore_remedy_line` takes its own, later, unlocked read of the session
+    metadata to search for a restore target -- a second read after `inspect_session`'s own, already
+    released by the time this one runs. A session that locks up in the gap between the two must not
+    read as "nothing to suggest", which is the stronger, wrong claim that a silent `None` made. The
+    third state is a printed line, not a silent absence -- the same rule `session.checked` already
+    follows a few lines up in this same verb."""
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    (d / "model.json").write_text((d / "revisions" / "0001-model.json").read_text(encoding="utf-8"))
+
+    from requivo.core.errors import SessionLockedError
+    from requivo.services.sessions import SessionService
+    real_meta = SessionService.meta
+
+    def _boom(self, s):
+        if s == slug:
+            raise SessionLockedError(f"session '{s}' is locked by another process; retry in a moment",
+                                     details={"slug": s})
+        return real_meta(self, s)
+
+    monkeypatch.setattr(SessionService, "meta", _boom)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", slug], client=None)
+    assert e.value.code == 1
+    text = buf.getvalue()
+    assert "model_is_not_the_last_revision" in text          # the diagnosis still ran
+    assert "Could not check whether" in text                 # the third state, printed
+    assert "requivo session restore" not in text              # never a fabricated suggestion
+
+
 def test_session_verify_names_no_remedy_for_a_problem_restore_cannot_fix(workspace, tmp_path):
     """The must-fire control for the test above: the remedy line is scoped to the codes `session
     restore` can actually address, not printed for every problem. A missing revision *file* is a
@@ -465,6 +499,10 @@ def test_session_restore_defaults_to_the_newest_readable_revision(workspace, tmp
 
 
 def test_session_restore_skips_a_broken_revision_when_searching_for_the_default(workspace, tmp_path):
+    """Falling back to an older revision is a *partial* repair, and the receipt says so -- found in
+    review: the original version of this test only checked that the fallback landed on the right
+    file, and would have passed unchanged against a claim that `session verify` reads clean
+    afterwards, which is false here (revision 3's own content is genuinely gone)."""
     slug = _apply_two_revisions(workspace, tmp_path)
     d = store.canonical_dir(slug)
     p3 = tmp_path / "p3.json"
@@ -476,8 +514,51 @@ def test_session_restore_skips_a_broken_revision_when_searching_for_the_default(
 
     out = _run(["session", "restore", slug])
     assert "revision 2" in out
+    assert "partial repair" in out.lower()
     assert (d / "model.json").read_text(encoding="utf-8") == \
         (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+    # honest afterwards: model.json now holds a real historical state, but this is not the full
+    # repair -- revision 3's own content is unrecoverable, and verify must keep saying so rather
+    # than reading as fixed.
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit):
+        app(["session", "verify", slug, "--json"], client=None)
+    report = json.loads(buf.getvalue())
+    assert report["ok"] is False
+    assert any(p["code"] == "model_is_not_the_last_revision" for p in report["problems"])
+
+
+def test_session_restore_default_search_also_skips_a_tampered_revision(workspace, tmp_path):
+    """The hash check, not just the parse check: a revision file hand-edited after being frozen still
+    parses as a valid model, and the default search must not trust it any more than it trusts one
+    that fails to parse at all."""
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    f = d / "revisions" / "0002-model.json"
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
+    (d / "model.json").write_text(f.read_text(encoding="utf-8"))  # torn, needs a repair
+
+    out = _run(["session", "restore", slug])
+    assert "revision 1" in out
+    assert (d / "model.json").read_text(encoding="utf-8") == \
+        (d / "revisions" / "0001-model.json").read_text(encoding="utf-8")
+
+
+def test_session_restore_refuses_an_explicit_revision_whose_hash_no_longer_matches(workspace,
+                                                                                    tmp_path):
+    slug = _apply_two_revisions(workspace, tmp_path)
+    d = store.canonical_dir(slug)
+    f = d / "revisions" / "0001-model.json"
+    before = f.read_text(encoding="utf-8")
+    f.write_text(before.replace('"completeness": 0', '"completeness": 5', 1))
+    model_before = (d / "model.json").read_text(encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        app(["session", "restore", slug, "--revision", "1"], client=None)
+    assert e.value.code == 1
+    assert (d / "model.json").read_text(encoding="utf-8") == model_before, \
+        "a refused restore must not touch model.json"
 
 
 def test_session_restore_accepts_an_explicit_revision_even_when_a_newer_one_is_healthy(workspace,

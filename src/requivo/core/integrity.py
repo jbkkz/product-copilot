@@ -143,32 +143,69 @@ class ReadableRevision:
     payload: str
 
 
-def newest_readable_revision(d: Path, n: int) -> ReadableRevision | None:
-    """The highest revision number in `1..n` whose `revisions/NNNN-model.json` exists and parses
-    under the same permissive contract `inspect_session_dir` checks it against below — read newest
-    first, because a repair wants the most recent state this build can trust, not the oldest one
-    that happens to still parse. `None` when nothing in that range is readable, which is the answer
-    a documented recovery path has to be able to give honestly rather than invent one for.
+def _try_revision(d: Path, i: int, expected_hashes: dict[int, str] | None) -> ReadableRevision | None:
+    """One candidate: does `revisions/NNNN-model.json` exist, parse under the permissive contract,
+    and — when `expected_hashes` names a hash for it — match it? Shared by `newest_readable_revision`
+    (searching) and `readable_revision` (checking one specific number), so the two never state the
+    same three-part check twice. `expected` absent or empty is unconfirmed rather than refused, the
+    same tolerance `inspect_session_dir` gives a legacy revision record with no recorded hash."""
+    f = d / "revisions" / f"{i:04d}-model.json"
+    if not f.is_file():
+        return None
+    try:
+        payload = f.read_text(encoding="utf-8")
+        PersistedEngineOutput.model_validate_json(payload)  # permissive, as inspect_session_dir below
+    except (OSError, ValidationError, ValueError):
+        return None
+    expected = (expected_hashes or {}).get(i)
+    if expected and content_hash(payload) != expected:
+        return None
+    return ReadableRevision(i, payload)
+
+
+def readable_revision(d: Path, revision: int, *,
+                      expected_hashes: dict[int, str] | None = None) -> ReadableRevision | None:
+    """Is this one specific revision readable and trustworthy? `None` if the file is missing, does
+    not parse, or does not match its recorded hash — the check `session restore`'s explicit
+    `--revision N` runs before touching anything, so a caller-named target is refused on exactly the
+    same grounds `newest_readable_revision`'s search would have skipped it on, never on a looser one.
+    See `_try_revision` for what "readable and trustworthy" means."""
+    return _try_revision(d, revision, expected_hashes)
+
+
+def newest_readable_revision(d: Path, n: int, *,
+                             expected_hashes: dict[int, str] | None = None) -> ReadableRevision | None:
+    """The highest revision number in `1..n` whose `revisions/NNNN-model.json` exists, parses under
+    the same permissive contract `inspect_session_dir` checks it against, and — when
+    `expected_hashes` names one — matches the hash `session.json`'s own revision log recorded for
+    it. Read newest first, because a repair wants the most recent state this build can trust, not
+    the oldest one that happens to still parse. `None` when nothing in that range is readable, which
+    is the answer a documented recovery path has to be able to give honestly rather than invent one
+    for.
+
+    **A file that parses is not automatically trustworthy, and `session restore` (#210) exists to be
+    trustworthy** (found in review). A revision file tampered with *after* it was frozen still parses
+    as a perfectly good model — `inspect_session_dir` catches exactly this with
+    `revision_hash_mismatch`, comparing the same recorded hash. Restoring from such a file without
+    the identical check would let a repair tool trust what the diagnostic it is paired with already
+    refuses to. `expected_hashes` is `{revision: model_hash}`, the shape `SessionMeta.revisions`
+    already carries; a revision absent from the map, or recorded with an empty hash, is treated as
+    unconfirmed rather than refused — this function still answers *can this build open it*, not
+    *is there a hash to check it against*.
 
     Exists for `session verify` (names the file its remedy line points at) and `session restore`
     (#210) — deliberately *not* a verdict about the session. It never raises and does not decide
     whether a torn `model.json` should be repaired, only which history this session actually has
-    that this build can open. It re-validates each candidate independently rather than reusing
-    `inspect_session_dir`'s own findings, whose per-revision loop keeps going past the *first*
+    that this build can open **and trust**. It re-validates each candidate independently rather than
+    reusing `inspect_session_dir`'s own findings, whose per-revision loop keeps going past the *first*
     problem in reading order rather than returning "which revisions parsed" in a form a caller could
     recover without re-deriving this same loop from them — at which point two statements of the
     check exist regardless of which file holds the second one.
     """
     for i in range(n, 0, -1):
-        f = d / "revisions" / f"{i:04d}-model.json"
-        if not f.is_file():
-            continue
-        try:
-            payload = f.read_text(encoding="utf-8")
-            PersistedEngineOutput.model_validate_json(payload)  # permissive, as below
-        except (OSError, ValidationError, ValueError):
-            continue
-        return ReadableRevision(i, payload)
+        found = _try_revision(d, i, expected_hashes)
+        if found is not None:
+            return found
     return None
 
 

@@ -543,20 +543,24 @@ that, extend an existing tier's scan set (as #355 did for `providers/`) rather t
 fourth.
 
 **#287 widens that bar from "a scanning tier" to every prose/CI/script guard that does not exercise
-shipped runtime code, because the same trajectory shows up one level up.** Measured 2026-08-29:
-`test_narrative_references.py` (437), `test_version_sites.py` (506),
+shipped runtime code, because the same trajectory shows up one level up.** The issue's own filing
+quoted a 2026-08-29 count that had already drifted the day it was written — `test_agent_layer.py`
+tripled that same day, in the commit that stopped the tracked `.claude/settings.json` configuring
+every contributor — so the figures below are re-measured directly against this repository rather than
+carried forward from the issue: `test_narrative_references.py` (441), `test_version_sites.py` (506),
 `test_workflow_untrusted_output.py` (673), `test_workflow_permissions.py` (207),
-`test_agent_layer.py` (227), `test_vocabulary_boundary.py` (113), `test_dependency_floor.py` (137),
+`test_agent_layer.py` (552), `test_vocabulary_boundary.py` (113), `test_dependency_floor.py` (153),
 `test_plugin.py` (353), `test_plugin_cli_drift.py` (1,153) and `test_golden_{lib,readout,capture}.py`
-(967) — 4,773 lines, 24% of the then 20,012-line suite — guard the repo's own self-description:
-comment references, version strings, CI YAML, `.claude/` inertness, asset wording, plugin-doc drift, a
-harness script. `test_boundaries.py` (1,086) and `test_encoding.py` (1,012) — another 2,098 lines,
-10% — guard source *form* (an import, an encoding declaration) rather than behaviour. Each one is
-incident-backed and individually defensible, same as every scanning tier above. The risk is the
-trajectory, not the estate: this culture adds a guard per incident, and an incident in prose is cheap
-to have, while nothing automated fails when the engine's questions or artifacts get materially worse
-— `docs/product-validation.md`'s own verdict, "well tested and under-validated," which #169 exists to
-fix and this file does not.
+(967) — 5,118 lines, ~20% of the 26,186-line suite — guard the repo's own self-description: comment
+references, version strings, CI YAML, `.claude/` inertness, asset wording, plugin-doc drift, a harness
+script. `test_boundaries.py` (1,167) and `test_encoding.py` (1,080) — another 2,247 lines, ~9% — guard
+source *form* (an import, an encoding declaration) rather than behaviour. Each one is incident-backed
+and individually defensible, same as every scanning tier above. The risk is the trajectory, not the
+estate: this culture adds a guard per incident, and an incident in prose is cheap to have, while
+nothing automated fails when the engine's questions or artifacts get materially worse —
+`docs/product-validation.md`'s own verdict, "well tested and under-validated," which #169 exists to
+fix and this file does not. Re-measure before citing this line again — a suite this actively guarded
+moves fast enough that even a same-day count can already be wrong.
 
 **The meta-guard estate is at budget.** A new prose/CI/script guard needs the same two-named-instance
 bar #288 already applies to a scanning tier, one level up: name two real instances of the drift it
@@ -576,10 +580,12 @@ A parallel drift, in the store rather than in the test suite: the report-only di
 lines) and the lock-residue scan (`scan_lock_root`, `_lock_health`, ~110 lines together) — have grown
 faster than the states they report actually occur. Each addition is well built and each mints public
 `--json` surface that `docs/compatibility.md` then makes expensive to remove, so the tier only ever
-ratchets outward. Meanwhile the residue that genuinely accumulates — `create_session`'s dot-prefixed
-staging directories and `_swap_in`'s `.replaced` backups, both left behind only by a process killed
-hard enough to skip its own cleanup — is reported by nothing, so the tier's coverage was never even
-aligned with what actually piles up (#287).
+ratchets outward. Meanwhile the residue that genuinely accumulates — a dot-prefixed scratch file left
+behind by any compound write hard-killed mid-write, from `create_session`'s staging directories and
+`_swap_in`'s `.replaced` backups to `session restore`'s own `.model.json.<pid>.restore.tmp` (#210,
+landing beside this paragraph) — is reported by nothing, so the tier's coverage was never even
+aligned with what actually piles up, and every new writer keeps adding another unreported instance of
+the identical shape (#287).
 
 **No new report-only diagnostic lands in this tier without a reproduced field instance of the state it
 reports, and it must name what a user should do about it** — a residue with no action is not reported.
@@ -818,7 +824,7 @@ instance would justify.
   / per-client / reusable-for-all). On for configurable multi-client platforms, off for one-shot apps.
 - **Adding a slot** touches more files than any other kind of change, and it used to be possible to
   miss the one file that silently mattered most (#269). Three are mandatory:
-  1. **`assets/framework/model_schema.json`** — the slot itself (`id`, `pillar`, `impact_default`,
+  1. **`framework/model_schema.json`** — the slot itself (`id`, `pillar`, `impact_default`,
      `label`, `probe`; `optional: true` only for a platform-edge slot with no dedicated artifact
      field, `config_vs_custom` today). This is the single source — `schema_slot_ids()` reads it, and
      everything else either derives from it or has to be kept consistent with it by hand.
