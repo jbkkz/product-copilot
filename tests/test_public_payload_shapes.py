@@ -146,6 +146,12 @@ class _Case:
     label: str
     argv: tuple[str, ...]
     keys: dict[str, str]
+    # The documented exit code for this invocation. 0 for every case recorded here, because the
+    # fixture workspace is healthy -- but it is pinned rather than assumed, so that a verb which
+    # starts exiting 4 (degraded) or 1 (inconsistent) against a healthy session goes red. Without
+    # it, moving the exit-code judgement after the parse below would have removed a loud failure
+    # and put nothing in its place.
+    exits: int = 0
 
 
 # The recorded shapes. Ordered by **invocation**, not alphabetically: a session must exist before a
@@ -339,29 +345,44 @@ def _observe(case: _Case, paths: dict[str, str]) -> dict:
     """
     argv = [part.format(**paths) for part in case.argv]
     buf = io.StringIO()
+    code = 0
     try:
         with redirect_stdout(buf):
             app(argv, client=None)  # client=None -> any accidental API use would blow up
     except SystemExit as exc:
-        raise AssertionError(
-            f"`{case.label}` exited {exc.code} against the fixture workspace, so no payload was "
-            f"observed. That is a broken fixture, not a clean verb -- stdout was "
-            f"{buf.getvalue()[:400]!r}") from exc
+        code = exc.code if isinstance(exc.code, int) else 1
     raw = buf.getvalue()
+    # Parse first, then judge the exit code -- the same ordering the provider runner uses for a
+    # truncated reply, and for the same reason. Several verbs here print their payload and *then*
+    # signal: `session verify` raises SystemExit(1) for an inconsistent session and
+    # SystemExit(EXIT_DEGRADED) for one it could not examine, and `session list` does the same for a
+    # degraded row. Reading the exit code first would throw a payload that is sitting in the buffer
+    # and report it as an unobservable verb, which is a true sentence about the wrong thing.
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise AssertionError(
-            f"`{case.label}` did not print parseable JSON on stdout: {raw[:400]!r}") from exc
+            f"`{case.label}` exited {code} and printed no parseable JSON on stdout, so no payload "
+            f"was observed at all -- that is a broken fixture rather than a clean verb. stdout was "
+            f"{raw[:400]!r}") from exc
     if not isinstance(payload, dict):
         raise AssertionError(
             f"`{case.label}` printed a {type(payload).__name__}, not an object. Every `--json` "
             f"payload has a top level -- #87 and #107 are the two that did not, and both were "
             f"breaking changes made to give them one.")
     if "code" in payload and "message" in payload and "code" not in case.keys:
+        # `!r`, like the two branches above: `message` is assembled from values read back off disk
+        # -- a slug, a card name, a filename -- and this repository has already had a persisted
+        # value forge a line of a verb own output (#40). Nothing untrusted reaches this fixture
+        # today, and quoting it costs one character.
         raise AssertionError(
             f"`{case.label}` answered the structured error envelope, not its payload: "
-            f"{payload['code']} -- {payload['message']}. The fixture is wrong, or the verb is.")
+            f"{payload['code']!r} -- {payload['message']!r}. The fixture is wrong, or the verb is.")
+    if code != case.exits:
+        raise AssertionError(
+            f"`{case.label}` printed a well-formed payload and then exited {code}, where {case.exits} "
+            f"is recorded. The exit code is part of what this page promises -- 4 is degraded, 1 is a "
+            f"firm negative -- so this is a change of answer, not a change of shape.")
     return payload
 
 
