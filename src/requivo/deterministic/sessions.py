@@ -41,6 +41,7 @@ from requivo.core.errors import (
     InconsistentArchiveError,
     InvalidArchiveError,
     InvalidModelError,
+    RequivoError,
     SessionExistsError,
     SessionLockedError,
     SessionNotFoundError,
@@ -333,27 +334,43 @@ def _cmd_session_migrate(a, client) -> None:
     this is the *only* thing that reads that layout — there is no automatic migrate-on-first-write.
 
     The `session_exists` check below is **reporting, not the guard**: it is what fills the
-    `skipped_already_present` row, and it is kept because a sweep that names what it declined is worth
-    a cheap stat call. The guard is `migrate_legacy`'s own atomic claim on the slug — which is why the
-    `SessionExistsError` arm exists. A session that appears between the check and the migration is the
-    TOCTOU window the check cannot close, and the correct outcome there is the same skip.
+    `skipped_already_present` (and `interrupted`, see below) rows, and it is kept because a sweep that
+    names what it declined is worth a cheap stat call. The guard is `migrate_legacy`'s own atomic
+    claim on the slug — which is why the `SessionExistsError` arm exists. A session that appears
+    between the check and the migration is the TOCTOU window the check cannot close, and the correct
+    outcome there is the same skip.
 
-    **That arm covers the occupied-slug case and nothing else, deliberately, and the gap is stated
-    here rather than left to be discovered.** A legacy session whose `model.json` does not parse still
-    aborts the whole pass: `migrate_legacy` raises before it claims the slug, nothing catches it, and
-    the run ends with no output at all — so slugs sorted after the bad one are neither migrated nor
-    reported, and the ones already done are never printed. That is invariant 15's shape and this loop
-    does not yet satisfy it. It is left loud on purpose rather than widened to `except Exception`
-    here: turning a corrupt session into one row of a list is the calm-wrong-answer direction, and
-    doing it properly means designing what the receipt says, which is a decision and not a catch."""
+    **A canonical session already occupying the slug is not one fact, it is two, and folding them
+    together used to be a false receipt** (#262). `migrate_legacy` claims the slug via `create_session`
+    and only afterwards, under a separate lock, applies the legacy model — a crash between the two
+    leaves a revision-0 shell at the canonical slug. Reporting that as `skipped_already_present`, which
+    means *the work is done*, told the user their session had migrated when the model never arrived
+    and `out/` was the only copy. `current_revision == 0` is what tells the two apart: a genuinely
+    completed migration always has revision 1 (`migrate_legacy` applies the model as its very last
+    step), so an occupied slug still sitting at 0 can only be this crash window, never a normal skip.
+    It renders under its own key, `interrupted`, naming the recovery step, and counts toward
+    `EXIT_DEGRADED` below like a bad legacy session does — the same shape as `skipped_already_present`
+    would be if the phrase did not already mean something else.
+
+    **A legacy session whose `model.json` does not parse used to abort the whole pass, per invariant
+    15's "a listing survives its own members" applied to this loop.** `migrate_legacy` raises before
+    it claims the slug, so nothing was written for that slug, and letting the exception propagate
+    ended the run with no output at all — every slug sorted after the bad one silently unreported, and
+    every one before it, however many had already migrated, never printed either. It is caught now,
+    narrowly: `RequivoError` is the vocabulary every structured failure in this store already speaks
+    (a bad `model.json`, an unreadable file), so catching it rather than `Exception` still lets a
+    genuine bug in the migration code itself surface as a traceback instead of one more list row."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
-    migrated, skipped = [], []
+    migrated, skipped, interrupted, errors = [], [], [], []
     repo = SessionService().repo
     for slug in slugs:
         if repo.exists(slug):
-            skipped.append(slug)
+            if repo.read_meta(slug).current_revision == 0:
+                interrupted.append(slug)
+            else:
+                skipped.append(slug)
             continue
         try:
             # No repository equivalent, and there cannot be one: this converts a directory in the
@@ -363,15 +380,35 @@ def _cmd_session_migrate(a, client) -> None:
         except SessionExistsError:
             skipped.append(slug)
             continue
+        except RequivoError as e:
+            errors.append({"slug": slug, "error": str(e)})
+            continue
         migrated.append(slug)
+    degraded = bool(errors or interrupted)
     if a.json:
-        _print_json({"migrated": migrated, "skipped_already_present": skipped, "source": str(root)})
-        return
-    print(f"Legacy sessions under {root}:")
-    print(f"  migrated: {', '.join(migrated) or '(none)'}")
-    if skipped:
-        print(f"  skipped (already in canonical store): {', '.join(skipped)}")
-    print("  Legacy files were preserved (read-only).")
+        _print_json({"migrated": migrated, "skipped_already_present": skipped,
+                     "interrupted": interrupted, "errors": errors, "source": str(root)})
+    else:
+        print(f"Legacy sessions under {root}:")
+        print(f"  migrated: {', '.join(migrated) or '(none)'}")
+        if skipped:
+            print(f"  skipped (already in canonical store): {', '.join(skipped)}")
+        if interrupted:
+            print(f"  present but empty (interrupted migrate?) — delete .requivo/sessions/<slug> and "
+                  f"re-run: {', '.join(interrupted)}")
+        if errors:
+            print("  could not migrate:")
+            for e in errors:
+                # Both fields are untrusted: `slug` is a directory name under `out/`, and `error` is a
+                # structured error's message text, which can itself quote file content — a corrupt
+                # legacy `model.json` is exactly the case that reaches this line (#40, #70, invariant 14).
+                print(f"    {display_token(e['slug'])}: {display_token(e['error'])}")
+        print("  Legacy files were preserved (read-only).")
+    # Raised after the receipt is printed, never instead of it, for the same reason `session list`
+    # raises after its rows: nothing on stdout is withheld, and a script that reads the exit code
+    # alone still learns that this run was not a clean success.
+    if degraded:
+        raise SystemExit(EXIT_DEGRADED)
 
 
 def _cmd_session_export(a, client) -> None:
@@ -572,20 +609,43 @@ def _cmd_session_rescope(a, client) -> None:
 # filesystem filling up, and so decompression cannot be used as an amplifier.
 MAX_ARCHIVE_FILES = 2_000
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+# `MAX_ARCHIVE_FILES` and `MAX_ARCHIVE_BYTES` are both computed over files alone -- directory entries
+# are filtered out of `infos` below before either sum runs. So an archive built entirely of directory
+# entries declares zero files and ~zero bytes and sailed past both, while the extraction loop still
+# iterated the *whole* `z.infolist()` and created every one of them: an inode/dir-creation exhaustion
+# DoS through a door neither file-only cap covers (#219). This bounds the raw entry count -- files and
+# directories together -- before either file-only cap runs. A real `session export` never writes a
+# directory entry at all (`_cmd_session_export` walks `f.is_file()` only), so a small multiple of
+# `MAX_ARCHIVE_FILES` is loose for the legitimate case and tight for the hostile one.
+MAX_ARCHIVE_ENTRIES = MAX_ARCHIVE_FILES * 4
 
 
-def _inspect_archive(z: zipfile.ZipFile) -> str:
+def _inspect_archive(z: zipfile.ZipFile) -> tuple[str, list[zipfile.ZipInfo]]:
     """Validate an export archive *before* anything is written, and return the single session slug it
-    contains. Raises `InvalidArchiveError` on anything unexpected, with `details["problem"]` naming
-    which shape check refused it — see that class for the vocabulary and for why the seven conditions
-    are one code (#101). It answered `invalid_model` until then, on a path where nobody had proposed
-    a model and where the arm on either side of it already named the archive.
+    contains together with the exact entry list that was validated. Raises `InvalidArchiveError` on
+    anything unexpected, with `details["problem"]` naming which shape check refused it — see that
+    class for the vocabulary and for why the eight conditions are one code (#101, #219). It answered
+    `invalid_model` until then, on a path where nobody had proposed a model and where the arm on
+    either side of it already named the archive.
+
+    **The returned entry list is what the caller must extract, and only that** (#219). Before this,
+    the caller re-read `z.infolist()` itself for the extraction loop -- a second, independent call
+    that happened to return the same entries every time, but "happened to" is not what "the extracted
+    set is exactly the validated set" means. Handing back the one list this function already counted
+    and bounded makes that a structural guarantee rather than a coincidence of two calls agreeing.
 
     Checking names by string prefix (the previous guard: `str(target).startswith(str(root))`) is not a
     containment test — `/…/sessions-evil` starts with `/…/sessions`. Here every entry is decomposed
     into path components instead, so a separator, a drive letter, a root, or a `..` segment is
     unrepresentable rather than merely unlikely."""
-    infos = [i for i in z.infolist() if not i.is_dir()]
+    all_infos = z.infolist()
+    if len(all_infos) > MAX_ARCHIVE_ENTRIES:
+        raise InvalidArchiveError(
+            f"the archive holds {len(all_infos)} entries (files and directories); the maximum is "
+            f"{MAX_ARCHIVE_ENTRIES}",
+            details={"problem": "too_many_entries",
+                     "entries": len(all_infos), "max_entries": MAX_ARCHIVE_ENTRIES})
+    infos = [i for i in all_infos if not i.is_dir()]
     if not infos:
         raise InvalidArchiveError("the archive contains no files", details={"problem": "empty"})
     if len(infos) > MAX_ARCHIVE_FILES:
@@ -635,7 +695,7 @@ def _inspect_archive(z: zipfile.ZipFile) -> str:
     # what stopped an archive whose folder was called `bad slug` from being unpacked into the store and
     # breaking every later `session list`. Direct on purpose: this is the *name* rule the file
     # backing enforces, asked before any session exists to ask a repository about.
-    return store.validate_slug(slug)
+    return store.validate_slug(slug), all_infos
 
 
 def _swap_in(extracted: Path, target: Path, slug: str, repo: SessionRepository) -> None:
@@ -795,7 +855,7 @@ def _cmd_session_import(a, client) -> None:
         raise UnreadableArchiveError(f"{display_token(str(archive))} is not a readable .zip archive: {e}",
                                      details={"archive": str(archive)}) from e
     with z:
-        slug = _inspect_archive(z)
+        slug, entries = _inspect_archive(z)
         # A conflict with the store's current state, not a malformed proposal: `session_exists`
         # exists for exactly this fact and answers 409 where `invalid_model` answered 400 (#101).
         #
@@ -815,7 +875,9 @@ def _cmd_session_import(a, client) -> None:
         # rename, but never visible to `session list` while it is still half-written.
         scratch = Path(tempfile.mkdtemp(prefix=".import-", dir=root.parent))
         try:
-            for info in z.infolist():
+            # Exactly the entry list `_inspect_archive` validated and bounded — never a fresh
+            # `z.infolist()` call — so the extracted set is structurally the validated set (#219).
+            for info in entries:
                 z.extract(info, scratch)
             extracted = scratch / slug
             _validate_extracted(extracted, slug)

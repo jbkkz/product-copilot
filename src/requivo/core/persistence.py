@@ -367,18 +367,17 @@ def session_lock(slug: str) -> Iterator[None]:
     ("a precondition is held across the writes it authorises") applies to it like any other.
     `test_a_session_deleted_before_the_lock_is_granted_is_refused` goes red if it moves back out.
 
-    **The check before the open stays, and is deliberately not authoritative.** It buys two things
-    and decides nothing: a slug with no session refuses without leaving an empty lock file behind,
-    and — the reason it is worth a line — `os.open` is never reached for a name that is not a
-    session, which on Windows keeps a slug spelling a reserved device (`con`, `nul`, `lpt1`) out of
-    `os.open` entirely. `validate_slug` does not exclude those, and such a name can never be a real
-    session on Windows anyway because `create_session`'s directory is refused first; this keeps the
-    error for one immediate and correct instead of a 30-second `SessionLockedError` on a console
-    handle. It can be wrong in exactly one direction — `_swap_in` holds this lock across two renames
-    and `<root>/<slug>` does not exist for the microseconds between them, so a caller sampling that
-    instant refuses `session_not_found` about a session that is merely being replaced. That window
-    is the one the pre-#113 code already had at its `os.open`, and a refusal is the safe direction:
-    this check can decline a lock, never grant one.
+    **The check before the open stays, and is deliberately not authoritative.** It buys one thing
+    and decides nothing: a slug with no session refuses without leaving an empty lock file behind.
+    A reserved Windows device name (`con`, `nul`, `lpt1`) never reaches this far in the first place —
+    `session_exists` resolves through `canonical_dir`, which calls `validate_slug`, and that now
+    refuses such a slug directly (#221, `test_reserved_windows_device_names_are_refused_as_slugs`)
+    rather than being caught here by `os.open` failing on a console handle. It can be wrong in
+    exactly one direction — `_swap_in` holds this lock across two renames and `<root>/<slug>` does
+    not exist for the microseconds between them, so a caller sampling that instant refuses
+    `session_not_found` about a session that is merely being replaced. That window is the one the
+    pre-#113 code already had at its `os.open`, and a refusal is the safe direction: this check can
+    decline a lock, never grant one.
 
     Neither the lock file nor a session directory is ever removed here. Unlinking a lock file a
     concurrent process may be holding is legal on POSIX and silently breaks mutual exclusion — the
@@ -687,6 +686,37 @@ def content_hash(text: str) -> str:
 # admitting exactly one. `\Z` is the anchor both docstrings were already describing.
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
+# Windows refuses to create a file or directory named one of these, case-insensitively, whether bare
+# or with any extension (`CON`, `con.txt` and `con.tar.gz` are all reserved -- the OS matches on the
+# component *before the first dot*, not the whole name). `_SLUG_RE` and `_FILENAME_RE` both admit
+# them, so without this a session slugged 'con' is fully valid on macOS/Linux, exports fine, and then
+# cannot be materialized by `session import` on a colleague's Windows machine -- a portability hole
+# the session format's own promise never mentions (#221).
+#
+# Refused on *every* platform, not only Windows: refusing only there would still let a POSIX user
+# create an archive Windows can never open, which is the defect this closes rather than relocates.
+# The cost is a POSIX user losing a legal name they will almost never want; the alternative is a
+# session that is portable everywhere except where compatibility.md promises it is.
+#
+# `com0`/`lpt0` and a bare `com`/`lpt`/`console` etc. are deliberately absent -- only `com1`-`com9`
+# and `lpt1`-`lpt9` are reserved devices, and a check wider than the real set is the kind of guard
+# that refuses a name nobody needed refused.
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{n}" for n in range(1, 10)}
+    | {f"lpt{n}" for n in range(1, 10)}
+)
+
+
+def _reserved_stem(name: str) -> bool:
+    """Is the component of `name` before its first dot a Windows reserved device name?
+
+    Shared by `validate_slug` (whose "stem" is the whole slug -- a slug never carries a dot) and
+    `validate_filename` (whose stem is genuinely the part before the first `.`, so `con.tar.gz` is
+    caught on `con` and not on `con.tar`)."""
+    stem = name.split(".", 1)[0]
+    return stem.lower() in _RESERVED_DEVICE_NAMES
+
 
 def validate_slug(slug: str) -> str:
     """Return `slug` if it is a safe session identifier, else raise `InvalidSlugError`. Lives in Core
@@ -696,6 +726,13 @@ def validate_slug(slug: str) -> str:
     if not isinstance(slug, str) or not _SLUG_RE.match(slug):
         raise InvalidSlugError(
             f"invalid session slug {slug!r}; expected kebab-case [a-z0-9-], e.g. 'leave-approval'",
+            details={"slug": slug})
+    # A slug never carries a dot (the pattern above forbids it), so this is a whole-slug check --
+    # see `_reserved_stem` and #221.
+    if _reserved_stem(slug):
+        raise InvalidSlugError(
+            f"invalid session slug {slug!r}: {slug.lower()!r} is a reserved Windows device name and "
+            "cannot be created as a directory there",
             details={"slug": slug})
     # Length is part of validity, not a separate concern: an over-long slug is a directory name the
     # filesystem rejects, and it fails deep inside a write as an OSError instead of at the boundary.
@@ -753,6 +790,14 @@ def validate_filename(filename: str) -> str:
         raise InvalidFilenameError(
             f"invalid artifact filename {filename!r}; expected a bare lowercase name such as "
             "'prd.md' — no directories, no dot segments, no leading dot",
+            details={"filename": filename})
+    # The stem before the first dot, not the whole filename: `con.tar.gz` is reserved on the `con`
+    # component alone, and Windows refuses it regardless of what follows (#221, see `_reserved_stem`).
+    if _reserved_stem(filename):
+        stem = filename.split(".", 1)[0]
+        raise InvalidFilenameError(
+            f"invalid artifact filename {filename!r}: {stem.lower()!r} is a reserved Windows device "
+            "name and cannot be created as a file there",
             details={"filename": filename})
     # Length is part of validity for the same reason it is for a slug: an over-long name is refused by
     # the filesystem deep inside the write, as a bare OSError, instead of at the boundary.

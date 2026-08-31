@@ -148,6 +148,56 @@ def test_import_refuses_an_archive_that_is_too_large_or_too_many_files(workspace
     assert store.list_session_slugs() == []
 
 
+def _dir_entries(slug: str, n: int, prefix: str = "d") -> dict:
+    """`n` bare directory entries under `<slug>/nested/`, each mapping to `""` -- `zipfile.writestr`
+    gives a name ending in `/` the directory bit `ZipInfo.is_dir()` actually tests (the filename
+    suffix, not `external_attr`), so this is a real directory entry from the reader's point of view,
+    not merely a path that looks like one."""
+    return {f"{slug}/nested/{prefix}{i:05d}/": "" for i in range(n)}
+
+
+def test_import_refuses_an_archive_bounded_by_files_and_bytes_but_not_by_directory_entries(
+        workspace, tmp_path, monkeypatch):
+    """#219. `MAX_ARCHIVE_FILES` and `MAX_ARCHIVE_BYTES` are both computed over `z.infolist()` with
+    directory entries filtered out (`_inspect_archive`'s own `infos = [i for i in z.infolist() if not
+    i.is_dir()]`), so an archive built from nothing but directory entries declares zero files and
+    ~zero bytes and used to sail past both caps -- while the extraction loop still iterated the full
+    `z.infolist()` and created every one of them, an inode/dir-creation exhaustion DoS through a door
+    neither file-only cap covers. Lowered here for speed; the parametrized case below exercises the
+    same `problem` code with the real ceiling. Must-fire, not just "raises": the refusal has to
+    happen at `_inspect_archive`, before any extraction, so none of the (many) directories this
+    archive names -- nor the session itself -- may exist afterwards."""
+    from requivo.deterministic import sessions as det
+    monkeypatch.setattr(det, "MAX_ARCHIVE_ENTRIES", 50)
+
+    entries = {**_good_entries("s"), **_dir_entries("s", 500)}
+    _zip(tmp_path / "dirbomb.zip", entries)
+
+    with pytest.raises(SystemExit):
+        _run(["session", "import", str(tmp_path / "dirbomb.zip"), "--json"])
+    assert store.list_session_slugs() == []
+    assert not (store.session_root() / "s").exists()
+
+
+def test_an_archive_with_directory_entries_just_under_the_cap_still_imports(
+        workspace, tmp_path, monkeypatch):
+    """Positive control for the cap above. A real `session export` never writes a directory entry at
+    all -- it walks real files only (`_cmd_session_export`'s `if f.is_file()`) -- but the fix must not
+    refuse an archive that legitimately carries a handful, as long as the total stays under the
+    ceiling. Without this, a cap that merely rejects everything with a directory entry in it would
+    also make this test pass, which is why the assertion is a successful import rather than an
+    absence of one."""
+    from requivo.deterministic import sessions as det
+    monkeypatch.setattr(det, "MAX_ARCHIVE_ENTRIES", 50)
+
+    entries = {**_good_entries("s"), **_dir_entries("s", 30)}   # 2 files + 30 dirs = 32, under 50
+    _zip(tmp_path / "ok.zip", entries)
+
+    r = _run_json(["session", "import", str(tmp_path / "ok.zip"), "--json"])
+    assert r["slug"] == "s"
+    assert store.list_session_slugs() == ["s"]
+
+
 def test_import_refuses_an_archive_that_is_not_a_session(workspace, tmp_path):
     # Extraction succeeding is not the same as having imported a session. Import used to declare
     # success on the strength of the extraction alone.
@@ -227,9 +277,20 @@ def _lower_the_byte_ceiling(mp):
     mp.setattr(det, "MAX_ARCHIVE_BYTES", 32)
 
 
+def _lower_the_entries_ceiling(mp, value=50):
+    """The real ceiling (`MAX_ARCHIVE_ENTRIES`) is driven end-to-end by
+    `test_import_refuses_an_archive_bounded_by_files_and_bytes_but_not_by_directory_entries`. Same
+    reasoning as `_lower_the_byte_ceiling`: paying that scale twice buys nothing here."""
+    from requivo.deterministic import sessions as det
+    mp.setattr(det, "MAX_ARCHIVE_ENTRIES", value)
+
+
 @pytest.mark.parametrize("label, problem, build", [
     ("no entries at all", "empty",
      lambda p, mp: _zip(p, {})),
+    ("more entries (directories included) than the entry ceiling", "too_many_entries",
+     lambda p, mp: (_lower_the_entries_ceiling(mp),
+                    _zip(p, {**_good_entries("s"), **_dir_entries("s", 51)}))),
     ("more entries than the ceiling", "too_many_files",
      lambda p, mp: _zip(p, {f"s/artifacts/f{i}.md": "x"
                             for i in range(MAX_ARCHIVE_FILES + 1)})),

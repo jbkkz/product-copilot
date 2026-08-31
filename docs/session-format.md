@@ -209,6 +209,14 @@ A slug names the session directory, so it is validated in the Core: strict kebab
 (`^[a-z0-9]+(?:-[a-z0-9]+)*$`), no path separators or dot segments. An explicit `--slug ../../escaped`
 is rejected before any path is built.
 
+A slug that is a Windows reserved device name is refused too, on every platform, case-insensitively —
+`con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`. Windows cannot create a file or directory with
+one of those names, so a session slugged `con` created on macOS or Linux would export fine and then be
+unopenable by `session import` on a colleague's Windows machine. Refusing it everywhere, rather than
+only on Windows, is what keeps an archive portable to every platform it claims to be (#221). The same
+set is refused as the stem of an artifact filename (the part before the first dot — `con.md` and
+`con.tar.gz` are both reserved).
+
 ## Verifying a session
 
 A session is several files that have to agree: the revision count in `session.json`, the revision file
