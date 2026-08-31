@@ -230,9 +230,14 @@ _PAYLOAD_SHAPES: dict[str, tuple[_Case, ...]] = {
             "artifact_status": "dict"}),
     ),
     "session verify": (
+        # `notes` is additive, from #260: an artifact type this build has no generator for is
+        # reported rather than counted as a defect, so it is a sibling of `problems` that moves
+        # neither `ok` nor the exit code. Recorded here in the change that added it, which is what
+        # the additive arm of the guard below asks for -- and this row is the first one it ever
+        # asked for, on a real change rather than a rehearsal.
         _Case("session verify --json", ("session", "verify", "s", "--json"), {
             "slug": "str", "ok": "bool", "session": "dict", "problems": "list",
-            "context_cards": "dict"}),
+            "notes": "list", "context_cards": "dict"}),
     ),
     "session list": (
         _Case("session list --json", ("session", "list", "--json"),
