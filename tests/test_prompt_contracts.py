@@ -50,8 +50,10 @@ Stated rather than left to read as clean:
     purpose: the three derived `id` fields (`Challenge`, `Opportunity`, `DesignDecision`) are
     legitimately absent from `brief.md`, and a coverage rule would go red on them today and force a
     prompt edit -- which costs a golden-harness capture -- for every future optional field.
-  - **the prose above the JSON block.** A "Required fields." paragraph that contradicts the contract
-    still reads as instruction to the model; only the example is parsed here. Out of scope per #266.
+  - **the prose around the JSON block.** Six of the eight assets close the fence and then add a
+    "Required fields." paragraph restating some of the same constraints in words; a paragraph that
+    contradicts its contract still reads as instruction to the model, and only the example is parsed
+    here. Out of scope per #266.
   - **an element contract inside a list the example leaves empty.** Only `epic.md`'s `depends_on: []`
     is such a list today, and it holds plain strings.
   - **semantic quality.** Whether a prompt produces a *good* artifact is the golden harness's
@@ -80,7 +82,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError, create_model
 
-from requivo.core.contracts import schema_slot_ids
+from requivo.core.contracts import StrictModel, schema_slot_ids
 from requivo.paths import PROMPTS
 from requivo.providers.anthropic import generators
 from requivo.providers.anthropic.generators import _GENERATORS, _OP_PROMPTS
@@ -311,11 +313,26 @@ def test_the_output_format_example_validates_against_its_contract(op):
         ) from exc
 
 
-def test_every_operation_resolves_to_a_pydantic_contract():
-    """The derivation is the load-bearing half of this file, so name what it found. A `contract_for`
-    that silently resolved nothing would make the parametrized test above vacuous."""
-    resolved = {op: contract_for(op).__name__ for op in sorted(_OP_PROMPTS)}
-    assert len(resolved) == len(_OP_PROMPTS), f"an operation resolved to no contract: {resolved}"
+def test_every_operation_resolves_to_a_contract_an_llm_may_fill():
+    """The derivation is the load-bearing half of this file, so assert something about what it found
+    rather than counting it.
+
+    Counting was the first version of this test and it could not fail: `contract_for` either raises
+    or returns a contract, so a comprehension over the unique keys of `_OP_PROMPTS` holds exactly
+    that many entries whenever the assertion is reached at all. What is genuinely worth asserting is
+    narrower than `contract_for`'s own `BaseModel` check -- invariant 4 says everything an LLM fills
+    inherits `StrictModel`, and it is that base's `extra="forbid"` which turns a drifted example into
+    a loud refusal instead of a silently trimmed reply. A contract that lost it would leave every row
+    of the table above passing while checking much less than this file claims to.
+    """
+    resolved = {op: contract_for(op) for op in sorted(_OP_PROMPTS)}
+    permissive = sorted(op for op, contract in resolved.items() if not issubclass(contract, StrictModel))
+    assert not permissive, (
+        f"these operations parse replies with a contract that is not a StrictModel: {permissive}. "
+        f"Without extra=forbid a key the prompt no longer asks for is dropped rather than refused, "
+        f"so validating an example against it proves much less than it appears to. Resolved: "
+        f"{ {op: contract.__name__ for op, contract in resolved.items()} }"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -378,6 +395,16 @@ def test_the_extractor_reads_the_fence_under_the_heading_not_the_first_in_the_fi
         '# Output format\n\n```json\n{"title": "x"}\n```\n'
     )
     assert json.loads(output_format_example("release", text)) == {"title": "x"}
+
+
+def test_the_strictness_check_fires_on_a_permissive_contract(monkeypatch):
+    """The positive control for the test above, which asserts a negative. `contract_for` only checks
+    `BaseModel`, so a contract that dropped `StrictModel` resolves fine and reaches the assertion --
+    which must then fail rather than shrug."""
+    permissive = create_model("PermissiveBrief", __base__=BaseModel, problem=(str, ""))
+    monkeypatch.setattr(generators, "Brief", permissive)
+    with pytest.raises(AssertionError, match="not a StrictModel"):
+        test_every_operation_resolves_to_a_contract_an_llm_may_fill()
 
 
 def test_the_derivation_refuses_a_generator_it_cannot_read(monkeypatch):

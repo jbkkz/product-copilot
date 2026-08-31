@@ -571,8 +571,10 @@ see invariant 10), `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `Estimate
 `ReleaseNotes` ↔ `release.md`. Slot ids live in `framework/model_schema.json`, which also carries each
 slot's `pillar` and `label` (read back by the renderer via `_slot_meta()`).
 
-That list is no longer kept by hand. `tests/test_prompt_contracts.py` parses each prompt's Output
-format example offline and validates it against the contract that operation actually parses replies
+The *agreement* between each prompt and its contract is no longer kept by hand — the enumeration
+above still is, and nothing checks those eight names against the registries, so read it as a map
+rather than as a guarantee. `tests/test_prompt_contracts.py` parses each prompt's Output format
+example offline and validates it against the contract that operation actually parses replies
 with — read out of the generator's own `_complete(...)` call rather than from a table here, so a
 generator pointed at a different contract goes red too. It exists because the drift was invisible and
 paid: a model obeying a stale example produces a reply `extra="forbid"` refuses, `_complete()` retries
