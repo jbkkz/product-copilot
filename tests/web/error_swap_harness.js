@@ -56,9 +56,11 @@ var documentStub = {
   getElementById: function (id) { return id === "flash" ? flash : null; },
   querySelectorAll: function (sel) {
     if (sel === SPINNER_SELECTOR) return [];
+    // Swept by `app.js` on load and after every swap (#239); this page models no counted field.
+    if (sel === "textarea[data-limit]") return [];
     if (sel !== SUBMIT_SELECTOR) {
-      throw new Error("the harness only models " + SUBMIT_SELECTOR + " and " + SPINNER_SELECTOR
-        + ", got: " + sel);
+      throw new Error("the harness only models " + SUBMIT_SELECTOR + ", " + SPINNER_SELECTOR
+        + " and textarea[data-limit], got: " + sel);
     }
     return buttons;
   },

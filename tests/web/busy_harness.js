@@ -18,6 +18,10 @@ var appJsPath = process.argv[2];
 var src = fs.readFileSync(appJsPath, "utf8");
 
 var SUBMIT_SELECTOR = 'button[type="submit"]';
+// Not what this harness is about, but `app.js` sweeps for it on load and after every swap (#239).
+// Modelled as *empty* rather than left to throw: a page with no counted field is a real page, and
+// this harness is one. `counter_harness.js` is where the counter itself is driven.
+var COUNTED_FIELD_SELECTOR = "textarea[data-limit]";
 // The elapsed-time signal (#236) queries this one too. Modelled as *no* status nodes on purpose:
 // this harness is about the buttons, and returning an empty list keeps that focus while still
 // letting `app.js` run. `elapsed_harness.js` is where the status text is actually watched.
@@ -54,9 +58,10 @@ var documentStub = {
   getElementById: function () { return null; },
   querySelectorAll: function (sel) {
     if (sel === SPINNER_SELECTOR) return [];
+    if (sel === COUNTED_FIELD_SELECTOR) return [];
     if (sel !== SUBMIT_SELECTOR) {
-      throw new Error("the harness only models " + SUBMIT_SELECTOR + " and " + SPINNER_SELECTOR
-        + ", got: " + sel);
+      throw new Error("the harness only models " + SUBMIT_SELECTOR + ", " + SPINNER_SELECTOR
+        + " and " + COUNTED_FIELD_SELECTOR + ", got: " + sel);
     }
     return buttons;
   },

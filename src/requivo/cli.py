@@ -834,6 +834,7 @@ def _cmd_web(a, client) -> None:
         import uvicorn
 
         from requivo.web.app import create_app
+        from requivo.web.logging_setup import configure_web_logging
     except ImportError as e:
         # `EngineError` for a missing optional dependency is a decision about a published payload, not
         # a leftover: its `code` is `provider_unavailable`, that code travels in the `--json` envelope,
@@ -845,6 +846,20 @@ def _cmd_web(a, client) -> None:
             "The web interface is not installed. Install it with `pip install 'requivo[web]'` "
             f"(or `uv tool install 'requivo[web]'`). You do NOT need it for the CLI or Claude Code. "
             f"(import error: {e})") from e
+    # The process is ours from here, so this is where `requivo.web` gets its handler (#291) — the
+    # same placement, and the same reason, as `configure_streams()` in `app()` above: importing the
+    # package must not reconfigure logging for a program that merely imported it, and `create_app()`
+    # is a factory a third party can mount inside their own service. `logging_setup` carries the
+    # argument in full; it declines rather than competing, so a host that configured this logger
+    # itself keeps what it set.
+    #
+    # Before the URL is printed and before uvicorn starts, so a record emitted during startup is
+    # already formatted. Known limit: under `--reload`, uvicorn spawns a worker process that
+    # re-imports the app, and that process has not been through here — a development flag's own
+    # worker still logs through `lastResort`. Closing that would mean configuring at import, which
+    # is the thing this placement exists to refuse.
+    # Pinned by `test_the_web_verb_configures_the_logger_before_it_serves`.
+    configure_web_logging()
     url = f"http://{host}:{port}"
     print(f"\nRequivo Web → {url}")
     print("  Sessions stay local under .requivo/sessions/. An Anthropic key (server env) is needed only")

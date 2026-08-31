@@ -46,7 +46,10 @@
       {% if answers_error_code %}<span class="muted">(code: {{ answers_error_code }})</span>{% endif %}
     </div>
     {% endif %}
+    {# `data-limit`: the server's own ceiling, for the counting-not-clipping affordance in `app.js`.
+       Nothing here constrains the field — see the note on the request textarea in `home.html`. #}
     <textarea id="answers" name="answers" required rows="5"
+      data-limit="{{ max_answers_chars }}"
       aria-label="{{ 'Your answers to the questions above' if s.questions
         else 'Anything further to fold into the understanding' }}">{{ submitted_answers if submitted_answers is defined else '' }}</textarea>
     <div class="toolbar">

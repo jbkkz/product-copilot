@@ -23,7 +23,11 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
      `test_no_template_carries_a_clipping_attribute` scans these files as raw text, so it cannot tell
      an attribute from prose naming one; this comment therefore describes the rule without spelling
      the attribute. #}
+  {# `data-limit` is the ceiling the *server* refuses at, rendered from `web/config.py` so the count
+     the reader is shown and the refusal they would meet cannot drift. It is read by `app.js`, which
+     counts and warns and never writes to the field — see the counting-not-clipping block there. #}
   <textarea id="request_text" name="request_text" required rows="6"
+    data-limit="{{ max_request_chars }}"
     aria-describedby="req-hint"
     placeholder="e.g. We'd like a leave approval system so staff can request time off and managers can approve it.">{{ form.request_text }}</textarea>
   <p id="req-hint" class="hint">One line or a whole email. The messier the request, the more Requivo helps.</p>

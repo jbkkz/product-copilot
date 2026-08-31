@@ -19,6 +19,14 @@ Two outcomes per action, deliberately, because they answer different people:
   it where there is a page to land on, but the log is what survives every case, including one this
   app cannot render to: a script that posts and never issues the follow-up GET.
 
+**"Always" is load-bearing, and it was false for two releases.** This line is written at `INFO`,
+`logging.lastResort` is fixed at `WARNING`, and nothing configured a handler for `requivo.web` — so
+the operator's channel was not merely unformatted, it was empty: *no handler* printed exactly the
+same as *nothing was spent*, which is the absence this project is careful about everywhere else.
+`requivo web` attaches that handler now (`web/logging_setup.py`, #291). One mode is still exempt and
+is named rather than glossed: under `--reload`, uvicorn's worker is a separate process that
+re-imports the app without passing through the entry point, so this line is still dropped there.
+
 The log line is written from a `finally`, which is what makes the second bullet true on the failure
 path. It is the same rule `record_call` states one layer down: a failed call is still billed, so the
 spend is recorded before the failure surfaces.

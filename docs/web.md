@@ -168,6 +168,19 @@ table, and what changed for anyone scripting against it, is in
 A 5xx is also logged in the terminal you started the server in — the page a reader gets says little
 by design, and an operator otherwise has no record of a condition the reader cannot act on.
 
+Those lines carry a timestamp, a level and the logger name, so a 5xx investigated an hour later can
+be tied to a request time; and the `INFO` line reporting what a paid call cost is printed too. Both
+used to reach Python's last-resort fallback instead — the bare message, interleaved with uvicorn's
+formatted lines — and because that fallback is fixed at WARNING, the cost line was not merely
+unformatted but dropped entirely, so *no handler* and *nothing was spent* looked identical (#291).
+
+The handler is attached by the `requivo web` verb, which owns the process — never at import and never
+in `create_app()`. If you mount this FastAPI app inside your own service, your configuration of the
+`requivo.web` logger is what applies: the root logger and uvicorn's loggers are never touched, and a
+logger you have already configured yourself is left exactly as you set it. One known limit: under
+`--reload`, uvicorn spawns a worker process that re-imports the app without passing through the entry
+point, so that development flag's own worker still logs unformatted.
+
 ## Security (local by default)
 
 Even though it is a local app:
@@ -243,15 +256,31 @@ Even though it is a local app:
   that allows only same-origin assets (so the vendored HTMX and local CSS are the only scripts/styles).
   HTMX is vendored rather than fetched from a CDN for exactly that reason, and because the app is meant
   to work offline; its version and licence are recorded in `THIRD-PARTY-NOTICES.md`.
+- **Nothing carrying your material is written to the browser's disk cache.** Every response gets
+  `Cache-Control: no-store` except the assets this package ships (#218). A page renders your own
+  client request and the model built from it plus the request token, and the model export and the
+  artifact downloads are your material in bulk — on a shared machine a disk copy outlives the
+  "sessions never leave this machine" promise in spirit, and a cached page is also where the two
+  stale states this app apologises for come from: an old `expected_revision` reaching a 409, and an
+  old token reaching a 403 after a restart. The rule is keyed on the **path** and fails closed rather
+  than on the content type, which is the reflex and would have missed the two downloads (`export` is
+  JSON, an artifact download is Markdown). `/static/…` and `/favicon.ico` stay cacheable; nothing is
+  said here about *how long*, since an ETag or `max-age` strategy for the bundled assets is a
+  separate question.
 - Input is length-bounded, and an over-long request or answer is **refused, not truncated** — half a
   request folded into the model reads exactly like a whole one. That refusal is the only bound the
   reader meets: no field carries an HTML `maxlength`, because a browser clips a paste to the remaining
   allowance silently — no event, no message, no visual difference — so an over-long request would
-  arrive at exactly the ceiling and sail through the very check written to stop it (#8). A client-side
-  affordance is welcome here, but it has to count and warn; it must never trim what the reader typed.
-  Request bodies are capped before they are parsed. An unknown context card is an error too:
-  filtering it out would leave an empty selection, which every reader downstream treats as "load
-  every card".
+  arrive at exactly the ceiling and sail through the very check written to stop it (#8). The
+  client-side affordance this invited now exists and is exactly that shape: past 80% of the ceiling a
+  live count appears beside the field, and past the ceiling it says the submission will be refused —
+  but it never writes to the field, never adds a clipping attribute and never blocks the submit, so
+  an over-long paste still reaches the server and still comes back with your text preserved (#239).
+  The ceiling it counts against is rendered from the server's own configuration, so the number you
+  are shown and the number you would be refused on cannot drift. With JavaScript off there is no
+  counter and, as before, no clipping. Request bodies are capped before they are parsed. An unknown
+  context card is an error too: filtering it out would leave an empty selection, which every reader
+  downstream treats as "load every card".
 - **A refusal costs you the submission no longer.** Refusing was right; the recovery was not. Every
   refusal on the request form was a full-page error whose only affordance was *Back to sessions*, so a
   26,000-character client email that arrived through the clipboard had to be fetched again from

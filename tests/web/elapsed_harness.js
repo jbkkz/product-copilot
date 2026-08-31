@@ -65,8 +65,10 @@ var documentStub = {
   querySelectorAll: function (sel) {
     if (sel === SUBMIT_SELECTOR) return buttons;
     if (sel === SPINNER_SELECTOR) return spinners;
-    throw new Error("the harness models " + SUBMIT_SELECTOR + " and " + SPINNER_SELECTOR
-      + ", got: " + sel);
+    // Swept by `app.js` on load and after every swap (#239); this page models no counted field.
+    if (sel === "textarea[data-limit]") return [];
+    throw new Error("the harness models " + SUBMIT_SELECTOR + ", " + SPINNER_SELECTOR
+      + " and textarea[data-limit], got: " + sel);
   },
   addEventListener: on
 };

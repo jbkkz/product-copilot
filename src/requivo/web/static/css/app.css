@@ -244,6 +244,18 @@ label {
 }
 label .hint { font-weight: 400; }
 
+/* The character counter (#239). Created by app.js, never rendered by a template, so with JavaScript
+   off there is no empty region here at all. It is silent below 80% of the ceiling — its appearance
+   is the signal — which is why it needs no reserved space and no `min-height`: the layout shift when
+   it arrives is the point. `--danger` past the ceiling, matching every other refusal on the page,
+   and it warns rather than constrains: nothing here (and nothing in app.js) can shorten what the
+   reader typed. */
+.counter {
+  color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums;
+  margin: 6px 0 0; text-align: right;
+}
+.counter.danger { color: var(--danger); font-weight: 550; text-align: left; }
+
 textarea, input[type=text], select {
   width: 100%; font-family: inherit; font-size: 14.5px; color: var(--text);
   background: var(--surface); padding: 10px 12px;

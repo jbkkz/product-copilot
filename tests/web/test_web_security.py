@@ -27,7 +27,7 @@ from requivo.web.security import (
     _same_trust_domain,
     csrf_token,
 )
-from tests.web.conftest import HIGH_EXPLICIT, _make_session, full_model
+from tests.web.conftest import BRIEF_REPLY, HIGH_EXPLICIT, _make_session, engine_reply, full_model
 
 # ── the headers every response carries ────────────────────────────────────────
 
@@ -41,6 +41,83 @@ def test_security_headers_present(client):
     # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
     # that the app states the policy rather than inheriting whatever the browser defaults to.
     assert "Referrer-Policy" in h
+
+
+# ── the disk cache (#218) ─────────────────────────────────────────────────────
+#
+# Where the boundary is drawn, and why it is not the content type. The obvious rule — `no-store` when
+# the response is `text/html` — covers the pages and the HTMX fragments and misses the two responses
+# carrying the *most* business content there is: `/sessions/{slug}/export` hands back the whole model
+# as `application/json`, and an artifact download hands back the PRD as `text/markdown`. Neither is
+# HTML and both are the reader's own material.
+#
+# So the rule is the other way round and fails closed: every response is `no-store` unless it is a
+# bundled asset this package ships (`/static/…`, `/favicon.ico`), which carry nothing of the reader's.
+# A route added later is covered without anybody remembering to cover it; the cost of the default
+# being wrong is one re-fetch of a stylesheet, and the cost of the allowlist being wrong is a session
+# page on disk.
+
+def test_no_response_carrying_the_readers_material_may_be_written_to_the_disk_cache(
+        client, with_provider):
+    """Every page, fragment and download this app answers with carries the reader's own request, the
+    model built from it, or the request token — none of which belongs in a browser's disk cache on a
+    shared machine, and the token going stale there is one of the two states the app already has to
+    apologise for (a 409 with a reload link, a 403 saying reload the page).
+
+    The four rows are deliberately not all HTML. The two downloads are the reason the header is keyed
+    on the path rather than on the content type: a `text/html` rule passes this test's first three
+    rows and leaves the whole model, and the whole PRD, cacheable.
+    """
+    with_provider(engine_reply(problem=HIGH_EXPLICIT), BRIEF_REPLY)
+    _make_session()
+
+    page = client.get("/sessions/leave-approval")
+    fragment = client.post("/sessions/leave-approval/answers",
+                           data={"answers": "Contractors are out of scope.", "expected_revision": "1"},
+                           headers={"HX-Request": "true"})
+    client.post("/sessions/leave-approval/artifacts/brief")
+    rows = {
+        "home": client.get("/"),
+        "session page": page,
+        "htmx fragment": fragment,
+        "model download": client.get("/sessions/leave-approval/export"),
+        "artifact page": client.get("/sessions/leave-approval/artifacts/brief"),
+        # The row the comment above is *about*. Without it this test's prose named the artifact
+        # download as half the reason the rule is keyed on the path, and then never drove it — so a
+        # per-route `Cache-Control` added to that one route later (an ETag scheme for large PRD
+        # downloads is the plausible one) would ship with nothing red, under a test claiming to cover
+        # exactly that case.
+        "artifact download": client.get("/sessions/leave-approval/artifacts/brief?download=1"),
+    }
+    for name, response in rows.items():
+        # Must fire: a 404 or a 500 would satisfy an assertion about a header just as happily as the
+        # real page, and the whole row would then be about an error page nobody caches anyway.
+        assert response.status_code == 200, f"the {name} row never reached the response it is about"
+        assert response.headers.get("Cache-Control") == "no-store", (
+            f"the {name} response may be written to the browser's disk cache")
+
+
+def test_a_bundled_asset_stays_cacheable(client):
+    """The other half of the boundary, and the reason it is an allowlist rather than a blanket. The
+    CSS, the vendored HTMX and this file's own JS carry nothing of the reader's; `no-store` on them
+    costs a re-fetch on every single navigation and protects nothing.
+
+    Asserted on a 200 for the same reason as above: `no-store` is absent from a 404 too.
+
+    And on the CSP for a second reason, which is the one that keeps this from quietly becoming a
+    test of nothing. `no-store` is also absent from a response the header middleware never ran on at
+    all — so if a later change took the middleware off the static mount, every assertion here would
+    go on passing while saying nothing about `_is_bundled_asset`. Requiring a header the middleware
+    *does* set proves it looked at this response and chose not to add `Cache-Control`."""
+    for path in ("/static/css/app.css", "/static/js/app.js", "/static/vendor/htmx.min.js",
+                 "/favicon.ico"):
+        response = client.get(path)
+        assert response.status_code == 200, f"{path} was not served, so this row asserts nothing"
+        assert "Content-Security-Policy" in response.headers, (
+            f"the header middleware never ran on {path}, so its lack of Cache-Control says nothing "
+            f"about the bundled-asset exclusion")
+        assert "no-store" not in response.headers.get("Cache-Control", ""), (
+            f"{path} is a bundled asset and must stay cacheable")
 
 
 # ── the slug guard ────────────────────────────────────────────────────────────
