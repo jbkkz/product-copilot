@@ -201,7 +201,8 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       byte-identically to a genuinely empty workspace, and a user reads that as "my sessions were
       deleted". When we could not look, `total` is `None`, because `0` is a claim about the
       workspace and we do not have one.
-    - `inconsistent` — {slug: [integrity codes]}, from `check_session`. A slug whose own files
+    - `inconsistent` — {slug: [integrity codes]}, the blocking half of `inspect_session` (which is
+      what `check_session` returns, so this key means exactly what it meant). A slug whose own files
       cannot be read gets the `unreadable` code the inner loop already synthesised, now as a real
       `IntegrityProblem` rather than an ad-hoc stand-in class.
     - `notes` — {slug: [integrity codes]} for findings that are *not* defects (#260). Today the only
