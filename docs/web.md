@@ -44,6 +44,33 @@ By default the server binds to `127.0.0.1`, prints its URL, and opens your brows
 environment** — it is only needed for provider actions (discovery, generation); reviewing existing
 sessions needs no key. The credential is never shown in the browser, never a form field, never logged.
 
+### Binding beyond loopback
+
+`--host` accepts any address, and reaching the app from another machine needs two things, not one:
+
+```bash
+REQUIVO_WEB_ALLOWED_HOSTS=192.168.1.50 requivo web --host 0.0.0.0
+```
+
+- **The bind address** (`--host`) is what the process listens on. `0.0.0.0` (or `::`) means "every
+  interface", which is not itself a value a browser can ever send back — no client addresses a server
+  as `0.0.0.0`, it addresses whatever hostname or IP it actually connected to.
+- **The allowed-host list** (`REQUIVO_WEB_ALLOWED_HOSTS`) is what the cross-site guard's `Host`
+  allowlist accepts (see [Security](#security-local-by-default)). It has to name the real address —
+  the LAN IP or hostname a client's browser will put in its `Host` header — because that check runs
+  on every request, reads and writes alike, and is the one line of defence against DNS rebinding.
+
+A wildcard bind address is **not** auto-allowlisted, on purpose: doing so used to record the literal
+string `"0.0.0.0"` in the allowlist, which satisfied nothing a real client ever sends, so
+`--host 0.0.0.0` alone looked like it worked — the process bound, the URL printed, the browser opened
+on loopback — while every actual LAN request got a 403 `host_not_allowed` with no obvious cause. A
+non-wildcard address (`--host 192.168.1.50`) *is* auto-allowlisted, because that literal value is
+exactly what a browser connecting to it will send.
+
+**There is still no authentication and no TLS.** Binding beyond loopback puts the request token and
+every session's content on the network in plain text to anyone who can reach that interface — a
+reverse proxy terminating TLS in front of it is the supported way to go further than a trusted LAN.
+
 ## The workflow
 
 One path leads the product, and the interface is built around it rather than around the model:
@@ -145,8 +172,10 @@ by design, and an operator otherwise has no record of a condition the reader can
 
 Even though it is a local app:
 
-- The server binds to `127.0.0.1` by default. Passing `--host 0.0.0.0` prints a warning: there is **no
-  authentication**, so the app must not be exposed on an untrusted network.
+- The server binds to `127.0.0.1` by default. Passing a non-loopback `--host` prints a warning: there
+  is **no authentication**, so the app must not be exposed on an untrusted network. A wildcard address
+  (`0.0.0.0`, `::`) additionally needs `REQUIVO_WEB_ALLOWED_HOSTS` set to the real address clients will
+  use, or the allowlist below refuses every request — see [Binding beyond loopback](#binding-beyond-loopback).
 - **Writes are protected against cross-site requests.** Binding to loopback keeps nobody out — any page
   open in the same browser can post to a known local port without a preflight, and for this app writing
   is the damage (sessions created, provider calls billed). Four checks run in `web/security.py`: a host

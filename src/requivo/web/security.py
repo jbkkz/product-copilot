@@ -52,7 +52,11 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 ALLOWED_HOSTS_ENV = "REQUIVO_WEB_ALLOWED_HOSTS"
 
 # Bounded before the body is read, let alone parsed: an unauthenticated local endpoint should not be
-# willing to buffer an arbitrary upload just to discover it has no valid token.
+# willing to buffer an arbitrary upload just to discover it has no valid token. That claim held only
+# for a request that *declares* its length — a chunked body (no `Content-Length`) used to be read in
+# full by `await request.body()` regardless, with the cap checked only once the whole thing was
+# already in memory (#216). A request with no valid declared length is now refused outright, before a
+# byte is read, rather than measured after the fact.
 MAX_BODY_BYTES = 1_000_000
 
 _TOKEN = secrets.token_urlsafe(32)
@@ -346,13 +350,32 @@ async def _enforce(request: Request) -> None:
             details={"origin": _hostname(origin), "host": host})
 
     declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+    if declared and declared.isdigit():
+        if int(declared) > MAX_BODY_BYTES:
+            raise InputTooLargeError(
+                f"the submitted form exceeds {MAX_BODY_BYTES:,} bytes",
+                details={"limit": MAX_BODY_BYTES, "declared": int(declared)})
+    else:
+        # No declared length at all — what a chunked or otherwise streamed body looks like at this
+        # layer — cannot be measured before it is read, and reading it to find out is exactly the bug
+        # this refuses (#216): `await request.body()` used to run unconditionally below, so the cap
+        # only ever fired *after* the whole thing — 6.5MB in the field, unbounded in principle — was
+        # already sitting in memory. No supported caller produces this: every form this app renders,
+        # curl, httpx and requests all declare a length, the same argument the undetermined-`Host`
+        # refusal above already makes for HTTP/1.0. Refusing outright, rather than reading with a
+        # running byte count, was chosen over the streaming alternative because it needs nothing from
+        # Starlette's body cache — the alternative would have to poke `request._body` to keep
+        # downstream form parsing working, which is a private attribute of a library this module does
+        # not otherwise reach into.
         raise InputTooLargeError(
-            f"the submitted form exceeds {MAX_BODY_BYTES:,} bytes",
-            details={"limit": MAX_BODY_BYTES, "declared": int(declared)})
+            "this request has no valid declared Content-Length and cannot be safely size-checked — "
+            "chunked or otherwise streamed request bodies are not supported",
+            details={"limit": MAX_BODY_BYTES, "reason": "missing_content_length"})
 
     # Starlette caches the body for the downstream app, so reading it here to find the token does not
-    # consume it — the route still parses its own form as usual.
+    # consume it — the route still parses its own form as usual. Reachable only once a valid declared
+    # length at or under the cap has already been confirmed above, so this is defence in depth against
+    # a body that lies about its own length, not the size check itself.
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise InputTooLargeError(
