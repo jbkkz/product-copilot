@@ -16,14 +16,29 @@ The key is read from the environment (or `.env`) and used only to authenticate t
 Code** mode there is no provider and no API key — Claude reasons in your session; the deterministic CLI
 applies. `requivo demo`, `requivo status` and `requivo impact` make no API call at all.
 
+`ANTHROPIC_API_KEY` is the usual way and not the only one. Requivo refuses early when no credential is
+available — so that a fresh install fails in one readable line rather than in a stack trace, and
+before anything is claimed or billed — but **what counts as a credential is the SDK's answer, not
+Requivo's**: whatever the installed `anthropic` SDK resolves, Requivo accepts, including
+`ANTHROPIC_AUTH_TOKEN`, a profile named by `ANTHROPIC_PROFILE`, workload identity federation, and the
+active profile on disk. Requivo keeps no list of those names (#334). If your setup authenticates a
+bare `Anthropic()` in the same shell, it authenticates Requivo. `requivo doctor` reports what the SDK
+resolved.
+
 ## Models
 
 Developed and measured against `claude-sonnet-5` (the default). Any current Claude model works via the
-`MODEL` environment variable:
+`REQUIVO_MODEL` environment variable:
 
 ```bash
-MODEL=claude-opus-4-8 requivo discover "…"
+REQUIVO_MODEL=claude-opus-4-8 requivo discover "…"
 ```
+
+Bare `MODEL` still works as a fallback for existing setups, but is deprecated — see the
+"Environment variables" section of [compatibility.md](compatibility.md#environment-variables--stable-with-one-exception).
+`MODEL` is a generic name other tools set too, so a shell already exporting it for something else
+could silently steer Requivo at the wrong model; `REQUIVO_MODEL` is read first and always wins when
+both are set.
 
 The exact model a session ran against is recorded in its revision provenance (see
 [session-format.md](session-format.md)).

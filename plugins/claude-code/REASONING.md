@@ -57,6 +57,38 @@ in plain language:
 Then stop, and let them come back. Carrying on past a missing CLI produces plausible prose with
 nothing tracking it, which is worse than the shell error it replaced.
 
+### If the CLI is installed: is it the version this plugin was tested against? (#251)
+
+The CLI updates independently of the plugin — `pip`/`uv` for one, a marketplace pin this project's
+own notes record as bumped roughly monthly for the other — so the two drift in the field even
+though a checkout that carries both never can. Nothing compared them at runtime before this.
+
+You already have what you need from the preflight above: the doctor report carries
+`requivo_version`. Compare it against **this plugin's own declared version** — read this plugin's
+`.claude-plugin/plugin.json` (with the `Read` tool you already have) and take its `version` field,
+which is the release this plugin build was tested against. Read it live rather than trusting a
+number written into this paragraph: a copy here could drift from the manifest the day someone bumps
+it and forgets the second site, and the manifest is the one file a release is guaranteed to touch.
+(`plugins/claude-code/scripts/version_skew.py` is the tested reference for the exact comparison
+below, and doubles as a standalone diagnostic outside this session.)
+
+Three outcomes, and the third is the one to get right:
+
+1. **`requivo_version` is equal to or newer than the plugin's `version`.** Say nothing — this is the
+   healthy, expected state, and flagging it on every single run would be noise nobody reads.
+2. **`requivo_version` is older.** Warn and continue — do **not** refuse or stop the skill. Tell the
+   user, once, in one line: *"This plugin was tested against requivo `<plugin version>`; you have
+   `<requivo_version>` installed. Most commands still work across a minor version — if one fails
+   with an argparse error about an unrecognized argument, that is why: `pip install -U requivo` (or
+   `uv tool install --force requivo`)."* Then carry on with the skill as normal; the plugin is
+   keyless and most verbs are unaffected by a minor skew, so proceeding is the right default.
+3. **You could not determine one or both numbers** — `requivo_version` was missing from the doctor
+   JSON, the JSON did not parse, or the manifest could not be read. This is a third state, never
+   "assume they match": say plainly that the skew check could not run and why, then continue the
+   skill exactly as in case 1 — a preflight refusing the whole skill because its OWN diagnostic
+   failed would be a worse outcome than an unwarned skew, but never claim "in step" for a comparison
+   you never made.
+
 ## The division of labour
 
 - **You (Claude) do the qualitative reasoning.** You read the request and the product context, decide

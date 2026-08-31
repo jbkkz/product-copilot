@@ -246,14 +246,21 @@ Even though it is a local app:
   Nothing changes before then, deliberately: a label that churns from the start is decoration on a
   fast call and says nothing about a slow one, so the *change* is the signal. With JavaScript off the
   static copy is the whole signal, which is why it states what the wait is for.
-- **What a paid action cost is stated where it can be and logged always** (#253). The answers turn and
-  a document generation answer with a fragment, so the tokens and the estimate ride the response. The
-  two paths that create a session or run a deferred discovery answer with a 303 — a redirect has no
-  body to put a figure in, and carrying one to the following GET would need cross-request state this
-  app does not have — so those are recorded to the `requivo.web` logger, in the terminal you started
-  the server in. The log line is written from a `finally`, so a call that failed after spending tokens
-  still leaves a trace. Tokens are exact; the cost is an estimate carrying the date of the rate table
-  behind it, and a model with no price on file says so rather than borrowing a neighbour's rate.
+- **What a paid action cost is stated where it can be, and logged always** (#253). The answers turn
+  and a document generation answer with a fragment, so the tokens and the estimate ride the response
+  directly. The two paths that create a session or run a deferred discovery answer with a 303 instead
+  — a redirect has no body of its own — so `web/spend.py` stashes the same figure server-side, keyed
+  by the session slug, and the GET the redirect lands on pops it once: the tab you land on states the
+  spend without ever putting a number on the URL, where it could be forged. That store is per-process,
+  in-memory and read-once: a restart between the redirect and the following GET loses it (unobservable
+  in practice — the hop is milliseconds), and a plain reload of the page you land on does not repeat
+  the line — it is a receipt for the action that just happened, not an ongoing charge. Every action is
+  also always logged to the `requivo.web` logger, in the terminal you started the server in, whether or
+  not there is a page to carry the figure to. The log line is written from a `finally`, so a call that
+  failed after spending tokens still leaves a trace — and if that failure was on a first analysis, the
+  page you land on states the spend too, for the same reason. Tokens are exact; the cost is an estimate
+  carrying the date of the rate table behind it, and a model with no price on file says so rather than
+  borrowing a neighbour's rate.
 - **One provider call at a time, and that rule belongs to the page rather than to a form.** Every
   generator under *More documents* posts to the same region, so a second click while the first call is
   in flight bought a second paid call whose result the first swap then discarded — generated and saved

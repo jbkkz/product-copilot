@@ -14,7 +14,7 @@ own output — is in English.
 ## Run and test
 
 ```bash
-cp .env.example .env                    # ANTHROPIC_API_KEY; MODEL defaults to claude-sonnet-5
+cp .env.example .env                    # ANTHROPIC_API_KEY; REQUIVO_MODEL defaults to claude-sonnet-5
 uv run requivo demo                     # replays a saved run — no key, no network, no arguments
 uv run requivo discover "We'd like a leave approval system."   # → .requivo/sessions/<slug>/
 uv run requivo status <slug>            # understanding checklist + readiness (offline)
@@ -218,8 +218,23 @@ bug that looked like correct behaviour.
    And a permissive read is only half: **whatever writes one must preserve what it could not name.**
    Reading alone left `resolve()` dropping the key on the next turn — the visible refusal traded for
    a silent loss, which is the worse of the two. See invariant 10.
+
+   **The same rule reaches past fields, and the second place it bit was an artifact *type*** (#260).
+   This page lists "a new artifact type" among the changes needing no bump, and `check_session_dir`
+   made an `artifact_status` key it had no generator for an integrity *problem* — so `session verify`
+   exited non-zero, `doctor` called the session inconsistent and `session import` refused a
+   colleague's archive, over a session `read_meta` opened without complaint. Identical shape to the
+   `model.json` case above, one file along, and it would have fired on the first new generator ever
+   shipped. Such a type is a **note** now: reported, blocking nothing.
+   `test_an_artifact_type_from_a_newer_requivo_is_not_reported_as_a_defect` is the guard.
+   The generalisation worth carrying: **a diagnostic must be at least as permissive as the loader**,
+   about every vocabulary the format lets a later version extend, not only about keys.
+   Tolerating is still not trusting (invariant 14) — the type has to *look* like one
+   (`_ARTIFACT_TYPE_RE`, `MAX_ARTIFACT_TYPE_LENGTH`) or it is refused as `unsafe_artifact_type`,
+   because accepting an unknown key is accepting what `session import` used to hold shut, and every
+   other check on that entry still runs.
 9. **A precondition is held across the writes it authorises.** `save_revision` checks
-   `expected_revision` and then performs five writes; without `session_lock` around both, two writers
+   `expected_revision` and then writes more than once; without `session_lock` around both, two writers
    pass the same check and the second overwrites the first — the check reads as protection while
    providing none. Every compound mutation runs under `repo.lock(slug)`, taken by the service so the
    whole sequence is one unit. The lock is re-entrant per thread, and OS-held, so a crash releases it.
@@ -570,6 +585,20 @@ see invariant 10), `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `Estimate
 `estimate.md`, `PRD` ↔ `prd.md`, `AcceptanceCriteria` ↔ `criteria.md`, `Epic` ↔ `epic.md`,
 `ReleaseNotes` ↔ `release.md`. Slot ids live in `framework/model_schema.json`, which also carries each
 slot's `pillar` and `label` (read back by the renderer via `_slot_meta()`).
+
+The *agreement* between each prompt and its contract is no longer kept by hand — the enumeration
+above still is, and nothing checks those eight names against the registries, so read it as a map
+rather than as a guarantee. `tests/test_prompt_contracts.py` parses each prompt's Output format
+example offline and validates it against the contract that operation actually parses replies
+with — read out of the generator's own `_complete(...)` call rather than from a table here, so a
+generator pointed at a different contract goes red too. It exists because the drift was invisible and
+paid: a model obeying a stale example produces a reply `extra="forbid"` refuses, `_complete()` retries
+twice with a corrective nudge and then raises `EngineError`, so one operation costs up to three calls
+every time it runs while the offline suite stays green (#266). What it deliberately does **not**
+check is an *optional* contract field the prompt was never told about — the three derived `id` fields
+are legitimately absent from `brief.md`, and a coverage rule would force a golden-harness capture for
+every future optional field. Adding a generator therefore adds a row to this guard automatically;
+changing an example still owes a golden capture.
 
 The slot vocabulary is enforced in two layers, with `schema_slot_ids()` as the single source:
 

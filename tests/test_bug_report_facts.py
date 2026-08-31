@@ -142,6 +142,32 @@ def test_a_model_override_that_is_set_but_empty_is_reported_as_one(workspace, mo
     assert "✅ model" not in text, "an empty model id must not render as a healthy row"
 
 
+def test_doctor_prefers_requivo_model_over_bare_model_and_reports_it_as_an_override(
+    workspace, monkeypatch
+):
+    """#268's own precedence, read back through the same public fact this file's other tests pin
+    rather than through `current_model_name()` directly -- `doctor` is what a bug reporter actually
+    pastes, so this is the shape a regression would actually be caught in."""
+    monkeypatch.setenv("MODEL", "some-other-tools-model")
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    report = _run_json(["doctor", "--json"])["model"]
+    assert report == {"name": "claude-opus-4-8", "source": "env"}
+
+
+def test_a_requivo_model_override_that_is_set_but_empty_is_reported_as_one(workspace, monkeypatch):
+    """The `REQUIVO_MODEL` twin of `test_a_model_override_that_is_set_but_empty_is_reported_as_one`.
+
+    Both `current_model_name()` and `doctor_report()`'s `source` check read `REQUIVO_MODEL` through
+    presence (`is not None`), not truthiness, for exactly the reason that test states for bare
+    `MODEL`: a truthy check on `""` would fall through to `MODEL`/the default and silently report the
+    comfortable lie that nothing was overridden, for the one variable every doc now teaches first.
+    """
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("REQUIVO_MODEL", "")
+    report = _run_json(["doctor", "--json"])["model"]
+    assert report == {"name": "", "source": "env"}
+
+
 def test_the_doctor_human_view_shows_both_rows(workspace, monkeypatch):
     """A `--json` key nobody prints is a fact a bug reporter still has to know to ask for. The human
     rendering is what a paste actually contains."""

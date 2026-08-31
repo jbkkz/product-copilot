@@ -633,7 +633,12 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "provider failure sends the reader to that session's page -- which carries the request and "
         "the retry button -- instead of to the 500 page, which hides both (#207). Choosing which "
         "page a reader lands on is the surface's whole job; the reasoning still happens behind "
-        "DiscoveryService, and this file calls nothing on the provider."
+        "DiscoveryService, and this file calls nothing on the provider. Named alongside "
+        "`ProviderOutputError` (a core, not a provider, name -- out of this guard's scope) in the "
+        "module-level `_PROVIDER_FAILURE` tuple since #253, because the JSON retry loop's own "
+        "give-up needs the identical routing decision `EngineError` gets and used not to receive "
+        "it: `routes/discovery.py` imports that tuple rather than `EngineError` itself, which is "
+        "why its own former entry below is gone rather than merely renamed."
     ),
     ("deterministic/doctor.py", "current_model_name"): (
         "a read of the provider's own model id, for the row `requivo doctor` prints so a bug report "
@@ -655,11 +660,6 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "is exactly what #332 found: it was correct until #201 widened the runner to accept "
         "`ANTHROPIC_AUTH_TOKEN` too, and then quietly wrong in the verb whose whole job is to report "
         "on the runner. Orchestrates nothing: no client is built, no call is made."
-    ),
-    ("web/routes/discovery.py", "EngineError"): (
-        "the second door onto the same first analysis, and it must fail into the same page as the "
-        "first -- see the entry above. Argued separately rather than inherited, which is why this "
-        "table is keyed by (file, name): two routes reaching one class is two decisions."
     ),
 }
 

@@ -10,6 +10,12 @@ Verbs take a session **slug**. `status` and `impact` also accept a path to a sav
 they can read a model that is not in a session store; every other verb resolves a session, because it
 writes a revision or an artifact back into one.
 
+**This page is a reference, top to bottom.** Design history — why a check exists, what bug it closed,
+how a behaviour used to differ — lives in [Design notes](#design-notes) at the foot of the page, out
+of the way of a flag lookup. Every table below is read against `--help` by
+`tests/test_cli_flag_names.py`, so a flag documented here is a flag the parser actually binds, and a
+flag the parser binds cannot ship silently undocumented.
+
 ## Global flags, and reading `--help`
 
 | Flag | Does |
@@ -68,7 +74,7 @@ paid call thrown away), a stale artifact wins over a missing brief. A converged 
 is already fresh gets no pointer — there is no single next step, and inventing one would be the menu
 this rule exists to refuse. `--json` never carries it.
 
-**The slug is derived from the request**, and it now drops function words and folds accents, so
+**The slug is derived from the request**, and it drops function words and folds accents, so
 *"We need a way to track vendor invoices"* becomes `track-vendor-invoices` rather than
 `we-need-a-way-to`. Pass `--slug` to `session init` for an explicit one. A request in a script the
 ASCII fold cannot romanize — Japanese, Cyrillic — still lands on `discovery`, and the second such
@@ -118,13 +124,41 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 |---|---|
 | `requivo demo` | Replay a bundled run — no key, no network |
 | `requivo doctor [--json]` | Environment + install check (see [What `doctor` answers](#what-doctor-answers)) |
-| `requivo schema` / `requivo context` | Inspect the slot schema / available context cards (`context --session <slug>` for exactly the cards that session uses) |
-| `requivo session init\|list\|show\|verify\|rescope\|migrate\|export\|import` | Session lifecycle (`verify` checks a session against itself; `rescope` re-scopes an existing session's context cards, see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards); `import --force` to replace a session of the same slug) |
-| `requivo model show\|validate\|apply\|diff <slug>` | Inspect and mutate a model through the validated path (`model apply --expected-revision N` for optimistic locking) |
-| `requivo artifact save\|list\|show <slug>` | Record and read generated artifacts (`save --revision N` is required — the revision the content was reasoned from is the one fact only the caller holds) |
+| `requivo schema [--framework]` | Print the slot schema (the model vocabulary + driver rule); `--framework` also prints the human framework spec |
+| `requivo context [--list] [--context/--cards CARDS] [--session SLUG]` | Inspect available context cards. `--list` prints the stems only; `--session <slug>` scopes to exactly the cards that session uses |
 
 The deterministic verbs and `--json` outputs are what the Claude Code plugin drives — Claude reasons,
 these apply.
+
+### `session` — session lifecycle
+
+| Command | Flags | Does |
+|---|---|---|
+| `requivo session init <request\|file\|->` | `--slug`, `--context`/`--cards`, `--provider`, `--json` | Create a session from a request (no LLM). `--slug` sets an explicit slug instead of one derived from the request; `--provider` is an informational tag (e.g. `claude-code`) recorded on the session |
+| `requivo session list` | `--json` | List canonical sessions |
+| `requivo session show <session>` | `--json` | Show a session's metadata + artifacts |
+| `requivo session migrate` | `--json` | Migrate ALL legacy `out/` sessions into `.requivo/sessions/` |
+| `requivo session export <session>` | `-o`/`--output`, `--json` | Export a session as a `.zip` archive; `--output` sets the destination path |
+| `requivo session verify <session>` | `--json` | Check that a session's files agree with each other |
+| `requivo session rescope <session>` | `--context`/`--cards` (required), `--json` | Re-scope an existing session's context cards — see [context-cards.md](context-cards.md#re-scoping-an-existing-sessions-cards) |
+| `requivo session import <archive>` | `--force`, `--json` | Import a session archive into the workspace; `--force` replaces a session of the same slug — see [Importing a session](#importing-a-session) |
+
+### `model` — inspect and mutate the model through the validated path
+
+| Command | Flags | Does |
+|---|---|---|
+| `requivo model show <session>` | `--json` | Print a session's current model |
+| `requivo model validate <proposal\|->` | `--allow-partial`, `--json` | Validate a proposal file, no session write — `--allow-partial` checks a partial projection instead of requiring the complete slot set |
+| `requivo model apply <session> <proposal\|->` | `--expected-revision N`, `--json` | Validate a proposal and apply it as a new revision — `--expected-revision` is the optimistic-locking check, see [What `model apply` takes](#what-model-apply-takes) |
+| `requivo model diff <session> <proposal\|->` | `--json` | Show what a proposal would change, no write |
+
+### `artifact` — record and read generated artifacts
+
+| Command | Flags | Does |
+|---|---|---|
+| `requivo artifact save <session>` | `--type` (required), `--file` (required), `--revision N` (required), `--json` | Record an artifact; `--revision` is the revision the content was reasoned from — the one fact only the caller holds |
+| `requivo artifact list <session>` | `--json` | List a session's artifacts + freshness — see "What `artifact list --json` answers" below |
+| `requivo artifact show <session>` | `--type` (required) | Print a saved artifact's content |
 
 ### What `doctor` answers
 
@@ -142,10 +176,11 @@ at all.
 | `context_cards` | The card names themselves — the plain list it has always been |
 | `sessions.readable` / `sessions.total` / `sessions.error` | Whether the session directory could be listed at all. When it could not, `total` is `null` rather than `0`, because *no sessions* and *we could not look* are different answers and a user told the first concludes their sessions were deleted |
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
+| `sessions.notes` | `{slug: [integrity codes]}` for findings that are **not** defects (#260) — today, an artifact type this build has no generator for, which [compatibility.md](compatibility.md) permits without a `format_version` bump. Reported so a type nobody can see is not a type nobody upgrades for; kept out of `inconsistent` so it moves neither the glyph nor any consumer's verdict |
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
-| `sessions.non_sessions` | What is under the session root and is **not** a session — see [Something here that is not a session](#something-here-that-is-not-a-session). `null`, not `[]`, when the root could not be listed |
-| `sessions.unexaminable` | Names under the session root that could **not be examined**, so whether they are sessions is unknown — `name` and `error` per entry. Not folded into `non_sessions`, which states a fact, nor into `total`, which stays what could be confirmed. `null`, not `[]`, when the root could not be listed. See [Something here that could not be examined](#something-here-that-could-not-be-examined) |
+| `sessions.non_sessions` | What is under the session root and is **not** a session — see [Design notes](#something-here-that-is-not-a-session). `null`, not `[]`, when the root could not be listed |
+| `sessions.unexaminable` | Names under the session root that could **not be examined**, so whether they are sessions is unknown — `name` and `error` per entry. Not folded into `non_sessions`, which states a fact, nor into `total`, which stays what could be confirmed. `null`, not `[]`, when the root could not be listed. See [Design notes](#something-here-that-could-not-be-examined) |
 | `locks.readable` / `locks.total` / `locks.error` | Whether `.requivo/locks/` could be listed at all, and how many `<slug>.lock` files it holds (#180) |
 | `locks.sessions_checked` / `locks.unmatched` | Which of those slugs currently name no session — candidate residue from a hand-deleted one, since there is no `session delete` verb. `unmatched` is `null`, not `[]`, when the *current session list* itself could not be read, on the same reasoning as `sessions.cards_checked` |
 | `locks.unexpected` | Names under `.requivo/locks/` that are not a `<slug>.lock` file `session_lock` could have written — a stray file, a directory, a symlink. `null`, not `[]`, when the lock root could not be listed at all |
@@ -156,6 +191,211 @@ An `empty` context is a broken install rather than a quiet inconvenience: the ca
 is estimated against, and impact is half of `information_value = uncertainty × impact`. Discovery
 would still run and still produce a model — it would just ask duller questions, for a reason nothing
 on screen would name.
+
+For why a directory under `.requivo/sessions/` can be reported as "not a session" or "could not be
+examined" at all, why a stored card name is escaped before it reaches your terminal, and why a lost
+context card is reported separately from a session-integrity problem — see
+[Design notes](#design-notes).
+
+### What `artifact list --json` answers
+
+```json
+{"slug": "leave-approval",
+ "artifacts": {"prd": {"revision": 3, "filename": "prd.md",
+                       "updated_at": "2026-08-20T14:25:28Z", "stale": false}}}
+```
+
+The rows live under `artifacts`, keyed by type, and `stale` is the dependency graph's verdict — not
+a comparison of `revision` against the session's current one, which is provenance (see
+[dependencies and staleness](requirements-model.md#dependencies-and-staleness)).
+
+`slug` is the name you asked under, not the one stored inside `session.json` — the same reading
+`session verify` and `session import` give it, and the safe side of a value that is untrusted on
+every read back.
+
+A session with nothing saved answers
+`{"slug": …, "artifacts": {}}`, which states which session was asked about; it used to answer `{}`,
+which a consumer could not tell from a payload that failed to serialise.
+
+**This payload used to be the bare inner map** (#107) — `{"prd": {…}}`, top level keyed by artifact
+type. **Breaking**, same class as #87 and #84: `jq '.artifacts'` where you had `jq '.'`. The rows
+are untouched. The reason is #87's, one shape along — a top level made of data cannot gain a field,
+because the consumer read is `for t, info in payload.items()` and any key added later is both
+ambiguous with a future artifact type and breaks that loop.
+
+### What `model apply` takes
+
+A proposal replaces the model, so it carries the **complete** slot set and a non-empty
+`summary.objective`. The three reasoning collections are the exception, and they are tri-state: leave
+`decisions`, `challenges` or `opportunities` out and the established ones stand; send `[]` and they are
+deleted (and what rested on them goes stale); send a list and it replaces. A refinement normally says
+nothing about them. To check a partial projection without applying it, use
+`model validate --allow-partial`. See [compatibility.md](compatibility.md#what-a-proposal-means).
+
+### Exit codes, and what 3 and 4 mean
+
+Requivo reads and writes UTF-8 throughout, whatever the machine's locale. A file *you* name —
+`requivo discover ./brief.md`, `requivo model apply <slug> proposal.json` — must be UTF-8 too; one
+that is not is refused by name, with the offending byte and its position, rather than decoded with
+the locale's codec into something that would look like prose and be wrong.
+
+On output, a console that cannot represent a character gets a visible backslash escape in its place,
+rather than a crash or a silent hole — `backslashreplace`, deliberately not `replace`, because a
+reader cannot tell a substituted question mark from a character that was never there. Where even that
+is impossible — a stream Requivo could not reconfigure, which
+`doctor` names — the command exits **3** instead of dying in a traceback:
+
+| Exit | Means |
+|---|---|
+| 0 | Success |
+| 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
+| 2 | Bad arguments (argparse) |
+| 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
+| 4 | **The work was done and part of the answer was unreachable.** What was produced is on stdout in full |
+
+Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
+its provider call, applies the revision and writes the artifact *before* it prints anything — so a
+renderer that dies at the final `print` and reports failure invites a re-run that pays for a second
+call and stacks a second revision on the first.
+
+The message reads the run's usage ledger rather than assuming: it says a call **has** been billed
+only when one was, because several verbs (`doctor`, `status`, `schema`) never call the provider at
+all and `discover` prints before it does. Telling you not to re-run a command that cost nothing
+would be the same misreport one layer up.
+
+Four describes a **shape of answer rather than a verb**. Two commands reach it today.
+
+`requivo session list` lists every session it can and gives one it could not read its own row:
+
+```
+Sessions under /work/.requivo/sessions:
+  leave-approval                           rev 3  (anthropic, 2026-08-19T09:04:11Z)
+  event-checkin                            could not be read — session format v2 is newer than this Requivo understands (v1) — upgrade requivo.
+
+1 entry could not be read. `requivo session verify <slug>` reports what is wrong in full.
+```
+
+The footer counts **entries**, not sessions: one of these rows can be an entry nobody could examine,
+and calling that a session is the one claim the third state exists to refuse. The degraded row
+**names the session and states nothing it could not read** — no revision, no provider, no timestamp.
+A session at **revision 0** is not this state: it has no model yet because nothing has analysed it,
+which is a normal row and reads as one.
+
+`requivo session verify` reaches 4 from the other side, and answers three different things:
+
+| What happened | Exit |
+|---|---|
+| The session is internally inconsistent — a complete answer | 1 |
+| Its product context was read and does not resolve — also complete | 1 |
+| Its product context **could not be read at all** — not an answer | 4 |
+
+Where both an inconsistency and an unreadable card happen at once, the **firm negative wins**: a
+session that is inconsistent *and* whose cards were unreadable exits 1, because a script gating on
+*is this usable* wants the definite answer and there is one. `--json` carries the whole story at
+every code.
+
+**`requivo doctor` exits 0 whatever it finds, and that is deliberate.** `verify` is a **gate**: you
+run it to decide, and its exit code is the decision. `doctor` is a **report** — it describes what is
+on this machine and never concludes what it means, because the same directory can be a
+half-extracted archive or a leftover lock and nothing in it says which. Read `doctor`'s output, not
+its status. The history behind both of these codes — why 4 exists rather than a fourth code per verb,
+and why `doctor` and `verify` look like siblings and are not — is in [Design notes](#design-notes).
+
+### Documents on stdin
+
+Every command that takes a document accepts `-` in place of a path, and reads it from stdin:
+
+```bash
+requivo model apply <slug> - --expected-revision 3 --json <<'JSON'
+{ "model": { … }, "questions": [], "summary": { "objective": "…" } }
+JSON
+
+requivo artifact save <slug> --type prd --file - --revision 3 --json < prd.md
+echo "We need a leave approval system." | requivo session init -
+```
+
+This is what the Claude Code skills use. A caller that already holds the content should not have to
+invent a file for it — the temp files the skills used to write were a shared path (two sessions
+overwrote each other), used a filename that is illegal on Windows, and needed `rm` to clean up.
+
+### Importing a session
+
+`session import` validates before it writes anything: the archive must hold exactly one session
+directory whose name is a valid slug, within a file-count and expanded-size ceiling, with no entry
+that could escape the session root. It is then extracted to scratch space and put through the same
+integrity check as `session verify` — the revision log accounts for the model, every revision file is
+there and matches the hash recorded for it, the current model *is* the last revision, every artifact
+has a file — and only then moved into place.
+
+A slug that already exists is refused unless `--force`, and a forced replacement is a swap: the
+existing session steps aside and is deleted only once the new one is in place, so a failure leaves you
+with the session you had rather than neither.
+
+**What a `--json` consumer branches on.** Every refusal here names the archive or the store, never a
+model. Assert on the code, never on the message.
+
+| Code | HTTP | The archive… |
+|---|---|---|
+| `unreadable_archive` | 400 | is not a readable `.zip` at all. `details`: `{archive}` |
+| `invalid_archive` | 400 | opens, but is not shaped like an export. `details`: `{problem, …}` |
+| `inconsistent_archive` | 400 | holds a session that fails the integrity check. `details`: `{slug, problems}` |
+| `session_exists` | 409 | is fine; that slug is taken and `--force` was not passed. `details`: `{slug}` |
+| `import_destination_occupied` | 409 | is fine; something that is **not** a session already sits at the slug's directory. `details`: `{slug, path}` |
+
+`invalid_archive` covers seven conditions under one code because they share one remedy — *give me a
+different archive*. `details["problem"]` is present on all seven and says which: `empty`,
+`too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory` or
+`multiple_sessions`. The size and count arms add the numbers they quote (`{files, max_files}`,
+`{bytes, max_bytes}`), the path arms add `{entry}` and the multi-session arm adds `{slugs}`; nothing
+is padded to a common shape, so read the shape after you have branched on `problem`.
+
+The first three are arms of `InvalidSessionError`, so `except InvalidSessionError` catches every
+*archive* refusal without enumerating them.
+
+Three more codes reach this verb and are about neither the archive's shape nor the store's state:
+`session_not_found` when the path you named is not a file, `invalid_slug` when the archive's one
+directory is named something that could not be a session, and `import_move_failed` (500) when the
+validated session could not be moved into place — the archive was fine and the store refused it.
+
+`--force` does **not** lift the `import_destination_occupied` refusal — it replaces a *session*, and
+the point of this code is that there is no session there. Move or delete the directory yourself; the
+import never removes something it cannot interpret. The full before/after story for both this code
+and #101's archive-vs-model split is [compatibility.md](compatibility.md#the-import-path-names-the-archive-not-the-model-101)
+— it is table-for-table what changed and why, and is not repeated here.
+
+`session export` reads under the session's write lock, so an archive can never combine an old
+`session.json` with a newer `model.json`, and it excludes any dot-prefixed entry — a scratch file
+from an interrupted write, and a legacy `.lock` left inside a session by an earlier Requivo. The write
+lock itself lives at `.requivo/locks/<slug>.lock`, outside every session directory; see
+[session-format.md](session-format.md#layout) for why.
+
+## Sessions from the `out/` layout
+
+Before the versioned session store, discovery wrote to `out/<slug>/`. Nothing has written there since
+0.8.0, and since 0.9.8 nothing reads it implicitly either — the automatic fallback and the
+migrate-on-first-write are gone, along with the flag CLI (`python src/engine.py …`) that produced that
+layout.
+
+One command remains, and it is the only thing that opens an `out/` directory:
+
+```bash
+requivo session migrate        # convert every out/<slug>/ session into .requivo/sessions/
+```
+
+It copies rather than moves — the originals stay where they are — and the converted model becomes
+revision 1, with its artifacts recorded against it. A session still only in `out/` is reported as
+missing with that command named in the error, rather than silently working at half capability.
+
+## Design notes
+
+Everything above is what a flag does. Everything below is *why it works that way* — a bug this
+repository hit, what it looked like, and what closed it. None of it is needed to run a command; all
+of it is needed to understand why `doctor` and `session verify` are shaped the way they are. This
+section is the reference page's own answer to CLAUDE.md's rule for a comment that recounts a past
+bug: keep the story next to the behaviour it explains, backed by a test that goes red if the guard
+it describes is removed. `docs/decisions/` — where a repository with no live claim on that directory
+would put pure archaeology with no such test — is held by another branch as this page was split; see
+the note at the end of this section.
 
 ### Something here that is not a session
 
@@ -328,236 +568,13 @@ to Unicode `Zl`/`Zp`. It matters if you parse this human-readable output line by
 is what `--json` is for, and `--json` escapes those two as well, which makes it the stricter of the
 two paths.
 
-### What `artifact list --json` answers
+### On this section's own home
 
-```json
-{"slug": "leave-approval",
- "artifacts": {"prd": {"revision": 3, "filename": "prd.md",
-                       "updated_at": "2026-08-20T14:25:28Z", "stale": false}}}
-```
-
-The rows live under `artifacts`, keyed by type, and `stale` is the dependency graph's verdict — not
-a comparison of `revision` against the session's current one, which is provenance (see
-[dependencies and staleness](requirements-model.md#dependencies-and-staleness)).
-
-`slug` is the name you asked under, not the one stored inside `session.json` — the same reading
-`session verify` and `session import` give it, and the safe side of a value that is untrusted on
-every read back.
-
-A session with nothing saved answers
-`{"slug": …, "artifacts": {}}`, which states which session was asked about; it used to answer `{}`,
-which a consumer could not tell from a payload that failed to serialise.
-
-**This payload used to be the bare inner map** (#107) — `{"prd": {…}}`, top level keyed by artifact
-type. **Breaking**, same class as #87 and #84: `jq '.artifacts'` where you had `jq '.'`. The rows
-are untouched. The reason is #87's, one shape along — a top level made of data cannot gain a field,
-because the consumer read is `for t, info in payload.items()` and any key added later is both
-ambiguous with a future artifact type and breaks that loop.
-
-### What `model apply` takes
-
-A proposal replaces the model, so it carries the **complete** slot set and a non-empty
-`summary.objective`. The three reasoning collections are the exception, and they are tri-state: leave
-`decisions`, `challenges` or `opportunities` out and the established ones stand; send `[]` and they are
-deleted (and what rested on them goes stale); send a list and it replaces. A refinement normally says
-nothing about them. To check a partial projection without applying it, use
-`model validate --allow-partial`. See [compatibility.md](compatibility.md#what-a-proposal-means).
-
-### Exit codes, and what 3 and 4 mean
-
-Requivo reads and writes UTF-8 throughout, whatever the machine's locale. A file *you* name —
-`requivo discover ./brief.md`, `requivo model apply <slug> proposal.json` — must be UTF-8 too; one
-that is not is refused by name, with the offending byte and its position, rather than decoded with
-the locale's codec into something that would look like prose and be wrong.
-
-On output, a console that cannot represent a character gets a visible backslash escape in its place,
-rather than a crash or a silent hole — `backslashreplace`, deliberately not `replace`, because a
-reader cannot tell a substituted question mark from a character that was never there. Where even that
-is impossible — a stream Requivo could not reconfigure, which
-`doctor` names — the command exits **3** instead of dying in a traceback:
-
-| Exit | Means |
-|---|---|
-| 0 | Success |
-| 1 | A clean, expected failure — an invalid proposal, a missing session, a provider error |
-| 2 | Bad arguments (argparse) |
-| 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
-| 4 | **The work was done and part of the answer was unreachable.** What was produced is on stdout in full |
-
-Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
-its provider call, applies the revision and writes the artifact *before* it prints anything — so a
-renderer that dies at the final `print` and reports failure invites a re-run that pays for a second
-call and stacks a second revision on the first.
-
-The message reads the run's usage ledger rather than assuming: it says a call **has** been billed
-only when one was, because several verbs (`doctor`, `status`, `schema`) never call the provider at
-all and `discover` prints before it does. Telling you not to re-run a command that cost nothing
-would be the same misreport one layer up.
-
-Four exists for the same reason one number along, and it describes a **shape of answer rather than a
-verb** — it is not `session list`'s code, and a number minted per verb would rebuild the collapse it
-was introduced to undo. Two commands reach it today.
-
-`requivo session list` is the first. A session written by a newer Requivo, or one left half-written
-by a crash, cannot be read — and it used to answer that by exiting 1 with a single message, **every
-other session invisible and nothing naming which one was the problem**. It now lists every session
-it can and gives the one it could not its own row:
-
-```
-Sessions under /work/.requivo/sessions:
-  leave-approval                           rev 3  (anthropic, 2026-08-19T09:04:11Z)
-  event-checkin                            could not be read — session format v2 is newer than this Requivo understands (v1) — upgrade requivo.
-
-1 entry could not be read. `requivo session verify <slug>` reports what is wrong in full.
-```
-
-The footer counts **entries**, not sessions: since #80 one of these rows can be an entry nobody
-could examine, and calling that a session is the one claim the third state exists to refuse.
-
-The degraded row **names the session and states nothing it could not read** — no revision, no
-provider, no timestamp. A plausible `rev 0` on a session nobody managed to open is a worse answer
-than no answer. It keeps the underlying error text, because *written by a newer Requivo, upgrade* is
-a remedy where a flattened *unreadable* is not. `session verify <slug>` is where the full story lives:
-it reports an integrity code for each way a `session.json` can be refused — a newer `format_version`,
-an unparseable file, a field of the wrong type.
-
-Two things it cannot report on. A session directory whose *name* is not a valid slug, since it has no
-slug to take; there the row's own line is already the whole answer. And an entry that could not be
-**examined** — `session_exists` probes `session.json` the way the listing itself used to, so `verify`
-still raises there rather than answering. That is a known gap with its own issue, not a state this
-verb reports: for such a row the line in the listing is the whole of what Requivo can say today.
-
-A session at **revision 0** is not this state. It has no model yet because nothing has analysed it,
-which is a normal row and reads as one — *we could not look* and *we have not looked yet* are two
-different answers, and only the first is a problem.
-
-**A second condition reaches 4 on the same command** (#80), and it is one number further out than the
-paragraph above: an entry under the session root that could not be *examined at all*, so whether it
-is a session is unknown. That failure happened in the scan that produces the row set — before any row
-existed to degrade — so it used to take the whole listing down rather than degrade one member. It is
-now a degraded row like any other, and the same 4 covers it, because 4 describes the shape of the
-answer and this is that shape. See
-[Something here that could not be examined](#something-here-that-could-not-be-examined).
-
-Neither 0 nor 1 is true of a listing with a hole in it, which is why it gets a number of its own:
-0 says nothing is wrong, 1 says nothing was listed. Making it non-zero is safe precisely because
-nothing is withheld — a script that only wants the rows still gets all of them on stdout, and
-`--json` carries `readable` and `error` per row, plus a top-level `degraded` count, for a caller
-that would rather branch than parse.
-
-`requivo session verify` is the second, and it reaches 4 from the other side. It answers three
-different things and had two exit codes:
-
-| What happened | Exit |
-|---|---|
-| The session is internally inconsistent — a complete answer | 1 |
-| Its product context was read and does not resolve — also complete | 1 |
-| Its product context **could not be read at all** — not an answer | 4 |
-
-The third already had a rendering of its own — *Could not check `<slug>`'s product context* — and
-then exited 1 beside a session that really is broken, in the verb whose whole job is to say whether a
-session is sound. Where both happen at once, the **firm negative wins**: a session that is
-inconsistent *and* whose cards were unreadable exits 1, because a script gating on *is this usable*
-wants the definite answer and there is one. `--json` carries the whole story at every code.
-
-**`requivo doctor` exits 0 whatever it finds, and that is deliberate.** It looks like `verify`'s
-sibling and is not one. `verify` is a **gate**: you run it to decide, and its exit code is the
-decision. `doctor` is a **report** — it describes what is on this machine and never concludes what
-it means, because the same directory can be a half-extracted archive or a leftover lock and nothing
-in it says which. A report that exits non-zero is concluding. Harmonising the two would cost the one
-verb that must not, so the difference is written down here rather than left to look like an
-oversight: read `doctor`'s output, not its status.
-
-### Documents on stdin
-
-Every command that takes a document accepts `-` in place of a path, and reads it from stdin:
-
-```bash
-requivo model apply <slug> - --expected-revision 3 --json <<'JSON'
-{ "model": { … }, "questions": [], "summary": { "objective": "…" } }
-JSON
-
-requivo artifact save <slug> --type prd --file - --revision 3 --json < prd.md
-echo "We need a leave approval system." | requivo session init -
-```
-
-This is what the Claude Code skills use. A caller that already holds the content should not have to
-invent a file for it — the temp files the skills used to write were a shared path (two sessions
-overwrote each other), used a filename that is illegal on Windows, and needed `rm` to clean up.
-
-### Importing a session
-
-`session import` validates before it writes anything: the archive must hold exactly one session
-directory whose name is a valid slug, within a file-count and expanded-size ceiling, with no entry
-that could escape the session root. It is then extracted to scratch space and put through the same
-integrity check as `session verify` — the revision log accounts for the model, every revision file is
-there and matches the hash recorded for it, the current model *is* the last revision, every artifact
-has a file — and only then moved into place.
-
-A slug that already exists is refused unless `--force`, and a forced replacement is a swap: the
-existing session steps aside and is deleted only once the new one is in place, so a failure leaves you
-with the session you had rather than neither.
-
-**What a `--json` consumer branches on.** Every refusal here names the archive or the store, never a
-model. Assert on the code, never on the message.
-
-| Code | HTTP | The archive… |
-|---|---|---|
-| `unreadable_archive` | 400 | is not a readable `.zip` at all. `details`: `{archive}` |
-| `invalid_archive` | 400 | opens, but is not shaped like an export. `details`: `{problem, …}` |
-| `inconsistent_archive` | 400 | holds a session that fails the integrity check. `details`: `{slug, problems}` |
-| `session_exists` | 409 | is fine; that slug is taken and `--force` was not passed. `details`: `{slug}` |
-| `import_destination_occupied` | 409 | is fine; something that is **not** a session already sits at the slug's directory. `details`: `{slug, path}` |
-
-`invalid_archive` covers seven conditions under one code because they share one remedy — *give me a
-different archive*. `details["problem"]` is present on all seven and says which: `empty`,
-`too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory` or
-`multiple_sessions`. The size and count arms add the numbers they quote (`{files, max_files}`,
-`{bytes, max_bytes}`), the path arms add `{entry}` and the multi-session arm adds `{slugs}`; nothing
-is padded to a common shape, so read the shape after you have branched on `problem`.
-
-The first three are arms of `InvalidSessionError`, so `except InvalidSessionError` catches every
-*archive* refusal without enumerating them. Before #101 the seven shape conditions and the occupied
-slug all answered `invalid_model` — a code documented for a malformed *proposal*, which is not what
-anyone hands `session import`.
-
-Three more codes reach this verb and are about neither the archive's shape nor the store's state:
-`session_not_found` when the path you named is not a file, `invalid_slug` when the archive's one
-directory is named something that could not be a session, and `import_move_failed` (500) when the
-validated session could not be moved into place — the archive was fine and the store refused it.
-
-`import_destination_occupied` is the one that used to be reported as `import_move_failed`, and the
-distinction is worth knowing because the remedies differ. The import claims a free slug by renaming
-the extracted directory onto it, and that rename does not answer the same way everywhere: on POSIX
-an **empty** destination directory is replaced silently, while on Windows it is `MoveFileExW`, which
-refuses *any* existing destination directory. A stray `mkdir` at the slug therefore used to import on
-macOS and Linux and fail on Windows with a message about a move that had nothing wrong with it. Both
-platforms now refuse it by name, before the rename is attempted. `--force` does **not** lift this
-refusal — it replaces a *session*, and the point of this code is that there is no session there. Move
-or delete the directory yourself; the import never removes something it cannot interpret.
-
-`session export` reads under the session's write lock, so an archive can never combine an old
-`session.json` with a newer `model.json`, and it excludes any dot-prefixed entry — a scratch file
-from an interrupted write, and a legacy `.lock` left inside a session by an earlier Requivo.
-The write lock itself now lives at `.requivo/locks/<slug>.lock`, outside every session directory, so
-a current session has nothing of the kind in it. See
-[session-format.md](session-format.md#layout) for why it is out there: `session import --force`
-renames the session directory, and a lock inside a directory being renamed is both meaningless
-(the writers under it resolve by pathname) and impossible on Windows.
-
-## Sessions from the `out/` layout
-
-Before the versioned session store, discovery wrote to `out/<slug>/`. Nothing has written there since
-0.8.0, and since 0.9.8 nothing reads it implicitly either — the automatic fallback and the
-migrate-on-first-write are gone, along with the flag CLI (`python src/engine.py …`) that produced that
-layout.
-
-One command remains, and it is the only thing that opens an `out/` directory:
-
-```bash
-requivo session migrate        # convert every out/<slug>/ session into .requivo/sessions/
-```
-
-It copies rather than moves — the originals stay where they are — and the converted model becomes
-revision 1, with its artifacts recorded against it. A session still only in `out/` is reported as
-missing with that command named in the error, rather than silently working at half capability.
+CLAUDE.md's rule for narrative in this codebase is: back it with a test, or move it to
+`docs/decisions/`. Every paragraph above is backed by a test — `test_cli_doctor` exercises the
+non-session state and `test_unexaminable_entries` the could-not-examine state, and the
+control-character escaping is pinned by
+`test_session_show_json_escapes_a_control_character_before_it_reaches_a_line` and its siblings — so
+none of it is the archaeology that rule sends to `docs/decisions/`. It moved here, to the foot of
+this page, rather than there, because `docs/decisions/` is a different branch's file this tick; if
+that changes, this section is the candidate to relocate, not to duplicate.

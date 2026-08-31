@@ -38,4 +38,8 @@ $ requivo doctor --json
 
 ## Notes
 
-<!-- Anything else. If it involves a specific request, please anonymise client-confidential content. -->
+<!-- Anything else. If it involves a specific request, please anonymise client-confidential content.
+If the error mentions "the reply that failed validation was saved to …", please attach that file --
+it is the exact provider reply that failed, local to your machine (`.requivo/debug/`, never sent
+anywhere), and it is usually what tells us whether this is a prompt regression or a model-side
+change. -->

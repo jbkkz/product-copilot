@@ -37,7 +37,13 @@ plugin and the Web app all read and write the same layout.
   temp file is unique per writer, so concurrent writers cannot collide on it.
 - **`locks/<slug>.lock`** is an empty file held with an OS-level lock for the duration of a write. The
   kernel releases it when the process ends, so a crash cannot leave a session permanently locked —
-  there is no stale-lock state to clean up, and no timeout to wait out.
+  there is no stale-lock state to clean up, and no timeout to wait out on a *crashed* holder.
+
+  A **live** holder is a different story, and both platforms now answer it the same way (#265).
+  Acquiring the lock against a holder that is merely slow — or genuinely stuck (a suspended
+  process, a debugger paused on a breakpoint, an NFS-mounted workspace) — waits up to 30 seconds
+  and then raises a clear "locked by another process, retry in a moment" rather than hanging. Every
+  write normally holds this lock for milliseconds, so this bound is never felt in ordinary use.
 
   It sits **beside** `sessions/` rather than inside the session it guards, and that is load-bearing
   rather than tidy. An OS lock is a claim on an *inode*; every writer under it resolves the session
@@ -214,11 +220,24 @@ under the hash its revision recorded.
 ```bash
 requivo session verify <slug>          # exits non-zero, and says which claim is false
 requivo session verify <slug> --json   # {"ok": false, "problems": [{"code": …, "message": …}],
-                                       #  "context_cards": {"checked": true, "problem": null}}
+                                       #  "notes": [], "context_cards": {"checked": true,
+                                       #  "problem": null}}
 ```
 
 The same check gates `session import` (an archive is held to exactly the standard a live session is)
 and appears in `requivo doctor`, which names any session in the workspace that no longer adds up.
+
+**What an interrupted apply leaves.** Applying a revision is three writes and no transaction — the
+frozen `revisions/NNNN-model.json`, then `model.json`, then `session.json` — so a machine that dies
+between two of them leaves a real state, and the order is chosen so that the first of those gaps is
+harmless. Only the frozen file is on disk, nothing reads it yet, and every read path goes on serving
+the revision `session.json` records; `verify` reports `orphan_revision_file` and the next apply mints
+the same revision number again, overwriting it. The revision number is never spent by a write that
+did not finish. Die in the *second* gap, with `model.json` already replaced, and the session really
+is inconsistent: `verify` says `model_is_not_the_last_revision` — the current model and the history
+describe different states — or `model_without_revision` when the interrupted apply was the session's
+first, since there is then no recorded revision for the model to disagree with. Re-applying is again
+the repair.
 
 A recorded artifact's `filename` is treated as untrusted while this runs. It is an unconstrained
 string in the format, and a session may arrive from an archive or a hand edit, so it goes through the
@@ -227,6 +246,15 @@ same bare-filename guard every artifact write uses; a name that is not a plain f
 existence**. Testing it would answer whether an arbitrary path on the machine exists — no content,
 but the presence or absence of `missing_artifact_file` in the reply is itself the answer. `import`
 refuses such an archive.
+
+**An artifact type this build has no generator for is a `note`, not a problem** (#260). It appears
+under `notes` rather than `problems`, counts towards neither `ok` nor the exit code, and does not stop
+`session import` — because [compatibility.md](compatibility.md) lists a new artifact type among the
+changes that need no `format_version` bump, so a session written by a newer Requivo is exercising the
+format rather than breaking it. Everything else about that row is checked exactly as before: the
+filename guard above, the file's existence, and the revision it claims. A key that is not *shaped*
+like an artifact type — a plain lowercase name such as `risk-register`, at most 64 characters — is a
+different answer and stays a refusal, as `unsafe_artifact_type`.
 
 `context_cards` is a second, separate question the same command answers: do the context cards this
 session was created with still resolve on this machine? It is reported beside `problems` rather than

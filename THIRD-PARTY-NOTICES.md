@@ -1,9 +1,9 @@
 # Third-party notices
 
-Requivo itself is MIT-licensed (see `LICENSE`). Its Python dependencies are declared in
-`pyproject.toml` and installed from PyPI, so they carry their own licenses and are not redistributed
-here. This file covers the one thing that *is* copied into this repository and shipped inside the
-wheel.
+Requivo itself is licensed under the Apache License 2.0 (see `LICENSE` and `NOTICE`). Its Python
+dependencies are declared in `pyproject.toml` and installed from PyPI, so they carry their own
+licenses and are not redistributed here. This file covers the one thing that *is* copied into this
+repository and shipped inside the wheel.
 
 ## htmx
 

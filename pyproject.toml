@@ -8,13 +8,13 @@ version = "1.3.0"
 description = "Turn a vague product request into a versioned requirements model: ask only the questions that change the solution, generate the brief and PRD from it, and compute exactly what a changed answer invalidates."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 keywords = ["requirements", "product", "llm", "anthropic", "claude", "prd", "discovery", "elicitation"]
 authors = [{ name = "jbkkz" }]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -61,7 +61,20 @@ dependencies = [
 # package declares >=3.9, so `pip install 'requivo[anthropic]'` resolves 0.x on 3.9 and 1.x above it
 # -- correct by construction, and the reason the 3.9 legs and the rest no longer test the same SDK.
 # That is an argument for moving the supported-Python window (#298), not against this ceiling.
-anthropic = ["anthropic>=0.40.0,<2"]
+#
+# **The floor moved to 0.42.0 from 0.40.0, found while implementing #294.** `_complete()` bills usage
+# through `getattr(u, name, 0) or 0` on four `anthropic.types.Usage` fields, and two of them --
+# `cache_read_input_tokens`, `cache_creation_input_tokens` -- were not on that class yet at 0.40.0 or
+# 0.41.x (measured directly: `Usage.model_fields` at 0.40.0 is only `{input_tokens, output_tokens}`;
+# both cache fields are present from 0.42.0 on). That is not a future rename to guard against -- it
+# was already true, silently, for the two oldest versions this extra's declared range let a resolver
+# install: `uv pip install --resolution lowest-direct` at the old `>=0.40.0` floor landed exactly
+# there, so any install pinned near the floor has been under-reporting cache-read/write spend with
+# nothing anywhere going red, on every release since this extra existed. #294's own pin
+# (test_usage_field_pin.py) is what surfaced it -- it fails red against a genuine `--resolution
+# lowest-direct` install at the old floor and passes at 0.42.0, so raising the floor is the fix
+# rather than narrowing the pin down to the two fields that happened to always be there.
+anthropic = ["anthropic>=0.42.0,<2"]
 # Local, single-user, self-hostable web interface: `pip install 'requivo[web]'`, then `requivo web`.
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
@@ -138,12 +151,15 @@ Changelog = "https://github.com/jbkkz/requivo/blob/main/CHANGELOG.md"
 requivo = "requivo.cli:app"
 
 [tool.setuptools]
-# THIRD-PARTY-NOTICES.md rides along with the license into the wheel's dist-info. The wheel carries a
-# verbatim copy of htmx, and a redistributed file should be traceable to its source and version even
-# though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather than PEP 639's
-# `[project] license-files`, which would raise the build-time setuptools floor and the metadata version
-# for no gain here.
-license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+# NOTICE and THIRD-PARTY-NOTICES.md ride along with the license into the wheel's dist-info. NOTICE is
+# not decoration: Apache-2.0 section 4(d) requires a redistribution to carry the NOTICE file, and a
+# wheel is a redistribution, so omitting it here would put every `pip install` out of compliance with
+# the licence this file declares. THIRD-PARTY-NOTICES.md is here for a different reason — the wheel
+# carries a verbatim copy of htmx, and a redistributed file should be traceable to its source and
+# version even though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather
+# than PEP 639's `[project] license-files`, which would raise the build-time setuptools floor and the
+# metadata version; whether that trade-off still binds is #337, deliberately not settled here.
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

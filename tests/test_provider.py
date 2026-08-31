@@ -192,9 +192,49 @@ def test_complete_wraps_api_errors_as_a_clean_engine_error():
 # ── #201: refusing before the SDK can traceback ──────────────────────────────
 
 
-def _no_credentials(monkeypatch):
-    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+# Every environment variable the SDK resolves a credential from, not just the two Requivo used to
+# check. Since #334 the guard asks the SDK rather than reading a list, so a test that clears only
+# `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is not describing a credential-free install on a
+# machine whose developer has a profile on disk -- it is describing whatever that machine happens to
+# have, and it would go green or red for reasons no diff explains.
+_CREDENTIAL_ENV = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE",
+    "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+)
+
+
+def _clear_credential_env(monkeypatch):
+    """Unset every credential variable, and leave the SDK's own discovery running.
+
+    For the tests that are *about* discovery: they set one source up and assert the guard sees what
+    the SDK resolved. Neutralising the chain there would assert against the stub instead of against
+    the SDK, which is the one thing those tests exist to check.
+    """
+    for var in _CREDENTIAL_ENV:
         monkeypatch.delenv(var, raising=False)
+
+
+def _no_credentials(monkeypatch):
+    """An install with no credential from *any* source the SDK reads, on any developer's machine.
+
+    The environment half is the tuple above. The on-disk half -- the active profile under the SDK's
+    config directory -- cannot be cleared by unsetting anything, so the SDK's own discovery entry
+    point is neutralised instead.
+
+    **`ANTHROPIC_CONFIG_DIR` is not the lever it looks like**, and that is worth the line it costs:
+    pointing it at an empty or absent directory does not mean "find no profiles here", it makes the
+    SDK *raise* `Config file not found ... (profile 'default')` out of the constructor -- and it does
+    so even when federation environment variables are set, which would otherwise have resolved. A
+    helper built on it turns every credential-free test into a test about a misconfigured config
+    directory, which is a different thing that happens to also fail.
+
+    `raising=False` because `default_credentials` does not exist on the older majors in
+    `anthropic>=0.42.0,<2`: there is no discovery chain there to neutralise, and its absence is the
+    same isolated state rather than an error.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
 
 
 def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):
@@ -264,6 +304,144 @@ def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
         monkeypatch.setenv(var, "sk-ant-whatever")
         assert credential_present() is True, f"{var} alone must read as present"
         assert new_client() is not None, f"{var} alone must not be false-refused"
+
+
+# ── #334: the guard asks the SDK, instead of keeping a list of the names it reads ─────────────
+
+
+def _sdk_has_credential_chain() -> bool:
+    """Whether the installed SDK has the profile/federation discovery chain at all.
+
+    `anthropic>=0.42.0,<2` spans SDKs that resolve two environment variables and SDKs that resolve
+    five sources, and the **Dependency floor** leg installs the former -- which is the point of that
+    leg, and why it is the one that caught this.
+
+    The production guard needs no branch for it: `_resolve_client` reads the three attributes through
+    `getattr` defaults, so an SDK with no `credentials` attribute simply has no such source and
+    resolves from the two variables it does understand. The *tests* do need one. A test that exports
+    federation variables and asserts a credential resolved is asserting a capability the floor does
+    not have, and it fails there for a reason that is not a defect.
+
+    Skipped with a stated reason rather than weakened to pass everywhere: the assertion is the whole
+    value of the test, and a version-agnostic rewrite of it would assert nothing on any leg. The
+    modern-SDK legs keep it; this one records that it could not look.
+    """
+    import anthropic._client as sdk_client
+
+    return hasattr(sdk_client, "default_credentials")
+
+
+_NEEDS_CHAIN = pytest.mark.skipif(
+    not _sdk_has_credential_chain(),
+    reason=(
+        "the installed anthropic SDK has no profile/federation discovery chain (the floor of "
+        "`anthropic>=0.42.0,<2` predates it). UNTESTED ON THIS SDK: that a credential resolved from "
+        "a source other than ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not false-refused. The legs "
+        "on a current SDK do test it."
+    ),
+)
+
+
+
+@_NEEDS_CHAIN
+def test_a_federation_install_is_not_false_refused(monkeypatch):
+    """The #334 defect itself, and the reason this file no longer keeps a list of variable names.
+
+    `new_client()` pre-flighted on `_AUTH_ENV_VARS` -- two entries against the five sources the SDK
+    documents. An install authenticating by workload identity federation therefore hit a refusal
+    telling it to set `ANTHROPIC_API_KEY`, while a bare `Anthropic()` in the same shell resolved a
+    credentials provider and would have made the call. Widening the tuple was rejected as the fix:
+    the resolution order belongs to the SDK, so a copy of it here is a copy that goes stale on the
+    SDK's schedule rather than on ours. Goes red on the tuple-based guard.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "an-identity-token")
+    monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "rule-1")
+    monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-1")
+
+    from requivo.providers.anthropic.client import credential_present
+
+    assert credential_present() is True, "the SDK resolves a federation credential; the guard must see it"
+    assert new_client() is not None
+
+
+def test_the_resolved_credential_attributes_are_read_through_getattr_defaults():
+    """Two halves of one promise, because each fails silently on its own.
+
+    The names must be *real* -- an SDK that renamed `credentials` would make every install read as
+    credential-free, which is a refusal nobody can argue with. And they must be read through a
+    default, because the supported range is `anthropic>=0.42.0,<2` and the older majors have no
+    `credentials` attribute at all; a bare `client.credentials` would turn the whole provider into an
+    `AttributeError` on the floor this repository tests against.
+    """
+    import anthropic as sdk
+
+    from requivo.providers.anthropic.client import _CREDENTIAL_ATTRS
+
+    client = sdk.Anthropic(api_key="sk-ant-whatever")
+    # `api_key` and `auth_token` exist on every major in `anthropic>=0.42.0,<2`; `credentials` is the
+    # one that does not, so it is checked only where the chain that populates it exists. Asserting it
+    # unconditionally is what went red on the Dependency floor leg -- a test contradicting the
+    # `getattr` default it was written to justify.
+    always = tuple(a for a in _CREDENTIAL_ATTRS if a != "credentials")
+    for attr in always:
+        assert hasattr(client, attr), (
+            f"the SDK no longer exposes `{attr}`; the guard is reading a name that is gone and would "
+            f"report every install as credential-free"
+        )
+    if _sdk_has_credential_chain():
+        assert hasattr(client, "credentials"), (
+            "this SDK has the discovery chain but no `credentials` attribute to leave its result on; "
+            "the guard would resolve a profile or federation credential and then not see it"
+        )
+
+    # The other half, and the one that has to hold on *every* supported major: an SDK object missing
+    # an attribute must read as "no credential from that source", never as an AttributeError.
+    class _OldSdkClient:  # only the two attributes every supported major has
+        api_key = None
+        auth_token = None
+
+    assert all(getattr(_OldSdkClient(), a, None) is None for a in _CREDENTIAL_ATTRS), (
+        "reading a missing attribute must yield None, not raise -- the floor SDK has no `credentials`"
+    )
+
+
+@_NEEDS_CHAIN
+def test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason(monkeypatch):
+    """A third state the env-var guard could not reach: configured, and unloadable.
+
+    `ANTHROPIC_PROFILE` naming a file that is not there makes the SDK raise out of its own
+    constructor. Nothing here expected construction to fail -- the guard's whole premise was that
+    `Anthropic()` never raises -- so it escaped `new_client()` as a traceback. It is an `EngineError`
+    now, quoting the SDK, which names the missing file and the variable to change; and it is
+    deliberately *not* the no-credential message, because telling someone to set `ANTHROPIC_API_KEY`
+    when they have a profile pointed at the wrong path is the wrong remedy for the right symptom.
+    """
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    with pytest.raises(EngineError) as ei:
+        new_client()
+    msg = str(ei.value)
+    assert "could not load the credential configuration" in msg
+    assert "a-profile-that-does-not-exist" in msg, "the SDK's own reason names the profile; keep it"
+    assert "No Anthropic credential found" not in msg, (
+        "a configured-but-unloadable profile is not an absent credential, and must not be given the "
+        "remedy for one"
+    )
+
+
+@_NEEDS_CHAIN
+def test_credential_present_does_not_raise_on_an_unloadable_profile(monkeypatch):
+    """`deterministic/doctor.py` calls `credential_present()` bare, so the verb that answers *is this
+    install healthy* would traceback on exactly the unhealthy install it exists to describe. False,
+    not an exception -- the detail belongs to `new_client()`, which has somewhere to put it."""
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    from requivo.providers.anthropic.client import credential_present
+
+    assert credential_present() is False
 
 
 def test_a_provider_verb_refuses_without_a_key_before_claiming_a_session(monkeypatch, tmp_path):
@@ -634,7 +812,117 @@ def test_cost_estimate_bills_a_write_premium_and_plain_input_differently():
 
 
 def test_current_model_name_reads_env_override(monkeypatch):
+    monkeypatch.delenv("REQUIVO_MODEL", raising=False)
     monkeypatch.delenv("MODEL", raising=False)
     assert current_model_name() == "claude-sonnet-5"
+
+
+def test_current_model_name_prefers_requivo_model_over_the_default(monkeypatch):
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    assert current_model_name() == "claude-opus-4-8"
+
+
+def test_current_model_name_falls_back_to_bare_model(monkeypatch):
+    # #268: the bare MODEL name predates REQUIVO_MODEL and existing setups must keep working --
+    # it is read only when REQUIVO_MODEL is unset.
+    monkeypatch.delenv("REQUIVO_MODEL", raising=False)
     monkeypatch.setenv("MODEL", "claude-opus-4-8")
     assert current_model_name() == "claude-opus-4-8"
+
+
+def test_current_model_name_prefers_requivo_model_when_both_are_set(monkeypatch):
+    # The precedence case #268 exists to pin: a shell that already exports a generic MODEL for some
+    # other tool must not silently steer Requivo once REQUIVO_MODEL is set alongside it.
+    monkeypatch.setenv("MODEL", "some-other-tools-model")
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    assert current_model_name() == "claude-opus-4-8"
+
+
+# ── #283: the malformed reply survives retry give-up ─────────────────────────
+# `_complete`'s give-up exit used to discard the raw reply along with the retry loop's local state.
+# The final reply that never validated is now written to `.requivo/debug/` and named in the raised
+# error, so a bug report has something to attach and the maintainer can tell a prompt regression from
+# a model-side change. Successful calls and transport-level failures write nothing -- there is no
+# malformed reply to save on either path, which the two negative tests below assert with a positive
+# control each (the give-up test itself), so a broken harness that writes nothing on *every* path
+# cannot pass all three silently.
+
+
+class _RaisingTransportClient:
+    """Raises the SDK's own transport error before any reply exists — the `except APIError` exit,
+    which has no raw text to save."""
+
+    def __init__(self):
+        self.messages = self
+
+    def create(self, **kwargs):
+        raise anthropic.APIConnectionError(
+            message="boom", request=httpx.Request("POST", "https://api.anthropic.com"))
+
+
+def test_a_retry_give_up_saves_the_final_raw_reply_and_names_it_in_the_error(tmp_path, monkeypatch):
+    """The positive control: drive `_complete` all the way to give-up and check the file it leaves
+    behind, not just that an error was raised."""
+    from requivo.core.errors import ProviderOutputError
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    bad_reply = '{"not": "an engine output"}'
+    fake = FakeClient(bad_reply, bad_reply, bad_reply)  # every retry attempt, never conforms
+    with pytest.raises(ProviderOutputError) as exc:
+        run(fake, [{"role": "user", "content": "leave approval"}])
+
+    saved = list((tmp_path / ".requivo" / "debug").glob("*.txt"))
+    assert len(saved) == 1, "the give-up exit must write exactly one debug file"
+    assert saved[0].read_text(encoding="utf-8") == bad_reply, (
+        "the saved file must hold the exact final raw reply, byte for byte -- not a summary of it"
+    )
+    assert str(saved[0]) in str(exc.value), (
+        "the error message must name the path a bug report should attach"
+    )
+    assert exc.value.details.get("raw_reply_path") == str(saved[0])
+
+
+def test_a_successful_call_writes_no_debug_file(tmp_path, monkeypatch):
+    """The negative half. Passes trivially if nothing ever writes the debug file at all -- which is
+    exactly why the give-up test above exists as the paired positive control."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    fake = FakeClient(_ENGINE_REPLY)
+    run(fake, [{"role": "user", "content": "leave approval"}])
+    assert not (tmp_path / ".requivo" / "debug").exists(), (
+        "a successful call has nothing to debug and must write nothing"
+    )
+
+
+def test_a_transport_failure_writes_no_debug_file(tmp_path, monkeypatch):
+    """The other negative half: an `EngineError` alone is not the trigger -- only give-up is. A
+    transport failure never reaches the JSON/contract stage, so there is no raw reply to save."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    with pytest.raises(EngineError):
+        run(_RaisingTransportClient(), [{"role": "user", "content": "leave approval"}])
+    assert not (tmp_path / ".requivo" / "debug").exists(), (
+        "a transport-level failure has no raw reply to save and must write nothing"
+    )
+
+
+def test_a_prune_failure_does_not_discard_an_already_saved_reply(tmp_path, monkeypatch):
+    """Found in review: `_prune_debug_dir`'s `unlink` calls carried no exception handling of their
+    own, so a failure there -- this codebase already knows a `PermissionError` on an open handle is
+    real and platform-specific, invariant 18's own `_replace_with_retry` exists because of it --
+    propagated up into `_save_failed_reply`'s broad `except Exception: return None` and discarded the
+    path of a reply that had, moments earlier, been written successfully. The write and the prune are
+    two separate failure domains now: a prune failure must never un-report a completed write.
+    """
+    from requivo.providers.anthropic import completion as mod
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+
+    def _raise(root):
+        raise PermissionError("locked by another process")
+
+    monkeypatch.setattr(mod, "_prune_debug_dir", _raise)
+    path = mod._save_failed_reply("some raw reply text", "EngineOutput")
+    assert path is not None, (
+        "a write that succeeded must still be reported even when the prune right after it fails"
+    )
+    assert path.read_text(encoding="utf-8") == "some raw reply text"

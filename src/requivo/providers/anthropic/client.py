@@ -34,43 +34,104 @@ else:
 
 MODEL_DEFAULT = "claude-sonnet-5"
 
-# The two environment variables the SDK will authenticate from. `ANTHROPIC_AUTH_TOKEN` is checked
-# alongside the key so a bearer-token setup is not false-refused by a guard meant to help; Requivo
-# does nothing else to support that flow, and does not need to.
+# The two environment variables a user is *told* about, and the only two this file still names.
+# They are the remedy in `_NO_KEY_MESSAGE`, not the decision: nothing here branches on them, because
+# a hand-kept list of the names the SDK reads is what #334 was.
 #
-# This is narrower than everything the installed SDK itself resolves credentials from -- its own
-# `Anthropic.__init__` docstring also documents `ANTHROPIC_PROFILE`, workload identity federation
-# env vars, and an on-disk active profile, none of which any Requivo surface checks for (#332,
-# filed as a follow-up rather than folded into this tuple: reading those is a design decision, not
-# a name to add here).
+# It was the decision for two releases, and it was two entries short of five. The installed SDK
+# resolves credentials from explicit arguments, then these two variables, then `ANTHROPIC_PROFILE`,
+# then workload identity federation, then the active profile on disk -- so an install authenticating
+# by profile or federation was refused by Requivo *before* the SDK was given a chance, and told to
+# set a variable, while a bare `Anthropic()` in the same shell would have built a working client.
+# Widening the tuple would have restored the same defect one release later, against a resolution
+# order this repository does not own. `_resolve_client` asks the SDK instead.
 _AUTH_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
+# The three attributes the SDK exposes its resolved credential on, read through `getattr` defaults
+# because the supported range is `anthropic>=0.42.0,<2` and `credentials` -- the profile/federation
+# provider -- does not exist on the older majors. An SDK without the attribute has no such source,
+# so `None` is the right answer there rather than a crash. Pinned by
+# `test_the_resolved_credential_attributes_are_read_through_getattr_defaults`.
+_CREDENTIAL_ATTRS = ("api_key", "auth_token", "credentials")
 
-def credential_present() -> bool:
-    """Whether a credential is visible in the environment, by the same names `new_client()`
-    authenticates from -- the **one** definition every "is there a key" reader shares.
-
-    Before #332, `web/config.py` and `deterministic/doctor.py` each kept their own
-    `os.getenv("ANTHROPIC_API_KEY")`, current at the time `new_client()` read only that name too.
-    #201 widened `new_client()` to `_AUTH_ENV_VARS` for a bearer-token setup and left the other two
-    behind, so a working bearer-token install built a client from the CLI while both the web surface
-    and `requivo doctor --json` reported no key. This function is what both now read instead of a
-    second copy of the tuple above, so the two cannot drift again the next time this tuple widens.
-    Pinned by `test_credential_present_is_the_one_definition_new_client_reads`.
-    """
-    return any(os.getenv(var) for var in _AUTH_ENV_VARS)
 
 # Said once, here, because three surfaces used to say a version of it and the paid CLI path said
 # nothing at all. Names both `_AUTH_ENV_VARS` (#332 review): the remedy has to name every name this
 # same guard accepts, or a bearer-token-only reader is told to set a credential they already have a
 # working equivalent of.
+#
+# It says "resolved none" rather than "none found", and the two are not the same sentence (#334).
+# The SDK also authenticates from a profile and from workload identity federation; this message is
+# now printed only when the SDK itself came back with nothing, so it must not read as a list of the
+# only ways in. Naming the two easy variables is a remedy for the common case, not a claim about the
+# set.
 _NO_KEY_MESSAGE = (
-    "No Anthropic credential found. Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN for a "
-    "bearer-token setup) in your environment, or put it in a `.env` file in the directory you run "
-    "from (see .env.example). `requivo doctor` reports whether a credential is visible. You do NOT "
-    "need one for `requivo demo`, for the offline verbs (status, impact, session, model, artifact), "
-    "or for Requivo inside Claude Code."
+    "No Anthropic credential found: the SDK resolved none from the environment, from a profile, or "
+    "from workload identity federation. The usual fix is to set ANTHROPIC_API_KEY (or "
+    "ANTHROPIC_AUTH_TOKEN for a bearer-token setup) in your environment, or to put it in a `.env` "
+    "file in the directory you run from (see .env.example). `requivo doctor` reports whether a "
+    "credential is visible. You do NOT need one for `requivo demo`, for the offline verbs (status, "
+    "impact, session, model, artifact), or for Requivo inside Claude Code."
 )
+
+
+def _resolve_client() -> tuple[object | None, str | None]:
+    """Ask the SDK to resolve credentials, and return `(client, problem)` -- exactly one of them set.
+
+    **The SDK runs its whole resolution chain in `Anthropic.__init__`, offline**, and leaves the
+    result on the instance. Measured against 0.122.0: nothing set leaves all three attributes None;
+    `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` each land on their own attribute; federation
+    environment variables land a provider on `credentials`; and construction takes single-digit
+    milliseconds with no network call. So the question "does this install have a credential" has an
+    authoritative answer that costs nothing, and reimplementing the resolution order in Python --
+    which is what #334 was -- is never necessary.
+
+    The `problem` arm covers a case the env-var guard could not reach at all: a profile that *is*
+    configured and cannot be loaded (`ANTHROPIC_PROFILE` naming a missing file, a malformed
+    `active_config`) makes the SDK raise out of the constructor. That used to escape `new_client()`
+    as a traceback, because nothing here expected construction to fail. It is caught broadly rather
+    than by the SDK's own error class on purpose: the class is not importable on every supported
+    major, and this function's contract is that an install which cannot make a call is refused
+    cleanly whatever the reason. The original message is quoted rather than replaced -- the SDK
+    names the file and the variable, which is more than this module could say.
+    Pinned by `test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason`.
+    """
+    if Anthropic is None:
+        return None, None  # the caller reports the not-installed case; there is nothing to resolve
+    try:
+        client = Anthropic()
+    except Exception as e:  # noqa: BLE001 - deliberate; see the docstring
+        return None, (
+            f"The Anthropic SDK could not load the credential configuration it was pointed at: {e}"
+        )
+    if all(getattr(client, attr, None) is None for attr in _CREDENTIAL_ATTRS):
+        return None, _NO_KEY_MESSAGE
+    return client, None
+
+
+def credential_present() -> bool:
+    """Whether this install can authenticate -- the **one** definition every "is there a key" reader
+    shares, and since #334 an answer the SDK gives rather than one this file guesses at.
+
+    Before #332, `web/config.py` and `deterministic/doctor.py` each kept their own
+    `os.getenv("ANTHROPIC_API_KEY")`, current at the time `new_client()` read only that name too.
+    #201 widened `new_client()` for a bearer-token setup and left the other two behind, so a working
+    bearer-token install built a client from the CLI while both the web surface and
+    `requivo doctor --json` reported no key. Both read this instead of a second copy, so they cannot
+    drift from `new_client()` again -- which now matters more, not less, since what they agree on is
+    the SDK's own resolution rather than a list.
+
+    **It never raises**, and that is a constraint from its callers rather than a preference:
+    `deterministic/doctor.py` calls it bare, and the verb that answers *is this install healthy*
+    must not traceback on the unhealthy install it exists to describe. A configured-but-unloadable
+    profile therefore reads as False here; `new_client()` is where that case gets its own message,
+    so nobody is told to set a variable when the real fault is a file the SDK could not read.
+    Pinned by `test_credential_present_is_the_one_definition_new_client_reads` and
+    `test_credential_present_does_not_raise_on_an_unloadable_profile`.
+    """
+    client, _ = _resolve_client()
+    return client is not None
+
 
 
 def new_client() -> Anthropic:
@@ -96,12 +157,43 @@ def new_client() -> Anthropic:
             "(or `uv tool install 'requivo[anthropic]'`). You do NOT need it to use Requivo inside "
             f"Claude Code — that mode uses no API key. (import error: {_IMPORT_ERROR})"
         )
-    if not credential_present():
-        raise EngineError(_NO_KEY_MESSAGE)
-    return Anthropic()
+    client, problem = _resolve_client()
+    if client is None:
+        raise EngineError(problem or _NO_KEY_MESSAGE)
+    return client
 
 
 def current_model_name() -> str:
     """The model id this process will call — the env override or the default. Exposed so provenance
-    (session.json) records the exact model a discovery ran against."""
+    (session.json) records the exact model a discovery ran against.
+
+    **`REQUIVO_MODEL` first, bare `MODEL` as a fallback, in that order** (#268). Every other
+    environment variable this package reads is `REQUIVO_`-prefixed; the model override was the one
+    exception, and `MODEL` is a generic name other tools set too — a CI job, a docker-compose file,
+    an unrelated ML script in the same shell — so it can collide silently and steer Requivo at a
+    differently-priced or nonexistent model with no hint the value came from outside. `REQUIVO_MODEL`
+    is read first so a workspace exporting both is unambiguous; bare `MODEL` is read only when
+    `REQUIVO_MODEL` is absent, so an existing setup that only ever set `MODEL` keeps working
+    unchanged. The fallback is recorded as deprecated in docs/compatibility.md, which is where every
+    other "two versions, one workspace" promise on this page lives — this file does not print
+    anything about it (see the comment above `os.getenv` below for why).
+    """
+    # No stderr notice on the fallback path, decided rather than merely omitted. `core/` is barred
+    # from the standard streams by invariant 7, and this module sits just outside `core/` — but the
+    # actual caller here is `_complete()`, deep inside a retry loop that already owns its own error
+    # channel (a clean `EngineError`/`ProviderOutputError`, never a bare print), and a provider
+    # printing on a path that *works* would be the one line in this call graph that bypasses it. A
+    # user who only ever set MODEL sees nothing wrong — the call succeeds with the model they asked
+    # for — so a notice here is a warning about vocabulary, not about a failure, and `requivo doctor`
+    # (which already reports environment-derived facts back to the user) is the honest place to
+    # eventually surface "your REQUIVO_MODEL setup falls back to bare MODEL" once one exists.
+    #
+    # `os.getenv("REQUIVO_MODEL") is not None`, not a bare `or` -- presence, not truthiness.
+    # `test_a_model_override_that_is_set_but_empty_is_reported_as_one` already pins the reason for
+    # bare `MODEL`: an exported-but-empty variable is an override in effect (of nothing), and a
+    # truthy check would fall through to `MODEL`/the default and report the comfortable lie that
+    # nothing was overridden. `REQUIVO_MODEL=""` deserves the identical answer, not a quieter one.
+    override = os.getenv("REQUIVO_MODEL")
+    if override is not None:
+        return override
     return os.getenv("MODEL", MODEL_DEFAULT)

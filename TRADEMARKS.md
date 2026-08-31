@@ -8,10 +8,12 @@ and does not create any right or obligation beyond what applicable law already p
 
 ## Code vs. name
 
-The Requivo **code** is licensed under the [MIT License](LICENSE). MIT gives you broad freedom to
-use, modify, distribute and even sell the code.
+The Requivo **code** is licensed under the [Apache License 2.0](LICENSE). Apache-2.0 gives you broad
+freedom to use, modify, distribute and even sell the code, and adds an explicit patent grant.
 
-The MIT license covers the code **only**. It does not, by itself, grant permission to use the
+That license covers the code **only**. Its section 6 says so directly — a license of the code is not
+a license of the marks — so what follows restates a boundary Apache-2.0 already draws rather than
+adding a condition to it. It does not, by itself, grant permission to use the
 **Requivo name, logo, visual identity, or official domains** in a way that implies your version is
 the official project or is endorsed or supported by it.
 
@@ -28,7 +30,7 @@ the official project or is endorsed or supported by it.
 
 The following are considered part of the official project's identity: the **Requivo** name, its logo
 and visual identity (if/when published), and its official domains and accounts (if/when reserved).
-Using the code under MIT does not transfer these.
+Using the code under Apache-2.0 does not transfer these.
 
 ## Questions
 

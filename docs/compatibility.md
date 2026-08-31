@@ -62,6 +62,29 @@ What may change without a `format_version` bump:
   `prompt_versions` map was removed in 0.9.2).
 - Adding a slot to the schema, a new artifact type, or a new value in a provenance field.
 
+**The artifact-type half of that last line was a promise nothing kept until #260**, and it failed in
+the shape this page warns about hardest. An `artifact_status` key naming a type the reading build has
+no generator for was an *integrity problem*: `session verify` exited non-zero, `doctor` listed the
+session as inconsistent, and `session import` refused a colleague's archive outright — while
+`read_meta` opened the very same file without complaint. The diagnostic disagreeing with the loader
+about one file is the worse of the two answers, and it is the identical defect #14 fixed one field
+along for `model.json`. It would have bitten on the first new generator ever shipped, on every
+session that generator had touched.
+
+Such a type is now a **note** rather than a problem: named in `session verify` (`--json` carries it
+under `notes`, a sibling of `problems`) and in `doctor` (`sessions.notes`), counted towards neither
+`ok` nor the exit code, and accepted by `session import`. Nothing else about the entry is relaxed —
+the recorded filename still goes through the bare-filename guard and the containment check, the file
+still has to be there, and the revision it claims still has to exist.
+
+**One deliberate narrowing, because tolerating widened a door that used to be shut.** Before this,
+an archive carrying arbitrary `artifact_status` keys was refused; now a tolerated key is one this
+build stores and prints for as long as the session lives. So the key has to *look* like an artifact
+type — a plain lowercase name such as `risk-register`, at most 64 characters, the same shape every
+key in `ARTIFACT_FILENAMES` already has. One that does not is refused as `unsafe_artifact_type`, a
+code of its own so a consumer can tell *a type from the future* from *junk or a forgery*. A real
+future generator is unaffected; nothing Requivo has ever written is.
+
 What requires a `format_version` bump, an entry in the changelog, and a migration in
 `migrate_session()`:
 
@@ -110,6 +133,35 @@ what drifts.
 The promise is additive, not a freeze: nothing here says an output may never gain a field. What it
 says is that a populated field will not quietly change meaning, and that a change of shape is
 announced. That is cheap to keep for fifteen outputs and was never the expensive half.
+
+**What "public" means for a payload, in one testable sentence: a payload's top-level key set, and
+the JSON types of those values, are the contract.** Removing a top-level key, renaming one, or
+changing the type a key holds is breaking, and needs a row in the ledger below. Adding one is free,
+and still gets a row, because every additive change on this page already has one.
+
+Nested shapes are deliberately outside that sentence. The behavioural tests exercise the fields that
+carry weight, and a contract reaching two levels down would be a restatement of the code rather than
+a promise about it.
+
+`test_every_public_json_payload_keeps_its_recorded_top_level_shape` is what stops that being a
+sentence, and it is a *second* guard rather than a widening of the first: the one above
+(`test_every_json_verb_is_inside_the_promise`) checks that this page names every verb, which is
+membership and says nothing about what a verb prints. The new one runs each of the fifteen against a
+fixture workspace and compares the top level of what it printed with a recorded key-and-type table.
+The two failure directions are reported separately, because they are not the same event — a key that
+vanished or changed type is a break, and a key that appeared wants one line added to the record.
+
+Why membership alone was not enough: four of the breaking changes below (#87, #84, #88, #107)
+shipped in the 1.0.0 release alone. All four were deliberate and all four are correctly recorded
+here, because somebody audited this surface by hand while the 1.0 contract was being cut — which is
+the point rather than a mitigation. Nothing in the tree would have gone red if a fifth had been made
+by accident, or made deliberately and its row forgotten.
+
+**One payload on this page is conditional, and nothing said so until now.** `requivo status --json`
+carries `slug`, `readiness`, `understanding`, `questions`, `summary` and `remaining_gaps` always;
+`revision`, `context_cards` and `artifacts` are layered on **only when the reference resolves to a
+canonical session**, because a bare `model.json` has no session to read them from. Both forms are
+public and both are pinned. A consumer that passes a file path must not read the three.
 
 **A code carries one fact, and one `details` shape.** That is what makes the advice above safe to
 follow: matching a code and then reading a key out of `details` has to work for every payload
@@ -623,6 +675,15 @@ flow — so declaring it unstable would contradict the code that declares it sta
 of `epic` inside it is breaking; the escape hatch is `version`, and bumping it is itself breaking and
 announced here.
 
+The same rule as the `--json` payloads applies inside it, one level deeper because this envelope has
+one: the key skeleton of the envelope, of the `epic` object, and of each entry in `issues` is the
+contract. `test_the_epic_export_skeleton_is_pinned_to_its_version` records that skeleton **per
+version number**, so changing a key is red until `EPIC_EXPORT_VERSION` moves and the new number gets
+a skeleton of its own beside the old one. Until #267 the only assertion on this envelope compared
+`version` with the constant it was read from, which is true whatever the keys are — a version number
+nothing forced to move, on the one payload whose stated consumer lives outside this repository and
+cannot be grepped for breakage.
+
 The **tracker plans** from `--github` and `--gitlab` are stable in the same way, with one asymmetry
 worth stating: they describe somebody else's API. A change we make to their shape is breaking. A
 change forced on us because GitHub or GitLab moved is not a promise we were ever able to make, and it
@@ -637,6 +698,18 @@ rule as a CLI flag: removing one, or changing what one means, is breaking.
 `REQUIVO_OUTPUT_DIR` is **deprecated** (see the table below). It configures the retired `out/` layout,
 which nothing has written since 0.8.0 and only `requivo session migrate` still reads. A live knob for a
 dead path is worth retiring while retiring is still free.
+
+**`MODEL` is deprecated too, in favour of `REQUIVO_MODEL`** (#268). It was the one model override in
+the package not `REQUIVO_`-prefixed, which matters because `MODEL` is a generic name other tools set
+— a CI job, a docker-compose file, an unrelated ML script sharing the same shell — so it can collide
+silently and steer Requivo at a differently-priced or nonexistent model with no hint the value came
+from outside. `current_model_name()` reads `REQUIVO_MODEL` first and falls back to bare `MODEL` only
+when `REQUIVO_MODEL` is unset, so nothing already working today stops working. This page's own
+promise applies: the fallback keeps working for at least one minor version and is named in the
+deprecations table below; it prints no runtime notice on the fallback path (a working call has
+nothing wrong to report — see the comment in `client.py`), so `requivo doctor` is where a future
+notice would belong if the silent collision this issue exists to prevent turns out to still happen in
+practice.
 
 ### Requivo Web's HTTP routes — **paths stable, bodies not**
 
@@ -739,6 +812,7 @@ change without notice.
 | **Implicit `out/<slug>/` fallback** | **Removed** — migration is explicit | deprecated 0.8.0 | 0.9.8 | `requivo session migrate`, then `.requivo/sessions/` |
 | **`/requivo-<skill>` plugin skill names** | Renamed | 0.9.2 | gone | `/requivo:<skill>` — Claude Code namespaces plugin skills |
 | **`REQUIVO_OUTPUT_DIR`** | Deprecated | #89 | with `requivo session migrate` | nothing — it configures the retired `out/` layout that only the migrator reads. `REQUIVO_WORKSPACE` is the knob for where sessions live |
+| **Bare `MODEL` env var** | Deprecated | #268 | not yet set | `REQUIVO_MODEL` — every other env var this package reads is `REQUIVO_`-prefixed; bare `MODEL` is read only when `REQUIVO_MODEL` is unset |
 | **`epic --json`** | **Renamed** — it wrote a file, it never emitted JSON | #83 | gone in the same change | `epic --export-json`, beside `--github` and `--gitlab`. `epic` deliberately has no stdout `--json`; the flag also silently switched the error channel, which is the half the rename fixes |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where

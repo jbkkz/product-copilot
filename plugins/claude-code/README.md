@@ -66,8 +66,11 @@ setups do not need Git for Windows.
 What a Requivo skill does on a native Windows machine with no Git Bash has not been measured, so this
 page does not describe it. Treat Git for Windows as required and the case does not arise.
 
-The plugin version tracks the Requivo release it was tested against, and the skills call CLI verbs, so
-keep the two in step. An older CLI may not have a verb a newer skill uses.
+The plugin version tracks the Requivo release it was tested against, and the skills call CLI verbs.
+Every skill's shared preflight (`REASONING.md`) now compares the two automatically on each run —
+warning and continuing when the CLI is older, and saying so explicitly when the check itself could
+not be made, rather than leaving the drift for a human to notice as an argparse error partway
+through a skill (#251).
 
 To run the plugin from a checkout instead, for development:
 `claude --plugin-dir ./plugins/claude-code`.
@@ -192,4 +195,4 @@ plugin created needs none.
 - [Requivo Web](https://github.com/jbkkz/requivo/blob/main/docs/web.md)
 - [Repository and issues](https://github.com/jbkkz/requivo)
 
-MIT licensed.
+Licensed under the Apache License 2.0.

@@ -24,6 +24,10 @@ def test_epic_export_is_neutral_and_maps_issues():
         ],
     )
     payload = epic_export(epic)
+    # This line reads as the version guard and is not one: it compares the payload with the constant
+    # the payload was built from, so it stays true whatever the envelope keys are. What forces a bump
+    # when a key changes is `test_the_epic_export_skeleton_is_pinned_to_its_version`, which records
+    # the key skeleton per version number (#267).
     assert payload["format"] == "requivo-epic" and payload["version"] == 1
     assert payload["epic"]["labels"] == ["epic"] and payload["epic"]["milestone"] == "Pilot"
     # goal + business value + scope fold into one importable description body.

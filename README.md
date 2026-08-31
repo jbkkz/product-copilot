@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/requivo)](https://pypi.org/project/requivo/)
 [![Python](https://img.shields.io/pypi/pyversions/requivo)](https://pypi.org/project/requivo/)
 [![CI](https://github.com/jbkkz/requivo/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jbkkz/requivo/actions/workflows/ci.yml?query=branch%3Amain)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)][license]
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)][license]
 
 > Find what could change the solution before you commit to the scope.
 
@@ -210,6 +210,11 @@ senior colleague's read, not an oracle, and get expert review for any legal/tax/
 raises.
 See the [roadmap][roadmap].
 
+**Ran it on a real request? [Tell us how it did][discovery-feedback].** No telemetry means this
+report is how the questions get better — say whether they were useful, useless or redundant, and
+what a senior PM/BA would have asked that Requivo did not. Anonymise anything client-confidential
+before posting.
+
 ---
 
 ## How this is built
@@ -235,10 +240,10 @@ authorship.
 ## Contributing and license
 
 Contributions are welcome — see [CONTRIBUTING.md][contributing]. The Core, CLI and Claude Code
-integration are open source under [MIT][license]. The Requivo **name and identity** are separate from
+integration are open source under [Apache-2.0][license]. The Requivo **name and identity** are separate from
 the code license — see [TRADEMARKS.md][trademarks].
 
-[MIT][license] © jbkkz
+[Apache-2.0][license] © jbkkz
 
 > _Requivo was previously named Product Copilot._
 
@@ -261,5 +266,6 @@ the code license — see [TRADEMARKS.md][trademarks].
 [docs-index]: https://github.com/jbkkz/requivo/blob/main/docs/README.md
 [compatibility]: https://github.com/jbkkz/requivo/blob/main/docs/compatibility.md
 [roadmap]: https://github.com/jbkkz/requivo/blob/main/docs/roadmap.md
+[discovery-feedback]: https://github.com/jbkkz/requivo/issues/new?template=discovery-feedback.md
 [contributing]: https://github.com/jbkkz/requivo/blob/main/CONTRIBUTING.md
 [trademarks]: https://github.com/jbkkz/requivo/blob/main/TRADEMARKS.md

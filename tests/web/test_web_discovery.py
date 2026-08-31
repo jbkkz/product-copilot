@@ -752,6 +752,48 @@ def test_a_failed_first_analysis_lands_on_the_session_that_was_saved(client, wit
     assert [m.current_revision for m in metas] == [0]
 
 
+def test_a_retry_exhausted_first_analysis_also_lands_on_the_saved_session(client, with_provider,
+                                                                           monkeypatch):
+    """`run_discovery`'s provider call can fail two ways: a transport failure (`EngineError`, the
+    fixture above), or the JSON retry loop giving up on a reply that never matches the contract
+    (`ProviderOutputError`, `core/errors.py`). `app.py`'s own `_status_for` already treats both as
+    the same family -- 502 either way -- so the recovery route must too.
+
+    Malformed replies drive this through the *real* retry loop rather than an injected `EngineError`,
+    which is what let the narrower `except EngineError` in `create_session` go uncaught for this class
+    and reach the app's generic 500/502 handler instead of the recovery page -- the same request the
+    reader just pasted, silently harder to get back to.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with_provider("not json", "not json", "not json")
+
+    r = client.post("/sessions", data={"request_text": "A leave approval system.",
+                                       "provider": "anthropic"}, follow_redirects=True)
+
+    assert r.status_code == 200, "a retry-exhausted first analysis dead-ends on an error page"
+    assert "Your request was saved" in r.text
+    assert "A leave approval system." in r.text, "the page does not show the request it saved"
+    assert "Analyse request" in r.text
+
+    metas = SessionService().list_sessions()
+    assert [m.current_revision for m in metas] == [0]
+
+
+def test_a_retry_exhausted_deferred_analysis_also_lands_on_the_saved_session(client, with_provider,
+                                                                              monkeypatch):
+    """The second door onto the same first analysis, same failure family."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with_provider()
+    slug = SessionService().create_session("A leave approval system.", slug="leave").slug
+    with_provider("not json", "not json", "not json")
+
+    r = client.post(f"/sessions/{slug}/discover", follow_redirects=True)
+
+    assert r.status_code == 200
+    assert "Your request was saved" in r.text
+    assert "Analyse request" in r.text
+
+
 def test_a_failed_retry_from_the_pending_page_re_renders_it_rather_than_a_500(client, with_provider,
                                                                              failing_analysis):
     """The second door onto the same first analysis. Both must fail into the same place, or the

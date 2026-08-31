@@ -99,7 +99,7 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
 
 # ── Session locking ────────────────────────────────────────────────────────────
 # A session mutation is a *compound* write: read the metadata, check the revision precondition, write
-# model.json, write revisions/NNNN-model.json, then rewrite session.json. Between the check and the
+# revisions/NNNN-model.json, write model.json, then rewrite session.json. Between the check and the
 # last write, another writer reading the same revision would produce a second revision from the same
 # base and silently overwrite the first. `expected_revision` alone cannot prevent that — it is checked
 # and then acted on, and the gap between the two is the race. These helpers close it.
@@ -112,13 +112,60 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
 _LOCK_TIMEOUT_SECONDS = 30.0
 _held_locks = threading.local()
 
+# The POSIX poll interval (#265). `flock(LOCK_EX | LOCK_NB)` either succeeds immediately or raises,
+# so contention is a poll loop, not a single blocking call, and the interval trades latency for CPU:
+# too short spins the CPU on a genuinely stuck holder for the whole 30s deadline, too long adds
+# needless latency to the overwhelmingly common case, a holder that finishes in milliseconds. Fixed
+# rather than backed off, on purpose: writes hold this lock for milliseconds (see the module
+# docstring above), so contention that outlasts a handful of polls is already the pathological case
+# the deadline exists for, and a growing interval would only add latency to the *ordinary* one it
+# does not help. At 20ms the full deadline is ~1500 wakeups -- negligible CPU for a bound that fires
+# only when something is stuck.
+_LOCK_POLL_INTERVAL_S = 0.02
+
 
 def _acquire(fd: int, slug: str) -> None:
+    """Take the OS lock on `fd`, bounded by `_LOCK_TIMEOUT_SECONDS` on every platform (#265).
+
+    The two branches used to disagree about what a stuck holder looks like: `msvcrt.locking` polls
+    on its own (it blocks ~10s per attempt and raises `OSError` between attempts) so the Windows loop
+    could turn that into a deadline, but POSIX's `fcntl.flock(fd, fcntl.LOCK_EX)` is a single call
+    that blocks until it succeeds, with nothing to loop on -- so a stuck holder (a SIGSTOPped
+    process, a debugger, an NFS-mounted workspace) hung the CLI silently and forever on the two
+    primary platforms, while Windows raised the structured `SessionLockedError` this module already
+    defines. `LOCK_EX | LOCK_NB` makes the POSIX call symmetric with the Windows one: it never blocks
+    the kernel, so the same poll-until-deadline shape now governs both.
+
+    Re-entrancy (invariant 9) is unaffected by this: `session_lock`'s own depth counter decides a
+    nested acquisition on the same thread *before* this function is ever called, so a nested `with
+    session_lock(slug):` never reaches `_acquire` a second time regardless of whether this function
+    blocks once or polls. Pinned by
+    `test_reentrant_acquisition_within_a_thread_still_never_touches_the_lock_twice`; the deadline
+    itself by `test_a_contended_lock_raises_within_the_deadline_instead_of_hanging` (POSIX;
+    the `msvcrt` branch's own bound is unchanged and untouched here).
+
+    **`BlockingIOError`, not a bare `OSError`** (caught in review before this shipped). `flock(...,
+    LOCK_NB)` raises exactly that -- CPython maps `EAGAIN`/`EWOULDBLOCK` to it since PEP 3151 -- when
+    and only when the lock is genuinely held elsewhere; a bare `except OSError` would also catch
+    `ENOLCK`, `EBADF` or a filesystem that refuses `flock` outright (NFS misconfigured, some network
+    mounts), none of which will ever resolve by waiting. The single blocking call this replaced let
+    such an error surface immediately as what it was; masking it behind up to 30 seconds of retries
+    and then relabelling it "locked by another process" would trade a loud, honest failure for a
+    quiet, misleading one -- the same rule `_replace_with_retry`'s own narrow `except PermissionError`
+    states two functions up in this file. Anything else still fails immediately and honestly."""
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     if fcntl is not None:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        return
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SessionLockedError(
+                        f"session '{slug}' is locked by another process; retry in a moment",
+                        details={"slug": slug}) from None
+                time.sleep(_LOCK_POLL_INTERVAL_S)
     if msvcrt is not None:  # pragma: no cover - Windows
-        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
         while True:
             try:
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # blocks ~10s per attempt, then raises
@@ -849,11 +896,20 @@ def artifact_path(slug: str, filename: str) -> Path:
     external consumer holding the services over a repository that is not this file backing, where
     `save_artifact` hands back whatever its store held. **`session import` is not that door, and
     saying so is the point.** The invariant's argument is written about `context_cards`, which import
-    deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` pins every
-    recorded filename to its `ARTIFACT_FILENAMES` value and to containment, and `session import`
-    refuses the whole archive when either fails — reproduced, both for a traversal and for a merely
-    wrong name. Read as covering both fields, this would claim a vector that is shut and quietly drop
-    the one that is open.
+    deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` puts every
+    recorded filename through `validate_filename` and `is_contained`, and `session import` refuses
+    the whole archive when either fails — reproduced, both for a traversal and for a merely wrong
+    name. Read as covering both fields, this would claim a vector that is shut and quietly drop the
+    one that is open.
+
+    **Since #260 that is the whole of what a filename is pinned to when the artifact *type* is one
+    this build does not know**, because there is then no `ARTIFACT_FILENAMES` value to pin it against
+    — an unknown type is a note rather than a refusal, so `session import` accepts the entry. This
+    paragraph said "pins every recorded filename to its `ARTIFACT_FILENAMES` value" and would have
+    read as a stronger claim than the code makes. The claim that matters is unchanged and is the one
+    stated above: the name is a bare file inside `artifacts/` or the archive is refused, whether or
+    not anything here recognises the type it is filed under. `artifact_filename_mismatch` still
+    refuses a *known* type stored under the wrong name.
 
     Coming through here also means such a name cannot forge a line in the terminal it is printed to:
     `_FILENAME_RE` is anchored at end-of-string and admits no line break (#40).
@@ -945,7 +1001,12 @@ def migrate_session(data: dict) -> SessionMeta:
 
 def read_meta(slug: str) -> SessionMeta:
     p = canonical_dir(slug) / "session.json"
-    if not p.exists():
+    # Through `_probe`, not a bare `p.exists()` (#264): `Path.exists()` re-raises `EACCES`, and this
+    # check used to sit outside the `try` below that wraps `OSError`, so a session.json the process
+    # cannot stat escaped as a raw `PermissionError` instead of `SessionUnreadableError` -- the
+    # identical unguarded probe #80 removed from `_scan_session_root` and #97 removed from
+    # `session_exists`, a third time here.
+    if not _probe(p, slug):
         raise _no_session(slug)
     try:
         return migrate_session(json.loads(p.read_text(encoding="utf-8")))
@@ -996,9 +1057,11 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
 
 def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                   provenance: dict | None = None) -> tuple[int, SessionMeta]:
-    """Persist a new model revision: write model.json AND revisions/NNNN-model.json (the prior model
-    is already frozen in an earlier revision file), record the revision's provenance, then bump
-    current_revision + updated_at. Returns (new_revision, updated_meta).
+    """Persist a new model revision: freeze revisions/NNNN-model.json, replace model.json with the
+    same payload (the prior model is already frozen in an earlier revision file), record the
+    revision's provenance, then bump current_revision + updated_at. Returns (new_revision,
+    updated_meta). The order of those writes is a guarantee rather than a detail; see the comment on
+    the two `_atomic_write` calls below.
 
     `expected_revision` is an optimistic-locking precondition: when given, the write fails with
     `RevisionConflictError` unless the session is still at that revision — so two updates racing from
@@ -1021,8 +1084,16 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
         ensure_store_dir(d / "revisions")
         rev = meta.current_revision + 1
         payload = model.model_dump_json(indent=2)
-        _atomic_write(d / "model.json", payload)
+        # Frozen revision file first, then model.json. Three writes and no transaction, so the order
+        # decides what a crash between two of them leaves: reversed, a death here served every reader
+        # content no revision records while session.json still named the previous one. Pinned by
+        # `test_a_crash_after_the_first_payload_write_still_reads_as_the_recorded_revision` and, on
+        # the revision 0 -> 1 arm that reports different codes,
+        # `test_a_crash_in_the_very_first_apply_leaves_a_session_still_at_revision_zero`. The window
+        # this does *not* close is pinned beside them by
+        # `test_a_crash_after_both_payload_writes_is_still_reported_as_inconsistent`.
         _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+        _atomic_write(d / "model.json", payload)
         prov = dict(provenance or {})
         meta.revisions.append(RevisionRecord(
             revision=rev,

@@ -178,6 +178,42 @@ jobs:
       # death would re-enable command processing at exactly the moment nobody knows what state the
       # step is in.
       #
+      # ── Caching the pinned install (#299) ────────────────────────────────────────────────
+      #
+      # `npm install -g @anthropic-ai/claude-code@<pin>` resolves the ~320MB platform-native ELF as
+      # one of the package's ordinary `optionalDependencies` -- see "Notes on the install and the
+      # platform" above -- so it lands in npm's own package cache (`~/.npm` on this runner) exactly
+      # like any other resolved tarball. A cache hit here means the install step below reads that
+      # tarball off disk instead of fetching it from the registry.
+      #
+      # The key is the whole point, not decoration: it is DERIVED from CLAUDE_CLI_VERSION, the same
+      # env var the gate is already pinned to, so a version bump misses the cache BY CONSTRUCTION.
+      # A cache keyed on anything else -- a hash of this file, a fixed string -- could go on serving
+      # a stale CLI after a pin bump, which would be worse than the 320MB this exists to save: a
+      # green leg that validated against a version nobody is shipping. `runner.os` is included on
+      # the same principle even though this job only ever runs on `ubuntu-latest` (see the file
+      # header): the cache path is platform-specific and a key that already carries the axis costs
+      # nothing today and is correct the day this job's `runs-on` changes.
+      - name: Cache the pinned Claude Code CLI's npm download
+        id: cache-claude-cli-npm
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: npm-claude-cli-${{ runner.os }}-${{ env.CLAUDE_CLI_VERSION }}
+
+      # A miss and a restore must not render identically in the log -- a caching regression (the
+      # key stops matching, or the action itself silently no-ops) has to be visible on its own,
+      # not inferred from how long the next step happened to take. `cache-hit` is only `true` on an
+      # EXACT key match, which is the only kind this step's key can produce (no `restore-keys`), so
+      # the two-way read below is complete.
+      - name: Report the CLI download cache status
+        run: |
+          if [ "${{ steps.cache-claude-cli-npm.outputs.cache-hit }}" = "true" ]; then
+            echo "npm download cache HIT for CLAUDE_CLI_VERSION=${CLAUDE_CLI_VERSION} -- the install below should not re-fetch the platform binary from the registry."
+          else
+            echo "npm download cache MISS for CLAUDE_CLI_VERSION=${CLAUDE_CLI_VERSION} -- installing fresh (a cold cache, or the first run after a pin bump)."
+          fi
+
       # See test_every_step_that_runs_the_cli_contains_what_it_prints,
       # test_a_gate_step_reports_the_cli_failure_through_its_fence, and
       # test_removing_the_exit_line_lets_a_failing_gate_report_success.

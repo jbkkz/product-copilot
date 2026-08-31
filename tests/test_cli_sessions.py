@@ -182,6 +182,43 @@ def test_session_verify_exits_four_when_it_could_not_check_the_product_context(w
     assert "Could not check" in buf.getvalue()
 
 
+def test_session_verify_exits_four_when_the_lock_could_not_be_taken(workspace, monkeypatch):
+    """The sibling of the test above, on the other new probe (#263, #265): a lock `inspect_session`
+    could not take within the deadline is *could not check*, exactly like an unreadable product
+    context, and must not be reported as `problems` -- that is the accusation shape #263 exists to
+    remove. Same structure as `test_session_verify_exits_four_when_it_could_not_check_the_product_context`:
+    the clean run is the must-fire control, and the exit code is checked on both surfaces."""
+    from requivo.core.errors import SessionLockedError
+    from requivo.deterministic import sessions as sessions_mod
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    healthy = _run_json(["session", "verify", "s", "--json"])
+    assert healthy["ok"] is True                                    # must fire
+    assert healthy["session"]["checked"] is True
+
+    def locked(slug):
+        raise SessionLockedError(f"session '{slug}' is locked by another process; retry in a moment",
+                                 details={"slug": slug})
+
+    monkeypatch.setattr(sessions_mod, "inspect_session", locked)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s", "--json"], client=None)
+    assert e.value.code == 4
+    report = json.loads(buf.getvalue())
+    assert report["ok"] is False
+    assert report["problems"] == []                                 # not a claim the session is broken
+    assert report["session"]["checked"] is False
+    assert "locked" in report["session"]["error"].lower()
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "verify", "s"], client=None)
+    assert e.value.code == 4
+    assert "Could not examine" in buf.getvalue()
+
+
 def test_session_verify_lets_a_firm_negative_outrank_a_partial_one(workspace, monkeypatch):
     """Both at once: a session that really is inconsistent *and* whose product context could not be
     checked. It exits **1**, not 4.

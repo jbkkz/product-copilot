@@ -147,3 +147,90 @@ def test_a_failed_paid_call_still_records_what_it_spent(client, with_provider, c
     logged = [rec.getMessage() for rec in caplog.records]
     assert any("web-answer" in line for line in logged), (
         "a paid turn that failed was not recorded anywhere: " + repr(logged))
+
+
+# ── the two redirecting paths, which now carry the figure to the following GET (#253) ─────────
+#
+# Both `POST /sessions` (provider=anthropic) and `POST /sessions/{slug}/discover` answer 303 and
+# have no body of their own to put a figure in. `track_web_usage(..., carry_to=slug)` stashes the
+# view server-side, keyed by slug, and the GET the redirect sends the reader to pops it once. A
+# query parameter was rejected on the issue itself: it would render a forgeable number as a cost
+# claim, which is worse than showing nothing.
+
+
+def test_a_first_analysis_lands_on_a_page_showing_what_it_spent(client, with_provider):
+    """`POST /sessions` with provider=anthropic redirects to the session page with no body of its
+    own -- the figure has to survive that hop server-side, not on the URL."""
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED), spend=PAID)
+
+    r = client.post("/sessions", data={"request_text": "A leave approval system",
+                                       "slug": "leave-approval", "provider": "anthropic"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    page = client.get(r.headers["location"])
+
+    assert PAID_TOKENS in page.text, "the figure did not survive the redirect from creation"
+    assert "estimate" in page.text
+
+
+def test_a_deferred_discovery_lands_on_a_page_showing_what_it_spent(client, with_provider):
+    """The second door onto a first analysis: `create_only` now, `/discover` later -- same
+    redirect-with-no-body shape, same carry."""
+    with_provider()
+    client.post("/sessions", data={"request_text": "A leave approval system",
+                                   "slug": "leave-approval", "provider": "create_only"})
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED), spend=PAID)
+
+    r = client.post("/sessions/leave-approval/discover", follow_redirects=False)
+    assert r.status_code == 303
+    page = client.get(r.headers["location"])
+
+    assert PAID_TOKENS in page.text
+    assert "estimate" in page.text
+
+
+def test_a_failed_first_analysis_still_shows_the_spend_it_recorded(client, with_provider, monkeypatch):
+    """A call that fails after spending tokens still surfaces its recorded spend -- the same
+    contract `test_a_failed_paid_call_still_records_what_it_spent` pins for the answers turn, now
+    for the path that lands the reader back on the pending page rather than an error fragment.
+
+    Three malformed replies: the JSON retry loop spends on every attempt before giving up as a
+    `ProviderOutputError`, so this reaches the recording exit rather than a call that never spent
+    anything -- and usage accumulates across every attempt, so the total is 3x `PAID_TOKENS`
+    (9000+400+3000 per attempt x 3 = 37,200), not `PAID_TOKENS` itself.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with_provider("not json", "not json", "not json", spend=PAID)
+
+    r = client.post("/sessions", data={"request_text": "A leave approval system",
+                                       "provider": "anthropic"}, follow_redirects=True)
+
+    assert r.status_code == 200
+    assert "Your request was saved" in r.text, "the recovery page itself regressed"
+    assert "37,200" in r.text, "a paid, failed turn recorded a spend but the retry page shows none"
+
+
+def test_reloading_the_landing_page_does_not_repeat_the_spend_line(client, with_provider):
+    """Read-once: a plain reload of the page the redirect landed on must not go on reporting a
+    spend for an action that already happened and was already shown once."""
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED), spend=PAID)
+    client.post("/sessions", data={"request_text": "A leave approval system",
+                                   "slug": "leave-approval", "provider": "anthropic"})
+
+    reload = client.get("/sessions/leave-approval")
+
+    assert PAID_TOKENS not in reload.text, "a reload repeated a spend already shown once"
+
+
+def test_an_offline_visit_to_a_session_with_no_pending_spend_shows_nothing(client, with_provider):
+    """The must-fire control for the carry itself: a session nobody just paid for shows no line --
+    proves the GET route's new `usage` context key is not unconditionally set."""
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED), spend=PAID)
+    client.post("/sessions", data={"request_text": "A leave approval system",
+                                   "slug": "leave-approval", "provider": "anthropic"})
+    client.get("/sessions/leave-approval")  # consumes the stashed figure
+
+    page = client.get("/sessions/leave-approval")
+
+    assert "estimate" not in page.text
+    assert PAID_TOKENS not in page.text

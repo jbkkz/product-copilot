@@ -39,11 +39,31 @@ def workspace(tmp_path, monkeypatch):
 def test_doctor_runs_without_api_key(workspace, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    # Since #334 the credential guard asks the SDK, which also discovers an active profile on disk --
+    # so clearing the environment is no longer enough to describe a credential-free install: on a
+    # machine whose developer has one, these tests would read that. The SDK's discovery entry point
+    # is neutralised too. `raising=False` because the older majors in `anthropic>=0.42.0,<2` have no
+    # such chain. The full reasoning, including why `ANTHROPIC_CONFIG_DIR` is not the lever it looks
+    # like, is on `_no_credentials` in `tests/test_provider.py`.
+    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
     r = _run_json(["doctor", "--json"])
     assert r["schema"]["ok"] and r["schema"]["slots"] > 0
     # Missing key / SDK must never be reported as a hard failure.
     assert r["provider_anthropic"]["api_key_present"] is False
     assert "sessions" in r["workspace"]
+
+
+def test_doctor_reports_the_model_source_as_env_when_requivo_model_is_set(workspace, monkeypatch):
+    """#268 renamed the model override's primary name, and `doctor_report()` used to decide
+    `model.source` by reading bare `MODEL` a second time rather than asking `current_model_name()`
+    how it actually resolved -- so a reporter who set only `REQUIVO_MODEL` (the name every doc now
+    teaches) would have `doctor` call their override "default", the exact "right until the day the
+    default moved" drift the comment above the old check named as the risk of a second copy.
+    """
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    r = _run_json(["doctor", "--json"])
+    assert r["model"] == {"name": "claude-opus-4-8", "source": "env"}
 
 
 def test_doctor_reports_a_bearer_token_as_a_credential_present(workspace, monkeypatch):
@@ -652,6 +672,48 @@ def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, 
     assert healthy_text != broken_text
     assert "lost-domain" in broken_text and "lost-domain" not in healthy_text
     assert "REQUIVO_CONTEXT_DIR" in broken_text, "the reader is not told how to recover"
+
+
+def test_doctor_reports_a_locked_session_as_could_not_check_not_as_broken(workspace, monkeypatch):
+    """#263/#265, caught by review before this shipped: a first draft of the `SessionLockedError`
+    handler in `_session_health` still built a default-severity `IntegrityProblem`, so `blocking()`
+    kept it and it landed straight in `inconsistent` -- driving the identical ❌ glyph a genuinely
+    broken session gets, which is exactly the accusation shape this whole issue family exists to
+    remove. A lock timeout must land in its own bucket and the warning glyph, never the failure one.
+
+    Must-fire control: the same session, unpatched, still reports ✅ with an empty `inconsistent`."""
+    from requivo.core.errors import SessionLockedError
+    from requivo.deterministic import doctor as doctor_mod
+
+    _run(["session", "init", "A real one.", "--slug", "locked-one", "--json"])
+
+    healthy = _run_json(["doctor", "--json"])["sessions"]
+    assert healthy["inconsistent"] == {}
+    assert healthy.get("locked", {}) == {}
+    assert "✅" in _check_line(_run(["doctor"]), "sessions")
+
+    real_inspect = doctor_mod.inspect_session
+
+    def locked_for_our_slug(slug):
+        if slug == "locked-one":
+            raise SessionLockedError(
+                "session 'locked-one' is locked by another process; retry in a moment",
+                details={"slug": slug})
+        return real_inspect(slug)
+
+    monkeypatch.setattr(doctor_mod, "inspect_session", locked_for_our_slug)
+
+    found = _run_json(["doctor", "--json"])["sessions"]
+    assert found["inconsistent"] == {}, (
+        f"a lock timeout must not be reported as an integrity problem: {found['inconsistent']}")
+    assert "locked-one" in found.get("locked", {})
+
+    text = _run(["doctor"])
+    sessions_line = _check_line(text, "sessions")
+    assert "❌" not in sessions_line, (
+        "a session that is merely locked must not earn the same glyph as a broken one")
+    assert "🟡" in sessions_line
+    assert "locked" in sessions_line.lower()
 
 
 def test_context_can_be_asked_for_by_session(workspace):

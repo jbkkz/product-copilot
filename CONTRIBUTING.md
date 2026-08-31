@@ -138,15 +138,17 @@ that has touched Git history must be considered compromised even after removal.
 ## Licensing of contributions
 
 By submitting a contribution, you agree that your contribution will be licensed under the same
-**MIT License** that covers the project.
+**Apache License 2.0** that covers the project.
 
 There is no Contributor License Agreement (CLA) or Developer Certificate of Origin (DCO) sign-off in
 force today. A lightweight DCO or CLA may be introduced before accepting large external contributions;
 if that happens it will be documented here first. Contributing now does not assign any additional
-rights beyond the MIT terms above.
+rights beyond the Apache-2.0 terms above.
 
 ## Trademark
 
-The MIT license covers the *code*. It does not grant rights to the **Requivo name, logo, or
-identity** — see [TRADEMARKS.md](TRADEMARKS.md). Forks are welcome and may say they are "based on
-Requivo"; a substantially modified fork should use a distinct name.
+The Apache-2.0 license covers the *code*. Section 6 of that license is explicit that it grants no
+trademark rights, and this project relies on that rather than adding a term of its own: it does not
+grant rights to the **Requivo name, logo, or identity** — see [TRADEMARKS.md](TRADEMARKS.md). Forks
+are welcome and may say they are "based on Requivo"; a substantially modified fork should use a
+distinct name.

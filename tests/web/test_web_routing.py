@@ -36,6 +36,43 @@ def test_static_assets_are_served_locally(client):
     assert client.get("/static/js/app.js").status_code == 200
 
 
+# ── chrome polish: favicon, human page titles (#241) ──────────────────────────
+
+def test_favicon_is_served_and_linked(client):
+    """No favicon existed anywhere in `web/` — every tab showed the browser default and every page
+    load 404'd `/favicon.ico` into the operator's logs. The brand mark already sits inline in
+    `base.html`; this ships it as a real icon and stops the implicit browser probe from 404ing."""
+    icon = client.get("/favicon.ico")
+    assert icon.status_code == 200
+    assert icon.headers["content-type"].startswith("image/svg+xml")
+
+    page = client.get("/").text
+    assert 'rel="icon"' in page, "base.html does not link an icon at all"
+
+
+def test_session_title_uses_the_objective_once_understood(client):
+    """The `<title>` used the slug (`we-d-like-managers-to — Requivo`) rather than the human title
+    the same page's `<h1>` already computes."""
+    _make_session("leave-approval", problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED)
+
+    page = client.get("/sessions/leave-approval").text
+
+    assert "<title>Leave system — Requivo</title>" in page, (
+        "the tab title still shows the slug instead of the objective " + page[:400])
+
+
+def test_session_title_falls_back_to_the_slug_while_pending(client, with_provider):
+    """No objective exists yet before the first analysis runs — the slug is still the only human
+    name for the session, so the title must not go blank or show 'None'."""
+    with_provider()
+    client.post("/sessions", data={"request_text": "A leave approval system",
+                                   "slug": "leave-only", "provider": "create_only"})
+
+    page = client.get("/sessions/leave-only").text
+
+    assert "<title>leave-only — Requivo</title>" in page
+
+
 # ── app / pages ───────────────────────────────────────────────────────────────
 
 def test_home_without_sessions(client):

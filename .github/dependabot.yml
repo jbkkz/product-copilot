@@ -25,6 +25,24 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Dependabot's production/development classification is per DEPENDENCY -- for pip, anything
+    # outside `[project.dependencies]` counts as development -- and it is what sets the
+    # `chore(deps)` / `chore(deps-dev)` commit-message prefix by default. Grouping below (#346)
+    # decides which pull request an update lands in and what the group is called; it does not
+    # change that classification. Left unconfigured, a runtime dependency grouped into `runtime`
+    # (anthropic, fastapi, ...) would still be titled `chore(deps-dev): ...`, because every one of
+    # them lives in `[project.optional-dependencies]` and dependabot calls that development (#347).
+    #
+    # One prefix for every pip bump, and `prefix-development` deliberately left UNSET, so the
+    # GROUP NAME in the title (`the runtime group` / `the dev-tooling group`) is what tells a
+    # security-relevant runtime bump from a tooling one -- dependabot's prefixes are per ecosystem,
+    # not per group, so this is the only way to stop a wrong prefix without inventing a right one.
+    # The alternative -- splitting the groups so each is homogeneous in dependency-type -- was
+    # rejected: it would multiply the pull-request count for no gain the group name doesn't
+    # already give a reader, and #346's whole point was fewer bursts (see that grouping's own
+    # comment on why this file groups at all).
+    commit-message:
+      prefix: "chore(deps)"
     # Only touch a requirement that cannot already accept the new version. The default rewrites the
     # *floor* of every range, and on this project a floor is not housekeeping -- it is the promise
     # `pip install requivo` makes, and the one thing scripts/dependency_floor.py exists to measure
@@ -39,9 +57,23 @@ updates:
     groups:
       # Two groups rather than one: a dev-tooling bump is a change to how the repo is checked and a
       # runtime bump is a change to what a user installs, and they are not reviewed the same way.
+      # Add newly added runtime dependencies to the runtime list, as nothing enforces it automatically.
+      # A new dependency added to pyproject.toml and not to this file matches neither group and gets its own individual PR.
       dev-tooling:
-        dependency-type: development
-        patterns: ["*"]
+        patterns:
+          - "pytest"
+          - "ruff"
+          - "pyright"
+          - "tomli"
+          - "packaging"
+          - "httpx"
+          - "setuptools"
       runtime:
-        dependency-type: production
-        patterns: ["*"]
+        patterns:
+          - "python-dotenv"
+          - "pydantic"
+          - "anthropic"
+          - "fastapi"
+          - "uvicorn"
+          - "jinja2"
+          - "python-multipart"
