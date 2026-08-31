@@ -421,6 +421,23 @@ blockquote.request {
   color: var(--text); white-space: pre-wrap; max-width: 68ch; font-size: 14.5px;
 }
 
+/* ── the store's own words, on the one page that wants them (#240) ───────────*/
+/* The home row shows a sentence; this is where the untruncated failure is stated, so it wraps
+   rather than scrolling sideways -- an error a reader has to drag to finish reading is one they
+   stop reading. Same treatment as the quoted request above, in the muted register. */
+pre.detail {
+  margin: 8px 0; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg);
+  color: var(--text); white-space: pre-wrap; word-break: break-word;
+  max-width: 68ch; font-size: 13px;
+}
+
+/* ── the bundled example, announced on its own page (#226) ───────────────────*/
+/* A quiet band rather than a warning: nothing is wrong, the reader is simply not looking at their
+   own work. It sits above the request so the claim arrives before the content it is about. */
+.example-note { margin: 0 0 20px; }
+.example-note .btn { margin-top: 8px; }
+
 /* ── what changed ────────────────────────────────────────────────────────────*/
 .changed .card { border-color: color-mix(in srgb, var(--link) 28%, var(--border)); }
 .changed .card .lead { color: var(--ink); font-size: 15.5px; font-weight: 600; margin-bottom: 10px; }

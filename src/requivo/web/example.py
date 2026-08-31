@@ -1,0 +1,142 @@
+"""The bundled example session — Web's keyless activation path (#226).
+
+Web is the declared product experience, and until this existed a keyless first run showed an empty
+page and a provider notice: a product surface with nothing on it. The CLI answered the same problem
+with `requivo demo` and said why in `_cmd_demo`'s own comment — *a visitor shouldn't need a key, a
+clone, and a venv before feeling what the product does.*
+
+Three constraints shape everything below, and each of them is a decision rather than an
+implementation detail:
+
+* **It goes through the ordinary validated path.** `create_session` + `update_model`, not a
+  hand-written directory. The example is then a real session in every sense a reader can check: it
+  has a revision, a frozen copy in `revisions/`, a readiness verdict computed by the same code as
+  everyone else's, and it opens in the CLI and in Claude Code. A directory assembled here would be
+  a *replica* of a session, and the first thing a replica does is drift.
+* **Nothing is reasoned.** No provider, no network, no key. The payload shipped in the wheel
+  (`src/requivo/assets/demo/`) is the output of a real run, replayed.
+* **It says what it is.** A sample session the reader did not create, appearing in a list of
+  sessions they own, has to be recognisable as an example wherever it renders.
+
+`is_example` answers that last one from the **request text**, not from the slug. A slug test is the
+obvious implementation and it is wrong in both directions: a workspace already holding a session
+called `example-event-check-in` pushes the sample to a derived name (`create_session` claims a slug
+atomically and falls back — invariant 11), so the sample would lose its badge and the squatter gain
+one. The request is what a session *is*; the slug is a name it happened to land under. Pinned by
+`test_the_example_is_recognised_by_what_it_asks_not_by_the_name_it_landed_under`.
+"""
+
+from __future__ import annotations
+
+import json
+
+from requivo.core.errors import RevisionConflictError
+from requivo.paths import DEMO
+from requivo.services.sessions import SessionService
+
+# The name the sample lands under when nothing else holds it. `create_session` may hand back a
+# derived name instead (invariant 11), which is why nothing downstream reads this to decide what
+# the sample *is* — see `is_example`.
+#
+# Deliberately not `cli.DEMO_SLUG` ("event-checkin-reconciliation"), which names the browsable copy
+# under `examples/` and travels in a URL. This one names a directory in the reader's own workspace
+# and shows up in `requivo session list`, where there is no badge and the name is the only signal —
+# so it says what it is. The two are the same payload and the docs say so; sharing one constant
+# would make a slug in somebody's workspace hostage to a directory rename in this repository.
+EXAMPLE_SLUG = "example-event-check-in"
+
+# Recorded on the revision this seeds. `provider` and `model_name` stay absent, deliberately:
+# invariant 6 says provenance is real or absent, and nothing reasoned this apply. The payload was
+# produced by a real Anthropic run months ago; claiming that provider *here* would describe a call
+# this process did not make. `session rescope` records `surface` alone for the same reason.
+# Pinned by `test_the_revision_claims_no_provider_it_did_not_use`.
+EXAMPLE_SURFACE = "web-example"
+
+
+def _read(name: str) -> str:
+    """One bundled asset, UTF-8 on purpose (invariant 16 — the locale default is not a codec)."""
+    return (DEMO / name).read_text(encoding="utf-8")
+
+
+def _unquote(markdown: str) -> str:
+    """The client email out of the payload's markdown wrapper.
+
+    `assets/demo/request.md` is written for `requivo demo` to *narrate*: a heading, two lines
+    explaining what kind of input this is, and then the email itself as a blockquote. A session
+    captures what the client said, so the wrapper would be a description of the request standing
+    where the request goes — and the understanding on screen would then be read against a paragraph
+    about the example rather than against the example.
+
+    Falls back to the whole text when there is no blockquote, so a future payload written without
+    one still seeds something rather than an empty request (which `create_session` refuses).
+    """
+    quoted = [line.lstrip()[1:].strip() for line in markdown.splitlines()
+              if line.lstrip().startswith(">")]
+    return "\n".join(quoted).strip() or markdown.strip()
+
+
+def example_request() -> str:
+    """The request the example session captures."""
+    return _unquote(_read("request.md"))
+
+
+def example_proposal() -> dict:
+    """The bundled model, as the proposal `update_model` validates and applies.
+
+    Parsed on each call rather than cached: `update_model` is handed this dict, and a cached one
+    would be a shared mutable the next caller sees whatever the last one did to it.
+    """
+    return json.loads(_read("model.json"))
+
+
+def _normalised(text: str) -> str:
+    """Whitespace-insensitive form, for comparing a request read back off disk against the packaged
+    one. Line endings differ between the platforms this runs on, and a sample that stopped being
+    recognised as the example on Windows alone is exactly the class of bug this repo keeps finding
+    one CI matrix at a time."""
+    return " ".join(text.split())
+
+
+def is_example(request_text: str) -> bool:
+    """Whether a session is the bundled example — decided by what it asks. See the module docstring
+    for why this is not a slug test."""
+    return bool(request_text) and _normalised(request_text) == _normalised(example_request())
+
+
+def seed_example(sessions: SessionService) -> str:
+    """Materialise the bundled example as a real local session. Returns the slug it landed under.
+
+    **Clicking twice navigates rather than refusing.** `create_session` is idempotent on identity
+    (the request *and* its context-card selection), so the second call hands back the session the
+    first one made — the reader ends up looking at the example either way, which is what they asked
+    for. Refusing was the other honest shape and it teaches nothing: the button says *example*, and
+    a reader who presses it again wants the example.
+
+    The model is applied only at revision 0. Re-applying an identical model would mint a second
+    revision with the same content and a provenance record describing an event that did not happen,
+    and it would overwrite a session the reader had since refined with a key of their own. Pinned by
+    `test_a_second_click_returns_to_the_same_session_rather_than_making_another`.
+
+    **`expected_revision` is what makes that a guarantee rather than a sequential accident.** The
+    `current_revision` read is outside any lock, and this route is a plain `def`, which Starlette
+    runs on a worker thread — so two first clicks arriving together (a double submit before the 303
+    lands, two tabs) can both see revision 0 through `create_session`'s idempotent-identity return
+    and both go on to apply. The precondition is what turns the loser of that race into a no-op
+    instead of a spurious revision 2 of identical content: exactly invariant 9's rule that a check
+    not held across the write it authorises is not a check. The conflict is *swallowed* rather than
+    raised, uniquely here, and only because of what it means at this one call site: somebody else
+    just seeded the very session this call was going to seed, which is the outcome asked for. Every
+    other caller of `update_model` must let a `RevisionConflictError` reach its reader, because
+    there the other writer applied something *different*.
+
+    No existence check precedes the create: `create_session` is the atomic claim (invariant 11), and
+    a check here would be the preceding-existence-check that invariant exists to refuse.
+    """
+    meta = sessions.create_session(example_request(), slug=EXAMPLE_SLUG)
+    if meta.current_revision == 0:
+        try:
+            sessions.update_model(meta.slug, example_proposal(), expected_revision=0,
+                                  provenance={"surface": EXAMPLE_SURFACE})
+        except RevisionConflictError:
+            pass  # a concurrent click seeded it first — see the docstring
+    return meta.slug

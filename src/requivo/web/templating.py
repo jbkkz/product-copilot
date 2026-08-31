@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from requivo.web.config import MAX_ANSWERS_CHARS, MAX_REQUEST_CHARS
 from requivo.web.security import CSRF_FIELD, csrf_token
-from requivo.web.viewmodels.labels import human_time
+from requivo.web.viewmodels.labels import EXAMPLE_BADGE, UNREADABLE_BADGE, human_time
 
 _HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = _HERE / "templates"
@@ -37,3 +37,13 @@ templates.env.filters["human_time"] = human_time
 # `test_the_limit_the_page_shows_is_the_limit_the_server_refuses_on`.
 templates.env.globals["max_request_chars"] = MAX_REQUEST_CHARS
 templates.env.globals["max_answers_chars"] = MAX_ANSWERS_CHARS
+# The word a bundled example wears, on the home row and on its own page (#226). A global for the
+# same reason the two above are: the caption is decided in `labels.py` and read in more than one
+# template, and a route that forgot to pass it would render a sample session wearing no mark of
+# being one -- an affordance that is off looking exactly like one with nothing to say.
+templates.env.globals["example_badge"] = EXAMPLE_BADGE
+# And the word for the third state (#240). The home row gets it through the view model, as
+# `status_label`; the session page for an unreadable session has no view model to get it from, and
+# typed the literal into the template instead -- which is the drift `labels.py`'s own comment on
+# this constant warns about, in the file the same change wrote it into. Two surfaces, one constant.
+templates.env.globals["unreadable_badge"] = UNREADABLE_BADGE

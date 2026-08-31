@@ -97,12 +97,34 @@ is not on any of these screens; the translation is defined once in `web/viewmode
 
 ![The decision brief: what is confirmed, what is being assumed, the decisions on record and the premises worth contesting.](images/web-brief.webp)
 
+- **Explore a worked example** — one button under the request box, and the way to see a finished
+  analysis without a key. (It is not the only keyless thing here: with no provider configured the
+  main form still captures a request, and the button says *Save request* rather than *Analyse
+  request* to say so.) It materialises the bundled sample — the messy
+  client email `requivo demo` replays — as a real session in your workspace, through the same
+  `SessionService.create_session` + `update_model` path everything else uses. It is not a read-only
+  exhibit and not a mock: it has a revision, a frozen copy under `revisions/`, a readiness verdict
+  computed by the same code as yours, and it opens in the CLI and in Claude Code. Nothing is called
+  and nothing is reasoned; the payload ships in the wheel. The button stays after you have sessions
+  of your own — showing it only on an empty workspace would put the example one real session out of
+  reach — and clicking it twice returns you to the session you already have rather than making a
+  second. It is labelled *Example* on its own page and on its row, and that label is decided by the
+  request it carries, not by the name it landed under (#226).
 - **Home** — the request box *is* the home page; there is no separate "new discovery" screen. Below it,
   the requests already in progress, each showing what was asked, whether it is waiting on you, and
   whether a document needs updating. Sessions created by the CLI or Claude Code appear here too. A
   session that cannot be read — written by a newer Requivo, or left with a truncated file by a crash
   mid-write — is a **row that says so and names itself**, not an error over the whole page: one bad
-  session used to hide the list of every other, and neither surface said which one it was (#7).
+  session used to hide the list of every other, and neither surface said which one it was (#7). The
+  row shows one line and links to the session, where the failure is stated in full with what to run
+  next. That line is the store's own sentence when the store already wrote one for a reader — *this
+  session came from a newer Requivo, upgrade requivo* keeps its remedy on the first screen — and a
+  plain sentence when it did not: a pydantic class name, an absolute path or `[Errno 21] Is a
+  directory` used to lead the row, on the page whose design rule is that engine vocabulary never
+  does (#240).
+  Opening that session answers with the status it always did (409 for a session from a newer
+  Requivo, 500 for a store that could not answer), and the same failure is logged in the terminal
+  you started the server in.
   The list is ordered by when each session last moved, newest first, and a row nobody could read
   sorts last — it states no timestamp at all, and an empty string would otherwise sort it to the top
   (#237). Times read as *3 days ago* or *25 Aug 2026*, with the exact instant on the row's `title`.

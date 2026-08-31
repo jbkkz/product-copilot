@@ -42,9 +42,13 @@ uvx --from "requivo[web,anthropic]" requivo web    # opens http://127.0.0.1:8765
 
 [![The Requivo Web session page: the objective, the request, and what Requivo understood, split into what is confirmed and what is being assumed.][shot-session]][web]
 
-Unlike the demo, this one analyses, so it needs a key: set `ANTHROPIC_API_KEY` in your environment or
-a `.env` file. Without it the interface still opens and reads existing sessions, and tells you what is
-missing.
+Analysing a request of your own needs a key: set `ANTHROPIC_API_KEY` in your environment or a `.env`
+file. Without one the interface still opens, reads existing sessions and tells you what is missing —
+and its home page offers **Explore a worked example**, which materialises the same messy client email
+`requivo demo` replays as a real, browsable session in your workspace. One click, no key, no network:
+the understanding, the open questions, the readiness verdict and the decision brief, all read from the
+payload bundled with the install. Refining it or generating a new document is the part that needs the
+key.
 
 **What it costs.** You pay Anthropic directly, on your own key: roughly **$0.03 to $0.06 per call**,
 which puts a complete session — a full discovery plus every artifact — **under $1** at current

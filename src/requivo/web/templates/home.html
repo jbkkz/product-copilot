@@ -82,6 +82,21 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
   </details>
 </form>
 
+{# #226 — the keyless activation path, and it is on this page rather than behind a flag because a
+   flag has to be known about before it can help, which is exactly what a visitor with no key does
+   not have. Rendered whether or not sessions exist: the issue proposed showing it only on an empty
+   workspace, and that is one real session away from an example nobody can reach again — including
+   the reader who wants to compare their own half-finished session against a worked one. It is a
+   POST, with the same token every other write on this app carries, because it creates a session.
+   Pinned by `test_the_example_stays_reachable_once_a_real_session_exists`. #}
+<form method="post" action="/sessions/example" class="example-invite">
+  {% include "_csrf.html" %}
+  <p class="hint">No key, nothing to install:
+    <button class="btn small ghost" type="submit">Explore a worked example</button>
+    — a real, messy client email and the understanding Requivo built from it, replayed from the
+    payload bundled with this install. Nothing is called.</p>
+</form>
+
 {% if sessions %}
 <h2>Recent</h2>
 <ul class="clean session-list">
@@ -98,6 +113,9 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
         {% elif s.state == 'awaiting' %}<span class="badge">{{ s.status_label }}</span>
         {% elif s.state == 'unreadable' %}<span class="badge danger">{{ s.status_label }}</span>
         {% else %}<span class="badge warn">{{ s.status_label }}</span>{% endif %}
+        {# The bundled sample says so here too (#226). A session the reader did not create, sitting
+           in a list of sessions they own, is otherwise indistinguishable from their own work. #}
+        {% if s.is_example %}<span class="badge">{{ example_badge }}</span>{% endif %}
         {% if s.needs_update %}<span class="badge danger">Needs updating</span>{% endif %}
         {# Translated, with the exact instant kept on the `title` — hiding here is presentational,
            so nothing is dropped (#237). A row nobody could read carries no timestamp at all and
@@ -105,8 +123,12 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
         {% if s.updated_at %}<span class="muted" title="{{ s.updated_at }}">{{ s.updated_at | human_time }}</span>{% endif %}
       </span>
     </a>
+    {# One human line, not `str(e)` (#240). The full text is on the session page this row links to,
+       and in the server log — the two places somebody fixing it is already standing. What it costs
+       is that a remedy which used to ride the row is now one click away; the argument for paying
+       that is on `UNREADABLE_HINT` in `viewmodels/labels.py`. #}
     {% if s.state == 'unreadable' %}
-    <p class="hint">{{ s.error }}</p>
+    <p class="hint">{{ s.hint }}</p>
     {% endif %}
   </li>
   {% endfor %}

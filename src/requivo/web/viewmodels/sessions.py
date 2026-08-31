@@ -10,7 +10,8 @@ from __future__ import annotations
 from requivo.core.errors import SessionNotFoundError
 from requivo.services.discovery import GENERATABLE
 from requivo.services.sessions import SessionService
-from requivo.web.viewmodels.labels import PRIMARY_ARTIFACT, artifact_label
+from requivo.web.example import is_example
+from requivo.web.viewmodels.labels import PRIMARY_ARTIFACT, UNREADABLE_BADGE, artifact_label, unreadable_hint
 from requivo.web.viewmodels.status import PRIORITY_QUESTIONS, readiness_view, understanding_view, understood_view
 
 # How much of the request a home-page row shows. A session is recognised by what was asked, not by its
@@ -52,20 +53,47 @@ def _unreadable_row(slug: str, error: str | None) -> dict:
 
     The title is the slug, because naming *which* session is the point: before #7 a reader with one
     broken session was shown an error for the whole page and had no way to learn which one it was.
+
+    **`hint` and `error` are two fields because they answer two readers** (#240). `error` is what the
+    failure said, kept in full and unchanged — it is what the session page states and what the
+    server logs; `hint` is the one line the home page shows, which is `error` itself when the store
+    already wrote it for a reader and a plain sentence when it did not (`unreadable_hint`). They
+    used to be the same value unconditionally, so the primary screen carried a pydantic class name,
+    an absolute path, or `[Errno 21] Is a directory` under a row — engine vocabulary leading the
+    page that exists not to have any.
+
+    Flattening the state itself was the over-correction to avoid, and the row is deliberately no
+    friendlier than before: the badge still says *could not be read*, still in the danger style, and
+    still says nothing it did not read. Only the register of the second line moved. Pinned by
+    `test_a_degraded_row_shows_one_human_line_and_no_engine_internals` and, for the half that would
+    otherwise rot, `test_humanising_the_row_did_not_flatten_the_third_state`.
+
+    `is_example` is `False` and not `None`: the question is *does this row wear the example badge*,
+    and a row nobody could read wears nothing. It is not a claim that the session is not the
+    example — we did not read its request, so we do not know, and nothing renders that as a fact.
     """
     return {"slug": slug, "title": slug, "updated_at": "", "state": "unreadable",
-            "status_label": "Could not be read", "open_questions": None, "needs_update": False,
-            "error": error or "no further detail"}
+            "status_label": UNREADABLE_BADGE, "open_questions": None, "needs_update": False,
+            "error": error or "no further detail", "hint": unreadable_hint(error),
+            "is_example": False}
 
 
 def _readable_row(sessions: SessionService, meta) -> dict:
     """The ordinary row. Raises whatever its reads raise — `session_list` owns the degradation, so
     that every failure below this line lands in one place instead of one `try` per call."""
+    # One read of the request, two uses: the title, and whether this is the bundled example. Read
+    # twice it would be two instants, and a session being written between them could title one row
+    # and badge another.
+    request_text = sessions.request_text(meta.slug)
     row = {
         "slug": meta.slug,
-        "title": _title(sessions.request_text(meta.slug), meta.slug),
+        "title": _title(request_text, meta.slug),
         "updated_at": meta.updated_at,
         "error": None,
+        # Nothing to humanise on a row that read cleanly; the key is present on every row so a
+        # template never has to ask which shape it was handed (#240).
+        "hint": None,
+        "is_example": is_example(request_text),
     }
     try:
         status = sessions.status(meta.slug)
@@ -164,10 +192,14 @@ def session_detail(sessions: SessionService, slug: str) -> dict:
     questions = status.get("questions", [])
     artifacts = _artifacts_view(status)
     generatable = generatable_view()
+    request_text = sessions.request_text(slug)
     return {
         "slug": slug,
         "revision": status.get("revision"),
-        "request_text": sessions.request_text(slug),
+        "request_text": request_text,
+        # Whether this screen is showing the bundled sample rather than the reader's own work
+        # (#226). Decided from the request, never from the slug — see `web/example.py`.
+        "is_example": is_example(request_text),
         "understood": understood_view(status),
         "readiness": readiness_view(status),
         # The few that lead the page, and the rest one disclosure away. The engine caps its reply at

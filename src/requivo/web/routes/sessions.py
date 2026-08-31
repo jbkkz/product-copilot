@@ -2,25 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from requivo.core.context import resolve_cards
-from requivo.core.errors import InputTooLargeError, InvalidSlugError, ProviderOutputError, SessionNotFoundError
+from requivo.core.errors import (
+    InputTooLargeError,
+    InvalidSlugError,
+    ProviderOutputError,
+    RequivoError,
+    SessionNotFoundError,
+)
 from requivo.core.persistence import validate_slug
 from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS, MAX_SLUG_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
+from requivo.web.example import is_example, seed_example
 from requivo.web.routes.home import home_context
 from requivo.web.spend import pop_web_usage, track_web_usage
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
 
 router = APIRouter()
+
+# The same logger `app.py` writes its 5xx lines to, so an unreadable session lands in the terminal
+# the operator started the server in rather than in a channel of its own.
+logger = logging.getLogger("requivo.web")
 
 # The provider seam fails two ways on a first analysis: a transport failure (`EngineError` — API
 # unavailable, output truncated) and the JSON retry loop giving up on a reply that never holds the
@@ -202,9 +214,110 @@ def create_session(
     return RedirectResponse(url=f"/sessions/{new_slug}", status_code=303)
 
 
+@router.post("/sessions/example")
+def create_example(sessions: SessionService = Depends(get_sessions)):
+    """Materialise the bundled example and go to it — the keyless activation path (#226).
+
+    A POST rather than a link, because it writes: it creates a session in the reader's workspace,
+    so it carries the cross-site token every other write on this app carries, and a refresh cannot
+    silently re-run it (the 303 is the same shape `create_session` above answers with).
+
+    Declared *before* `GET /sessions/{slug}` for readability only — the two differ by method, so
+    neither shadows the other however they are ordered.
+
+    Every decision this makes lives in `web/example.py`, not here: what a second click does, what
+    the revision claims about who produced it, and how the sample is recognised afterwards. This is
+    a redirect around one service call, which is what lets a second surface reuse the operation
+    without reimplementing the policy.
+    """
+    return RedirectResponse(url=f"/sessions/{seed_example(sessions)}", status_code=303)
+
+
+def _unreadable_session(request: Request, slug: str, exc: BaseException):
+    """The session page for a session nobody could read (#240).
+
+    `home.html` has promised since #7 that "the session screen is where the full error is stated,
+    and that is the one place a reader can act on it". It was not: every read on this route raised,
+    and the reader got `errors/error.html` or `errors/500.html` — a generic page naming neither the
+    session nor anything to run. So the row humanised by #240 pointed at a page that knew less than
+    the row did.
+
+    **The status does not move.** Whatever the exception would have been reported as, it still is:
+    409 for a session written by a newer Requivo, 500 for a store that could not answer. A page
+    that explains a failure does not turn it into a success, and `session_page`'s status is part of
+    a public surface. `_status_for` is imported inside the function because `app.py` imports this
+    module — the cycle is real, and by the time a request is served `app` is fully imported. Pinned
+    by `test_opening_an_unreadable_session_answers_with_the_status_it_always_did`.
+
+    Logged as well as rendered. The page is written for the reader; the operator needs the same
+    fact in the terminal they started the server in, which is where the app's own 5xx arm already
+    puts one.
+    """
+    from requivo.web.app import _status_for  # noqa: PLC0415 - see the docstring: app imports this
+
+    status = _status_for(exc) if isinstance(exc, RequivoError) else 500
+    code = exc.code if isinstance(exc, RequivoError) else "session_unreadable"
+    # **The traceback rides the non-`RequivoError` arm and only that arm**, because the catch above
+    # is deliberately open and therefore also catches what nobody anticipated. A `RequivoError` is a
+    # state this build has a code and a sentence for, and a stack under it is noise; anything else
+    # may be a defect in this codebase, and without `exc_info` the operator's log renders "the store
+    # is broken" and "we have a bug" as one identical line carrying `str(exc)` and nothing else.
+    # `app.py`'s sibling handler for the same unanticipated family already uses `logger.exception`
+    # for this reason; this is that decision, kept rather than quietly dropped one route along.
+    logger.error("session '%s' could not be read (%s): %s", slug, code, exc,
+                 exc_info=None if isinstance(exc, RequivoError) else exc)
+    return templates.TemplateResponse(request, "sessions/unreadable.html", {
+        "slug": slug, "status": status, "code": code, "detail": str(exc),
+    }, status_code=status)
+
+
 @router.get("/sessions/{slug}")
 def session_page(request: Request, slug: str = Depends(safe_slug),
                  sessions: SessionService = Depends(get_sessions)):
+    """One session, or the page for one nobody could read (#240).
+
+    **The guard wraps the reads and stops there.** `_session_view` returns a template name and a
+    context and renders nothing; the render happens below, outside the `try`. That split is the
+    whole of this guard's correctness, because Starlette renders a `Jinja2Templates.TemplateResponse`
+    *eagerly*, inside `_TemplateResponse.__init__` — so a `try` that spans the render catches
+    Jinja's own `UndefinedError` from a context key a route forgot to pass, and reports a defect in
+    this codebase to the reader as *your session is corrupt on disk* and to the operator as the
+    same. An absence produced by the guard, dressed as an absence in the world.
+
+    **The existence check is inside the `try` and that is not tidiness.** `sessions.exists` reaches
+    `core.persistence._probe`, which raises `SessionUnreadableError` for any `OSError` that is not
+    "no such thing" — an `EACCES` on a parent directory, say. That is precisely a session that is
+    there and could not be read, and outside the guard it fell to the app-wide handler and the
+    generic page this route exists to replace. None of the three break modes in
+    `tests/web/test_degraded_listing.py` reach it, which is how it survived the first draft.
+    """
+    try:
+        template, context = _session_view(request, slug, sessions)
+    except SessionNotFoundError:
+        # Re-raised deliberately: "there is no such session" is a 404 the app already renders well,
+        # and it is not the third state. Only a session that *is* there and could not be read gets
+        # the page below.
+        raise
+    except Exception as exc:  # noqa: BLE001 - the set of ways a session can be broken is open
+        # The same argument `SessionService.list_entries` makes for its own bare catch, at the one
+        # route that opens a single named session: a truncated `model.json` (pydantic), a
+        # `request.md` replaced by a directory (`OSError`), a `format_version` from a newer build
+        # (`RequivoError`). Naming a family here is how the guard ends up nominally on and
+        # effectively off for the next failure mode.
+        return _unreadable_session(request, slug, exc)
+    return templates.TemplateResponse(request, template, context)
+
+
+def _session_view(request: Request, slug: str, sessions: SessionService) -> tuple[str, dict]:
+    """Everything this route *reads*, and nothing it renders — (template name, context).
+
+    Its guard therefore sits above all of the reads rather than around the first one: wrapping only
+    `sessions.meta(slug)` would leave `session_detail`'s own reads — the model, the status, the
+    request — outside it, which is the shape of #7 one route along. And it stops short of the
+    render, for the reason `session_page` states.
+
+    `request` is read for its query parameters only; nothing here renders with it.
+    """
     if not sessions.exists(slug):
         raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
     meta = sessions.meta(slug)
@@ -214,14 +327,21 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
     # time, which is deliberate (see `spend.py`).
     usage = pop_web_usage(slug)
     if meta.current_revision == 0:
+        # Read once and used twice on this branch; the branch below gets it from `session_detail`,
+        # which reads it for the same two purposes there.
+        request_text = sessions.request_text(slug)
         # 'Create session only' with no discovery yet — offer to run it. `usage` is set here only when
         # a first analysis spent tokens and then failed: the model never advanced past revision 0, but
         # the spend is real and already logged, so the retry page states it rather than the silence a
         # bare "your request was saved" would otherwise leave.
-        return templates.TemplateResponse(request, "sessions/detail.html", {
+        return "sessions/detail.html", {
             "pending": True, "slug": slug,
-            "request_text": sessions.request_text(slug), "context_cards": meta.context_cards,
+            "request_text": request_text, "context_cards": meta.context_cards,
             "provider": provider_status(),
+            # A seeded example whose apply did not land is still the example, and still says so
+            # (#226). Ordinarily unreachable — `seed_example` applies the model in the same call —
+            # but a crash between the two leaves exactly this page.
+            "is_example": is_example(request_text),
             # Set only by `analysis_failed`'s redirect. Anyone can put it in a URL by hand, which on a
             # local single-user server with no authentication is not a boundary worth defending -- and
             # Jinja escapes it either way.
@@ -232,12 +352,17 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
             # without a path to attach.
             "analysis_failed_path": request.query_params.get("analysis_failed_path"),
             "usage": usage,
-        })
-    return templates.TemplateResponse(request, "sessions/detail.html", {
-        "pending": False, "s": session_detail(sessions, slug),
+        }
+    detail = session_detail(sessions, slug)
+    return "sessions/detail.html", {
+        "pending": False, "s": detail,
+        # Lifted to the top level so `detail.html` can announce the sample once, above the branch
+        # that splits on `pending` (#226). Both branches answer the same question and a template
+        # asking it two ways is a template that will answer it two ways.
+        "is_example": detail["is_example"],
         "provider": provider_status(),
         "usage": usage,
-    })
+    }
 
 
 @router.get("/sessions/{slug}/export")
