@@ -571,6 +571,18 @@ see invariant 10), `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `Estimate
 `ReleaseNotes` ↔ `release.md`. Slot ids live in `framework/model_schema.json`, which also carries each
 slot's `pillar` and `label` (read back by the renderer via `_slot_meta()`).
 
+That list is no longer kept by hand. `tests/test_prompt_contracts.py` parses each prompt's Output
+format example offline and validates it against the contract that operation actually parses replies
+with — read out of the generator's own `_complete(...)` call rather than from a table here, so a
+generator pointed at a different contract goes red too. It exists because the drift was invisible and
+paid: a model obeying a stale example produces a reply `extra="forbid"` refuses, `_complete()` retries
+twice with a corrective nudge and then raises `EngineError`, so one operation costs up to three calls
+every time it runs while the offline suite stays green (#266). What it deliberately does **not**
+check is an *optional* contract field the prompt was never told about — the three derived `id` fields
+are legitimately absent from `brief.md`, and a coverage rule would force a golden-harness capture for
+every future optional field. Adding a generator therefore adds a row to this guard automatically;
+changing an example still owes a golden capture.
+
 The slot vocabulary is enforced in two layers, with `schema_slot_ids()` as the single source:
 
 - *Vocabulary* — both contracts always reject unknown slot ids: in the model, in the slot each
