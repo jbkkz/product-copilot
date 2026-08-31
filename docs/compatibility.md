@@ -866,6 +866,41 @@ from one code to another, which this page's own promise calls **breaking**. Unli
 having already gone out — `session init` is offline and spends nothing, so nothing about a paid call
 softens this one.
 
+### `requivo discover` and the three shapes of its argument — a behaviour change (#360)
+
+`session init -`, `model apply <slug> -` and `artifact save --file -` have always read stdin from a
+bare `-`. `discover` did not: it asked `is_file_argument`, which answers False for `-` — correctly,
+`-` is not a file — so the argument fell through to the literal-text branch and the engine was asked
+to discover a product from the two characters `-`. It now reads stdin, like its siblings, and
+refuses an empty source before any provider call.
+
+Three conditions move off exit **0**, each of which used to reach the provider and be billed:
+
+| Invocation | Was | Now |
+|---|---|---|
+| `requivo discover -` with a terminal on stdin | 0 — discovered on the literal `-` | **1** |
+| `requivo discover -` with an empty pipe | 0 — discovered on the literal `-` | **2** |
+| `requivo discover <an empty file>` | 0 — a billed call on an empty request | **2** |
+
+The third is the one no reading of #360's title predicts. The old branch read a file's contents and
+never re-checked them, so only a blank *argument* was refused; a file that happened to be empty was
+read, found empty, and sent anyway.
+
+That is the same shape as #250 and #255 above — a condition moved from one code to another, which
+this page's own promise calls **breaking** — and it is declared that way in
+`changelog.d/360.fixed.md` rather than argued down on the grounds that every one of those old
+behaviours was a defect and none was ever documented here. #255 was first declared compatible on
+exactly that kind of harm argument and had to be corrected before its tag; the rule in this section
+is mechanical for that reason.
+
+**Note what the rule does not say, because the same change ran into it from the other side.** #249,
+in the same release, moves `requivo status <slug> --workspace DIR` from exit 2 to exit 0 — also a
+condition moving between codes, and declared *compatible* on the grounds that it only widens:
+nothing that worked stops working. The promise above is written without a direction, so read
+literally it covers both. Whether widening deserves its own clause is open (#382); until it is
+settled, the two are being treated differently in practice and this paragraph is where that is
+recorded rather than left to be rediscovered.
+
 ### The web error banner's `code` — **not stable**
 
 Requivo Web renders a `(code: …)` line on a refusal. Four of those values —
