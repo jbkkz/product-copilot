@@ -79,6 +79,66 @@ def test_doctor_reports_a_bearer_token_as_a_credential_present(workspace, monkey
     assert r["provider_anthropic"]["api_key_present"] is True
 
 
+# ── #365: a second reader wants more than the bool ──────────────────────────
+
+_NEEDS_CHAIN = pytest.mark.skipif(
+    not hasattr(__import__("anthropic._client", fromlist=["default_credentials"]), "default_credentials"),
+    reason=(
+        "the installed anthropic SDK has no profile/federation discovery chain (the floor of "
+        "`anthropic>=0.42.0,<2` predates it). UNTESTED ON THIS SDK: an unloadable ANTHROPIC_PROFILE "
+        "is not reachable to name in doctor's output. See test_provider.py's own _NEEDS_CHAIN for "
+        "the full reasoning -- this is the identical gate, one file over."
+    ),
+)
+
+
+@_NEEDS_CHAIN
+def test_doctor_names_the_remedy_for_an_unloadable_profile_rather_than_no_api_key(workspace, monkeypatch):
+    """#365: `doctor` used to call `credential_present()` bare, which flattens "no credential" and "a
+    credential that is configured and unloadable" onto the same False -- so the verb whose whole job
+    is diagnosing the install told the reader to set an environment variable when the fault was a
+    profile file the SDK could not read. Setting the variable would not have fixed it, and the reader
+    had no way to learn that from the output.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "a-profile-that-does-not-exist")
+
+    r = _run_json(["doctor", "--json"])
+    assert r["provider_anthropic"]["api_key_present"] is False
+    problem = r["provider_anthropic"]["credential_problem"]
+    assert problem is not None
+    assert "could not load the credential configuration" in problem
+    assert "a-profile-that-does-not-exist" in problem, "the SDK's own reason names the profile"
+
+    text = _run(["doctor"])
+    assert "no API key" not in _check_line(text, "anthropic"), (
+        "the wrong remedy for an unloadable profile -- setting a variable will not fix a file the "
+        "SDK could not read, and nothing here tells the reader that"
+    )
+    assert "could not be loaded" in text
+    assert "a-profile-that-does-not-exist" in text
+
+
+def test_doctor_still_says_no_api_key_when_none_is_configured_at_all(workspace, monkeypatch):
+    """The must-not-fire twin, genuinely reached (not merely asserted against silence): with no
+    credential from any source, the existing message is unchanged. Without this, a fix that stopped
+    saying "no API key" for every False case would pass the test above and silently break the far
+    more common one -- a "must not say X" assertion alone passes on a harness that produces no
+    message at all.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
+
+    r = _run_json(["doctor", "--json"])
+    assert r["provider_anthropic"]["api_key_present"] is False
+    assert r["provider_anthropic"]["credential_problem"] is None
+
+    text = _run(["doctor"])
+    assert "no API key" in _check_line(text, "anthropic")
+
+
 # ── doctor's own failures must not render as green ticks (#12) ──────────────────
 #
 # Every test in this block asserts that the *healthy* and the *broken* case produce **different**

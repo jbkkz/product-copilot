@@ -38,6 +38,14 @@ _PROVIDER_FAILURE = (EngineError, ProviderOutputError)
 # message.
 _MAX_NOTICE_CHARS = 300
 
+# The exact text `completion.py`'s give-up exit puts between the failure sentence and the saved-reply
+# path (`saved_note = f" — the reply that failed validation was saved to {debug_path}"`), duplicated
+# here rather than imported: importing from `providers.anthropic` would cross the surface-provider
+# boundary this file otherwise stays clear of, for one string. `analysis_failed()` below matches it
+# via `endswith` against the whole clause -- prefix and path together -- so the notice it truncates
+# never ends on a dangling "...was saved to" with the path removed and nothing left to complete it.
+_SAVED_NOTE_PREFIX = " — the reply that failed validation was saved to "
+
 
 def analysis_failed(slug: str, exc: EngineError | ProviderOutputError) -> RedirectResponse:
     """Send the reader to the session that *was* saved, carrying why the analysis was not (#207).
@@ -52,9 +60,39 @@ def analysis_failed(slug: str, exc: EngineError | ProviderOutputError) -> Redire
     `exc` is one of `_PROVIDER_FAILURE` -- both members are `RequivoError`s with the same `.message`
     shape, and this function reads only that, never the code, so the two failure classes render
     identically here on purpose.
+
+    **The saved-reply path (#283) is carried separately, and deliberately excluded from what gets
+    truncated (#362).** `ProviderOutputError.message` puts that path at its own *tail* -- see
+    `completion.py`'s give-up exit -- so a message this long simply loses it: on a realistic contract
+    violation the full message runs past a thousand characters and the path never reaches the first
+    `_MAX_NOTICE_CHARS` of it; on the shortest possible cause the notice ends *mid-filename*, at a
+    path that does not resolve. Neither is a message that has merely lost some words -- the second is
+    actively worse than no path, since it looks complete and is not. `exc.details["raw_reply_path"]`
+    (only `ProviderOutputError` ever sets it) rides as its own query parameter, untruncated, and the
+    whole connector clause is stripped from the text `notice` is sliced from -- not only the path.
+
+    **Stripping the path alone and not the clause around it was tried first and reviewed out**: it
+    left the notice ending "...was saved to" with nothing after it, and the template's own sentence
+    for the path then repeats "was saved to" immediately underneath -- a dangling half-sentence
+    followed by its own completion, worse to read than the truncation this fix exists to close. So
+    `_SAVED_NOTE_PREFIX` below is `completion.py`'s own connector text, matched via `endswith` against
+    the *whole* clause (prefix + path). It is deliberately best-effort: a future reword of that
+    sentence in `completion.py` that this constant is not updated alongside simply stops matching, and
+    the notice reverts to carrying the unstripped clause -- redundant with the path block again, but
+    never broken, and never silently wrong. The CLI is unaffected either way: `exc.message` itself is
+    never touched, only what this function derives from a local copy of it.
     """
-    notice = quote(exc.message[:_MAX_NOTICE_CHARS])
-    return RedirectResponse(url=f"/sessions/{slug}?analysis_failed={notice}", status_code=303)
+    message = exc.message
+    saved_path = exc.details.get("raw_reply_path") if isinstance(exc, ProviderOutputError) else None
+    if saved_path:
+        full_clause = f"{_SAVED_NOTE_PREFIX}{saved_path}"
+        if message.endswith(full_clause):
+            message = message[: -len(full_clause)]
+    notice = quote(message[:_MAX_NOTICE_CHARS])
+    url = f"/sessions/{slug}?analysis_failed={notice}"
+    if saved_path:
+        url += f"&analysis_failed_path={quote(str(saved_path))}"
+    return RedirectResponse(url=url, status_code=303)
 
 
 @router.post("/sessions")
@@ -188,6 +226,11 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
             # local single-user server with no authentication is not a boundary worth defending -- and
             # Jinja escapes it either way.
             "analysis_failed": request.query_params.get("analysis_failed"),
+            # The saved-reply path (#283), carried outside the truncated notice above and rendered in
+            # full (#362) -- absent whenever the failure was an `EngineError` or the debug write
+            # itself failed, in which case `analysis_failed`'s own sentence already covers the cause
+            # without a path to attach.
+            "analysis_failed_path": request.query_params.get("analysis_failed_path"),
             "usage": usage,
         })
     return templates.TemplateResponse(request, "sessions/detail.html", {

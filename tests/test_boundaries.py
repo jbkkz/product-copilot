@@ -646,20 +646,25 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "verb answers about the *install* rather than about a session -- which is why this is not "
         "reachable through DiscoveryService, whose every method takes a slug. Weighed against "
         "#167's rule (move the neutral concept out of `providers/` rather than allowlist it) and "
-        "that rule does not apply here: the value is `os.getenv('MODEL', 'claude-sonnet-5')`, and "
-        "the default in it is Anthropic's own fact, not a neutral one waiting to be relocated. The "
-        "alternative -- doctor re-deriving the same getenv with its own copy of the default -- is "
-        "worse in the specific way this file exists to prevent: it would be correct until the day "
-        "the default moved, and then quietly wrong in the verb people paste into bug reports."
+        "that rule does not apply here: since #268 the value is `REQUIVO_MODEL` if set, else "
+        "`os.getenv('MODEL', 'claude-sonnet-5')` -- a two-name precedence, and both the fallback "
+        "name and the default in it are Anthropic's own facts, not a neutral one waiting to be "
+        "relocated. The alternative -- doctor re-deriving the same precedence with its own copy -- "
+        "is worse in the specific way this file exists to prevent: it would be correct until the day "
+        "the precedence changed (as this very entry was, and stayed stale for one, per #364), and "
+        "then quietly wrong in the verb people paste into bug reports."
     ),
-    ("deterministic/doctor.py", "credential_present"): (
+    ("deterministic/doctor.py", "credential_diagnosis"): (
         "the same reasoning as `current_model_name` immediately above, for the "
-        "`provider_anthropic.api_key_present` row: the set of env-var names a credential can come "
-        "from is Anthropic's own fact (`new_client()`'s `_AUTH_ENV_VARS`), not a neutral one waiting "
-        "to be relocated out of `providers/`. Doctor keeping its own `os.getenv('ANTHROPIC_API_KEY')` "
-        "is exactly what #332 found: it was correct until #201 widened the runner to accept "
-        "`ANTHROPIC_AUTH_TOKEN` too, and then quietly wrong in the verb whose whole job is to report "
-        "on the runner. Orchestrates nothing: no client is built, no call is made."
+        "`provider_anthropic.api_key_present`/`credential_problem` rows: the set of env-var names a "
+        "credential can come from, and the SDK's own reason when a configured profile could not be "
+        "loaded, are both Anthropic's own facts (`new_client()`'s `_AUTH_ENV_VARS`, "
+        "`_resolve_client()`'s `problem` arm), not a neutral one waiting to be relocated out of "
+        "`providers/`. #365 is the same drift #332 found one function along: `credential_present()` "
+        "alone is right for a caller that only wants a yes/no, and wrong for the verb whose whole job "
+        "is naming the remedy -- it read the bool and told a reader with an unloadable profile to set "
+        "a variable that was never the fault. Orchestrates nothing: no client is built, no call is "
+        "made."
     ),
 }
 

@@ -124,13 +124,41 @@ def credential_present() -> bool:
     **It never raises**, and that is a constraint from its callers rather than a preference:
     `deterministic/doctor.py` calls it bare, and the verb that answers *is this install healthy*
     must not traceback on the unhealthy install it exists to describe. A configured-but-unloadable
-    profile therefore reads as False here; `new_client()` is where that case gets its own message,
-    so nobody is told to set a variable when the real fault is a file the SDK could not read.
+    profile therefore reads as False here, the same as a genuinely absent credential -- collapsing
+    the two is deliberate for a caller that only ever needed a boolean, and `new_client()` is where
+    the unloadable case gets its own message. **`doctor` is a second reader that does not only want
+    a boolean** (#365): it names a remedy, and "set an API key" is the wrong remedy for a file the
+    SDK could not read. `credential_diagnosis()` below is that second reader's answer; this
+    function's own contract is unchanged for its other callers (`web/config.py`, the CLI).
     Pinned by `test_credential_present_is_the_one_definition_new_client_reads` and
     `test_credential_present_does_not_raise_on_an_unloadable_profile`.
     """
     client, _ = _resolve_client()
     return client is not None
+
+
+def credential_diagnosis() -> tuple[bool, str | None]:
+    """`credential_present()` plus the one thing it deliberately discards for its own callers: *why*,
+    for the one case where "why" is more specific than "nothing is configured".
+
+    `_resolve_client()` already tells the two `False` causes apart -- see its own docstring. This
+    wraps that into a shape a *reporting* surface can render safely: it never raises, either, and it
+    hands back a `problem` string only for the arm that needs one. "SDK not installed" and
+    "genuinely no credential visible" both already say what they are without a wrapped SDK
+    exception, and `doctor` prints its own remedy for the first of those -- so `problem` is `None`
+    for both, and non-`None` only for a profile that is configured and could not be loaded, which is
+    the one arm `credential_present()`'s own docstring names as the reason a second reader exists.
+
+    Returns `(present, problem)`; `present=True` implies `problem is None`. Pinned by
+    `test_credential_diagnosis_names_the_unloadable_profile_the_bool_hides` and
+    `test_credential_diagnosis_leaves_a_genuinely_missing_credential_unnamed`.
+    """
+    client, problem = _resolve_client()
+    if client is not None:
+        return True, None
+    if problem is None or problem == _NO_KEY_MESSAGE:
+        return False, None
+    return False, problem
 
 
 

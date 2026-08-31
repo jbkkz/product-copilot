@@ -30,7 +30,7 @@ from requivo.core.integrity import SEVERITY_NOTE, IntegrityProblem, blocking, in
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
 from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
-from requivo.providers.anthropic import credential_present, current_model_name
+from requivo.providers.anthropic import credential_diagnosis, current_model_name
 from requivo.services.sessions import SessionService
 from requivo.streams import describe_streams
 
@@ -73,6 +73,13 @@ def doctor_report() -> dict:
         provider_version = getattr(anthropic, "__version__", "unknown")
     except ImportError:
         pass
+
+    # #365: `credential_diagnosis()` is `credential_present()`'s own answer for a reader that wants
+    # more than the bool -- `credential_problem` is `None` for the ordinary "no credential visible"
+    # case (and for "SDK not installed", reported separately above) and the SDK's own quoted reason
+    # for a profile that is configured and could not be loaded, so the human rendering below can name
+    # the actual remedy instead of "no API key" for a fault no environment variable fixes.
+    api_key_present, credential_problem = credential_diagnosis()
 
     # The console's own codec, which `doctor` is the right verb to answer about: it is the thing
     # that decides whether any *other* line of this report can be printed at all (#29). `cli.app()`
@@ -130,7 +137,15 @@ def doctor_report() -> dict:
             # the day #201 widened the runner to accept `ANTHROPIC_AUTH_TOKEN` too, so a working
             # bearer-token install reported no key here. Pinned by
             # test_doctor_reports_a_bearer_token_as_a_credential_present.
-            "api_key_present": credential_present(),
+            "api_key_present": api_key_present,
+            # #365: `credential_present()` alone flattens "no credential" and "a credential that is
+            # configured and unloadable" onto the same False, which is correct for a caller that only
+            # wants a yes/no and wrong for the verb whose whole job is naming the remedy -- it told a
+            # user with an unloadable profile to set a variable that was never the fault. `None` here
+            # is the ordinary case (nothing to add to the boolean above); a string is quoted verbatim
+            # from the SDK by `_resolve_client()` and named in the human rendering below instead of
+            # "no API key". Additive: a consumer reading `api_key_present` alone is unaffected.
+            "credential_problem": credential_problem,
         },
         # `locks` is here because a convention this verb does not report is a convention this verb
         # answers about the wrong shape (#113). The write lock moved out of the session directory to
@@ -459,8 +474,19 @@ def _cmd_doctor(a, client) -> None:
         print(f"  {ok} context cards   {c['count']} available")
     p = r["provider_anthropic"]
     prov = f"installed (v{p['version']})" if p["installed"] else "not installed"
-    key = "API key set" if p["api_key_present"] else "no API key"
+    # #365: a `credential_problem` means a profile IS configured and the SDK could not load it --
+    # naming that as "no API key" sends the reader to set a variable that was never the fault, and
+    # they have no way to learn that from the output. Checked first, because it is the more specific
+    # of the two False causes and the ordinary "no API key" wording must not shadow it.
+    if p["credential_problem"]:
+        key = "credential configured but could not be loaded"
+    elif p["api_key_present"]:
+        key = "API key set"
+    else:
+        key = "no API key"
     print(f"  {ok if p['installed'] else warn} anthropic       {prov} · {key}")
+    if p["credential_problem"]:
+        print(f"     └─ {display_token(p['credential_problem'])}")
     if not p["installed"]:
         print("     └─ optional: `pip install 'requivo[anthropic]'` for API-powered discovery.")
         print("        Not needed for Claude Code mode.")

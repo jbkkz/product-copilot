@@ -779,6 +779,86 @@ def test_a_retry_exhausted_first_analysis_also_lands_on_the_saved_session(client
     assert [m.current_revision for m in metas] == [0]
 
 
+def _long_contract_violation_reply() -> str:
+    """Valid JSON, so this drives a real pydantic `ValidationError` rather than the shorter
+    `no JSON object found in the reply` a non-JSON reply produces above -- a realistic contract
+    violation, not the shortest possible cause. Long enough (measured: well past 1000 chars once
+    wrapped in `ProviderOutputError.message`) that the saved-reply path #283 appends sits nowhere
+    near the first `_MAX_NOTICE_CHARS` of it (#362)."""
+    payload = {"model": {}, "summary": {}}
+    for i in range(7):
+        payload[f"extra_field_{i}"] = "x" * 10
+    return json.dumps(payload)
+
+
+def test_a_retry_exhausted_analysis_carries_the_full_saved_reply_path_on_the_web_surface(
+        client, with_provider, monkeypatch, tmp_path):
+    """#362: #283 appends the saved-reply path to the *tail* of `ProviderOutputError.message`, and
+    #253 routes that message into `analysis_failed`, which truncates at `_MAX_NOTICE_CHARS = 300` --
+    so on a realistic contract violation the path is gone entirely, and on the shortest possible
+    cause the notice ends mid-filename at a path that does not resolve.
+
+    Both shapes in one fixture, driven through the *real* retry loop (never an injected error -- a
+    hand-written short message would pass against the unfixed code, since the defect only shows up
+    once the message is genuinely long): the long cause is the control that fails on the unfixed
+    code with the path silently dropped; the short cause is the one the issue measured ending
+    mid-path.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    long_reply = _long_contract_violation_reply()
+    with_provider(long_reply, long_reply, long_reply)
+    r = client.post("/sessions", data={"request_text": "A leave approval system.",
+                                       "provider": "anthropic"}, follow_redirects=True)
+    assert r.status_code == 200
+    saved = list((tmp_path / ".requivo" / "debug").glob("*.txt"))
+    assert len(saved) == 1, "the give-up exit must have written exactly one debug file"
+    debug_path = str(saved[0])
+    assert debug_path in r.text, (
+        "the saved-reply path is the one artifact a bug report needs, and it must be reachable on "
+        "the web surface -- not silently dropped by the notice's 300-char cap"
+    )
+    assert r.text.count(debug_path) == 1, (
+        "the full path must appear exactly once -- a second occurrence would mean a truncated "
+        "fragment is still leaking into the page alongside the complete one"
+    )
+    # Found in review: stripping only the path (and not the connector clause around it) left the
+    # notice ending "...was saved to" with nothing after it, immediately followed by the template's
+    # own "The reply that failed validation was saved to <path>." -- the same four words twice in a
+    # row across two lines. The connector clause is stripped whole now, so the phrase appears once.
+    assert r.text.count("was saved to") == 1, (
+        "the connector phrase must appear once, from the separately-rendered path sentence -- twice "
+        "means the truncated notice still carries the dangling clause the path sentence repeats"
+    )
+    saved[0].unlink()  # isolate the second POST below to its own single debug file
+
+    short_reply = "not json"
+    with_provider(short_reply, short_reply, short_reply)
+    r = client.post("/sessions", data={"request_text": "A different request entirely.",
+                                       "provider": "anthropic"}, follow_redirects=True)
+    assert r.status_code == 200
+    saved2 = list((tmp_path / ".requivo" / "debug").glob("*.txt"))
+    assert len(saved2) == 1
+    debug_path2 = str(saved2[0])
+    assert debug_path2 in r.text, "the shortest-cause message must not end mid-path either"
+    # A truncated notice ending mid-path would leave an orphaned *prefix* of the filename sitting in
+    # the page next to nothing that resolves -- assert no such partial fragment survives once the
+    # complete path is rendered.
+    fragment = Path(debug_path2).name[:20]
+    assert r.text.count(fragment) == 1, (
+        "the debug filename's own characters must appear only where the complete path does -- a "
+        "second, partial occurrence is exactly the mid-path truncation this fix closes"
+    )
+    # This is the short-message case where the connector clause -- not just the path -- sits inside
+    # the first _MAX_NOTICE_CHARS, so it is the one the dangling-clause regression (found in review)
+    # actually reaches: the long-message case above never gets far enough into the message to include
+    # the clause at all, truncated or otherwise, so it cannot exercise this.
+    assert r.text.count("was saved to") == 1, (
+        "the connector phrase must appear once, from the separately-rendered path sentence -- twice "
+        "means the truncated notice still carries the dangling clause the path sentence repeats"
+    )
+
+
 def test_a_retry_exhausted_deferred_analysis_also_lands_on_the_saved_session(client, with_provider,
                                                                               monkeypatch):
     """The second door onto the same first analysis, same failure family."""
