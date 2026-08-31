@@ -289,9 +289,9 @@ class UnreadableArchiveError(InvalidSessionError):
 
 
 class InvalidArchiveError(InvalidSessionError):
-    """The archive opens, but its *shape* is not an export: no entries, too many, expanding past the
-    size ceiling, an entry that is not safely inside exactly one session directory, or more than one
-    session in it.
+    """The archive opens, but its *shape* is not an export: no entries, too many raw entries (files
+    and directories together), too many files, expanding past the size ceiling, an entry that is not
+    safely inside exactly one session directory, or more than one session in it.
 
     **Why it is in this family and not on its own.** It sits between `unreadable_archive` and
     `inconsistent_archive` on one code path in `_cmd_session_import`, and the three answer the same
@@ -299,23 +299,31 @@ class InvalidArchiveError(InvalidSessionError):
     the caller's, so 400. `unreadable_archive`'s docstring argues that nothing has been identified
     yet, which is true here too and did not take it out of the family; a consumer writing
     `except InvalidSessionError` for *any* malformed-session refusal would otherwise catch the arm on
-    either side of this one and miss the seven in between. It was `InvalidModelError` until #101 —
+    either side of this one and miss the eight in between. It was `InvalidModelError` until #101 —
     a code documented as *"a proposed model is structurally or semantically invalid"*, answering for
     an archive nobody proposed a model with.
 
-    **One code for seven conditions, and what that costs.** They share a remedy — *give me a
+    **One code for eight conditions now, and what that costs.** They share a remedy — *give me a
     different archive* — and #82's rule is that a candidate sending a reader where an existing code
     already sends them has not earned a line. But #82's finding was that `details` varying silently
     under one code is what raised `KeyError` on three of eight payloads, so a single code owes a
     discriminator rather than being excused one:
 
-    - `details["problem"]` is on **every** arm, and is one of `empty`, `too_many_files`,
-      `too_large`, `unsafe_entry`, `entry_outside_session_directory`, `multiple_sessions`. A
-      consumer that needs the distinction branches on a key that is always present.
-    - Each arm adds the numbers its own sentence quotes, and only those: `{files, max_files}`,
-      `{bytes, max_bytes}`, `{entry}`, `{slugs}`. `empty` adds nothing. Padding them to a common
-      shape would state measurements nobody took, which is the half of #82 that was a decision
-      rather than an obligation.
+    - `details["problem"]` is on **every** arm, and is one of `empty`, `too_many_entries`,
+      `too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory`,
+      `multiple_sessions`. A consumer that needs the distinction branches on a key that is always
+      present.
+    - Each arm adds the numbers its own sentence quotes, and only those: `{entries, max_entries}`,
+      `{files, max_files}`, `{bytes, max_bytes}`, `{entry}`, `{slugs}`. `empty` adds nothing. Padding
+      them to a common shape would state measurements nobody took, which is the half of #82 that was
+      a decision rather than an obligation.
+
+    **`too_many_entries` is the eighth, added by #219.** `too_many_files` and `too_large` are both
+    computed over `z.infolist()` with directory entries filtered out, so an archive built entirely of
+    directory entries declared zero files and ~zero bytes and passed both — while the extraction loop
+    still created every one of them, an inode-exhaustion bound the file-only caps never covered.
+    `too_many_entries` bounds the raw entry count, files and directories together, before either
+    file-only cap runs.
     """
 
     code = "invalid_archive"

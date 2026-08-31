@@ -42,6 +42,7 @@ from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import ModelUnreadableError, RequivoError, SessionNotFoundError
 from requivo.core.integrity import check_session
 from requivo.core.persistence import derive_slug, load_model
+from requivo.deterministic._shared import EXIT_DEGRADED
 from requivo.services.artifacts import ArtifactService
 from requivo.services.repository import FileSessionRepository
 from requivo.services.sessions import SessionService
@@ -174,6 +175,121 @@ def test_the_bulk_migrate_command_skips_a_slug_that_is_already_taken(workspace, 
     assert out["skipped_already_present"] == ["aaa-taken"]
     assert _problem("aaa-taken", 1) == "REAL"
     assert _problem("zzz-free", 1) == "LEGACY"
+
+
+def test_the_bulk_migrate_command_degrades_a_bad_legacy_session_rather_than_aborting(workspace, capsys):
+    """#262. One legacy session with an unparseable `model.json` must not abort the whole pass --
+    the docstring on `_cmd_session_migrate` used to admit exactly this gap. The two healthy sessions
+    sorted before and after the bad one (alphabetically, so both sides of the loop are exercised)
+    still migrate, and the bad one is named with its own error rather than silently dropped, per
+    invariant 15's "a listing survives its own members" applied to this loop. A must-fire control:
+    without the fix this test's own `pytest.raises(SystemExit)` around the first call never returns,
+    because the unhandled `ModelUnreadableError` aborts the process before any JSON is printed."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    _legacy("aaa-first", "FIRST")
+    d = store.legacy_dir("mmm-corrupt")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "model.json").write_text("{not valid json", encoding="utf-8")
+    _legacy("zzz-last", "LAST")
+
+    with pytest.raises(SystemExit) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert ei.value.code == EXIT_DEGRADED
+    out = json.loads(capsys.readouterr().out)
+    assert sorted(out["migrated"]) == ["aaa-first", "zzz-last"]
+    assert out["skipped_already_present"] == []
+    assert [e["slug"] for e in out["errors"]] == ["mmm-corrupt"]
+    assert out["errors"][0]["error"]   # the structured message, not just the slug
+    assert _problem("aaa-first", 1) == "FIRST"
+    assert _problem("zzz-last", 1) == "LAST"
+
+
+def test_an_interrupted_migration_is_reported_distinctly_from_already_present(workspace, capsys):
+    """#262. `migrate_legacy` claims the slug via `create_session` and only afterwards, under a
+    separate lock, applies the model -- a crash between the two leaves a revision-0 shell occupying
+    the canonical slug with the legacy model never copied. That must not render as
+    `skipped_already_present`, which means the work is done: it is a different fact, and folding the
+    two together is the false receipt this issue is about. A must-not-fire control sits beside it:
+    `test_the_bulk_migrate_command_skips_a_slug_that_is_already_taken` builds a *genuinely* migrated
+    session (current_revision 1) onto a legacy slug and asserts it stays in `skipped_already_present`
+    -- so this test only proves something if that one still passes too."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    _legacy("half-done", "NEVER-COPIED")
+    # The crash window `migrate_legacy` documents: the slug is claimed but the model was never
+    # applied, so the canonical session sits at revision 0. Empty request text, not an arbitrary one
+    # -- `_legacy` writes no request.md/request.txt, so `migrate_legacy` would have claimed this slug
+    # with request="" (its own fallback), and the interrupted/unrelated discriminator compares
+    # exactly this against the legacy request text. An arbitrary request here would make this fixture
+    # indistinguishable from the *unrelated*-session case the sibling test below covers.
+    SessionService().create_session("", slug="half-done")
+
+    with pytest.raises(SystemExit) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert ei.value.code == EXIT_DEGRADED
+    out = json.loads(capsys.readouterr().out)
+    assert out["migrated"] == []
+    assert out["skipped_already_present"] == []
+    assert out["interrupted"] == ["half-done"]
+    # The legacy model was never copied in -- the canonical session is still empty, current_revision 0.
+    assert SessionService().repo.read_meta("half-done").current_revision == 0
+
+
+def test_a_canonical_session_that_cannot_be_read_is_reported_not_crashed(workspace, capsys):
+    """Found in review of #262 itself. `repo.read_meta(slug)` -- the call that decides
+    `skipped_already_present` vs `interrupted` for an occupied slug -- can itself raise
+    `SessionUnreadableError` when the *canonical* session's own `session.json` is corrupt, and that
+    call sat outside the loop's per-slug isolation: an unreadable canonical session for an occupied
+    legacy slug aborted the whole pass exactly the way an unparseable *legacy* `model.json` did before
+    #262 was filed -- the identical defect, one call away from the one the issue named. Must-fire:
+    every other legacy session in the sweep (sorted before and after the unreadable one) still
+    migrates, and the run exits with a receipt rather than an unhandled `SessionUnreadableError`."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    _legacy("aaa-first", "FIRST")
+    _legacy("broken-canonical", "NEVER-READ")
+    store.canonical_dir("broken-canonical").mkdir(parents=True, exist_ok=True)
+    (store.canonical_dir("broken-canonical") / "session.json").write_text(
+        "{not valid json", encoding="utf-8")
+    _legacy("zzz-last", "LAST")
+
+    with pytest.raises(SystemExit) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert ei.value.code == EXIT_DEGRADED
+    out = json.loads(capsys.readouterr().out)
+    assert sorted(out["migrated"]) == ["aaa-first", "zzz-last"]
+    assert [e["slug"] for e in out["errors"]] == ["broken-canonical"]
+    assert _problem("aaa-first", 1) == "FIRST"
+    assert _problem("zzz-last", 1) == "LAST"
+
+
+def test_an_unrelated_revision_zero_session_at_a_legacy_slug_is_not_called_interrupted(
+        workspace, capsys):
+    """Found in review of #262 itself. `current_revision == 0` alone is not evidence of a crashed
+    migrate -- any ordinary session (`session init`, or discovery not yet through its first turn) can
+    legitimately sit at revision 0, and if its slug happens to coincide with an `out/` legacy
+    directory's, `interrupted`'s own printed remedy ("delete .requivo/sessions/<slug> and re-run")
+    would destroy that session's real, unrelated work. The discriminator is the request hash:
+    `create_session` stamps `request_hash` from the exact request text it is passed, so a genuine
+    crash window (where `migrate_legacy` claimed the slug with the *legacy* request text) leaves that
+    hash identical to the legacy request's -- and an unrelated session, created with its own request,
+    does not match. Must-not-fire: the same slug, occupied by a session with a different request,
+    stays `skipped_already_present`, never `interrupted`."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    d = store.legacy_dir("shared-slug")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "request.md").write_text("The legacy request text.", encoding="utf-8")
+    (d / "model.json").write_text(json.dumps(
+        _full_model(**{"problem": _slot(10, "inferred", "low", "LEGACY")})))
+
+    SessionService().create_session("A completely different, unrelated request.", slug="shared-slug")
+
+    _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    out = json.loads(capsys.readouterr().out)
+    assert out["interrupted"] == []
+    assert out["skipped_already_present"] == ["shared-slug"]
 
 
 # ── #5: filename is a write target, so it is validated like its slug sibling ─────
@@ -955,6 +1071,42 @@ def test_invalid_slug_is_rejected_before_touching_the_filesystem():
         with pytest.raises(InvalidSlugError):
             canonical_dir(bad)
     assert validate_slug("leave-approval") == "leave-approval"   # the shape derive_slug() always emits
+
+
+def test_reserved_windows_device_names_are_refused_as_slugs():
+    # #221: con/nul/aux/prn/com1-9/lpt1-9 cannot be created as files or directories on Windows,
+    # case-insensitively, whether bare or with an extension. A session slugged 'con' is legal on
+    # macOS/Linux, exports fine, and cannot be materialized by `session import` on Windows -- a
+    # portability hole the session format's own promise never mentions. Refused on every platform
+    # (the check is platform-independent by design, invariant 17) so an archive created on POSIX
+    # cannot be created and then found unopenable elsewhere.
+    from requivo.core.errors import InvalidSlugError
+    from requivo.core.persistence import validate_slug
+    reserved = ("con", "prn", "aux", "nul",
+                "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+                "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9")
+    for name in reserved:
+        with pytest.raises(InvalidSlugError):
+            validate_slug(name)
+        with pytest.raises(InvalidSlugError):
+            validate_slug(name.upper())
+    # Must-not-fire control: names that merely resemble the reserved set stay valid.
+    for ok in ("console", "com0", "lpt", "con-approval", "prnter"):
+        assert validate_slug(ok) == ok
+
+
+def test_reserved_windows_device_names_are_refused_as_filename_stems():
+    # validate_filename checks the stem before the first dot, so `con.md` and `con.tar.gz` are
+    # equally reserved -- Windows refuses `CreateFile` on the device name regardless of extension.
+    from requivo.core.errors import InvalidFilenameError
+    from requivo.core.persistence import validate_filename
+    for bad in ("con.md", "CON.MD", "nul.txt", "lpt1.json", "com9.tar.gz"):
+        with pytest.raises(InvalidFilenameError):
+            validate_filename(bad)
+    # Must-not-fire control: an ordinary artifact filename, and one that merely starts with the
+    # reserved word as a substring rather than the whole stem, stay valid.
+    for ok in ("prd.md", "console.md", "config.md"):
+        assert validate_filename(ok) == ok
 
 
 def test_load_model_rejects_invalid_model(tmp_path):

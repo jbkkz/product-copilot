@@ -260,7 +260,8 @@ _PAYLOAD_SHAPES: dict[str, tuple[_Case, ...]] = {
     ),
     "session migrate": (
         _Case("session migrate --json", ("session", "migrate", "--json"),
-              {"migrated": "list", "skipped_already_present": "list", "source": "str"}),
+              {"migrated": "list", "skipped_already_present": "list", "interrupted": "list",
+               "errors": "list", "source": "str"}),
     ),
 }
 

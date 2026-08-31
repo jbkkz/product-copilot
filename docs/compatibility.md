@@ -97,6 +97,18 @@ Slot ids are a separate contract with its own `schema_version`, recorded on ever
 clarity as a newer `format_version`, instead of failing later as an `unknown_slot` error naming a slot
 the user never typed. An older `schema_version` keeps loading.
 
+**Another deliberate narrowing, for the same reason as the artifact-type one above: tolerating a name
+widened a door that portability needed shut.** Since #221, `validate_slug` and `validate_filename`
+refuse a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`,
+case-insensitively — the filename check on the stem before the first dot), on every platform. This is
+**breaking**: a slug such as `con` was legal before this change and is refused now. It is refused
+everywhere rather than only on Windows on purpose — a session slugged `con` and created on macOS or
+Linux exported fine and then could not be materialized by `session import` on Windows at all, which is
+the portability hole `.requivo/sessions/` is supposed to have closed. An existing session already
+holding one of these names on disk is unaffected — nothing here reads or rewrites `session.json` to
+enforce it — but `validate_slug`/`validate_filename` refuse it on any *new* creation or explicit
+`--slug` from this version on.
+
 ## The `--json` outputs are public
 
 **Every `--json` output is public — all fifteen of them, and the structured error envelope
@@ -424,6 +436,17 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
 Adding a code is not a breaking change under this policy, but *moving a condition to a new code* is,
 so both are noted here and in the changelog rather than only in the latter.
 
+- **`session migrate --json` gained `interrupted` and `errors`** (#262). Additive: `migrated` and
+  `skipped_already_present` keep exactly the meaning they had. `skipped_already_present` did carry an
+  ambiguity worth stating plainly, though not a payload-shape one — an occupied slug at
+  `current_revision` 0 (a previous migrate that claimed the slug and crashed before applying the
+  model) used to be indistinguishable in that list from a genuinely completed migration; it now
+  reports separately, under `interrupted`, naming the recovery step. A legacy session whose
+  `model.json` will not parse used to abort the whole command with no JSON printed at all; it is now
+  named under `errors` and every other legacy session still migrates. The command's exit code is `4`
+  (`EXIT_DEGRADED`, the same code `session list` and `session verify` already use) when either of the
+  two new lists is non-empty, where it was always `0` before.
+
 ### HTTP statuses in Requivo Web
 
 The Web maps each code to a status, and **every code has an explicit mapping** — the table used to
@@ -535,6 +558,7 @@ is structurally or semantically invalid"*, and answering 400. None of them is ab
 | Condition | Was | Now | Status |
 |---|---|---|---|
 | the archive contains no files | `invalid_model` | `invalid_archive` (`problem: empty`) | 400 |
+| more entries (files and directories together) than `MAX_ARCHIVE_ENTRIES` | never checked | `invalid_archive` (`problem: too_many_entries`) | 400 |
 | more files than `MAX_ARCHIVE_FILES` | `invalid_model` | `invalid_archive` (`problem: too_many_files`) | 400 |
 | expands past `MAX_ARCHIVE_BYTES` | `invalid_model` | `invalid_archive` (`problem: too_large`) | 400 |
 | an entry with a Windows separator | `invalid_model` | `invalid_archive` (`problem: unsafe_entry`) | 400 |
@@ -543,17 +567,28 @@ is structurally or semantically invalid"*, and answering 400. None of them is ab
 | more than one session directory | `invalid_model` | `invalid_archive` (`problem: multiple_sessions`) | 400 |
 | the slug is taken and `--force` was not passed | `invalid_model` | `session_exists` | **400 → 409** |
 
-**One code for the seven, and what that code owes.** They share a remedy — *give me a different
+**`too_many_entries` is the eighth arm, added by #219 rather than by #101, and it is additive under
+the same rule as every other `--json` field this page tracks.** The seven above only ever counted
+*files* — `MAX_ARCHIVE_FILES` and `MAX_ARCHIVE_BYTES` are both computed over `z.infolist()` with
+directory entries filtered out — so an archive built entirely of directory entries had zero files and
+~zero declared bytes and sailed past both caps while the extraction loop still created every one of
+them. `too_many_entries` bounds `len(z.infolist())` itself, files and directories together, before
+either of the file-only caps runs. A real `session export` never writes a directory entry at all (it
+walks real files only), so this bound is loose for the legitimate case and exists purely to close the
+directory-only path.
+
+**One code for the eight now, and what that code owes.** They share a remedy — *give me a different
 archive* — and the rule stated in the section above refuses a candidate code that sends a reader where
 an existing one already sends them. What a single code owes in exchange is exactly the thing #82 was
 about: `details["problem"]` is present on **every** `invalid_archive` arm, with a closed vocabulary —
-`empty`, `too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory`,
-`multiple_sessions`. Each arm then adds only the numbers its own sentence quotes (`{files, max_files}`,
-`{bytes, max_bytes}`, `{entry}`, `{slugs}`). Seven conditions under one code with varying keys would
-have rebuilt the `KeyError` that #82 removed.
+`empty`, `too_many_entries`, `too_many_files`, `too_large`, `unsafe_entry`,
+`entry_outside_session_directory`, `multiple_sessions`. Each arm then adds only the numbers its own
+sentence quotes (`{entries, max_entries}`, `{files, max_files}`, `{bytes, max_bytes}`, `{entry}`,
+`{slugs}`). Eight conditions under one code with varying keys would have rebuilt the `KeyError` that
+#82 removed.
 
 **Only one status moves.** `session_exists` was already in the vocabulary, already 409, already
-documented for exactly this fact — *"a session already occupies that slug"*. The seven archive arms
+documented for exactly this fact — *"a session already occupies that slug"*. The eight archive arms
 stay 400, because the caller did hand us the archive.
 
 **One behavioural note, not a code change.** In `create_session` and `migrate_legacy`,

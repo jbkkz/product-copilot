@@ -343,12 +343,13 @@ model. Assert on the code, never on the message.
 | `session_exists` | 409 | is fine; that slug is taken and `--force` was not passed. `details`: `{slug}` |
 | `import_destination_occupied` | 409 | is fine; something that is **not** a session already sits at the slug's directory. `details`: `{slug, path}` |
 
-`invalid_archive` covers seven conditions under one code because they share one remedy — *give me a
-different archive*. `details["problem"]` is present on all seven and says which: `empty`,
-`too_many_files`, `too_large`, `unsafe_entry`, `entry_outside_session_directory` or
-`multiple_sessions`. The size and count arms add the numbers they quote (`{files, max_files}`,
-`{bytes, max_bytes}`), the path arms add `{entry}` and the multi-session arm adds `{slugs}`; nothing
-is padded to a common shape, so read the shape after you have branched on `problem`.
+`invalid_archive` covers eight conditions under one code because they share one remedy — *give me a
+different archive*. `details["problem"]` is present on all eight and says which: `empty`,
+`too_many_entries`, `too_many_files`, `too_large`, `unsafe_entry`,
+`entry_outside_session_directory` or `multiple_sessions`. The size and count arms add the numbers
+they quote (`{entries, max_entries}`, `{files, max_files}`, `{bytes, max_bytes}`), the path arms add
+`{entry}` and the multi-session arm adds `{slugs}`; nothing is padded to a common shape, so read the
+shape after you have branched on `problem`.
 
 The first three are arms of `InvalidSessionError`, so `except InvalidSessionError` catches every
 *archive* refusal without enumerating them.
@@ -386,6 +387,18 @@ requivo session migrate        # convert every out/<slug>/ session into .requivo
 It copies rather than moves — the originals stay where they are — and the converted model becomes
 revision 1, with its artifacts recorded against it. A session still only in `out/` is reported as
 missing with that command named in the error, rather than silently working at half capability.
+
+**The receipt has four rows, not two, since #262.** A legacy session whose `model.json` will not
+parse no longer aborts the whole pass — it is named under `errors` with its own message, and every
+other legacy session still migrates. And a canonical session already occupying a legacy slug is
+split into two different facts rather than one: `skipped_already_present` means the migration is
+genuinely done (the session is at revision 1 or later); `interrupted` means a previous run claimed
+the slug and crashed before the model was copied in, so the session sits empty at revision 0 and the
+legacy data was never migrated. The remedy for `interrupted` is in the message itself — delete
+`.requivo/sessions/<slug>` and re-run. The command exits `4` (the same code `session list` and
+`session verify` use for "the work was done and part of the answer was unreachable") whenever
+`errors` or `interrupted` is non-empty, so a script reading only the exit code still learns the run
+was not a clean success.
 
 ## Design notes
 
