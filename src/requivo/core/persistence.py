@@ -849,11 +849,20 @@ def artifact_path(slug: str, filename: str) -> Path:
     external consumer holding the services over a repository that is not this file backing, where
     `save_artifact` hands back whatever its store held. **`session import` is not that door, and
     saying so is the point.** The invariant's argument is written about `context_cards`, which import
-    deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` pins every
-    recorded filename to its `ARTIFACT_FILENAMES` value and to containment, and `session import`
-    refuses the whole archive when either fails — reproduced, both for a traversal and for a merely
-    wrong name. Read as covering both fields, this would claim a vector that is shut and quietly drop
-    the one that is open.
+    deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` puts every
+    recorded filename through `validate_filename` and `is_contained`, and `session import` refuses
+    the whole archive when either fails — reproduced, both for a traversal and for a merely wrong
+    name. Read as covering both fields, this would claim a vector that is shut and quietly drop the
+    one that is open.
+
+    **Since #260 that is the whole of what a filename is pinned to when the artifact *type* is one
+    this build does not know**, because there is then no `ARTIFACT_FILENAMES` value to pin it against
+    — an unknown type is a note rather than a refusal, so `session import` accepts the entry. This
+    paragraph said "pins every recorded filename to its `ARTIFACT_FILENAMES` value" and would have
+    read as a stronger claim than the code makes. The claim that matters is unchanged and is the one
+    stated above: the name is a bare file inside `artifacts/` or the archive is refused, whether or
+    not anything here recognises the type it is filed under. `artifact_filename_mismatch` still
+    refuses a *known* type stored under the wrong name.
 
     Coming through here also means such a name cannot forge a line in the terminal it is printed to:
     `_FILENAME_RE` is anchored at end-of-string and admits no line break (#40).

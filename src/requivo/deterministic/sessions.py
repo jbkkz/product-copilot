@@ -46,7 +46,7 @@ from requivo.core.errors import (
     SessionUnreadableError,
     UnreadableArchiveError,
 )
-from requivo.core.integrity import check_session, check_session_dir
+from requivo.core.integrity import SEVERITY_NOTE, blocking, check_session_dir, inspect_session
 from requivo.core.persistence import ensure_store_dir
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _print_json, _read_source, _resolve_cards
@@ -440,6 +440,14 @@ def _cmd_session_verify(a, client) -> None:
     cards could not be read exits 1. A script gating on *is this usable* wants the definite answer,
     and there is one. Nothing is withheld at either code: `--json` carries the whole story either
     way, and `ok` keeps the meaning it always had — it is false in all three failing states.
+
+    **A fourth thing is reported and is none of the three** (#260): a `note` is a finding that is not
+    a defect, and today the only one is an artifact type this build has no generator for. It prints,
+    it rides in `--json` under `notes`, and it changes neither `ok` nor the exit code — because
+    `docs/compatibility.md` lists a new artifact type among the changes that need no `format_version`
+    bump, and a verb that answered "broken" there would be measuring a session written by a newer
+    Requivo against a rule that version no longer follows. `problems` keeps its meaning exactly, so a
+    consumer gating on it is unaffected.
     """
     svc = SessionService()
     slug = svc.resolve_slug(a.session)
@@ -458,7 +466,9 @@ def _cmd_session_verify(a, client) -> None:
     else:
         if not found:
             raise svc.no_session(slug)
-    problems = check_session(slug) if session_probe["checked"] else []
+    findings = inspect_session(slug) if session_probe["checked"] else []
+    problems = blocking(findings)
+    notes = [f for f in findings if f.severity == SEVERITY_NOTE]
     cards = _card_health(slug) if session_probe["checked"] else {"checked": False, "problem": None,
                                                                  "error": session_probe["error"]}
     unsound = bool(problems) or cards["problem"] is not None
@@ -474,9 +484,12 @@ def _cmd_session_verify(a, client) -> None:
         # `session` is additive and always present (#97). It is a sibling of `context_cards` and
         # carries the same two keys for the same reason: a consumer reading `problems: []` has to be
         # able to tell *checked, nothing wrong* from *nothing was checked*, and an empty list spells
-        # both. Branch on `session.checked`, never on the emptiness of `problems`.
+        # both. Branch on `session.checked`, never on the emptiness of `problems` — or, since #260,
+        # of `notes`, which is empty in that arm for exactly the same reason and says exactly as
+        # little.
         _print_json({"slug": slug, "ok": ok, "session": session_probe,
-                     "problems": [p.to_dict() for p in problems], "context_cards": cards})
+                     "problems": [p.to_dict() for p in problems],
+                     "notes": [n.to_dict() for n in notes], "context_cards": cards})
         if exit_code:
             raise SystemExit(exit_code)
         return
@@ -490,6 +503,13 @@ def _cmd_session_verify(a, client) -> None:
         print(f"❌ Session '{slug}' has {len(problems)} problem(s):")
         for p in problems:
             print(f"  · [{p.code}] {p.message}")
+    if notes:
+        # Printed under the tick rather than instead of it: the session *is* consistent, and this is
+        # a fact about it worth naming (#260). Not a glyph of its own — ✅/❌/🟡 already spell the
+        # three answers this verb gives, and a fourth would read as a fourth verdict.
+        print(f"  Also worth knowing about '{slug}':")
+        for n in notes:
+            print(f"  · [{n.code}] {n.message}")
     if cards["problem"]:
         code = cards["problem"]["code"]
         restorable = code in _RESTORABLE_CARD_CODES
@@ -723,7 +743,14 @@ def _validate_extracted(d: Path, slug: str) -> None:
     a model.json — which is shape, not truth. An archive announcing revision 2 with no `revisions/` at
     all passed, and so did one whose model.json had been swapped for a different model: nothing is
     malformed in either, only the relationships are broken. `check_session_dir` is the same check
-    `requivo session verify` runs, so an archive is held to exactly the standard a live session is."""
+    `requivo session verify` runs, so an archive is held to exactly the standard a live session is.
+
+    **Exactly the same standard, and deliberately not the same output** (#260). `session verify`
+    calls `inspect_session` and gates on `blocking(...)`; this calls `check_session_dir`, which *is*
+    that gate. What verify has and this does not is the `notes` half — an artifact type this build
+    has no generator for, which is a fact about the session rather than a reason to refuse it, so it
+    has nothing to say on a path whose only question is accept or reject. If that ever becomes worth
+    surfacing at import, it belongs in the success message, not in this refusal."""
     problems = check_session_dir(d, expected_slug=slug)
     if problems:
         raise InconsistentArchiveError(

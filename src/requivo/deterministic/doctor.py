@@ -26,7 +26,7 @@ import platform
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, check_selection
 from requivo.core.errors import InvalidModelError
-from requivo.core.integrity import IntegrityProblem, check_session
+from requivo.core.integrity import SEVERITY_NOTE, IntegrityProblem, blocking, inspect_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
 from requivo.paths import ASSETS, CONTEXT, lock_root, session_root, user_context_dir, workspace_root
@@ -201,9 +201,17 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       byte-identically to a genuinely empty workspace, and a user reads that as "my sessions were
       deleted". When we could not look, `total` is `None`, because `0` is a claim about the
       workspace and we do not have one.
-    - `inconsistent` — {slug: [integrity codes]}, from `check_session`. A slug whose own files
+    - `inconsistent` — {slug: [integrity codes]}, the blocking half of `inspect_session` (which is
+      what `check_session` returns, so this key means exactly what it meant). A slug whose own files
       cannot be read gets the `unreadable` code the inner loop already synthesised, now as a real
       `IntegrityProblem` rather than an ad-hoc stand-in class.
+    - `notes` — {slug: [integrity codes]} for findings that are *not* defects (#260). Today the only
+      member is an artifact type this build has no generator for, which `docs/compatibility.md` says
+      may appear without a `format_version` bump. Kept out of `inconsistent` because that key drives
+      the ❌ on the sessions row, and a session written by a newer Requivo is not broken; kept in the
+      report because a type nobody can see is a type nobody upgrades for. A separate key rather than
+      a severity inside `inconsistent`: a consumer reading `inconsistent` to mean *these are broken*
+      predates this and must keep being right.
     - `unresolved_cards` — {slug: error envelope} for a session whose persisted card selection no
       longer loads (see `_card_health` for why that is not an integrity code). `cards_checked` is
       false when the card layer itself was unreadable — then nobody looked, and an empty map here
@@ -225,6 +233,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       and also, on the surface a user actually runs, fatal.
     """
     inconsistent: dict[str, list[str]] = {}
+    noted: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
     try:
         # One listing for all three parts. Calling `list_session_slugs`, `list_non_session_entries`
@@ -241,14 +250,15 @@ def _session_health(*, cards_readable: bool = True) -> dict:
         unexaminable = [e.to_dict() for e in blind]
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
-                "inconsistent": {}, "unresolved_cards": {}, "cards_checked": False,
+                "inconsistent": {}, "notes": {}, "unresolved_cards": {}, "cards_checked": False,
                 "non_sessions": None, "unexaminable": None}
     for slug in slugs:
         try:
-            problems = check_session(slug)
+            findings = inspect_session(slug)
         except Exception as e:  # noqa: BLE001
-            problems = [IntegrityProblem("unreadable", str(e))]
-        codes = [p.code for p in problems]
+            findings = [IntegrityProblem("unreadable", str(e))]
+        codes = [p.code for p in blocking(findings)]
+        note_codes = [f.code for f in findings if f.severity == SEVERITY_NOTE]
         if cards_readable:
             health = _card_health(slug)
             if not health["checked"] and "unreadable" not in codes:
@@ -257,8 +267,10 @@ def _session_health(*, cards_readable: bool = True) -> dict:
                 unresolved[slug] = health["problem"]
         if codes:
             inconsistent[slug] = codes
+        if note_codes:
+            noted[slug] = note_codes
     return {"total": len(slugs), "readable": True, "error": None,
-            "inconsistent": inconsistent, "unresolved_cards": unresolved,
+            "inconsistent": inconsistent, "notes": noted, "unresolved_cards": unresolved,
             "cards_checked": cards_readable, "non_sessions": non_sessions,
             "unexaminable": unexaminable}
 
@@ -430,15 +442,20 @@ def _cmd_doctor(a, client) -> None:
         print(f"     └─ {r['workspace']['sessions']} could not be listed. This is not the same "
               "thing as having no sessions.")
         return
-    bad, lost = h["inconsistent"], h["unresolved_cards"]
+    bad, lost, noted = h["inconsistent"], h["unresolved_cards"], h["notes"]
     # Only worth saying when there are sessions at all. Since #33 a session with no card selection is
     # *not* exempt: `check_selection(None)` reads the card directory now, because an install with no
     # cards refuses every load, `only=None` included — so "every card" is a selection that can fail
     # like any other.
     unchecked = not h["cards_checked"] and bool(h["total"])
     blind = h["unexaminable"] or []
-    notes = ([f"{len(bad)} inconsistent"] if bad else []) \
+    # `tallies`, not `notes`: since #260 `notes` is a *key of this report* — the non-defect findings —
+    # and binding the same word to the summary fragments would shadow it in the one function that
+    # prints both. `_cmd_session_verify` shipped exactly that collision once, on `code`, and it
+    # reached a user as a stray line where an exit code should have been.
+    tallies = ([f"{len(bad)} inconsistent"] if bad else []) \
         + ([f"{len(lost)} with product context that no longer loads"] if lost else []) \
+        + ([f"{len(noted)} with a note"] if noted else []) \
         + (["product context not checked"] if unchecked else []) \
         + ([f"{len(blind)} entr{'y' if len(blind) == 1 else 'ies'} that could not be examined"]
            if blind else [])
@@ -449,9 +466,12 @@ def _cmd_doctor(a, client) -> None:
     # card layer rather than the failure glyph: nothing here is known to be broken, and spelling
     # "we could not tell" the same way as "this is wrong" is the merge the third state exists to
     # prevent. It must not be the clean tick either, which was the whole finding.
+    # `noted` is deliberately absent from this expression (#260): a note is not a defect and not a
+    # *could not look*, so it moves no glyph. It is counted in `tallies` and named in a row below,
+    # which is what keeps it from being silently dropped.
     glyph = "❌" if (bad or lost) else (warn if (unchecked or blind) else ok)
     print(f"  {glyph} sessions        {h['total']} in this workspace"
-          + (f" · {' · '.join(notes)}" if notes else ""))
+          + (f" · {' · '.join(tallies)}" if tallies else ""))
     # `display_token` on every slug, for the reason `_print_unexaminable` states two functions down
     # and this loop did not: the name is a raw directory entry. `_scan_session_root` puts it in the
     # *sessions* bucket on `(p/"session.json").exists()` alone, and the `except Exception` above turns
@@ -469,6 +489,13 @@ def _cmd_doctor(a, client) -> None:
         print(f"     └─ {safe}: {', '.join(codes)} — run `requivo session verify {safe}`")
     for slug, problem in lost.items():
         print(f"     └─ {display_token(slug)}: {problem['message']}")
+    # A row of its own, and `session verify` rather than a repair: the codes here name something the
+    # session is *entitled* to have (#260), so there is nothing to fix and the remedy — if there is
+    # one — is upgrading this install, which only the full message says.
+    for slug, note_codes in noted.items():
+        safe = display_token(slug)
+        print(f"     └─ {safe}: {', '.join(note_codes)} — not a defect; "
+              f"`requivo session verify {safe}` says what it is")
     # One hint per remedy actually present, rather than one hint for whichever remedy came first.
     codes = {p["code"] for p in lost.values()}
     if codes & _RESTORABLE_CARD_CODES:

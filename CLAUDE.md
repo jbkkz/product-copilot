@@ -218,6 +218,21 @@ bug that looked like correct behaviour.
    And a permissive read is only half: **whatever writes one must preserve what it could not name.**
    Reading alone left `resolve()` dropping the key on the next turn — the visible refusal traded for
    a silent loss, which is the worse of the two. See invariant 10.
+
+   **The same rule reaches past fields, and the second place it bit was an artifact *type*** (#260).
+   This page lists "a new artifact type" among the changes needing no bump, and `check_session_dir`
+   made an `artifact_status` key it had no generator for an integrity *problem* — so `session verify`
+   exited non-zero, `doctor` called the session inconsistent and `session import` refused a
+   colleague's archive, over a session `read_meta` opened without complaint. Identical shape to the
+   `model.json` case above, one file along, and it would have fired on the first new generator ever
+   shipped. Such a type is a **note** now: reported, blocking nothing.
+   `test_an_artifact_type_from_a_newer_requivo_is_not_reported_as_a_defect` is the guard.
+   The generalisation worth carrying: **a diagnostic must be at least as permissive as the loader**,
+   about every vocabulary the format lets a later version extend, not only about keys.
+   Tolerating is still not trusting (invariant 14) — the type has to *look* like one
+   (`_ARTIFACT_TYPE_RE`, `MAX_ARTIFACT_TYPE_LENGTH`) or it is refused as `unsafe_artifact_type`,
+   because accepting an unknown key is accepting what `session import` used to hold shut, and every
+   other check on that entry still runs.
 9. **A precondition is held across the writes it authorises.** `save_revision` checks
    `expected_revision` and then writes more than once; without `session_lock` around both, two writers
    pass the same check and the second overwrites the first — the check reads as protection while

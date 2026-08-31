@@ -142,6 +142,7 @@ at all.
 | `context_cards` | The card names themselves — the plain list it has always been |
 | `sessions.readable` / `sessions.total` / `sessions.error` | Whether the session directory could be listed at all. When it could not, `total` is `null` rather than `0`, because *no sessions* and *we could not look* are different answers and a user told the first concludes their sessions were deleted |
 | `sessions.inconsistent` | `{slug: [integrity codes]}` — run `session verify <slug>` on each |
+| `sessions.notes` | `{slug: [integrity codes]}` for findings that are **not** defects (#260) — today, an artifact type this build has no generator for, which [compatibility.md](compatibility.md) permits without a `format_version` bump. Reported so a type nobody can see is not a type nobody upgrades for; kept out of `inconsistent` so it moves neither the glyph nor any consumer's verdict |
 | `sessions.unresolved_cards` | `{slug: error}` for a session whose saved context cards no longer resolve here |
 | `sessions.cards_checked` | False when the card directory itself was unreadable, so `unresolved_cards` being empty means nothing |
 | `sessions.non_sessions` | What is under the session root and is **not** a session — see [Something here that is not a session](#something-here-that-is-not-a-session). `null`, not `[]`, when the root could not be listed |

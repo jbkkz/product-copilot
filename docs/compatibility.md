@@ -62,6 +62,29 @@ What may change without a `format_version` bump:
   `prompt_versions` map was removed in 0.9.2).
 - Adding a slot to the schema, a new artifact type, or a new value in a provenance field.
 
+**The artifact-type half of that last line was a promise nothing kept until #260**, and it failed in
+the shape this page warns about hardest. An `artifact_status` key naming a type the reading build has
+no generator for was an *integrity problem*: `session verify` exited non-zero, `doctor` listed the
+session as inconsistent, and `session import` refused a colleague's archive outright — while
+`read_meta` opened the very same file without complaint. The diagnostic disagreeing with the loader
+about one file is the worse of the two answers, and it is the identical defect #14 fixed one field
+along for `model.json`. It would have bitten on the first new generator ever shipped, on every
+session that generator had touched.
+
+Such a type is now a **note** rather than a problem: named in `session verify` (`--json` carries it
+under `notes`, a sibling of `problems`) and in `doctor` (`sessions.notes`), counted towards neither
+`ok` nor the exit code, and accepted by `session import`. Nothing else about the entry is relaxed —
+the recorded filename still goes through the bare-filename guard and the containment check, the file
+still has to be there, and the revision it claims still has to exist.
+
+**One deliberate narrowing, because tolerating widened a door that used to be shut.** Before this,
+an archive carrying arbitrary `artifact_status` keys was refused; now a tolerated key is one this
+build stores and prints for as long as the session lives. So the key has to *look* like an artifact
+type — a plain lowercase name such as `risk-register`, at most 64 characters, the same shape every
+key in `ARTIFACT_FILENAMES` already has. One that does not is refused as `unsafe_artifact_type`, a
+code of its own so a consumer can tell *a type from the future* from *junk or a forgery*. A real
+future generator is unaffected; nothing Requivo has ever written is.
+
 What requires a `format_version` bump, an entry in the changelog, and a migration in
 `migrate_session()`:
 
