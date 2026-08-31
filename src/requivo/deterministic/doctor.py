@@ -25,7 +25,7 @@ import platform
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, check_selection
-from requivo.core.errors import InvalidModelError
+from requivo.core.errors import InvalidModelError, SessionLockedError
 from requivo.core.integrity import SEVERITY_NOTE, IntegrityProblem, blocking, inspect_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
@@ -216,6 +216,14 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       longer loads (see `_card_health` for why that is not an integrity code). `cards_checked` is
       false when the card layer itself was unreadable — then nobody looked, and an empty map here
       means nothing at all.
+    - `locked` — {slug: error message} for a session `inspect_session` could not even take the lock
+      on within the deadline (#263, #265). This is deliberately **not** folded into `inconsistent`:
+      that key drives the ❌ glyph, and a lock this call could not take says nothing about whether
+      the session is sound — it is the identical accusation shape invariant 17 exists to prevent,
+      aimed at a session that is merely mid-write. It gets its own bucket and its own (warning)
+      glyph, on the same "could not look, not the same as broken" terms as `unexaminable` below.
+      Cards are not checked for a locked slug either, for the same reason `session verify` skips
+      them when its own probe could not run: nothing here was established well enough to build on.
     - `non_sessions` — what is under the session root and is *not* a session: the name, what kind of
       thing it is and what it holds, from `list_non_session_entries`. Nothing could see one of these
       at all (#67), and the symptom is not in this report — it is the next `create_session` on that
@@ -235,6 +243,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     inconsistent: dict[str, list[str]] = {}
     noted: dict[str, list[str]] = {}
     unresolved: dict[str, dict] = {}
+    locked: dict[str, str] = {}
     try:
         # One listing for all three parts. Calling `list_session_slugs`, `list_non_session_entries`
         # and `list_unexaminable_entries` separately reads the directory at three instants, and a
@@ -251,10 +260,20 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     except Exception as e:  # noqa: BLE001 - doctor reports, it does not fail — but it must say what it hit
         return {"total": None, "readable": False, "error": str(e),
                 "inconsistent": {}, "notes": {}, "unresolved_cards": {}, "cards_checked": False,
-                "non_sessions": None, "unexaminable": None}
+                "non_sessions": None, "unexaminable": None, "locked": {}}
     for slug in slugs:
         try:
             findings = inspect_session(slug)
+        except SessionLockedError as e:
+            # No measurement, not a defect (#263, #265): reviewed and corrected before this landed
+            # (a first draft folded this into `inconsistent` under its own code, which still drove
+            # the ❌ glyph and directly contradicted this comment). A lock this call could not take
+            # within the deadline says nothing about whether the session is sound, so it gets a
+            # bucket of its own rather than the one that means "broken" -- see `locked` above.
+            # `continue`, not a fall-through: cards are not checked either, on the same reasoning
+            # `_cmd_session_verify` already applies when its own probe could not run.
+            locked[slug] = str(e)
+            continue
         except Exception as e:  # noqa: BLE001
             findings = [IntegrityProblem("unreadable", str(e))]
         codes = [p.code for p in blocking(findings)]
@@ -272,7 +291,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     return {"total": len(slugs), "readable": True, "error": None,
             "inconsistent": inconsistent, "notes": noted, "unresolved_cards": unresolved,
             "cards_checked": cards_readable, "non_sessions": non_sessions,
-            "unexaminable": unexaminable}
+            "unexaminable": unexaminable, "locked": locked}
 
 
 def _lock_health() -> dict:
@@ -449,6 +468,7 @@ def _cmd_doctor(a, client) -> None:
     # like any other.
     unchecked = not h["cards_checked"] and bool(h["total"])
     blind = h["unexaminable"] or []
+    locked = h.get("locked") or {}
     # `tallies`, not `notes`: since #260 `notes` is a *key of this report* — the non-defect findings —
     # and binding the same word to the summary fragments would shadow it in the one function that
     # prints both. `_cmd_session_verify` shipped exactly that collision once, on `code`, and it
@@ -458,7 +478,8 @@ def _cmd_doctor(a, client) -> None:
         + ([f"{len(noted)} with a note"] if noted else []) \
         + (["product context not checked"] if unchecked else []) \
         + ([f"{len(blind)} entr{'y' if len(blind) == 1 else 'ies'} that could not be examined"]
-           if blind else [])
+           if blind else []) \
+        + ([f"{len(locked)} locked (could not check)"] if locked else [])
     # Three glyphs for three states, on the line a reader actually scans. Leaving "not checked" to
     # a trailing note put a tick on this line while nobody had looked — the defect this whole change
     # is about, one line further down than where it was filed.
@@ -466,10 +487,13 @@ def _cmd_doctor(a, client) -> None:
     # card layer rather than the failure glyph: nothing here is known to be broken, and spelling
     # "we could not tell" the same way as "this is wrong" is the merge the third state exists to
     # prevent. It must not be the clean tick either, which was the whole finding.
+    # `locked` joins that same middle glyph, for the identical reason (#263, #265): a lock this call
+    # could not take within the deadline is *could not look*, not *this is wrong*, and it must never
+    # earn the ❌ that `bad`/`lost` earn — the exact regression a reviewer caught before this shipped.
     # `noted` is deliberately absent from this expression (#260): a note is not a defect and not a
     # *could not look*, so it moves no glyph. It is counted in `tallies` and named in a row below,
     # which is what keeps it from being silently dropped.
-    glyph = "❌" if (bad or lost) else (warn if (unchecked or blind) else ok)
+    glyph = "❌" if (bad or lost) else (warn if (unchecked or blind or locked) else ok)
     print(f"  {glyph} sessions        {h['total']} in this workspace"
           + (f" · {' · '.join(tallies)}" if tallies else ""))
     # `display_token` on every slug, for the reason `_print_unexaminable` states two functions down
@@ -505,6 +529,11 @@ def _cmd_doctor(a, client) -> None:
     if unchecked:
         print("     └─ the card directory could not be read (see above), so nothing is known about "
               "whether these sessions' product context still loads.")
+    for slug, message in locked.items():
+        print(f"     └─ {display_token(slug)}: could not check — {display_token(message)}")
+    if locked:
+        print("     └─ a lock this call could not take within its deadline. Writes normally hold "
+              "it for milliseconds; retry, or investigate a stuck holder if it persists.")
     _print_unexaminable(blind, h["total"])
     _print_non_sessions(h["non_sessions"])
 

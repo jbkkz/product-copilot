@@ -37,7 +37,13 @@ plugin and the Web app all read and write the same layout.
   temp file is unique per writer, so concurrent writers cannot collide on it.
 - **`locks/<slug>.lock`** is an empty file held with an OS-level lock for the duration of a write. The
   kernel releases it when the process ends, so a crash cannot leave a session permanently locked —
-  there is no stale-lock state to clean up, and no timeout to wait out.
+  there is no stale-lock state to clean up, and no timeout to wait out on a *crashed* holder.
+
+  A **live** holder is a different story, and both platforms now answer it the same way (#265).
+  Acquiring the lock against a holder that is merely slow — or genuinely stuck (a suspended
+  process, a debugger paused on a breakpoint, an NFS-mounted workspace) — waits up to 30 seconds
+  and then raises a clear "locked by another process, retry in a moment" rather than hanging. Every
+  write normally holds this lock for milliseconds, so this bound is never felt in ordinary use.
 
   It sits **beside** `sessions/` rather than inside the session it guards, and that is load-bearing
   rather than tidy. An OS lock is a claim on an *inode*; every writer under it resolves the session
