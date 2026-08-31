@@ -140,6 +140,43 @@ def test_check_reads_the_manifest_end_to_end(monkeypatch):
     assert result.state == BEHIND
 
 
+# -- review findings (self-review, #299/#251/#347): both against the module's own contract ---
+
+
+def test_a_non_version_shaped_manifest_value_is_could_not_look_not_in_step(tmp_path):
+    """Found in self-review. `_parse_version` is deliberately tolerant (a non-numeric TRAILING
+    component parses as 0 rather than raising -- `.dev0`, `-rc1`), and that tolerance used to reach
+    all the way to a manifest `version` that is not a version at all: "unreleased" parsed to `(0,)`,
+    which compared as <= every real CLI version and rendered IN_STEP -- the exact collapse the
+    module's own docstring calls the trap this file exists to avoid. A shape that does not even
+    start with a digit is not "an unusual version", it is an unreadable one."""
+    bad = tmp_path / "plugin.json"
+    bad.write_text(json.dumps({"version": "unreleased"}), encoding="utf-8")
+    result = check(_doctor_json("1.3.0"), None, manifest_path=bad)
+    assert result.state == COULD_NOT_LOOK, (
+        f"a non-version-shaped manifest value must not render as IN_STEP, got state={result.state} "
+        f"message={result.message!r}"
+    )
+
+
+def test_a_non_version_shaped_cli_version_is_could_not_look():
+    """The other side of the same collapse: `requivo_version` itself not being version-shaped."""
+    result = check(_doctor_json("unknown"), None)
+    assert result.state == COULD_NOT_LOOK
+
+
+def test_differing_precision_is_not_reported_as_behind():
+    """Found in self-review. Tuple comparison of different lengths makes a true PREFIX read as
+    smaller: `_parse_version("1.3") == (1, 3)` and `_parse_version("1.3.0") == (1, 3, 0)`, and
+    `(1, 3) < (1, 3, 0)` in Python even though "1.3" and "1.3.0" name the same release. Padding to
+    equal length before comparing is what a semver-aware comparison would do anyway."""
+    result = compare("1.3", "1.3.0")
+    assert result.state == IN_STEP, (
+        f"'1.3' and '1.3.0' should compare equal (differing precision, same release), got "
+        f"state={result.state} message={result.message!r}"
+    )
+
+
 # -- the prose preflight must not duplicate the version as a literal --------------------------
 
 

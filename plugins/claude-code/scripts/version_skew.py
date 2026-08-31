@@ -76,10 +76,27 @@ class SkewResult:
         return f"SkewResult(state={self.state}, message={self.message!r})"
 
 
+# The first component must be a real digit run -- "1", "2026" -- or this is not a version at all
+# ("unreleased", "unknown", "dev"), and treating it as one is exactly the collapse this module's
+# own docstring forbids (found in self-review, see the two tests this fixes in
+# tests/test_plugin_version_skew.py). Everything AFTER the first component stays tolerant of a
+# non-numeric trailing chunk (`.dev0`, `-rc1`), which is a real version parsing as far as it can
+# rather than raising over a suffix nobody asked this advisory check to understand.
+_VERSION_SHAPE_RE = re.compile(r"^\d+")
+
+
+def _looks_like_a_version(value: str) -> bool:
+    return bool(_VERSION_SHAPE_RE.match(value.strip()))
+
+
 def _parse_version(version: str):
     """A dotted version string as a tuple of ints, tolerant of a non-numeric trailing component
     (`.dev0`, `-rc1`) -- which parses as 0 rather than raising, so an unusual version string
-    degrades to 'compare what can be compared' instead of crashing an advisory preflight check."""
+    degrades to 'compare what can be compared' instead of crashing an advisory preflight check.
+
+    Callers must check `_looks_like_a_version` first (`check()` and `tested_against_version` both
+    do): this function alone cannot refuse "unreleased" -- it has no digit anywhere, so every chunk
+    parses to 0 and the result is indistinguishable from a real, very old version."""
     parts = []
     for chunk in re.split(r"[.\-+]", version.strip()):
         match = re.match(r"\d+", chunk)
@@ -102,12 +119,23 @@ def tested_against_version(manifest_path: Path = MANIFEST) -> str:
     version = data.get("version")
     if not isinstance(version, str) or not version.strip():
         raise ValueError(f"{manifest_path} declares no usable `version`")
+    if not _looks_like_a_version(version):
+        raise ValueError(f"{manifest_path} declares a `version` that is not version-shaped: {version!r}")
     return version
 
 
 def compare(cli_version: str, plugin_version: str) -> SkewResult:
-    """The two-number decision, once both are known to be readable strings."""
-    if _parse_version(cli_version) >= _parse_version(plugin_version):
+    """The two-number decision, once both are known to be readable, version-shaped strings.
+
+    Tuples are padded to equal length before comparing -- Python compares tuples lexically, so a
+    true prefix reads as smaller than what it is a prefix of ("1.3" == (1, 3) < (1, 3, 0) ==
+    "1.3.0"), which would report BEHIND for two strings naming the same release (found in
+    self-review; see the two version_skew tests it fixes)."""
+    cli_t, plugin_t = _parse_version(cli_version), _parse_version(plugin_version)
+    width = max(len(cli_t), len(plugin_t))
+    cli_t = cli_t + (0,) * (width - len(cli_t))
+    plugin_t = plugin_t + (0,) * (width - len(plugin_t))
+    if cli_t >= plugin_t:
         return SkewResult(
             IN_STEP,
             f"requivo {cli_version} is at or ahead of {plugin_version}, the version this plugin "
@@ -163,6 +191,13 @@ def check(
             "doctor report carries no `requivo_version` field. This is not evidence the versions "
             "match -- it is unknown.",
         )
+    if not _looks_like_a_version(cli_version):
+        return SkewResult(
+            COULD_NOT_LOOK,
+            f"Could not determine whether this plugin is in step with the installed CLI: the "
+            f"doctor report's `requivo_version` ({cli_version!r}) is not version-shaped. This is "
+            f"not evidence the versions match -- it is unknown.",
+        )
     try:
         plugin_version = tested_against_version(manifest_path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -174,9 +209,15 @@ def check(
     return compare(cli_version, plugin_version)
 
 
-def main(argv=None) -> int:  # pragma: no cover - thin CLI wrapper, exercised manually / in CI
+def main(argv=None) -> int:  # pragma: no cover - thin CLI wrapper, exercised manually only
     """Standalone diagnostic: run `requivo doctor --json` and print the verdict. Not part of any
-    skill's runtime Bash grant -- see the module docstring."""
+    skill's runtime Bash grant -- see the module docstring.
+
+    No CI leg calls this function -- only `check()` and `compare()`, its two callees, are exercised
+    by `tests/test_plugin_version_skew.py`. The `subprocess.run` spawn and its
+    `FileNotFoundError`/`OSError` split are therefore untested by this suite; they are ordinary,
+    narrow exception handling (the standard pair for "the binary is not on PATH" across platforms)
+    but that is an argument from reading the code, not a run of it on any platform."""
     del argv
     doctor_error: Optional[str] = None
     output: Optional[str] = None

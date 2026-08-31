@@ -90,13 +90,42 @@ def test_the_cache_step_precedes_the_install_step():
     )
 
 
+def _without_comments(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#")
+    )
+
+
 def test_a_cache_hit_and_a_cache_miss_are_distinguishable_in_the_log():
     """Second, smaller judgment call from the issue: a leg that silently fell back to a full
-    install and one that restored must not look the same in the run log."""
-    gate = _gate_job()
-    assert "cache-hit" in gate, (
-        "nothing in the gate job reads back cache-hit -- a miss and a restore render identically "
+    install and one that restored must not look the same in the run log.
+
+    Found tautological in self-review: a bare `"cache-hit" in gate` substring check also matches
+    the explanatory COMMENT a few lines above the step that reads it back -- that comment has to
+    say "cache-hit" in prose to explain the step below it, so the assertion passed even against a
+    version of this file where the step's `run:` block no longer read `outputs.cache-hit` at all.
+    Comments are stripped first, and the check is for the FUNCTIONAL reference
+    (`steps.<id>.outputs.cache-hit`), not the bare word, so only an actual readback satisfies it."""
+    gate = _without_comments(_gate_job())
+    assert "steps.cache-claude-cli-npm.outputs.cache-hit" in gate, (
+        "nothing in the gate job's step BODIES (comments excluded) reads back "
+        "steps.cache-claude-cli-npm.outputs.cache-hit -- a miss and a restore render identically "
         "in the log, so a caching regression would never be noticed"
+    )
+
+
+def test_the_cache_hit_guard_fires_when_the_readback_is_removed():
+    """The must-fire half for the test above: strip the functional reference (as if the readback
+    step were reverted to an unconditional echo) while leaving the neighbouring comment -- which
+    still says "cache-hit" in prose -- untouched, and confirm the comment-stripped check still
+    catches it."""
+    gate = _without_comments(_gate_job())
+    reverted = gate.replace(
+        'if [ "${{ steps.cache-claude-cli-npm.outputs.cache-hit }}" = "true" ]; then',
+        'echo "cache status unknown -- not actually read back"',
+    )
+    assert "steps.cache-claude-cli-npm.outputs.cache-hit" not in reverted, (
+        "the fixture did not actually remove the functional reference -- fix the fixture"
     )
 
 
