@@ -694,6 +694,7 @@ def _engine_output_for_dup():
     return EngineOutput.model_validate(_full_model())
 
 
+
 def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_path, monkeypatch):
     """An export reads several files that must agree with each other. Read outside the lock, it can
     combine an old session.json with a new model.json — an archive that is internally inconsistent and
@@ -705,7 +706,21 @@ def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_p
     session. The exclusion stays and is still asserted, for the residue: a session written by an
     older Requivo carries one, and a hand-made archive can carry one too. So the fixture plants it
     rather than waiting for a writer to, which is also the only way this half of the test can still
-    fail."""
+    fail.
+
+    **The lock-wait assertion has two ways to be vacuous, and #293 is both of them.** `held.is_set()`
+    used to be read *after* `t.join(timeout=10)` — but `join()` blocks until the writer thread has
+    finished, and the writer always calls `held.set()` on its way out regardless of whether export
+    ever waited for it, so the read after `join()` is True whether or not the guard fired. Confirmed
+    by monkeypatching `store.session_lock` to a no-op and re-running the original assertion order: it
+    still passed. So the read now happens the instant `session export` returns, before `t.join()` —
+    which can only be True if export's own read blocked on the lock the writer was holding. And the
+    `time.sleep(0.05)` that used to stand in for "the writer has the lock by now" is a scheduling
+    guess with no positive control of its own; a slow runner can let export start before the writer
+    ever acquires, which would make this test measure nothing while still reading green. `acquired`
+    is the control: the writer signals the instant it takes the lock, and export does not start
+    until that signal is observed, so a hang on `acquired.wait` fails loudly instead of the test
+    passing over uncontended code."""
     import time
 
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
@@ -714,21 +729,26 @@ def test_export_excludes_the_lock_file_and_waits_for_the_writer(workspace, tmp_p
     assert not (store.canonical_dir("s") / ".lock").exists()
     (store.canonical_dir("s") / ".lock").touch()               # legacy residue, as an older one left it
 
+    acquired = threading.Event()
     held = threading.Event()
 
     def hold_the_lock():
         with store.session_lock("s"):
+            acquired.set()
             time.sleep(0.4)
             held.set()
 
     t = threading.Thread(target=hold_the_lock)
     t.start()
-    time.sleep(0.05)                                           # let it take the lock first
+    assert acquired.wait(10), "the writer never took the lock — contention was never reached"
     dest = tmp_path / "s.zip"
     _run(["session", "export", "s", "-o", str(dest), "--json"])
+    # Read before join(): join() waits for the writer to finish regardless of whether export waited
+    # for it, so held would read True either way by the time join() returns. Read here, it can only
+    # be set if export's own read blocked until the writer released the lock.
+    assert held.is_set(), "the export read the session while a writer held it"
     t.join(timeout=10)
 
-    assert held.is_set(), "the export read the session while a writer held it"
     with zipfile.ZipFile(dest) as z:
         names = z.namelist()
     assert not [n for n in names if ".lock" in n]
