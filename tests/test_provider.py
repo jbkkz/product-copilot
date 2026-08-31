@@ -230,7 +230,7 @@ def _no_credentials(monkeypatch):
     directory, which is a different thing that happens to also fail.
 
     `raising=False` because `default_credentials` does not exist on the older majors in
-    `anthropic>=0.40.0,<2`: there is no discovery chain there to neutralise, and its absence is the
+    `anthropic>=0.42.0,<2`: there is no discovery chain there to neutralise, and its absence is the
     same isolated state rather than an error.
     """
     _clear_credential_env(monkeypatch)
@@ -312,7 +312,7 @@ def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
 def _sdk_has_credential_chain() -> bool:
     """Whether the installed SDK has the profile/federation discovery chain at all.
 
-    `anthropic>=0.40.0,<2` spans SDKs that resolve two environment variables and SDKs that resolve
+    `anthropic>=0.42.0,<2` spans SDKs that resolve two environment variables and SDKs that resolve
     five sources, and the **Dependency floor** leg installs the former -- which is the point of that
     leg, and why it is the one that caught this.
 
@@ -335,7 +335,7 @@ _NEEDS_CHAIN = pytest.mark.skipif(
     not _sdk_has_credential_chain(),
     reason=(
         "the installed anthropic SDK has no profile/federation discovery chain (the floor of "
-        "`anthropic>=0.40.0,<2` predates it). UNTESTED ON THIS SDK: that a credential resolved from "
+        "`anthropic>=0.42.0,<2` predates it). UNTESTED ON THIS SDK: that a credential resolved from "
         "a source other than ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not false-refused. The legs "
         "on a current SDK do test it."
     ),
@@ -370,7 +370,7 @@ def test_the_resolved_credential_attributes_are_read_through_getattr_defaults():
 
     The names must be *real* -- an SDK that renamed `credentials` would make every install read as
     credential-free, which is a refusal nobody can argue with. And they must be read through a
-    default, because the supported range is `anthropic>=0.40.0,<2` and the older majors have no
+    default, because the supported range is `anthropic>=0.42.0,<2` and the older majors have no
     `credentials` attribute at all; a bare `client.credentials` would turn the whole provider into an
     `AttributeError` on the floor this repository tests against.
     """
@@ -379,7 +379,7 @@ def test_the_resolved_credential_attributes_are_read_through_getattr_defaults():
     from requivo.providers.anthropic.client import _CREDENTIAL_ATTRS
 
     client = sdk.Anthropic(api_key="sk-ant-whatever")
-    # `api_key` and `auth_token` exist on every major in `anthropic>=0.40.0,<2`; `credentials` is the
+    # `api_key` and `auth_token` exist on every major in `anthropic>=0.42.0,<2`; `credentials` is the
     # one that does not, so it is checked only where the chain that populates it exists. Asserting it
     # unconditionally is what went red on the Dependency floor leg -- a test contradicting the
     # `getattr` default it was written to justify.
@@ -812,7 +812,117 @@ def test_cost_estimate_bills_a_write_premium_and_plain_input_differently():
 
 
 def test_current_model_name_reads_env_override(monkeypatch):
+    monkeypatch.delenv("REQUIVO_MODEL", raising=False)
     monkeypatch.delenv("MODEL", raising=False)
     assert current_model_name() == "claude-sonnet-5"
+
+
+def test_current_model_name_prefers_requivo_model_over_the_default(monkeypatch):
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    assert current_model_name() == "claude-opus-4-8"
+
+
+def test_current_model_name_falls_back_to_bare_model(monkeypatch):
+    # #268: the bare MODEL name predates REQUIVO_MODEL and existing setups must keep working --
+    # it is read only when REQUIVO_MODEL is unset.
+    monkeypatch.delenv("REQUIVO_MODEL", raising=False)
     monkeypatch.setenv("MODEL", "claude-opus-4-8")
     assert current_model_name() == "claude-opus-4-8"
+
+
+def test_current_model_name_prefers_requivo_model_when_both_are_set(monkeypatch):
+    # The precedence case #268 exists to pin: a shell that already exports a generic MODEL for some
+    # other tool must not silently steer Requivo once REQUIVO_MODEL is set alongside it.
+    monkeypatch.setenv("MODEL", "some-other-tools-model")
+    monkeypatch.setenv("REQUIVO_MODEL", "claude-opus-4-8")
+    assert current_model_name() == "claude-opus-4-8"
+
+
+# ── #283: the malformed reply survives retry give-up ─────────────────────────
+# `_complete`'s give-up exit used to discard the raw reply along with the retry loop's local state.
+# The final reply that never validated is now written to `.requivo/debug/` and named in the raised
+# error, so a bug report has something to attach and the maintainer can tell a prompt regression from
+# a model-side change. Successful calls and transport-level failures write nothing -- there is no
+# malformed reply to save on either path, which the two negative tests below assert with a positive
+# control each (the give-up test itself), so a broken harness that writes nothing on *every* path
+# cannot pass all three silently.
+
+
+class _RaisingTransportClient:
+    """Raises the SDK's own transport error before any reply exists — the `except APIError` exit,
+    which has no raw text to save."""
+
+    def __init__(self):
+        self.messages = self
+
+    def create(self, **kwargs):
+        raise anthropic.APIConnectionError(
+            message="boom", request=httpx.Request("POST", "https://api.anthropic.com"))
+
+
+def test_a_retry_give_up_saves_the_final_raw_reply_and_names_it_in_the_error(tmp_path, monkeypatch):
+    """The positive control: drive `_complete` all the way to give-up and check the file it leaves
+    behind, not just that an error was raised."""
+    from requivo.core.errors import ProviderOutputError
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    bad_reply = '{"not": "an engine output"}'
+    fake = FakeClient(bad_reply, bad_reply, bad_reply)  # every retry attempt, never conforms
+    with pytest.raises(ProviderOutputError) as exc:
+        run(fake, [{"role": "user", "content": "leave approval"}])
+
+    saved = list((tmp_path / ".requivo" / "debug").glob("*.txt"))
+    assert len(saved) == 1, "the give-up exit must write exactly one debug file"
+    assert saved[0].read_text(encoding="utf-8") == bad_reply, (
+        "the saved file must hold the exact final raw reply, byte for byte -- not a summary of it"
+    )
+    assert str(saved[0]) in str(exc.value), (
+        "the error message must name the path a bug report should attach"
+    )
+    assert exc.value.details.get("raw_reply_path") == str(saved[0])
+
+
+def test_a_successful_call_writes_no_debug_file(tmp_path, monkeypatch):
+    """The negative half. Passes trivially if nothing ever writes the debug file at all -- which is
+    exactly why the give-up test above exists as the paired positive control."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    fake = FakeClient(_ENGINE_REPLY)
+    run(fake, [{"role": "user", "content": "leave approval"}])
+    assert not (tmp_path / ".requivo" / "debug").exists(), (
+        "a successful call has nothing to debug and must write nothing"
+    )
+
+
+def test_a_transport_failure_writes_no_debug_file(tmp_path, monkeypatch):
+    """The other negative half: an `EngineError` alone is not the trigger -- only give-up is. A
+    transport failure never reaches the JSON/contract stage, so there is no raw reply to save."""
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+    with pytest.raises(EngineError):
+        run(_RaisingTransportClient(), [{"role": "user", "content": "leave approval"}])
+    assert not (tmp_path / ".requivo" / "debug").exists(), (
+        "a transport-level failure has no raw reply to save and must write nothing"
+    )
+
+
+def test_a_prune_failure_does_not_discard_an_already_saved_reply(tmp_path, monkeypatch):
+    """Found in review: `_prune_debug_dir`'s `unlink` calls carried no exception handling of their
+    own, so a failure there -- this codebase already knows a `PermissionError` on an open handle is
+    real and platform-specific, invariant 18's own `_replace_with_retry` exists because of it --
+    propagated up into `_save_failed_reply`'s broad `except Exception: return None` and discarded the
+    path of a reply that had, moments earlier, been written successfully. The write and the prune are
+    two separate failure domains now: a prune failure must never un-report a completed write.
+    """
+    from requivo.providers.anthropic import completion as mod
+
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+
+    def _raise(root):
+        raise PermissionError("locked by another process")
+
+    monkeypatch.setattr(mod, "_prune_debug_dir", _raise)
+    path = mod._save_failed_reply("some raw reply text", "EngineOutput")
+    assert path is not None, (
+        "a write that succeeded must still be reported even when the prune right after it fails"
+    )
+    assert path.read_text(encoding="utf-8") == "some raw reply text"

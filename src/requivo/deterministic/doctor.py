@@ -88,7 +88,22 @@ def doctor_report() -> dict:
     # of the same lookup, which would be right until the day the default moved. Importing it is a
     # read that orchestrates nothing, and the argument for that is written into the boundary guard
     # surface-provider allowlist, which is where such a claim is kept honest.
-    override = os.getenv("MODEL")
+    #
+    # **The day the default moved was #268**, one release after this comment predicted it: the
+    # provider started reading `REQUIVO_MODEL` first and bare `MODEL` only as a fallback, and this
+    # line still asked only about `MODEL`. A reporter who had already moved to `REQUIVO_MODEL` -- the
+    # name every doc now teaches -- was told their override was the default, which is the same drift
+    # this comment names, arriving on schedule. Reading both names, in the same presence-based order
+    # `current_model_name` reads them, is the fix rather than a third copy of the precedence.
+    #
+    # Presence (`is not None`), not truthiness -- already established for bare MODEL by
+    # `test_a_model_override_that_is_set_but_empty_is_reported_as_one`: an exported-but-empty
+    # variable is an override in effect, and `source` must say "env" for it or it names neither the
+    # default it didn't use nor the override that was really in force. `REQUIVO_MODEL=""` gets the
+    # same answer.
+    override = os.getenv("REQUIVO_MODEL")
+    if override is None:
+        override = os.getenv("MODEL")
     model = {"name": current_model_name(), "source": "default" if override is None else "env"}
 
     return {

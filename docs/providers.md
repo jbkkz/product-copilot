@@ -28,11 +28,17 @@ resolved.
 ## Models
 
 Developed and measured against `claude-sonnet-5` (the default). Any current Claude model works via the
-`MODEL` environment variable:
+`REQUIVO_MODEL` environment variable:
 
 ```bash
-MODEL=claude-opus-4-8 requivo discover "…"
+REQUIVO_MODEL=claude-opus-4-8 requivo discover "…"
 ```
+
+Bare `MODEL` still works as a fallback for existing setups, but is deprecated — see the
+"Environment variables" section of [compatibility.md](compatibility.md#environment-variables--stable-with-one-exception).
+`MODEL` is a generic name other tools set too, so a shell already exporting it for something else
+could silently steer Requivo at the wrong model; `REQUIVO_MODEL` is read first and always wins when
+both are set.
 
 The exact model a session ran against is recorded in its revision provenance (see
 [session-format.md](session-format.md)).

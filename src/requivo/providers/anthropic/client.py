@@ -48,7 +48,7 @@ MODEL_DEFAULT = "claude-sonnet-5"
 _AUTH_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 # The three attributes the SDK exposes its resolved credential on, read through `getattr` defaults
-# because the supported range is `anthropic>=0.40.0,<2` and `credentials` -- the profile/federation
+# because the supported range is `anthropic>=0.42.0,<2` and `credentials` -- the profile/federation
 # provider -- does not exist on the older majors. An SDK without the attribute has no such source,
 # so `None` is the right answer there rather than a crash. Pinned by
 # `test_the_resolved_credential_attributes_are_read_through_getattr_defaults`.
@@ -165,5 +165,35 @@ def new_client() -> Anthropic:
 
 def current_model_name() -> str:
     """The model id this process will call — the env override or the default. Exposed so provenance
-    (session.json) records the exact model a discovery ran against."""
+    (session.json) records the exact model a discovery ran against.
+
+    **`REQUIVO_MODEL` first, bare `MODEL` as a fallback, in that order** (#268). Every other
+    environment variable this package reads is `REQUIVO_`-prefixed; the model override was the one
+    exception, and `MODEL` is a generic name other tools set too — a CI job, a docker-compose file,
+    an unrelated ML script in the same shell — so it can collide silently and steer Requivo at a
+    differently-priced or nonexistent model with no hint the value came from outside. `REQUIVO_MODEL`
+    is read first so a workspace exporting both is unambiguous; bare `MODEL` is read only when
+    `REQUIVO_MODEL` is absent, so an existing setup that only ever set `MODEL` keeps working
+    unchanged. The fallback is recorded as deprecated in docs/compatibility.md, which is where every
+    other "two versions, one workspace" promise on this page lives — this file does not print
+    anything about it (see the comment above `os.getenv` below for why).
+    """
+    # No stderr notice on the fallback path, decided rather than merely omitted. `core/` is barred
+    # from the standard streams by invariant 7, and this module sits just outside `core/` — but the
+    # actual caller here is `_complete()`, deep inside a retry loop that already owns its own error
+    # channel (a clean `EngineError`/`ProviderOutputError`, never a bare print), and a provider
+    # printing on a path that *works* would be the one line in this call graph that bypasses it. A
+    # user who only ever set MODEL sees nothing wrong — the call succeeds with the model they asked
+    # for — so a notice here is a warning about vocabulary, not about a failure, and `requivo doctor`
+    # (which already reports environment-derived facts back to the user) is the honest place to
+    # eventually surface "your REQUIVO_MODEL setup falls back to bare MODEL" once one exists.
+    #
+    # `os.getenv("REQUIVO_MODEL") is not None`, not a bare `or` -- presence, not truthiness.
+    # `test_a_model_override_that_is_set_but_empty_is_reported_as_one` already pins the reason for
+    # bare `MODEL`: an exported-but-empty variable is an override in effect (of nothing), and a
+    # truthy check would fall through to `MODEL`/the default and report the comfortable lie that
+    # nothing was overridden. `REQUIVO_MODEL=""` deserves the identical answer, not a quieter one.
+    override = os.getenv("REQUIVO_MODEL")
+    if override is not None:
+        return override
     return os.getenv("MODEL", MODEL_DEFAULT)
