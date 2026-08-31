@@ -196,7 +196,7 @@ jobs:
       # nothing today and is correct the day this job's `runs-on` changes.
       - name: Cache the pinned Claude Code CLI's npm download
         id: cache-claude-cli-npm
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.npm
           key: npm-claude-cli-${{ runner.os }}-${{ env.CLAUDE_CLI_VERSION }}
