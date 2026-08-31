@@ -303,3 +303,119 @@ def test_an_entry_that_could_not_be_examined_is_a_row_and_not_a_broken_page(clie
     assert f"A request about {HEALTHY_ANALYSED}" in r.text   # must fire: the healthy row is intact
     assert "blocked-entry" in r.text                          # …and the entry names itself
     assert "could not be read" in r.text.lower()
+
+
+# ── #240: the third state speaks the product's language, and loses nothing ────
+#
+# The row was already correct about *what* it did not know (invariant 15, and the whole block
+# above). What it printed was `str(e)` — for a `RequivoError` a three-sentence remedy carrying an
+# absolute path, and for anything else the exception's own words: `[Errno 21] Is a directory:
+# '/…/request.md'`. Engine internals leading the primary screen, on a page whose design rule is
+# that they never do.
+#
+# The trap this section is shaped against is the obvious over-correction: a friendly sentence that
+# makes *could not be read* read like *nothing much happened*. So every assertion below is paired
+# with one that the row is still visibly the third state, and one that the detail did not vanish
+# from the product entirely.
+
+# What must never appear on the home page. Machine text, an absolute path, and the exception class
+# names that reach this row through the two non-`RequivoError` break modes.
+_ENGINE_INTERNALS = ("Errno", "Traceback", "ValidationError", "IsADirectoryError", "pydantic")
+
+
+def _row_hint(slug: str) -> str:
+    """The one line rendered under a degraded row, as the page shows it."""
+    from requivo.web.viewmodels.sessions import session_list
+    return next(r["hint"] for r in session_list(SessionService()) if r["slug"] == slug)
+
+
+@pytest.mark.parametrize("slug", sorted(BREAKERS))
+def test_a_degraded_row_shows_one_human_line_and_no_engine_internals(client, slug):
+    _seed(slug, analysed=True)
+    BREAKERS[slug](slug)
+
+    r = client.get("/")
+    assert r.status_code == 200
+    for token in _ENGINE_INTERNALS:
+        assert token not in r.text, f"{slug}: the home page is still printing {token}"
+    # An absolute path is the other half of the same leak, and the one that survives a check
+    # written only against exception class names.
+    assert str(canonical_dir(slug)) not in r.text
+
+    hint = _row_hint(slug)
+    assert hint.count(".") <= 2, f"{slug}: the row hint is not one line — {hint!r}"
+    assert hint in r.text
+
+
+@pytest.mark.parametrize("slug", sorted(BREAKERS))
+def test_humanising_the_row_did_not_flatten_the_third_state(client, slug):
+    """Must fire, and the reason this is a separate test: a hint reading "nothing to report here"
+    would satisfy every assertion above. The row has to stay distinguishable from a healthy one
+    *and* from one that is merely early."""
+    _seed(HEALTHY_ANALYSED, analysed=True)
+    _seed(HEALTHY_AWAITING, analysed=False)
+    _seed(slug, analysed=True)
+    BREAKERS[slug](slug)
+
+    from requivo.web.viewmodels.sessions import session_list
+    rows = {r["slug"]: r for r in session_list(SessionService())}
+    assert rows[slug]["state"] == "unreadable"
+    assert rows[slug]["status_label"] != rows[HEALTHY_AWAITING]["status_label"]
+    assert rows[slug]["status_label"] != rows[HEALTHY_ANALYSED]["status_label"]
+    # The full text is still carried — it is simply not what the home page prints.
+    assert rows[slug]["error"]
+    assert rows[slug]["error"] != rows[slug]["hint"]
+
+    r = client.get("/")
+    assert "Could not be read" in r.text
+
+
+@pytest.mark.parametrize("slug", sorted(BREAKERS))
+def test_the_full_detail_is_reachable_where_the_row_says_it_is(client, slug):
+    """`home.html` has promised since #7 that "the session screen is where the full error is
+    stated". It was not: opening a broken session raised, and the reader got the generic error
+    page — 409 or 500 depending on which layer failed, and in neither case a word about *which*
+    session or what to run next. A row that sends a reader somewhere has to be right about it."""
+    _seed(slug, analysed=True)
+    BREAKERS[slug](slug)
+
+    r = client.get(f"/sessions/{slug}")
+    assert slug in r.text                                  # it names the session
+    assert "could not be read" in r.text.lower()
+    assert "session verify" in r.text                      # …and the remedy the CLI already names
+
+
+@pytest.mark.parametrize("slug", sorted(BREAKERS))
+def test_opening_an_unreadable_session_answers_with_the_status_it_always_did(client, slug):
+    """The humanised page is not a 200. `session_page` reported 409 for a session written by a
+    newer Requivo and 500 for a store failure, and both are still true of a session nobody can
+    read — a page that says so does not make the request succeed. Moving either would be a
+    compatibility change to a public surface, made here by accident."""
+    _seed(slug, analysed=True)
+    BREAKERS[slug](slug)
+
+    expected = 409 if slug == BROKEN_META else 500
+    r = client.get(f"/sessions/{slug}")
+    assert r.status_code == expected
+
+
+def test_the_unreadable_session_page_is_logged_for_whoever_has_to_fix_it(client, caplog):
+    """The page is for the reader; the log is for the operator. Both, or the humanising has simply
+    moved the detail somewhere nobody looks."""
+    import logging
+
+    _seed(BROKEN_MODEL, analysed=True)
+    break_model(BROKEN_MODEL)
+    with caplog.at_level(logging.ERROR, logger="requivo.web"):
+        client.get(f"/sessions/{BROKEN_MODEL}")
+    assert any(BROKEN_MODEL in rec.getMessage() for rec in caplog.records)
+
+
+def test_a_healthy_session_page_is_untouched(client):
+    """The must-fire control for the whole section: the unreadable branch must not swallow an
+    ordinary session on its way past."""
+    _seed(HEALTHY_ANALYSED, analysed=True)
+    r = client.get(f"/sessions/{HEALTHY_ANALYSED}")
+    assert r.status_code == 200
+    assert "could not be read" not in r.text.lower()
+    assert "What Requivo understood" in r.text

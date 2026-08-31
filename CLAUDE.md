@@ -152,6 +152,9 @@ requivo/
     model.py         model show / validate / apply / diff       artifacts.py  artifact save / list / show
   web/             Requivo Web — FastAPI + Jinja2 + HTMX over the services (the `[web]` extra)
     app.py           create_app()   security.py  cross-site guard   routes/  viewmodels/  templates/
+    example.py       the bundled sample as a real session — the keyless activation path (#226); it
+                     owns the policy (second click, provenance, how a sample is recognised) so the
+                     route stays a redirect and a second surface could reuse it
     viewmodels/labels.py  the user-facing vocabulary, in one table (see "Two vocabularies" below)
 plugins/claude-code/   the Claude Code plugin (skills + manifest) — NOT shipped in the wheel
 ```

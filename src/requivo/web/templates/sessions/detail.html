@@ -7,6 +7,21 @@
 {% block content %}
 <p><a class="backlink" href="/">← All requests</a></p>
 
+{# The bundled sample announces itself before anything it contains (#226). Above the pending split
+   on purpose: both branches are reachable for it and both need the claim, and a template that asks
+   the same question in two places will eventually answer it two ways. `is_example` is set at the
+   top level by `session_page` for exactly that. #}
+{% if is_example %}
+<div class="notice info example-note" role="note">
+  <strong>{{ example_badge }}</strong> — this is the sample that ships with Requivo, not a session
+  you created. A real, messy client email was reasoned once by a real run, and what you see below is
+  replayed from the bundled payload: reading the understanding, the questions and what rests on what
+  costs no API key and makes no network call.
+  <br>Refining it or generating a document does need a key — those reach the provider like any other
+  session, because this is an ordinary session in your workspace, not a read-only exhibit.
+</div>
+{% endif %}
+
 {% if pending %}
 <h1>{{ slug }}</h1>
 <p><span class="badge">Awaiting analysis</span></p>

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{# A session that is on disk and could not be opened (#240) — the third state, on the screen the
+   home row sends a reader to. It is deliberately not `errors/500.html`: that page names no session
+   and offers nothing to run, and a row that says "open it for the full detail" has to be right.
+
+   Everything the server knows is stated here, in full and untruncated, because this is the page the
+   home row was humanised *against*. Hiding it in both places would not be a friendlier product, it
+   would be a product that knows less than it did. #}
+{% block title %}{{ slug }} — Requivo{% endblock %}
+{% block content %}
+<p><a class="backlink" href="/">← All requests</a></p>
+
+<h1>{{ slug }}</h1>
+<p><span class="badge danger">Could not be read</span></p>
+
+<div class="notice danger" role="alert">
+  <p>Requivo found this session on disk and could not open it. Nothing has been changed or deleted.</p>
+  <p>What went wrong:</p>
+  {# The store's own words, escaped by the environment like every other value on every page. It is
+     the one place in the product where they belong: whoever is reading this page is the person
+     fixing it. #}
+  <pre class="detail">{{ detail }}</pre>
+  <p class="muted">Error code: <code>{{ code }}</code> (HTTP {{ status }})</p>
+</div>
+
+<h2>What to try</h2>
+<div class="card">
+  <ul class="clean tight">
+    <li><code>requivo session verify {{ slug }}</code> reports what is wrong in full — the same
+      check <code>requivo doctor</code> runs over every session.</li>
+    <li>Every model that was ever applied is still on disk, under <code>revisions/</code> inside
+      this session, so an earlier one can be recovered from there.</li>
+    <li>If the message above says this session came from a newer Requivo, upgrading is the fix —
+      nothing here is damaged.</li>
+  </ul>
+</div>
+{% endblock %}

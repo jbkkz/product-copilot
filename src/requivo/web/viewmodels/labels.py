@@ -39,6 +39,32 @@ ARTIFACT_LABELS: dict[str, str] = {
 # The one document the primary flow leads to. Everything else is available, under "More documents".
 PRIMARY_ARTIFACT = "brief"
 
+# ── the bundled example (#226) ────────────────────────────────────────────────
+# One word, on the row and on the page, so a session the reader did not create is never mistaken for
+# one they did. Registered as a Jinja global in `templating.py` rather than typed into the two
+# templates that show it — the same argument `human_time` is registered under.
+EXAMPLE_BADGE = "Example"
+
+# ── a session nobody could read (#240) ────────────────────────────────────────
+# The third state's own vocabulary. `UNREADABLE_BADGE` matches the CLI word for word (`session list`
+# prints "could not be read", `doctor` and `session verify` agree with it) — one thing described two
+# ways across two surfaces is how a reader stops trusting either.
+#
+# `UNREADABLE_HINT` is what replaced `str(e)` under the row. The engine's own words were correct and
+# were the wrong register for the primary screen: a pydantic class name, an absolute path, or
+# `[Errno 21] Is a directory` — jargon leading a page whose whole design rule is that engine
+# vocabulary never does. What it costs is real and is worth stating rather than glossing: the
+# remedy that used to ride the row (*upgrade requivo*, for a session from a newer format) is now one
+# click away instead of on the first screen. The full text is not discarded — the session page
+# states it and the server log records it, which are the two places somebody acting on it is
+# already standing.
+#
+# **No apostrophe, deliberately.** Autoescaping turns one into `&#39;`, so the sentence a test
+# asserts on and the sentence on the page would stop being the same string.
+UNREADABLE_BADGE = "Could not be read"
+UNREADABLE_HINT = ("Requivo could not read the files for this session. "
+                   "Open it for the full detail.")
+
 
 def artifact_label(artifact_type: str) -> str:
     return ARTIFACT_LABELS.get(artifact_type, artifact_type)
