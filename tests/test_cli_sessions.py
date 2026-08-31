@@ -70,6 +70,35 @@ def test_session_list_and_show(workspace, tmp_path):
     assert shown["slug"] == "one" and shown["format_version"] == 1
 
 
+def test_a_reserved_slug_already_on_disk_is_readable_by_list_show_and_verify(workspace):
+    # #372: `.requivo/sessions/con/` already on disk (created before #221 shipped, or on a platform
+    # that never refused the name) must stay reachable through every read verb this module owns,
+    # `session export` and `session import` excluded — those live in `test_cli_session_archives.py`,
+    # a file this lane does not own this round; `core/persistence.py`'s own
+    # `test_a_session_already_on_disk_under_a_reserved_slug_is_readable_by_every_verb_that_named_it`
+    # covers the lock `session export` takes. Built by hand, not through `session init`, which must
+    # keep refusing to *create* one — that half is pinned in `test_persistence_guards.py`.
+    d = store.session_root() / "con"
+    (d / "revisions").mkdir(parents=True)
+    (d / "artifacts").mkdir()
+    (d / "request.md").write_text("A request captured before #221 shipped.", encoding="utf-8")
+    (d / "session.json").write_text(json.dumps({
+        "session_id": "deadbeef", "slug": "con", "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z", "provider": None, "model_name": None,
+        "context_cards": None, "current_revision": 0, "format_version": 1,
+        "revisions": [], "artifact_status": {}}), encoding="utf-8")
+
+    listing = _run_json(["session", "list", "--json"])
+    assert listing["degraded"] == 0
+    assert any(s["slug"] == "con" and s["readable"] for s in listing["sessions"])
+
+    shown = _run_json(["session", "show", "con", "--json"])
+    assert shown["slug"] == "con"
+
+    verified = _run_json(["session", "verify", "con", "--json"])
+    assert verified["ok"] is True
+
+
 def test_session_migrate_moves_legacy_sessions(workspace, tmp_path):
     # Seed a legacy out/<slug>/ session, then bulk-migrate it into the canonical store.
     legacy = store.legacy_dir("legacy-one")
@@ -82,6 +111,40 @@ def test_session_migrate_moves_legacy_sessions(workspace, tmp_path):
     assert store.session_exists("legacy-one")
     assert store.read_meta("legacy-one").current_revision == 1
     assert legacy.joinpath("model.json").exists()  # originals preserved
+
+
+def test_session_migrate_survives_one_undecodable_legacy_request_beside_a_healthy_session(workspace):
+    # #371: a legacy `request.md` that is not valid UTF-8 used to abort the whole pass with a raw
+    # traceback and no receipt at all, taking every other slug in the sweep down with it. Two members
+    # in one fixture, deliberately -- a fixture with only the broken one would pass on the pre-fix
+    # code too (nothing else was there to prove survived), and a fixture with only the healthy one
+    # never reaches the bug at all.
+    #
+    # "bad" sorts before "zzz-good", so on the pre-fix code the traceback fires before the healthy
+    # slug is even reached -- reproducing "no receipt printed at all" rather than "one row missing".
+    bad_legacy = store.legacy_dir("bad")
+    bad_legacy.mkdir(parents=True)
+    bad_legacy.joinpath("model.json").write_text(json.dumps(_full_model()))
+    bad_legacy.joinpath("request.md").write_bytes(b"legacy \xff\xfe request")
+    # A canonical session already occupies the slug, at revision 0 -- the branch that reads
+    # `_legacy_request_text` to decide `interrupted` vs. `skipped` (see `_cmd_session_migrate`).
+    store.create_session("bad", "Whatever the canonical request happened to be.")
+
+    good_legacy = store.legacy_dir("zzz-good")
+    good_legacy.mkdir(parents=True)
+    good_legacy.joinpath("model.json").write_text(json.dumps(_full_model()))
+    good_legacy.joinpath("request.txt").write_text("A healthy legacy request.")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "migrate", "--json"], client=None)
+    assert e.value.code == 4  # EXIT_DEGRADED — the receipt still printed, in full, ahead of it
+
+    r = json.loads(buf.getvalue())
+    assert "zzz-good" in r["migrated"]
+    assert store.session_exists("zzz-good")
+    assert [err["slug"] for err in r["errors"]] == ["bad"]
+    assert good_legacy.joinpath("model.json").exists()  # originals preserved either way
 
 
 # ── the revision contract on the CLI surface ────────────────────────────────────

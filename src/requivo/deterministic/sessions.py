@@ -392,7 +392,17 @@ def _cmd_session_migrate(a, client) -> None:
     legacy `model.json` (unrelated to this migration, or itself a symptom of an interrupted write of
     some other kind), and it sat outside any per-slug guard: an unreadable canonical session for an
     already-occupied legacy slug aborted the whole pass exactly the way the unparseable-legacy-model
-    case did before this issue was filed. It is wrapped the same way `migrate_legacy` is below."""
+    case did before this issue was filed. It is wrapped the same way `migrate_legacy` is below.
+
+    **Wrapping `read_meta` alone was not the whole of that isolation, and shipped believing it was**
+    (#371). `repo.request_text(slug)` and `_legacy_request_text(root / slug)` — the two reads that
+    decide `interrupted` vs. `skipped` once `read_meta` has succeeded — each do their own
+    `p.exists()` + `p.read_text(encoding="utf-8")`, outside the `try` above them, in the version that
+    shipped in 2.0.0. Neither `UnicodeDecodeError` nor an `EACCES` `Path.exists()` re-raises is a
+    `RequivoError`, so an undecodable legacy `request.md` escaped this guard exactly the way an
+    unparseable `model.json` used to: a raw traceback, no receipt printed at all, and a healthy
+    session sorted after the bad one in the same sweep neither migrated nor reported. Both reads are
+    inside the same `try` now, widened to `(RequivoError, OSError, UnicodeDecodeError)`."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
@@ -402,11 +412,20 @@ def _cmd_session_migrate(a, client) -> None:
         if repo.exists(slug):
             try:
                 meta = repo.read_meta(slug)
-            except RequivoError as e:
+                # Both reads that decide `interrupted` vs. `skipped` belong inside the same try as
+                # `read_meta` above -- #371. `repo.request_text` and `_legacy_request_text` each do
+                # their own `p.exists()` + `p.read_text(encoding="utf-8")`, and neither
+                # `UnicodeDecodeError` nor an `EACCES` `Path.exists()` re-raises is a `RequivoError`,
+                # so a legacy `request.md` that is not valid UTF-8 (or unreadable) used to escape this
+                # per-slug guard entirely: a raw traceback, no receipt printed at all, and every slug
+                # sorted after the bad one -- however many had already migrated -- silently unreported.
+                # This is invariant 15's own class, one read below where #262 already closed it once.
+                is_interrupted = (meta.current_revision == 0
+                                   and repo.request_text(slug) == _legacy_request_text(root / slug))
+            except (RequivoError, OSError, UnicodeDecodeError) as e:
                 errors.append({"slug": slug, "error": str(e)})
                 continue
-            if (meta.current_revision == 0
-                    and repo.request_text(slug) == _legacy_request_text(root / slug)):
+            if is_interrupted:
                 interrupted.append(slug)
             else:
                 skipped.append(slug)

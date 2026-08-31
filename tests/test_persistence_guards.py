@@ -1095,6 +1095,84 @@ def test_reserved_windows_device_names_are_refused_as_slugs():
         assert validate_slug(ok) == ok
 
 
+def test_creating_a_reserved_slug_is_still_refused_through_canonical_dir_directly(workspace):
+    # #372: `create_session` calls `canonical_dir`, never `validate_slug` directly, so the previous
+    # test (which only exercises `validate_slug`) does not actually pin what stops a *new* 'con'
+    # session from being created. This does. Must-fire, and it is the creation half of #372's split:
+    # nothing exists at this name yet, so it is refused exactly as strictly as before the read half
+    # of the fix landed.
+    from requivo.core.errors import InvalidSlugError
+    with pytest.raises(InvalidSlugError):
+        store.canonical_dir("con")
+    with pytest.raises(InvalidSlugError):
+        store.create_session("con", "A request that would slug to a reserved name.")
+    with pytest.raises(InvalidSlugError):
+        with store.session_lock("nul"):
+            pass  # pragma: no cover - refused before the body ever runs
+
+
+def test_a_session_already_on_disk_under_a_reserved_slug_is_readable_by_every_verb_that_named_it(
+        workspace):
+    # #372: a session already on disk under a Windows reserved name -- created before #221 shipped,
+    # or on a platform that never refused one -- must stay reachable for reading, session export
+    # included (the documented way to move it off the reserved name entirely). Built by hand rather
+    # than through `create_session`, which must (and does, per the sibling test above) still refuse
+    # to create one: this reproduces exactly what a pre-#221 directory looks like on disk today.
+    d = store.session_root() / "con"
+    (d / "revisions").mkdir(parents=True)
+    (d / "artifacts").mkdir()
+    (d / "request.md").write_text("A request captured before #221 shipped.", encoding="utf-8")
+    (d / "session.json").write_text(json.dumps({
+        "session_id": "deadbeef", "slug": "con", "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z", "provider": None, "model_name": None,
+        "context_cards": None, "current_revision": 0, "format_version": 1,
+        "revisions": [], "artifact_status": {}}), encoding="utf-8")
+
+    # Must-fire: every read path this issue named tolerates the existing directory.
+    assert store.session_exists("con") is True
+    assert store.canonical_dir("con") == d
+    assert store.read_meta("con").slug == "con"
+    assert store.session_request("con") == "A request captured before #221 shipped."
+    assert "con" in store.list_session_slugs()
+    # `session export`'s own read-consistency lock -- `lock_path`'s half of the fix, not just
+    # `canonical_dir`'s -- must reach it too, or the one documented way off the reserved name stays
+    # blocked even though every other read now works.
+    with store.session_lock("con"):
+        pass
+
+    # Must-not-fire control, in the same fixture (a negative needs a positive beside it): a reserved
+    # name nothing has created is still refused. The tolerance above is about what already exists on
+    # disk, never a general relaxation of #221.
+    from requivo.core.errors import InvalidSlugError
+    with pytest.raises(InvalidSlugError):
+        store.canonical_dir("nul")
+    with pytest.raises(InvalidSlugError):
+        with store.session_lock("nul"):
+            pass  # pragma: no cover - refused before the body ever runs
+
+
+def test_idempotent_reinit_of_an_existing_reserved_slug_returns_it_rather_than_creating_one(
+        workspace):
+    # #372, the corollary that validates the read/creation split is drawn in the right place:
+    # `session init` re-run against the identical request is documented as idempotent (returns the
+    # existing session rather than erroring), and that must keep working for a session that happens
+    # to sit at a reserved slug -- without ever taking the branch that *creates* a new 'con' directory.
+    # `create_session`'s own rename is the sole claim on a slug (invariant 11); this proves the swap
+    # never runs a second time by asserting the returned session_id is the one already on disk.
+    d = store.session_root() / "con"
+    (d / "revisions").mkdir(parents=True)
+    (d / "artifacts").mkdir()
+    (d / "request.md").write_text("Some request.", encoding="utf-8")
+    (d / "session.json").write_text(json.dumps({
+        "session_id": "original-id", "slug": "con", "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z", "provider": None, "model_name": None,
+        "context_cards": None, "current_revision": 0, "format_version": 1,
+        "revisions": [], "artifact_status": {}}), encoding="utf-8")
+
+    meta = SessionService().create_session("Some request.", slug="con")
+    assert meta.session_id == "original-id"
+
+
 def test_reserved_windows_device_names_are_refused_as_filename_stems():
     # validate_filename checks the stem before the first dot, so `con.md` and `con.tar.gz` are
     # equally reserved -- Windows refuses `CreateFile` on the device name regardless of extension.

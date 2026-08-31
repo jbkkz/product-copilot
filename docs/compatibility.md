@@ -801,7 +801,7 @@ policy for exit codes that this page did not contain. It does now.
 | Exit | Means |
 |---|---|
 | 0 | success |
-| 1 | a clean, expected failure — an invalid proposal, a missing session, a provider error |
+| 1 | a clean, expected failure — an invalid proposal, a missing session, a provider error, an oversized request |
 | 2 | bad arguments (argparse) |
 | 3 | the command's work finished and its output could not be encoded |
 | 4 | the work was done and part of the answer was unreachable |
@@ -849,6 +849,22 @@ They exit 130 now, like every other command. A script that gated on exit 1 to de
 indistinguishable, to a script, from an empty but valid result. It now exits **1**: the *input* was
 invalid, not the answer partial, so this is "a clean, expected failure" rather than `EXIT_DEGRADED`'s
 "the answer was unreachable". Whatever matched, if anything, still renders in full above the exit.
+
+### `session init` and an oversized request — a behaviour change (#255)
+
+`SessionService.create_session` now calls `require_input_within_bounds` before a request reaches a
+provider or lands on disk — the service layer is the integrity boundary (invariant 14), not a
+route's own friendly re-render, which is careful but not a guarantee. A request over **20,000
+characters** — `MAX_INPUT_CHARS` in `core/contracts.py` — is refused with `{"code":
+"input_too_large"}` at exit **1**, instead of creating the session.
+
+`git show v1.3.0:src/requivo/services/sessions.py` has no length check at all, so this moves
+`session init` — one of the fifteen public `--json` payloads declared above — from exit 0 to exit 1
+on an input it used to accept. That is the same shape #250 documents just above: a condition moved
+from one code to another, which this page's own promise calls **breaking**. Unlike the concern
+`changelog.d/255.fixed.md` first weighed and set aside — a caller relying on a billed provider call
+having already gone out — `session init` is offline and spends nothing, so nothing about a paid call
+softens this one.
 
 ### The web error banner's `code` — **not stable**
 
