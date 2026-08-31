@@ -18,7 +18,7 @@ from requivo.core import persistence as store
 from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
-from requivo.core.integrity import check_session
+from requivo.core.integrity import check_session, inspect_session
 from requivo.core.persistence import _atomic_write
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
@@ -873,7 +873,14 @@ def test_a_crafted_artifact_filename_cannot_be_used_to_probe_for_files_outside_t
 def test_an_unknown_artifact_type_does_not_fall_through_to_the_filesystem(workspace, tmp_path):
     """The fall-through the #23 lane's auditor named: an unknown artifact *type* recorded its problem
     and then carried on to the join with the untrusted filename still in hand. Both branches did —
-    the filename-mismatch one too — so neither is a guard."""
+    the filename-mismatch one too — so neither is a guard.
+
+    Re-aimed by #260, where the unknown *type* stopped being a problem and became a note. The claim
+    this test makes is unchanged and is about the **filename**: the row is still reported, and the
+    name it carries is still refused rather than probed. What moved is which list the type-level
+    finding lands in, so `inspect_session` is what the first assertion now reads — asserting it
+    through `check_session` would have made this test pass for a reason unrelated to its name.
+    `tests/test_future_artifact_types.py` holds the rest of that promise."""
     outside = tmp_path / "outside.md"
     outside.write_text("x\n")
 
@@ -884,8 +891,8 @@ def test_an_unknown_artifact_type_does_not_fall_through_to_the_filesystem(worksp
                                                           filename=str(outside))
     p.write_text(json.dumps(raw))
 
+    assert "unknown_artifact_type" in {pr.code for pr in inspect_session("probe")}   # must-fire
     codes = {pr.code for pr in check_session("probe")}
-    assert "unknown_artifact_type" in codes          # must-fire: the row is still reported
     assert "unsafe_artifact_filename" in codes       # and its filename was refused, not followed
     assert "missing_artifact_file" not in codes
 

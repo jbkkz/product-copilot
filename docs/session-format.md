@@ -214,7 +214,8 @@ under the hash its revision recorded.
 ```bash
 requivo session verify <slug>          # exits non-zero, and says which claim is false
 requivo session verify <slug> --json   # {"ok": false, "problems": [{"code": …, "message": …}],
-                                       #  "context_cards": {"checked": true, "problem": null}}
+                                       #  "notes": [], "context_cards": {"checked": true,
+                                       #  "problem": null}}
 ```
 
 The same check gates `session import` (an archive is held to exactly the standard a live session is)
@@ -239,6 +240,15 @@ same bare-filename guard every artifact write uses; a name that is not a plain f
 existence**. Testing it would answer whether an arbitrary path on the machine exists — no content,
 but the presence or absence of `missing_artifact_file` in the reply is itself the answer. `import`
 refuses such an archive.
+
+**An artifact type this build has no generator for is a `note`, not a problem** (#260). It appears
+under `notes` rather than `problems`, counts towards neither `ok` nor the exit code, and does not stop
+`session import` — because [compatibility.md](compatibility.md) lists a new artifact type among the
+changes that need no `format_version` bump, so a session written by a newer Requivo is exercising the
+format rather than breaking it. Everything else about that row is checked exactly as before: the
+filename guard above, the file's existence, and the revision it claims. A key that is not *shaped*
+like an artifact type — a plain lowercase name such as `risk-register`, at most 64 characters — is a
+different answer and stays a refusal, as `unsafe_artifact_type`.
 
 `context_cards` is a second, separate question the same command answers: do the context cards this
 session was created with still resolve on this machine? It is reported beside `problems` rather than

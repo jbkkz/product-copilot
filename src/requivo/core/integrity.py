@@ -33,11 +33,19 @@ directions — they look like separate concerns and are the same sentence read f
 
 Reading them together is what makes the pair coherent: an integrity answer is derived from the
 directory's own bytes, and it neither imports facts from the environment nor exports questions to it.
+
+**Not everything worth naming is a defect.** A finding carries a `severity`, and the second value is
+what `docs/compatibility.md` needs it to be: an artifact type this build has no generator for is a
+*note* rather than a problem, because that page lists "a new artifact type" among the changes that
+need no `format_version` bump and this module used to refuse one outright (#260). `check_session_dir`
+returns the blocking half, so the default answer every existing caller already asks for is the safe
+one; `inspect_session_dir` returns everything, for the two surfaces that report rather than gate.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,15 +56,58 @@ from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import InvalidFilenameError, RequivoError
 from requivo.core.persistence import canonical_dir, content_hash, is_contained, migrate_session, validate_filename
 
+# The two severities a finding can carry.
+#
+# `problem` is a broken claim: the session does not tell the truth about itself, and every caller
+# refuses on it. `note` is something worth *naming* that is not a defect, and the only member today
+# is an artifact type this build has no generator for (#260).
+SEVERITY_PROBLEM = "problem"
+SEVERITY_NOTE = "note"
+
+# What an artifact *type* must look like for this module to treat it as a plausible future one. The
+# same shape as `_FILENAME_RE` in the store, and deliberately a separate statement of it: a type is a
+# vocabulary token and a filename is a path component, `ARTIFACT_FILENAMES` maps one onto the other,
+# and the two are free to diverge. Lowercase runs of [a-z0-9] joined by a single `.`, `-` or `_`,
+# which is what every key in `ARTIFACT_FILENAMES` already is.
+#
+# It exists because tolerating an unknown type widens a door that used to be shut: before #260 an
+# archive carrying arbitrary `artifact_status` keys was refused outright by `session import`, and a
+# tolerated key is one this build will accept, store, and print on a *passing* `doctor` run for as
+# long as the session lives. A key that is not token-shaped is not a newer Requivo's generator — it
+# is junk or a forgery — so it keeps the refusal, under `unsafe_artifact_type` rather than under the
+# note's code, because a consumer has to be able to tell the two apart.
+# `test_an_artifact_type_that_is_not_a_plausible_token_is_still_a_problem` is the guard.
+_ARTIFACT_TYPE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*\Z")
+
+# Room for a descriptive compound name and no more. An artifact type is printed once per row by
+# `doctor` and by `session verify`, on what is now a code path that *passes*, so an unbounded one is
+# a reader's whole screen. Generous against the longest key those tables could plausibly hold.
+MAX_ARTIFACT_TYPE_LENGTH = 64
+
 
 @dataclass(frozen=True)
 class IntegrityProblem:
-    """One broken claim. `code` is a stable machine token (assert on it, not on the message)."""
+    """One finding. `code` is a stable machine token (assert on it, not on the message).
+
+    `severity` is additive and defaults to `SEVERITY_PROBLEM`, so every construction and every
+    `to_dict()` consumer that predates #260 keeps exactly the meaning it had. Filter with `blocking`
+    rather than by hand: `severity != SEVERITY_PROBLEM` and `severity == SEVERITY_NOTE` differ the
+    moment a third value exists, and only one of the two is the safe reading."""
     code: str
     message: str
+    severity: str = SEVERITY_PROBLEM
+
+    @property
+    def is_problem(self) -> bool:
+        return self.severity == SEVERITY_PROBLEM
 
     def to_dict(self) -> dict:
-        return {"code": self.code, "message": self.message}
+        return {"code": self.code, "message": self.message, "severity": self.severity}
+
+
+def blocking(findings: list[IntegrityProblem]) -> list[IntegrityProblem]:
+    """The findings that mean the session does not tell the truth about itself, in reading order."""
+    return [f for f in findings if f.is_problem]
 
 
 def _read_json(path: Path) -> tuple[dict | None, str | None]:
@@ -72,33 +123,42 @@ def _is_revision(filename: str, n: int) -> bool:
     return head.isdigit() and 1 <= int(head) <= n
 
 
-def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[IntegrityProblem]:
-    """Every internal inconsistency in the session directory `d`, in reading order. Empty == coherent.
+def inspect_session_dir(d: Path, *, expected_slug: str | None = None) -> list[IntegrityProblem]:
+    """Every finding about the session directory `d`, in reading order — notes included.
 
     `expected_slug` is the name the caller believes the session has — the directory name in the store,
     or the folder name inside an archive. A session that disagrees with its own container about its
     identity is the first thing to catch, because every later check keys on it.
+
+    **`check_session_dir` is the one to call to decide something**; this one is for a surface that
+    reports. The split is which way the *default* fails (#260): a caller asking "is this session
+    sound" and getting the whole list back would gate on a note, which is the defect that change
+    removed, and it would do so silently — the list is non-empty either way. So the plain name keeps
+    the plain meaning it always had and this one carries the longer answer.
     """
-    problems: list[IntegrityProblem] = []
+    findings: list[IntegrityProblem] = []
 
     def bad(code: str, message: str) -> None:
-        problems.append(IntegrityProblem(code, message))
+        findings.append(IntegrityProblem(code, message))
+
+    def note(code: str, message: str) -> None:
+        findings.append(IntegrityProblem(code, message, severity=SEVERITY_NOTE))
 
     meta_path = d / "session.json"
     if not meta_path.is_file():
         bad("no_session_json", f"{d.name}/session.json is missing — this is not a session directory")
-        return problems
+        return findings
     raw, err = _read_json(meta_path)
     if raw is None:
         bad("unreadable_session_json", f"session.json cannot be read: {err}")
-        return problems
+        return findings
     try:
         meta = migrate_session(raw)
     except (RequivoError, ValidationError) as e:
         # Both are expected here and neither should escape as a traceback: a *future* format is a
         # RequivoError by design, and a structurally wrong session.json is a Pydantic ValidationError.
         bad("invalid_session_json", f"session.json is not valid session metadata: {e}")
-        return problems
+        return findings
 
     if expected_slug is not None and meta.slug != expected_slug:
         bad("slug_mismatch",
@@ -109,7 +169,7 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
     n = meta.current_revision
     if n < 0:
         bad("negative_revision", f"current_revision is {n}")
-        return problems
+        return findings
     if len(meta.revisions) != n:
         bad("revision_count_mismatch",
             f"session.json says revision {n} but its log holds {len(meta.revisions)} record(s) — the "
@@ -178,7 +238,37 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
     artifacts = d / "artifacts"
     for atype, st in meta.artifact_status.items():
         if atype not in ARTIFACT_FILENAMES:
-            bad("unknown_artifact_type", f"session.json records an artifact of unknown type {atype!r}")
+            # **A note, not a problem** (#260). `docs/compatibility.md` lists "a new artifact type"
+            # among the changes that need no `format_version` bump, and refusing one here made the
+            # first generator a later Requivo ships turn every session it had touched into a defect
+            # on this build: `session verify` non-zero, `doctor` naming it, `session import` refusing
+            # a colleague's archive — while `read_meta` opens the very same file without complaint.
+            # The diagnostic disagreeing with the loader about one file is the worse of the two
+            # answers (invariant 8), and it is the correction #14 already made one field along, for
+            # a *model* key from a newer version.
+            #
+            # Tolerated is not trusted (invariant 14), in two ways. The type must be *shaped* like
+            # one, or it keeps the refusal below. And nothing further down this loop is skipped: the
+            # recorded filename still goes through `validate_filename` and `is_contained`, the file
+            # still has to be there, and the revision still has to exist — so a type this build
+            # cannot name buys an archive no relaxation of any other check.
+            #
+            # `atype` is untrusted and reaches the terminal, so it is rendered `!r` for the same
+            # reason the filename beside it is: `session show` and `artifact list` already escape
+            # this very dict key (#70), and a note prints on a run that *passes*, where a forged row
+            # at column 0 is least likely to be doubted (#40).
+            # `test_an_artifact_type_from_a_newer_requivo_is_not_reported_as_a_defect` is the guard.
+            if _ARTIFACT_TYPE_RE.match(atype) and len(atype) <= MAX_ARTIFACT_TYPE_LENGTH:
+                note("unknown_artifact_type",
+                     f"session.json records an artifact of unknown type {atype!r} — this build has "
+                     "no generator by that name, which is what a session written by a newer Requivo "
+                     "looks like. Nothing else about that entry is assumed")
+            else:
+                bad("unsafe_artifact_type",
+                    f"session.json records an artifact under {atype[:MAX_ARTIFACT_TYPE_LENGTH]!r}, "
+                    "which is not shaped like an artifact type — a plain lowercase name such as "
+                    "'risk-register', no longer than "
+                    f"{MAX_ARTIFACT_TYPE_LENGTH} characters")
         elif st.filename != ARTIFACT_FILENAMES[atype]:
             bad("artifact_filename_mismatch",
                 f"the {atype!r} artifact is recorded as {st.filename!r}, but that type is stored as "
@@ -230,7 +320,22 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
                 f"the {atype!r} artifact claims to come from revision {st.revision}, which this "
                 f"session does not have (it has 1..{n or 0})")
 
-    return problems
+    return findings
+
+
+def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[IntegrityProblem]:
+    """Every internal inconsistency in the session directory `d`, in reading order. Empty == coherent.
+
+    The gating answer, and the one whose meaning has not changed: a caller that refuses on a non-empty
+    return refuses on exactly the same set it always did. `inspect_session_dir` is the same walk with
+    the notes left in, for a surface that reports instead of deciding.
+    """
+    return blocking(inspect_session_dir(d, expected_slug=expected_slug))
+
+
+def inspect_session(slug: str) -> list[IntegrityProblem]:
+    """`inspect_session_dir` for a session in the store."""
+    return inspect_session_dir(canonical_dir(slug), expected_slug=slug)
 
 
 def check_session(slug: str) -> list[IntegrityProblem]:
