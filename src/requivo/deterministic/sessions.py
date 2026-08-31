@@ -42,6 +42,7 @@ from requivo.core.errors import (
     InvalidArchiveError,
     InvalidModelError,
     SessionExistsError,
+    SessionLockedError,
     SessionNotFoundError,
     SessionUnreadableError,
     UnreadableArchiveError,
@@ -466,7 +467,16 @@ def _cmd_session_verify(a, client) -> None:
     else:
         if not found:
             raise svc.no_session(slug)
-    findings = inspect_session(slug) if session_probe["checked"] else []
+    findings: list = []
+    if session_probe["checked"]:
+        try:
+            findings = inspect_session(slug)
+        except (SessionLockedError, SessionUnreadableError) as e:
+            # A lock this call could not take within the deadline (#263, #265) is no measurement,
+            # not a broken session -- reporting it as `problems` would be the exact accusation shape
+            # invariant 17 exists to prevent, aimed at a session that is merely mid-write. It joins
+            # the probe's own unreadable arm above rather than getting a fourth state of its own.
+            session_probe = {"checked": False, "error": str(e)}
     problems = blocking(findings)
     notes = [f for f in findings if f.severity == SEVERITY_NOTE]
     cards = _card_health(slug) if session_probe["checked"] else {"checked": False, "problem": None,

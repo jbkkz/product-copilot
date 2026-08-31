@@ -366,6 +366,28 @@ def test_session_exists_answers_could_not_tell_through_the_error_channel(blocked
     assert store.session_exists("no-such-session-anywhere") is False
 
 
+def test_read_meta_answers_could_not_tell_through_the_error_channel(blocked):
+    """#264, the identical class one function further along. `session_exists` was fixed by routing
+    its existence probe through `_probe`; `read_meta`'s own `if not p.exists(): raise
+    _no_session(slug)` sat outside the `try` that wraps `OSError`, so a session.json the process
+    cannot stat still escaped as a raw `PermissionError` instead of `SessionUnreadableError` --
+    bypassing the structured-error contract every caller (`session show`, doctor's per-session arm,
+    the HTTP 500 mapping) is written against."""
+    from requivo.core.errors import SessionNotFoundError, SessionUnreadableError
+
+    with pytest.raises(SessionUnreadableError) as caught:
+        store.read_meta(BLOCKED)
+    assert caught.value.details["slug"] == BLOCKED
+
+    # Must-fire control: a genuinely absent session still answers "not found", not "unreadable" --
+    # collapsing the two the other way is the bug on the far side of this fix.
+    with pytest.raises(SessionNotFoundError):
+        store.read_meta("no-such-session-anywhere")
+
+    # And the healthy session in the same workspace still reads normally.
+    assert store.read_meta(HEALTHY).slug == HEALTHY
+
+
 def test_absent_is_still_false_because_absent_is_a_real_answer(workspace):
     """`ENOENT` must keep returning `False`. It is the commonest answer, `Path.exists()` already
     swallows it, and turning it into an exception would make every `session init` raise."""

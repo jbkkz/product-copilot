@@ -54,7 +54,14 @@ from pydantic import ValidationError
 from requivo.core.contracts import PersistedEngineOutput
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import InvalidFilenameError, RequivoError
-from requivo.core.persistence import canonical_dir, content_hash, is_contained, migrate_session, validate_filename
+from requivo.core.persistence import (
+    canonical_dir,
+    content_hash,
+    is_contained,
+    migrate_session,
+    session_lock,
+    validate_filename,
+)
 
 # The two severities a finding can carry.
 #
@@ -334,10 +341,32 @@ def check_session_dir(d: Path, *, expected_slug: str | None = None) -> list[Inte
 
 
 def inspect_session(slug: str) -> list[IntegrityProblem]:
-    """`inspect_session_dir` for a session in the store."""
-    return inspect_session_dir(canonical_dir(slug), expected_slug=slug)
+    """`inspect_session_dir` for a session in the store, taken under the session's write lock (#263).
+
+    `check_session_dir` reads session.json, then the revision files, then model.json, and none of
+    that used to be locked. `save_revision` writes the same three things in the same order but not
+    atomically as one unit -- the frozen revision file and model.json land first, session.json last
+    (see the comment on that ordering) -- so a checker racing a writer could read the *old* meta
+    against the *new* model and report `model_is_not_the_last_revision`, "the file was changed after
+    it was written", about a session that is perfectly healthy and merely mid-save. That is
+    invariant 17's own class ("a check that can answer differently for the same argument depending
+    on when it runs is not a check") landing in the one verb whose entire job is truth-telling.
+
+    Taking the lock here, rather than in `check_session_dir`, keeps that function usable on an
+    *extracted archive* directory during `session import` -- there is no session in the store yet to
+    lock, and no writer that could be racing one. `session_lock` also reports a session that has
+    vanished exactly the way every other store-side caller already reports it
+    (`SessionNotFoundError`), so this needs no case of its own for that. Writes hold the lock for
+    milliseconds, so waiting for one costs nothing measurable; a lock held past `_LOCK_TIMEOUT_SECONDS`
+    raises `SessionLockedError`, which callers must treat as *no measurement*, never as *inconsistent*
+    -- see `_cmd_session_verify` and `_session_health`, which both catch it for exactly that reason.
+    Pinned by `test_check_session_waits_for_a_concurrent_writer_instead_of_reporting_a_tear`.
+    """
+    with session_lock(slug):
+        return inspect_session_dir(canonical_dir(slug), expected_slug=slug)
 
 
 def check_session(slug: str) -> list[IntegrityProblem]:
-    """`check_session_dir` for a session in the store."""
-    return check_session_dir(canonical_dir(slug), expected_slug=slug)
+    """`check_session_dir` for a session in the store -- the blocking half of `inspect_session`,
+    including its lock (#263)."""
+    return blocking(inspect_session(slug))

@@ -25,7 +25,7 @@ import platform
 
 from requivo.core import persistence as store
 from requivo.core.context import available_cards, check_selection
-from requivo.core.errors import InvalidModelError
+from requivo.core.errors import InvalidModelError, SessionLockedError
 from requivo.core.integrity import SEVERITY_NOTE, IntegrityProblem, blocking, inspect_session
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, _print_json, _resolve_cards
@@ -255,6 +255,14 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     for slug in slugs:
         try:
             findings = inspect_session(slug)
+        except SessionLockedError as e:
+            # No measurement, not a defect (#263, #265): a lock this call could not take within the
+            # deadline says nothing about whether the session is sound. `doctor` has no separate
+            # "unchecked" bucket the way `session verify` does (EXIT_DEGRADED), so the slug still
+            # surfaces here for a human to look at -- but under its own code, not the generic
+            # "unreadable" a genuinely broken session gets, so a reader can tell "retry" apart from
+            # "corrupted".
+            findings = [IntegrityProblem("session_locked", str(e))]
         except Exception as e:  # noqa: BLE001
             findings = [IntegrityProblem("unreadable", str(e))]
         codes = [p.code for p in blocking(findings)]

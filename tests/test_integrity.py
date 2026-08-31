@@ -747,6 +747,68 @@ def test_a_coherent_session_reports_no_problems(workspace):
     assert check_session("s") == []
 
 
+def test_check_session_waits_for_a_concurrent_writer_instead_of_reporting_a_tear(workspace,
+                                                                                  monkeypatch):
+    """#263. `check_session` used to read session.json, the revision files and model.json with no
+    lock, so it could observe `save_revision`'s compound write torn: revisions/NNNN-model.json and
+    model.json already replaced, session.json about to follow. An old session.json read alongside a
+    fresh model.json then reported `model_is_not_the_last_revision` -- 'the file was changed after
+    it was written' -- about a perfectly healthy session: invariant 17's class ('a check that can
+    answer differently for the same argument depending on when it runs is not a check') landing in
+    the one verb whose job is truth-telling.
+
+    Reproduced with `write_meta` paused mid-save, the same gap
+    `test_a_forced_import_serialises_against_a_concurrent_writer` freezes to prove the analogous
+    claim for `session import`."""
+    svc = _healthy()
+    real_write_meta = store.write_meta
+    at_the_gate, release = threading.Event(), threading.Event()
+
+    def paused(slug, meta):
+        if slug == "s" and not at_the_gate.is_set():
+            at_the_gate.set()
+            assert release.wait(20), "the test never released the paused writer"
+        return real_write_meta(slug, meta)
+
+    monkeypatch.setattr(store, "write_meta", paused)
+
+    write_failures: list[BaseException] = []
+
+    def _write():
+        try:
+            svc.update_model("s", _full_model(**{"problem": _slot(90, "explicit", "high",
+                                                                    "moved again")}))
+        except BaseException as e:  # noqa: BLE001 - reported, not swallowed
+            write_failures.append(e)
+
+    writer = threading.Thread(target=_write, daemon=True)
+    writer.start()
+    assert at_the_gate.wait(10), "the writer never reached the gap between its writes"
+
+    check_results: list[list] = []
+    checker_done = threading.Event()
+
+    def _check():
+        check_results.append(check_session("s"))
+        checker_done.set()
+
+    checker = threading.Thread(target=_check, daemon=True)
+    checker.start()
+
+    # Must fire: a checker racing the writer must not read past the lock while the writer still
+    # holds it -- it must block instead of returning the torn state (or anything at all).
+    assert not checker_done.wait(1.0), (
+        "check_session read past a writer still mid-save instead of waiting for its lock")
+
+    release.set()
+    writer.join(10)
+    checker.join(10)
+    assert not write_failures, f"the writer failed: {write_failures}"
+    assert checker_done.is_set(), "check_session never returned once the writer released the lock"
+    assert check_results == [[]], (
+        f"a healthy session mid-save must report clean once the writer finishes, got {check_results}")
+
+
 def test_a_session_whose_history_is_gone_is_caught(workspace):
     """The reviewer's repro, and the one shape that used to pass every check: session.json announces
     revision 2, `revisions/` is empty, and nothing is malformed — model.json parses, the metadata

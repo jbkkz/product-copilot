@@ -112,13 +112,50 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
 _LOCK_TIMEOUT_SECONDS = 30.0
 _held_locks = threading.local()
 
+# The POSIX poll interval (#265). `flock(LOCK_EX | LOCK_NB)` either succeeds immediately or raises,
+# so contention is a poll loop, not a single blocking call, and the interval trades latency for CPU:
+# too short spins the CPU on a genuinely stuck holder for the whole 30s deadline, too long adds
+# needless latency to the overwhelmingly common case, a holder that finishes in milliseconds. Fixed
+# rather than backed off, on purpose: writes hold this lock for milliseconds (see the module
+# docstring above), so contention that outlasts a handful of polls is already the pathological case
+# the deadline exists for, and a growing interval would only add latency to the *ordinary* one it
+# does not help. At 20ms the full deadline is ~1500 wakeups -- negligible CPU for a bound that fires
+# only when something is stuck.
+_LOCK_POLL_INTERVAL_S = 0.02
+
 
 def _acquire(fd: int, slug: str) -> None:
+    """Take the OS lock on `fd`, bounded by `_LOCK_TIMEOUT_SECONDS` on every platform (#265).
+
+    The two branches used to disagree about what a stuck holder looks like: `msvcrt.locking` polls
+    on its own (it blocks ~10s per attempt and raises `OSError` between attempts) so the Windows loop
+    could turn that into a deadline, but POSIX's `fcntl.flock(fd, fcntl.LOCK_EX)` is a single call
+    that blocks until it succeeds, with nothing to loop on -- so a stuck holder (a SIGSTOPped
+    process, a debugger, an NFS-mounted workspace) hung the CLI silently and forever on the two
+    primary platforms, while Windows raised the structured `SessionLockedError` this module already
+    defines. `LOCK_EX | LOCK_NB` makes the POSIX call symmetric with the Windows one: it never blocks
+    the kernel, so the same poll-until-deadline shape now governs both.
+
+    Re-entrancy (invariant 9) is unaffected by this: `session_lock`'s own depth counter decides a
+    nested acquisition on the same thread *before* this function is ever called, so a nested `with
+    session_lock(slug):` never reaches `_acquire` a second time regardless of whether this function
+    blocks once or polls. Pinned by
+    `test_reentrant_acquisition_within_a_thread_still_never_touches_the_lock_twice`; the deadline
+    itself by `test_a_contended_lock_raises_within_the_deadline_instead_of_hanging` (POSIX;
+    the `msvcrt` branch's own bound is unchanged and untouched here)."""
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     if fcntl is not None:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        return
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise SessionLockedError(
+                        f"session '{slug}' is locked by another process; retry in a moment",
+                        details={"slug": slug}) from None
+                time.sleep(_LOCK_POLL_INTERVAL_S)
     if msvcrt is not None:  # pragma: no cover - Windows
-        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
         while True:
             try:
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # blocks ~10s per attempt, then raises
@@ -954,7 +991,12 @@ def migrate_session(data: dict) -> SessionMeta:
 
 def read_meta(slug: str) -> SessionMeta:
     p = canonical_dir(slug) / "session.json"
-    if not p.exists():
+    # Through `_probe`, not a bare `p.exists()` (#264): `Path.exists()` re-raises `EACCES`, and this
+    # check used to sit outside the `try` below that wraps `OSError`, so a session.json the process
+    # cannot stat escaped as a raw `PermissionError` instead of `SessionUnreadableError` -- the
+    # identical unguarded probe #80 removed from `_scan_session_root` and #97 removed from
+    # `session_exists`, a third time here.
+    if not _probe(p, slug):
         raise _no_session(slug)
     try:
         return migrate_session(json.loads(p.read_text(encoding="utf-8")))

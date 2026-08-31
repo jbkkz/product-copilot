@@ -21,7 +21,9 @@ from __future__ import annotations
 import builtins
 import io
 import json
+import os
 import shutil
+import time
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -595,6 +597,84 @@ def test_the_lock_still_guards_a_session_that_exists(workspace):
     assert _problem("live") == "REAL v2"
     assert store.read_meta("live").artifact_status["brief"].revision == 1
     assert [p.code for p in check_session("live")] == []
+
+
+@pytest.mark.skipif(store.fcntl is None, reason="POSIX-only branch: fcntl.flock has no Windows "
+                     "equivalent here, and the msvcrt branch already had a bounded wait. "
+                     "REASONED, NOT OBSERVED on Windows -- see #265.")
+def test_a_contended_lock_raises_within_the_deadline_instead_of_hanging(workspace, monkeypatch):
+    """#265. `_LOCK_TIMEOUT_SECONDS` was honoured only in the `msvcrt` branch; on POSIX,
+    `fcntl.flock(fd, fcntl.LOCK_EX)` blocked forever with no message, so a stuck holder (a SIGSTOPped
+    process, a debugger, an NFS-mounted workspace) froze the CLI on the primary platforms instead of
+    raising the `SessionLockedError` Windows already had. The deadline is shortened so this proves
+    the bound rather than the hang.
+
+    The contending holder opens its own file descriptor on the same lock file rather than going
+    through `session_lock` -- `flock` is scoped to the *open file description*, not the thread or
+    the process, so a second `os.open` in this same test process contends for real, without needing
+    a second process or thread to hold the lock."""
+    SessionService().create_session("A real request.", slug="contended")
+    monkeypatch.setattr(store, "_LOCK_TIMEOUT_SECONDS", 0.3)
+
+    lock_file = store.lock_path("contended")
+    store.ensure_store_dir(lock_file.parent)
+    holder_fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    store.fcntl.flock(holder_fd, store.fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        with pytest.raises(RequivoError) as ei:
+            with store.session_lock("contended"):
+                pass  # pragma: no cover - must never be granted while the holder is live
+        elapsed = time.monotonic() - started
+    finally:
+        store.fcntl.flock(holder_fd, store.fcntl.LOCK_UN)
+        os.close(holder_fd)
+
+    assert ei.value.code == "session_locked"
+    assert "contended" in str(ei.value)
+    # Bounded, not instant (a spin that returns before the holder ever really contended would prove
+    # nothing) and not the unbounded hang it replaces (an unpatched 30s deadline here would make
+    # this assertion the reason the whole suite takes half a minute to fail).
+    assert 0.25 <= elapsed < 5.0, elapsed
+
+    # The session is otherwise unharmed: once the holder releases, an ordinary acquisition succeeds.
+    with store.session_lock("contended"):
+        pass
+
+
+def test_reentrant_acquisition_within_a_thread_still_never_touches_the_lock_twice(workspace,
+                                                                                   monkeypatch):
+    """The POSIX branch moved from one blocking `flock` call to a polling loop (#265); this pins that
+    the re-entrancy invariant 9 relies on is unaffected, because it is decided one layer above
+    `_acquire` and never reaches it on a nested call.
+
+    `session_lock`'s own `_held_locks` depth counter is what makes nested acquisition safe -- a
+    second `with session_lock(slug):` on the same thread increments the counter and returns without
+    calling `_acquire` again at all. So the assertion is that `_acquire` runs exactly once for two
+    nested holds, with a deadline short enough that a defect reintroducing a real second wait would
+    time out this test rather than silently pass it."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="nested")
+    svc.update_model("nested", _full_model())
+    monkeypatch.setattr(store, "_LOCK_TIMEOUT_SECONDS", 0.3)
+    calls: list[str] = []
+    real_acquire = store._acquire
+
+    def counting_acquire(fd, slug):
+        calls.append(slug)
+        return real_acquire(fd, slug)
+
+    monkeypatch.setattr(store, "_acquire", counting_acquire)
+
+    with store.session_lock("nested"):
+        with store.session_lock("nested"):
+            store.save_session_artifact("nested", "brief", ARTIFACT_FILENAMES["brief"], "# Brief\n",
+                                        source_revision=1)
+
+    assert calls == ["nested"], (
+        f"a nested acquisition on the same thread must not call _acquire again: {calls}")
+
+
 # ── #36: a path that is only printed is still a path this code built ─────────────
 #
 # `deterministic/artifacts.py`'s `artifact save` and `cli.py`'s `_wrote` each re-joined
