@@ -525,7 +525,7 @@ def test_an_interrupt_inside_a_draft_turn_is_not_a_traceback(monkeypatch, capsys
     with pytest.raises(SystemExit) as exit_:
         app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
 
-    assert exit_.value.code == 1
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
     sessions = SessionService().list_sessions()
     assert [m.current_revision for m in sessions] == [1], "the interrupt discarded a paid turn"
     err = capsys.readouterr().err
@@ -548,7 +548,7 @@ def test_an_interrupt_during_the_brief_reports_the_saved_session(monkeypatch, ca
     with pytest.raises(SystemExit) as exit_:
         app(["discover", _REQUEST], client=FakeClient(_ENGINE_REPLY))
 
-    assert exit_.value.code == 1
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
     sessions = SessionService().list_sessions()
     assert [m.current_revision for m in sessions] == [1], "the interrupt discarded the drafted turn"
     err = capsys.readouterr().err
@@ -586,3 +586,70 @@ def test_a_rescue_that_cannot_save_says_so_and_still_names_the_original_failure(
         f"the original provider failure was masked by the save's, so the user cannot tell what "
         f"stopped the run: {err!r}"
     )
+
+
+# ── #206: the quick (`--once`/non-tty) path had no rescue of its own ──────────────────────────────
+
+
+def test_an_interrupt_in_the_once_path_names_the_claimed_session_and_the_retry(monkeypatch, capsys):
+    """`--once`/non-tty `discover` claims a session and makes exactly one paid call, through
+    `disco.start()` -- and until now nothing in `_cmd_discover` wrapped that call. A Ctrl-C landing
+    inside it reached `app()` as a bare `KeyboardInterrupt` with the claimed session unnamed, the same
+    trap `_rescue_drafted` already closed for the interactive loop (#202) and never closed here.
+
+    `start()` itself is stubbed to raise once the session it claims is on disk, so what's under test
+    is `_cmd_discover`'s own handling of the call raising -- not how the SDK's interrupt becomes one.
+    """
+    monkeypatch.setattr(DiscoveryService, "start",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
+    sessions = SessionService().list_sessions()
+    assert len(sessions) == 1, "the interrupted call left no claimed session to retry"
+    assert sessions[0].current_revision == 0, "nothing was drafted, so revision 0 is the truth"
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert sessions[0].slug in err
+    assert "re-run `requivo discover`" in err
+
+
+def test_an_interrupt_before_a_session_is_claimed_names_no_slug(monkeypatch, capsys):
+    """The trap on the other side of the fix above (#206): an abort point that has genuinely claimed
+    nothing must not invent a session to name -- a message naming a slug that does not exist is worse
+    than the traceback it replaces. `_is_file_arg` runs before any session is claimed on every
+    `discover` call, so patching it to interrupt reproduces the earliest realistic abort point."""
+    monkeypatch.setattr("requivo.cli._is_file_arg",
+                        lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 130
+    assert SessionService().list_sessions() == [], (
+        "a session was claimed before the request was even read"
+    )
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "Interrupted." in err
+    assert "Saved" not in err, f"named a session that does not exist: {err!r}"
+
+
+def test_a_top_level_interrupt_on_an_existing_session_exits_130_with_no_traceback(monkeypatch, capsys):
+    """Every command other than `discover` reaches the provider with no claim of its own to make --
+    the session it operates on already existed before this run started -- so `app()`'s own top-level
+    handler is the whole fix for it, with nothing discover-specific to say (#206)."""
+    _run_app(["discover", _REQUEST, "--once"], client=FakeClient(_ENGINE_REPLY))
+    slug = SessionService().list_sessions()[0].slug
+    monkeypatch.setattr(DiscoveryService, "generate",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["brief", slug])
+
+    assert exit_.value.code == 130
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "Interrupted." in err

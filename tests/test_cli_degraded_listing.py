@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from requivo.cli import EXIT_RENDER_FAILED, app
+from requivo.cli import EXIT_INTERRUPTED, EXIT_RENDER_FAILED, app
 from requivo.core.persistence import SESSION_FORMAT_VERSION, canonical_dir
 from requivo.deterministic import EXIT_DEGRADED
 from requivo.paths import session_root
@@ -325,8 +325,10 @@ def test_the_three_outcomes_have_three_exit_codes(workspace):
 def test_the_degraded_code_collides_with_nothing():
     """The two exit-code constants live in two modules — `cli.py` imports `deterministic/`, so the
     dependency cannot run the other way — and nothing but this test stops them being given the same
-    number. 0, 1 and 2 are taken by success, `RequivoError` and argparse."""
-    assert EXIT_DEGRADED not in {0, 1, 2, EXIT_RENDER_FAILED}
+    number. 0, 1 and 2 are taken by success, `RequivoError` and argparse; 130 joined the set at #206
+    under the same rule, for the conventional SIGINT code."""
+    assert EXIT_DEGRADED not in {0, 1, 2, EXIT_RENDER_FAILED, EXIT_INTERRUPTED}
+    assert EXIT_INTERRUPTED not in {0, 1, 2, EXIT_RENDER_FAILED}
 
 
 def test_the_degraded_exit_code_is_published_as_a_value_not_as_a_name():

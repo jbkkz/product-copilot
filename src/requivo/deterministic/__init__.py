@@ -6,6 +6,15 @@ the same `SessionService`/`ArtifactService` the provider path uses. Claude Code 
 reasons with its own Claude, pipes the proposal in on stdin, and calls `model validate`/`model apply` — so no
 `ANTHROPIC_API_KEY` is ever required in that mode.
 
+**"No LLM" is true of every verb here and is not, on its own, the axis that put them here** (#296).
+The actual split is *plumbing* (this package: session/model/artifact CRUD, install diagnostics) versus
+*journey* (`cli.py`: demo, discover, refine, generate, web, in the order a user meets them). Three
+journey verbs -- `status`, `demo`, `impact` -- happen to be no-LLM too, and stay in `cli.py` rather
+than moving here, because they are reads over the same journey `discover`/`answer`/`brief` belong to,
+not administration over a session's own directory the way everything in this package is. A contributor
+who reads "no LLM" as the boundary and goes looking for `status` in here is reading the sentence that
+used to make that the whole story; `cli.py`'s own tree entry in CLAUDE.md carries the other half.
+
 `register(sub)` attaches the parsers to the main `requivo` argparse tree; each handler takes
 `(args, client)` to match the CLI's uniform dispatch (the deterministic handlers ignore `client`).
 Handlers raise structured `RequivoError`s; `cli.app()` turns them into a clean message or a JSON error

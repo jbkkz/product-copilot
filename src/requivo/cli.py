@@ -18,7 +18,7 @@ from requivo.core.analysis import _label, model_status
 from requivo.core.context import resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
-from requivo.core.errors import RequivoError
+from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
 from requivo.core.selectors import display_text
 from requivo.deterministic import read_user_text
@@ -65,6 +65,16 @@ MAX_TURNS = 8
 # expected failure) so a script can tell "nothing happened" from "it happened and you cannot see it";
 # see the `UnicodeEncodeError` arm in `app()` and `streams.py` for why the distinction is the point.
 EXIT_RENDER_FAILED = 3
+
+# The conventional SIGINT code (128 + signal 2), and the one condition it is reserved for: the
+# operator pressed Ctrl-C. Distinct from 1 on purpose -- 1 already means "a clean, expected failure",
+# and a script gating on it should be able to tell "the provider refused this" from "somebody stopped
+# the run themselves" (#206). Before this, an interrupt that escaped every local handler was an
+# unhandled Python exception -- a traceback, and whichever exit code the interpreter happens to give
+# one, which was never a documented promise. Added beside EXIT_RENDER_FAILED under the rule
+# `test_the_degraded_code_collides_with_nothing` already enforces for 4: nothing else may claim this
+# number, and that test is what stops it happening by accident.
+EXIT_INTERRUPTED = 130
 
 # Two messages, because this arm cannot see how far the handler got and must not pretend it can.
 # `app()` wraps the whole handler, and several verbs print before they mutate anything -- `discover`
@@ -273,6 +283,17 @@ def _say_saved(slug: str) -> None:
     print(f"\nSaved session → {store.canonical_dir(slug)}")
 
 
+def _say_nothing_drafted(slug: str) -> None:
+    """The one case with genuinely nothing to salvage: a session was claimed and the paid call that
+    would have drafted its first turn never returned. Shared by `_rescue_drafted`'s first-turn
+    failure and `_cmd_discover`'s quick (`--once`/non-tty) path, which claims a session and makes its
+    one paid call the same way `converse()`'s loop does but has no loop of its own to fail mid-turn
+    (#206) -- both land here rather than duplicating the two lines."""
+    print(f"\nSaved request → {store.canonical_dir(slug)}", file=sys.stderr)
+    print("Nothing was drafted, so the session is unchanged — re-run `requivo discover` to try "
+          "again.", file=sys.stderr)
+
+
 def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str):
     """Persist what an interrupted drafting loop had already paid for, then let the failure surface.
 
@@ -285,9 +306,7 @@ def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str)
     `requivo discover` is still the right retry, so it says so rather than pointing at `answer`.
     Never returns. Pinned by `test_a_failed_draft_turn_persists_the_turns_that_succeeded`."""
     if e.last is None:
-        print(f"\nSaved request → {store.canonical_dir(slug)}", file=sys.stderr)
-        print("Nothing was drafted, so the session is unchanged — re-run `requivo discover` to try "
-              "again.", file=sys.stderr)
+        _say_nothing_drafted(slug)
     else:
         kept = e.turn - 1
         # **The save is guarded, because this is the code path whose entire job is keeping the work**
@@ -311,12 +330,14 @@ def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str)
         print(f"Saved session → {store.canonical_dir(slug)}", file=sys.stderr)
         print(f'Continue where you left off with:\n  requivo answer {slug} "<your answers>"',
               file=sys.stderr)
-    if isinstance(e.cause, RequivoError):
-        raise e.cause
-    # A Ctrl-C landing inside the provider call, which `converse`'s prompt-level catch never saw:
-    # it is not a `RequivoError`, so `app()` would have let it out as a traceback (#202).
-    print("\nInterrupted.", file=sys.stderr)
-    raise SystemExit(1) from e.cause
+    # Re-raised rather than wrapped: `app()` is the one place that decides the final exit code and
+    # prints the generic "Interrupted."/usage-summary tail for every command, discover included
+    # (#206). This function's job stops at naming what was kept and how to continue -- a
+    # `RequivoError` reaches `app()`'s own handler for that, and so, since #206, does a bare
+    # `KeyboardInterrupt`, which used to have nowhere to land and was wrapped in `SystemExit(1)` here
+    # instead: exit 1, the code for "a clean, expected failure", on the one condition that has its
+    # own conventional code and is not that.
+    raise e.cause
 
 
 def _cmd_discover(a, client) -> None:
@@ -346,7 +367,19 @@ def _cmd_discover(a, client) -> None:
     slug_hint = SessionService.slug_hint(Path(a.request).stem) if is_file else None
     quick = a.once or not sys.stdin.isatty()
     if quick:
-        slug = disco.start(request, cards=only, slug=slug_hint, finalize=False, surface="cli-discover")
+        # Claimed here, ahead of `start()`'s own internal claim, purely so the `except` below has a
+        # slug to name. `claim_session` is idempotent and makes no provider call (its own docstring
+        # says so), so claiming it a second time inside `start()` right after costs nothing. `start()`
+        # then makes exactly one paid call -- and until #206 an abort inside it had no handler of its
+        # own: the session was already claimed and on disk, and the traceback that reached the
+        # operator never said so.
+        meta = disco.claim_session(request, cards=only, slug=slug_hint)
+        try:
+            slug = disco.start(request, cards=only, slug=meta.slug, finalize=False,
+                               surface="cli-discover")
+        except (EngineError, KeyboardInterrupt):
+            _say_nothing_drafted(meta.slug)
+            raise
         out = disco.sessions.load_model(slug)
         render_turn(out)
         _say_saved(slug)
@@ -411,7 +444,9 @@ def _cmd_discover(a, client) -> None:
         print(f"\nThe decision brief did not complete: {_why(e)}", file=sys.stderr)
         print(f"Your discovery is saved and nothing was lost — retry just this step with:\n"
               f"  requivo brief {slug}", file=sys.stderr)
-        raise SystemExit(1) from e
+        # Re-raised, not wrapped: `app()` decides the final exit code -- 1 for the `RequivoError`,
+        # 130 for the bare interrupt (#206), both with the usage summary it prints for every command.
+        raise
     # `gen.model`, not `out`: the assessment's reasoning has been absorbed into the model as a
     # revision by now, so this renders what was actually saved rather than the pre-absorption copy.
     render_brief(gen.model, gen.artifact)
@@ -456,7 +491,21 @@ def _resolve_ref(ref: str) -> tuple[EngineOutput, str]:
         return load_model(p), p.parent.name
     svc = SessionService()
     if svc.exists(ref):
-        return svc.load_model(ref), svc.resolve_slug(ref)
+        slug = svc.resolve_slug(ref)
+        try:
+            return svc.load_model(slug), slug
+        except SessionNotFoundError:
+            # `svc.exists(ref)` above already established that the session directory is real, so this
+            # is not "no such session" -- it is the narrower "claimed but never discovered" case
+            # `core/persistence.py:load_session_model` raises under the same `session_not_found` code
+            # (#250). Reconstructed here with the CLI's own remedy rather than reworded at the source,
+            # which is held by a concurrent lane this round; see the changelog fragment for #250.
+            raise SessionNotFoundError(
+                f"session '{slug}' has no model yet — only the request was captured. Run "
+                f"`requivo discover` on the same request to analyse it (or, in Claude Code, "
+                f"/requivo:discover).",
+                details={"slug": slug},
+            ) from None
     raise svc.no_session(ref, what="model file or session", details={"ref": ref})
 
 
@@ -595,6 +644,12 @@ def _cmd_impact(a, client) -> None:
               f"(e.g. 'permissions', 'workflow', 'reporting').")
     if resolved:
         render_impact(propagate(out, resolved))
+    if unmatched:
+        # A wrong probe used to be indistinguishable from an empty result -- both exited 0 -- so a
+        # script gating on the exit code alone could not tell "nothing downstream" from "you asked
+        # about a slot that does not exist" (#250). Exit 1, not `EXIT_DEGRADED`: the *input* was
+        # invalid, not the answer partial, and whatever did match is still rendered above in full.
+        raise SystemExit(1)
 
 
 # Provider-backed generators. Each resolves a session (slug or model.json path) and hands off to
@@ -893,6 +948,21 @@ def app(argv: list[str] | None = None, client=None) -> None:
             else:
                 safe_write(sys.stderr, f"\n{e}\n")
             raise SystemExit(1) from None
+        except KeyboardInterrupt:
+            # Every clean, expected failure surfaces without a traceback (the arm above); Ctrl-C was
+            # the one interruption that did not, because it is not a `RequivoError` and used to
+            # propagate straight past this function -- skipping the usage summary, and, for any
+            # command with no rescue logic of its own, naming nothing at all (#206).
+            #
+            # `_cmd_discover`'s own handlers (`_rescue_drafted`, the quick path's own claim above, and
+            # the brief-generation catch) print what a claimed session held and how to continue,
+            # *then re-raise the bare interrupt* rather than exiting themselves -- so this is where
+            # every one of them, discover included, actually ends: no traceback, the spend so far, and
+            # the conventional SIGINT code rather than 1, so a script can tell "the operator stopped
+            # it" from "the operator got back a clean refusal".
+            _render_usage_safely(ledger)
+            safe_write(sys.stderr, "\nInterrupted.\n")
+            raise SystemExit(EXIT_INTERRUPTED) from None
         except UnicodeEncodeError as e:
             # The braces to `configure_streams`' belt, and the reason this arm exists at all: a
             # `UnicodeEncodeError` escaping a handler was raised by a `print`, which means the

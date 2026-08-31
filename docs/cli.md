@@ -252,6 +252,7 @@ is impossible — a stream Requivo could not reconfigure, which
 | 2 | Bad arguments (argparse) |
 | 3 | **The command's work finished and its output could not be encoded.** The message says whether a provider call was billed |
 | 4 | **The work was done and part of the answer was unreachable.** What was produced is on stdout in full |
+| 130 | **The operator interrupted the run** (Ctrl-C / SIGINT). Distinct from 1 so a script can tell a refusal from an interruption; on `discover`, the message names the claimed session and the continuation verb whenever one was claimed |
 
 Three exists because 1 would be a lie in the one case that costs money. `requivo brief <slug>` makes
 its provider call, applies the revision and writes the artifact *before* it prints anything — so a

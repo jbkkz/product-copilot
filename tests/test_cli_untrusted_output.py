@@ -182,11 +182,23 @@ def test_impact_cannot_be_made_to_print_a_line_by_an_unmatched_slot_token(worksp
 
     # must fire: a real token still resolves, and an ordinary unknown one is still named as typed
     assert "Unknown slot" not in _run(["impact", "imp", "workflow"])
-    unknown = _run(["impact", "imp", "zzz"]).splitlines()
+    # An unmatched slot exits 1 since #250 -- a wrong probe used to be indistinguishable from an
+    # empty result -- so the text is read off stdout directly rather than through `_run`, which does
+    # not expect `app()` to raise.
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        with pytest.raises(SystemExit) as exc:
+            app(["impact", "imp", "zzz"])
+    assert exc.value.code == 1
+    unknown = buf.getvalue().splitlines()
     assert any(ln.startswith("Unknown slot(s): zzz") for ln in unknown), unknown
 
     # must not fire: a leading control character cannot become a line of the output
-    forged = _run(["impact", "imp", "\nFORGED AT COLUMN 0"]).splitlines()
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        with pytest.raises(SystemExit):
+            app(["impact", "imp", "\nFORGED AT COLUMN 0"])
+    forged = buf2.getvalue().splitlines()
     assert "FORGED AT COLUMN 0" not in forged, forged
     named = [ln for ln in forged if ln.startswith("Unknown slot(s): ")]
     assert len(named) == 1 and "FORGED AT COLUMN 0" in named[0], forged

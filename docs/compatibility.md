@@ -770,6 +770,7 @@ policy for exit codes that this page did not contain. It does now.
 | 2 | bad arguments (argparse) |
 | 3 | the command's work finished and its output could not be encoded |
 | 4 | the work was done and part of the answer was unreachable |
+| 130 | the operator interrupted the run (Ctrl-C / SIGINT) |
 
 [cli.md](cli.md) carries what each means in full, and is the page to read; this one carries the
 promise. **The promise is the same one made for `RequivoError.code`, one paragraph up: adding a code
@@ -792,6 +793,27 @@ There are now **two** ways to reach the partial answer, and they are the same an
 could not be read, or the session directory itself could not be stat-ed (#97). Both render as `4`
 and both set `ok` to false; `--json` says which, in `context_cards.checked` and `session.checked`
 respectively.
+
+### Ctrl-C gets its own exit code (#206)
+
+A `KeyboardInterrupt` reaching the CLI used to be an unhandled Python exception once it escaped
+whatever local `except` happened to be in scope on that call — a traceback, and whichever exit code
+the interpreter gives one, which was never a documented promise. It is now caught at the top of
+`app()` and exits **130**, the conventional SIGINT code (128 + signal 2), distinct from 1 so a script
+can tell "the provider refused this" from "the operator stopped it".
+
+**One real behaviour change inside that:** `requivo discover`'s interactive loop and its
+decision-brief step already named the claimed session and the continuation verb on a `KeyboardInterrupt`
+(#202, #320) — and did it by exiting **1**, the code documented above for "a clean, expected failure".
+They exit 130 now, like every other command. A script that gated on exit 1 to detect an interrupted
+`discover` specifically needs to gate on 130 instead.
+
+### `requivo impact` and an unmatched slot — a behaviour change (#250)
+
+`requivo impact <slug> <unknown-slot>` used to print `Unknown slot(s): …` and exit **0** —
+indistinguishable, to a script, from an empty but valid result. It now exits **1**: the *input* was
+invalid, not the answer partial, so this is "a clean, expected failure" rather than `EXIT_DEGRADED`'s
+"the answer was unreachable". Whatever matched, if anything, still renders in full above the exit.
 
 ### The web error banner's `code` — **not stable**
 
