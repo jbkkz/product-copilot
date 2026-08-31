@@ -152,3 +152,15 @@ def record_call(rec: CallRecord) -> None:
     ledger = _LEDGER.get()
     if ledger is not None:
         ledger.record(rec)
+
+
+def current_ledger() -> UsageLedger | None:
+    """The ledger active on this call stack, or `None` when no `track_usage()` scope is open (#292).
+
+    Read-only counterpart to `record_call`: a caller that wants to know *what a specific operation
+    just spent* — a revision's provenance is the first one — needs to read the ledger back, not only
+    write to it. `None` is a real, common answer (most of the offline test suite never opens a
+    ledger at all) and callers must treat it as "nothing to report", never as "spent nothing": the
+    two look identical from in here and only the caller can tell them apart from context, which is
+    exactly invariant 6's rule about provenance applied to this ledger."""
+    return _LEDGER.get()

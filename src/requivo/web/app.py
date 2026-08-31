@@ -110,6 +110,9 @@ _STATUS_BY_CODE = {
     "no_context_cards": 500,          # this install shipped no cards; nothing the caller sent caused it
     "provider_output_invalid": 502,   # upstream would not hold the contract, after every retry
     "session_locked": 503,            # the write never started; retrying it unchanged is correct
+    # The content was produced (paid for) and only the write failed — the store, not the request
+    # (#208).
+    "artifact_write_failed": 500,
 }
 
 # What an *unknown* code gets. Deliberately a 5xx: with every known code mapped above, this only

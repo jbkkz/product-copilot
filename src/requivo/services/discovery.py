@@ -19,15 +19,36 @@ revision), so revision handling and staleness are identical to every other surfa
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from requivo.core.contracts import EngineOutput
-from requivo.core.errors import RevisionConflictError
-from requivo.core.persistence import ArtifactStatus
+from requivo.core.errors import (
+    ArtifactWriteFailedError,
+    InvalidSlugError,
+    RevisionConflictError,
+    SessionLockedError,
+    SessionUnreadableError,
+)
+from requivo.core.persistence import ArtifactStatus, ensure_store_dir, is_contained, validate_slug
 from requivo.core.validation import require_input_within_bounds
+from requivo.paths import lock_root
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
+from requivo.usage import current_ledger
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+try:  # Windows
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 # artifact type → the writer that turns its contract into the Markdown that gets saved. This is the
 # vocabulary of "things a generation produces a document for"; `stories` and `estimate` are absent on
@@ -143,6 +164,127 @@ def absorb_reasoning(out: EngineOutput, brief) -> None:
     out.opportunities = brief.opportunities
 
 
+def _discovery_guard_path(slug: str) -> Path:
+    """The in-flight first-discovery guard for `slug`: `<workspace>/.requivo/locks/<slug>.discovering`.
+
+    A sibling of `core.persistence.lock_path`, deliberately a *different* file (#209). That lock
+    covers a compound write and is released **before** a provider call starts — a call runs seconds
+    to minutes and cannot hold a write lock open that long, by that lock's own docstring — which is
+    exactly the window two concurrent first-discovery requests can both walk into: both read revision
+    0, both pass `_require_revision_zero`, and both are free to pay for a provider call before either
+    has written anything. This file exists to serialise *that* window, without touching the write
+    lock at all.
+
+    Validated exactly as `lock_path` validates its own: the slug reaches here from the service layer
+    and, under invariant 14, an external consumer may call this layer directly."""
+    root = lock_root()
+    p = root / (validate_slug(slug) + ".discovering")
+    if not is_contained(p, root):
+        raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
+                               details={"slug": slug})
+    return p
+
+
+@contextmanager
+def _discovery_guard(slug: str) -> Iterator[None]:
+    """Refuse a second, concurrent first-discovery on `slug` before it can pay for anything (#209).
+
+    Held for exactly the span a paid provider call plus its one write can take — acquired right
+    before the provider is called, released on every exit, success, failure, or an interrupt.
+
+    **Non-blocking, unlike `session_lock`.** A second caller does not wait its turn, because there is
+    no turn to wait for: a first discovery is not a queue, it is one operation that either lands the
+    session's very first revision or does not, and telling the loser immediately — before it has
+    spent anything — is strictly better than making it wait out `session_lock`'s own 30-second
+    deadline for a write that was never going to be its own.
+
+    `flock` on the *open file description*, exactly like `session_lock`'s own lock, so a crashed
+    holder (a killed CLI, a restarted web worker) releases it the instant the process dies — no mtime
+    heuristic is needed to tell a genuinely stuck holder from a dead one, because the kernel already
+    knows the difference. The refusal is `SessionLockedError` (`session_locked`, already mapped to
+    503 — "the write never started; retrying it unchanged is correct"): nothing about the loser's own
+    request was wrong, and resubmitting once the winner has finished is the correct next step, not a
+    different one.
+
+    Deliberately not re-entrant, unlike `session_lock`: nothing here legitimately nests this guard
+    around itself, and the plain non-reentrant shape is what keeps "a losing caller makes zero
+    provider calls" a fact about the lock file rather than about a depth counter a nested call could
+    quietly increment past.
+    """
+    p = _discovery_guard_path(slug)
+    ensure_store_dir(p.parent)
+    try:
+        fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        raise SessionUnreadableError(
+            f"could not open the discovery guard for session '{slug}': {e}",
+            details={"slug": slug}) from e
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise SessionLockedError(
+                    f"a discovery is already running for session '{slug}'; wait for it to finish "
+                    "and reload",
+                    details={"slug": slug}) from None
+        elif msvcrt is not None:  # pragma: no cover - Windows
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError:
+                raise SessionLockedError(
+                    f"a discovery is already running for session '{slug}'; wait for it to finish "
+                    "and reload",
+                    details={"slug": slug}) from None
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            elif msvcrt is not None:  # pragma: no cover - Windows
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
+
+
+def _usage_since(before: int) -> dict:
+    """The token/rate provenance for however many provider calls a `DiscoveryService` operation made
+    since `before` (a `len(ledger.calls)` saved right before the call), shaped as the extra
+    `RevisionRecord` fields `_provenance` merges in (#292).
+
+    `{}` — not zero-filled — when there is no active ledger (`usage.track_usage()` never opened, as
+    most of the offline test suite runs) or it recorded no calls in that span. Both are "nothing to
+    report", never "spent nothing": invariant 6's rule about provenance, applied to this ledger.
+
+    Several calls can land in one span — `start(..., finalize=True)` makes two (`analyze`, then the
+    brief's own `generate`) before the one apply that follows — and their tokens are summed, because
+    the revision they produced embodies both. The rate is stamped only when every call in the span
+    agrees on it: the ordinary case is one provider, one model, one price table for the whole span,
+    and a genuine disagreement is refused rather than guessed at — the same argument `UsageLedger`'s
+    own docstring makes for cost."""
+    ledger = current_ledger()
+    if ledger is None:
+        return {}
+    calls = ledger.calls[before:]
+    if not calls:
+        return {}
+    usage: dict = {
+        "usage_input_tokens": sum(c.input_tokens for c in calls),
+        "usage_output_tokens": sum(c.output_tokens for c in calls),
+        "usage_cache_read_tokens": sum(c.cache_read_tokens for c in calls),
+        "usage_cache_write_tokens": sum(c.cache_write_tokens for c in calls),
+    }
+    rates = {c.rate_per_mtok for c in calls}
+    dates = {c.priced_as_of for c in calls}
+    if len(rates) == 1 and len(dates) == 1:
+        (rate,), (as_of,) = rates, dates
+        if rate is not None and as_of is not None:
+            usage["usage_rate_per_mtok"] = rate
+            usage["usage_priced_as_of"] = as_of
+    return usage
+
+
 class DiscoveryService:
     """Provider-backed orchestration over the session/artifact services.
 
@@ -173,10 +315,15 @@ class DiscoveryService:
             self._provider = AnthropicProvider(self._client)
         return self._provider
 
-    def _provenance(self, op: str, *, cards: list[str] | None, surface: str) -> dict:
-        """The provenance for a revision: what the provider says about itself, plus which of our
-        surfaces asked for it (the one thing the provider cannot know)."""
-        return {**self._need_provider().provenance(op, only=cards), "surface": surface}
+    def _provenance(self, op: str, *, cards: list[str] | None, surface: str,
+                    usage: dict | None = None) -> dict:
+        """The provenance for a revision: what the provider says about itself, which of our surfaces
+        asked for it (the one thing the provider cannot know), and — when the caller has it — what
+        the call(s) behind this apply actually spent (`_usage_since`, #292)."""
+        prov = {**self._need_provider().provenance(op, only=cards), "surface": surface}
+        if usage:
+            prov.update(usage)
+        return prov
 
     # ── discovery ────────────────────────────────────────────────────────────────
     def create_only(self, request: str, *, cards: list[str] | None = None,
@@ -206,7 +353,8 @@ class DiscoveryService:
         return meta
 
     def finalize_discovery(self, request: str, out: EngineOutput, *, cards: list[str] | None = None,
-                           slug: str | None = None, brief=None, surface: str = "discover") -> str:
+                           slug: str | None = None, brief=None, surface: str = "discover",
+                           usage: dict | None = None) -> str:
         """Create the session and apply a discovered model through the validated path. When a `brief` is
         given (a finalized discovery), its reasoning is absorbed into the model first. Shared by the
         CLI's interactive loop (which produced `out` itself) and `start()`.
@@ -215,13 +363,19 @@ class DiscoveryService:
         same request reuses its session — so without that precondition a re-run would quietly replace a
         model that had been refined over several turns with a naive first-turn one, and a write that
         landed while the provider was reasoning would be overwritten the same way. Both cases are a
-        `revision_conflict`, which is recoverable; a silent replacement is not."""
+        `revision_conflict`, which is recoverable; a silent replacement is not.
+
+        `usage` (#292) is optional and threaded through rather than computed here: this method makes
+        no provider call of its own, so it has no `before` index of its own to measure from. `start()`
+        passes what its own call(s) spent; the CLI's interactive loop, which reaches this after up to
+        nine calls of its own, currently does not, and the revision it produces carries no usage
+        provenance — absent rather than wrong, per invariant 6."""
         meta = self.claim_session(request, cards=cards, slug=slug)
         if brief is not None:
             absorb_reasoning(out, brief)
         self.sessions.update_model(
             meta.slug, out.model_dump_json(), expected_revision=0,
-            provenance=self._provenance("analyze", cards=cards, surface=surface))
+            provenance=self._provenance("analyze", cards=cards, surface=surface, usage=usage))
         return meta.slug
 
     def start(self, request: str, *, cards: list[str] | None = None, slug: str | None = None,
@@ -232,13 +386,22 @@ class DiscoveryService:
         The session is claimed *before* the provider is called. Creation is idempotent, so re-running
         a discovery whose session already carries a model is refused — and refusing it after the call
         means having paid for reasoning (twice, when finalizing) that can only be thrown away. The
-        check is cheap and the call is not."""
+        check is cheap and the call is not.
+
+        **And claiming is not the only race (#209).** Two callers of this same request — a second
+        browser tab, a refresh-and-resubmit — both idempotently reuse the session `claim_session`
+        returns and both pass its revision-zero check before either has paid for anything. The
+        `_discovery_guard` below is what actually decides which of them proceeds: the loser is
+        refused immediately, before it ever reaches the provider."""
         provider = self._need_provider()
         meta = self.claim_session(request, cards=cards, slug=slug)
-        out = provider.analyze(request, only=cards)
-        brief = provider.generate("brief", out, only=cards) if finalize else None
-        return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
-                                       surface=surface)
+        with _discovery_guard(meta.slug):
+            ledger = current_ledger()
+            before = len(ledger.calls) if ledger is not None else 0
+            out = provider.analyze(request, only=cards)
+            brief = provider.generate("brief", out, only=cards) if finalize else None
+            return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
+                                           surface=surface, usage=_usage_since(before))
 
     # ── interactive drafting (before there is a session) ─────────────────────────
     # An interactive surface reasons several turns against a request that has not been persisted
@@ -308,14 +471,24 @@ class DiscoveryService:
         has been refined it would write a naive first-turn model over that work, with the optimistic
         lock satisfied throughout (it reads revision N and writes against N). The `POST
         /sessions/{slug}/discover` route reaches this directly; the Web only offers the button at
-        revision 0, but that is a rendering decision, not a rule."""
+        revision 0, but that is a rendering decision, not a rule.
+
+        **`_discovery_guard` is what actually serialises two concurrent callers of this route
+        (#209).** `_require_revision_zero` above cannot: a second tab or a refresh-and-resubmit reads
+        the same revision-0 snapshot before either caller has written anything, so both pass it and
+        both would otherwise reach the provider — the guard is the first point either caller can lose
+        the race, and it is checked before either has spent anything."""
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_revision_zero(slug, snap.revision)
-        out = self._need_provider().analyze(snap.request, only=snap.context_cards)
-        return self.sessions.update_model(
-            slug, out.model_dump_json(), expected_revision=snap.revision,
-            provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface))
+        with _discovery_guard(slug):
+            ledger = current_ledger()
+            before = len(ledger.calls) if ledger is not None else 0
+            out = self._need_provider().analyze(snap.request, only=snap.context_cards)
+            return self.sessions.update_model(
+                slug, out.model_dump_json(), expected_revision=snap.revision,
+                provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface,
+                                            usage=_usage_since(before)))
 
     # ── refinement ───────────────────────────────────────────────────────────────
     def answer(self, slug: str, answers: str, *, expected_revision: int | None = None,
@@ -340,12 +513,15 @@ class DiscoveryService:
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_no_conflict_yet(slug, expected_revision, snap)
+        ledger = current_ledger()
+        before = len(ledger.calls) if ledger is not None else 0
         out = self._need_provider().analyze(
             snap.request, current_model=snap.model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(
             slug, out.model_dump_json(),
             expected_revision=expected_revision if expected_revision is not None else snap.revision,
-            provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface))
+            provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface,
+                                        usage=_usage_since(before)))
 
     # ── generation ───────────────────────────────────────────────────────────────
     def reason(self, slug: str, artifact_type: str, **kwargs):
@@ -403,16 +579,37 @@ class DiscoveryService:
         provider = self._need_provider()
 
         if artifact_type == "brief":
+            ledger = current_ledger()
+            before = len(ledger.calls) if ledger is not None else 0
             brief = provider.generate("brief", out, only=cards)
             absorb_reasoning(out, brief)
+            usage = _usage_since(before)
             # `out` is the revision-N model plus the reasoning just derived from it. Applying it without
             # the precondition would discard any revision that landed while the provider was reasoning.
-            applied = self.sessions.update_model(
-                slug, out.model_dump_json(), expected_revision=source_revision,
-                provenance=self._provenance("brief", cards=cards, surface=surface))
+            try:
+                applied = self.sessions.update_model(
+                    slug, out.model_dump_json(), expected_revision=source_revision,
+                    provenance=self._provenance("brief", cards=cards, surface=surface, usage=usage))
+            except RevisionConflictError as e:
+                # The paid assessment is not thrown away merely because the apply lost the race
+                # (#208). `ArtifactService.save` already knows how to file a document against an
+                # older source revision, honestly flagged stale — invariant 2's own words: "saving
+                # against an older revision stays legal". What genuinely did not happen is the
+                # reasoning's absorption into the model: the decisions/challenges/opportunities just
+                # derived from `out` were never written, because the apply that would have written
+                # them is exactly the one that lost. Both facts, and the remedy, go in one message —
+                # not just the conflict — so a caller reading only `.message` (the CLI's generic
+                # `except RequivoError` handler, the Web's generic exception handler) is told the
+                # whole story with no special-casing needed on either surface.
+                status = self._save_generated(slug, "brief", brief_markdown(out, brief), source_revision)
+                raise RevisionConflictError(
+                    f"{e.message} The decision brief was still generated and saved against revision "
+                    f"{source_revision} (now flagged stale); its reasoning was NOT absorbed into the "
+                    f"model. `requivo brief {slug}` (or the Web's Regenerate) will refresh both.",
+                    details={**e.details, "artifact_saved": True, "artifact_type": "brief",
+                             "artifact_stale": status.stale}) from e
             # The assessment renders exactly the model that apply just wrote, so it belongs to that revision.
-            status = self.artifacts.save(slug, "brief", brief_markdown(out, brief),
-                                         source_revision=applied.revision)
+            status = self._save_generated(slug, "brief", brief_markdown(out, brief), applied.revision)
             return Generated(status=status, artifact=brief, model=out)
 
         try:
@@ -431,5 +628,18 @@ class DiscoveryService:
         to be handled here, by re-diffing after the write and replaying the change through the graph.
         It now belongs to `ArtifactService.save`, which does it for *every* caller rather than only the
         provider path: the same hazard reaches a Claude Code turn saving a document it wrote earlier.
-        Passing the honest source revision is the whole contribution this layer needs to make."""
-        return self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)
+        Passing the honest source revision is the whole contribution this layer needs to make.
+
+        **And the one place every generated artifact's write is caught (#208).** The content reaching
+        here was already paid for — a provider call that ran for seconds to minutes — so a write that
+        then fails at the filesystem (a full disk, a permissions error, anything `_atomic_write` did
+        not itself turn into a `RequivoError`) must not surface as a bare traceback out from under
+        that call. `ArtifactWriteFailedError` names what was lost and where it was going; the caller
+        still has to regenerate, because the content itself was never handed back to be retried."""
+        try:
+            return self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)
+        except OSError as e:
+            raise ArtifactWriteFailedError(
+                f"{artifact_type!r} was generated for session '{slug}' but could not be saved: {e}",
+                details={"slug": slug, "type": artifact_type,
+                         "cause": f"{type(e).__name__}: {e}"}) from e

@@ -1,0 +1,170 @@
+"""#292: stamp per-call token usage into revision provenance, so a session's cost is answerable.
+
+Driven directly against `DiscoveryService`/`SessionService` with a stub `ReasoningProvider` that
+records its own spend into the active `requivo.usage` ledger, the same way a real provider's
+`_complete()` does -- no CLI, no web, no real network.
+"""
+
+from __future__ import annotations
+
+import pytest
+from _fakes import out, slot
+
+from requivo.services.discovery import DiscoveryService
+from requivo.services.sessions import SessionService
+from requivo.usage import CallRecord, record_call, track_usage
+
+
+@pytest.fixture(autouse=True)
+def _isolate_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
+
+
+class _SpendingProvider:
+    """A stub `ReasoningProvider` whose `analyze()` records one `CallRecord` against whatever ledger
+    is active -- exactly what `providers/anthropic/completion.py::_record` does for a real call."""
+
+    name = "stub"
+
+    def __init__(self, *records: CallRecord):
+        self._records = list(records)
+
+    def analyze(self, request, *, current_model=None, answers=None, only=None, reuse_system=False):
+        record_call(self._records.pop(0))
+        return out({"problem": slot(80, "explicit", "high")})
+
+    def generate(self, *a, **k):  # pragma: no cover - unused here
+        raise NotImplementedError
+
+    def model_name(self):
+        return "stub-model"
+
+    def provenance(self, op, *, only=None):
+        return {"provider": self.name, "model_name": self.model_name(), "surface": "test"}
+
+
+def test_a_provider_backed_apply_stamps_token_and_rate_provenance_onto_its_revision():
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    provider = _SpendingProvider(CallRecord(
+        model="stub-model", input_tokens=1000, output_tokens=200,
+        cache_read_tokens=50, cache_write_tokens=10,
+        rate_per_mtok=(2.0, 10.0), priced_as_of="2026-08-29"))
+    disco = DiscoveryService(provider=provider, sessions=sessions)
+
+    with track_usage():
+        disco.run_discovery(slug, surface="test")
+
+    rec = sessions.repo.read_meta(slug).revisions[-1]
+    assert rec.usage_input_tokens == 1000
+    assert rec.usage_output_tokens == 200
+    assert rec.usage_cache_read_tokens == 50
+    assert rec.usage_cache_write_tokens == 10
+    assert tuple(rec.usage_rate_per_mtok) == (2.0, 10.0)
+    assert rec.usage_priced_as_of == "2026-08-29"
+
+
+def test_a_deterministic_apply_carries_no_usage_provenance():
+    """Must-fire control: a `model apply` that never touches a provider -- the shape a Claude Code
+    turn or a hand-authored proposal takes -- must not read as having spent $0.00 (invariant 6)."""
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    sessions.update_model(slug, out({"problem": slot(80, "explicit", "high")}).model_dump_json())
+
+    rec = sessions.repo.read_meta(slug).revisions[-1]
+    assert rec.usage_input_tokens is None
+    assert rec.usage_output_tokens is None
+    assert rec.usage_cache_read_tokens is None
+    assert rec.usage_cache_write_tokens is None
+    assert rec.usage_rate_per_mtok is None
+    assert rec.usage_priced_as_of is None
+
+
+def test_a_provider_call_made_with_no_active_ledger_still_leaves_usage_absent():
+    """The offline test suite's ordinary shape: a provider call made with no `track_usage()` scope
+    open at all. `current_ledger()` is `None`, and that has to read the same as "nothing to report",
+    not as a call that spent zero tokens."""
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    provider = _SpendingProvider(CallRecord(model="stub-model", input_tokens=1000, output_tokens=200))
+    disco = DiscoveryService(provider=provider, sessions=sessions)
+
+    disco.run_discovery(slug, surface="test")  # no track_usage() scope open
+
+    rec = sessions.repo.read_meta(slug).revisions[-1]
+    assert rec.usage_input_tokens is None
+    assert rec.usage_rate_per_mtok is None
+
+
+def test_a_revision_record_with_no_usage_keys_round_trips_unchanged():
+    """An old session.json, written before #292, carries no usage_* keys at all. `RevisionRecord`
+    must load it without complaint and default every usage field to absent, not zero."""
+    from requivo.core.persistence import RevisionRecord
+
+    old_json = (
+        '{"revision": 1, "created_at": "2026-01-01T00:00:00Z", "provider": "anthropic", '
+        '"model_name": "claude-sonnet-5", "surface": "cli-discover", "model_hash": "sha256:abc"}'
+    )
+    rec = RevisionRecord.model_validate_json(old_json)
+    assert rec.usage_input_tokens is None
+    assert rec.usage_rate_per_mtok is None
+    # Re-serializes without inventing a zero anywhere a real value was never known.
+    again = RevisionRecord.model_validate_json(rec.model_dump_json())
+    assert again.usage_input_tokens is None
+
+
+def test_render_session_cost_is_silent_when_no_revision_carries_usage(capsys):
+    """Must-fire control for the renderer itself: a session applied entirely through a deterministic
+    path (or by Claude Code) must print nothing -- never $0.00 (invariant 6)."""
+    from requivo.render.terminal import render_session_cost
+
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    sessions.update_model(slug, out({"problem": slot(80, "explicit", "high")}).model_dump_json())
+    revisions = sessions.repo.read_meta(slug).revisions
+
+    render_session_cost(revisions)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_render_session_cost_sums_priced_revisions():
+    from requivo.render.terminal import render_session_cost
+
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    provider = _SpendingProvider(
+        CallRecord(model="stub-model", input_tokens=1000, output_tokens=200,
+                  rate_per_mtok=(2.0, 10.0), priced_as_of="2026-08-29"))
+    disco = DiscoveryService(provider=provider, sessions=sessions)
+    with track_usage():
+        disco.run_discovery(slug, surface="test")
+
+    revisions = sessions.repo.read_meta(slug).revisions
+    render_session_cost(revisions)  # smoke: must not raise, prints the cumulative figure
+
+    assert revisions[-1].usage_input_tokens == 1000
+
+
+def test_requivo_status_prints_the_cumulative_cost_line():
+    """The CLI end -- `requivo status` shows the line once a revision carries usage."""
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    from requivo.cli import app
+
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    provider = _SpendingProvider(
+        CallRecord(model="stub-model", input_tokens=1000, output_tokens=200,
+                  rate_per_mtok=(2.0, 10.0), priced_as_of="2026-08-29"))
+    disco = DiscoveryService(provider=provider, sessions=sessions)
+    with track_usage():
+        disco.run_discovery(slug, surface="test")
+
+    buf = StringIO()
+    with redirect_stdout(buf):
+        app(["status", slug])
+    printed = buf.getvalue()
+    assert "SESSION COST" in printed
+    assert "1,000" in printed or "1000" in printed

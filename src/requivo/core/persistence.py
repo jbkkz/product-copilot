@@ -628,6 +628,21 @@ class RevisionRecord(BaseModel):
     surface: Optional[str] = None             # the reasoning surface, e.g. "cli-discover", "requivo-answer"
     prompt_version: Optional[str] = None      # "sha256:…" of the prompt, when known
     model_hash: str = ""                      # "sha256:…" of the model payload — content identity
+    # Token/rate provenance for a provider-backed apply (#292) — absent for a deterministic apply
+    # (session import, a hand-authored `model apply`, a Claude Code turn, which spends no API tokens)
+    # and for any revision written before this field existed. Never zero-filled: invariant 6 says
+    # provenance is real or absent, and a revision that genuinely spent 0 tokens does not exist.
+    usage_input_tokens: Optional[int] = None
+    usage_output_tokens: Optional[int] = None
+    usage_cache_read_tokens: Optional[int] = None
+    usage_cache_write_tokens: Optional[int] = None
+    # The rate this revision's calls were actually billed at, `(input, output)` USD per million
+    # tokens — stamped rather than looked up again at render time, so a later price-table edit
+    # cannot retroactively change what an old revision is reported to have cost (`usage.py`'s own
+    # "cost is arithmetic here and nowhere else"). `None` when the calls behind this revision did not
+    # all agree on one rate — a genuine disagreement is refused rather than guessed at.
+    usage_rate_per_mtok: Optional[tuple[float, float]] = None
+    usage_priced_as_of: Optional[str] = None   # the rate table's own date, alongside the rate itself
 
 
 class SessionMeta(BaseModel):
@@ -1149,6 +1164,12 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
             model_name=prov.get("model_name"),
             surface=prov.get("surface"),
             prompt_version=prov.get("prompt_version"),
+            usage_input_tokens=prov.get("usage_input_tokens"),
+            usage_output_tokens=prov.get("usage_output_tokens"),
+            usage_cache_read_tokens=prov.get("usage_cache_read_tokens"),
+            usage_cache_write_tokens=prov.get("usage_cache_write_tokens"),
+            usage_rate_per_mtok=prov.get("usage_rate_per_mtok"),
+            usage_priced_as_of=prov.get("usage_priced_as_of"),
         ))
         meta.current_revision = rev
         meta.updated_at = _now()

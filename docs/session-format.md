@@ -113,11 +113,23 @@ Each applied revision records **who produced it**, in a `revisions` log in `sess
 | `surface` | which interface asked (`cli-discover`, `web-answer`, `cli-brief`, a Claude Code turn, `session-rescope`…) |
 | `previous_revision`, `created_at` | where it sits in the history |
 | `model_hash` | content identity of the model that was written |
+| `usage_input_tokens`, `usage_output_tokens`, `usage_cache_read_tokens`, `usage_cache_write_tokens` | what the provider call(s) behind this revision actually spent |
+| `usage_rate_per_mtok`, `usage_priced_as_of` | the `(input, output)` USD-per-million-token rate those calls were billed at, and the date of the table it came from |
 
 Provenance belongs to the revision, not the session, because a model is moved by more than one surface
 over its life. The prompt hash is there because behaviour is tuned by editing prompts and context
 cards: "which model produced this" answers half the question, and the other half is what changed
 between two runs that look identical in the log.
+
+**The `usage_*` fields are additive, from #292, and absent — never zero — on most revisions.** A
+deterministic apply (`model apply` from a hand-authored proposal, a Claude Code turn, which spends no
+API tokens, `session import`) carries none of them; a revision written before #292 shipped carries
+none either. Only a provider-backed apply made while a `requivo.usage` ledger was open (every CLI
+command, every Web request) stamps them, and it stamps the rate it was actually billed at rather than
+one looked up again later — a later edit to the vendor rate table must not retroactively change what
+an old revision is reported to have cost. `requivo status` sums every revision that carries them into
+a cumulative "session cost so far" line and says nothing when none do, the same three-state shape
+`render_usage()` uses for a single run's own tokens/cost/latency.
 
 Updates go through the single validated apply path and support an **optimistic-locking** precondition:
 `requivo model apply <slug> proposal.json --expected-revision N` fails cleanly with a

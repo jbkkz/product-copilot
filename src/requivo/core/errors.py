@@ -439,3 +439,18 @@ class ProviderOutputError(RequivoError):
     surface as a bare traceback."""
 
     code = "provider_output_invalid"
+
+
+class ArtifactWriteFailedError(RequivoError):
+    """A generated artifact's content was produced — paid for, on every path that raises this — and
+    the write meant to record it failed at the filesystem: a full disk, a permissions error, or any
+    other `OSError` `_atomic_write` did not itself turn into a structured refusal (#208).
+
+    Raised at the one seam that turns "the write raised" into a clean, structured message instead of
+    a bare traceback surfacing out from under a paid provider call. The content itself is not
+    recoverable from here — it was never handed back to a caller that could retry the save on its
+    own — so the honest remedy is "regenerate", not a guess at what a partial write left behind.
+    `details`: `{slug, type, cause}`.
+    """
+
+    code = "artifact_write_failed"
