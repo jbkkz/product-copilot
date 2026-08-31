@@ -202,9 +202,10 @@ refused by name rather than silently decoded into something that reads like pros
 
 ## Status
 
-Actively developed and stable on the 1.x line. The Core, CLI, Claude Code plugin and local Web
-interface are usable today. The **session format is a published contract** — versioned, forward-compatible, and shared by
-every interface; what is guaranteed and what is deprecated is written down in
+Actively developed. The Core, CLI, Claude Code plugin and local Web interface are usable today, and
+what is stable is stated rather than inferred from the release number: Requivo is versioned with
+SemVer, and the **session format is a published contract** — versioned, forward-compatible, and
+shared by every interface. What is guaranteed and what is deprecated is written down in
 [compatibility][compatibility]. Output is non-deterministic — treat the decision brief as a
 senior colleague's read, not an oracle, and get expert review for any legal/tax/compliance flag it
 raises.

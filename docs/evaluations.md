@@ -84,10 +84,17 @@ adjustment entry, or an override?"* — that's the read that matters.
 
 ## Cost
 
-K calls per request, doubled under `--brief`. An **interactive** request costs K × `GOLDEN_TURNS`
-instead — 15 at the defaults — so capture it on its own rather than as part of a full-set run.
-Re-capture the targeted request first and the full set only before committing a baseline. The
-harness's own logic is unit-tested in `tests/test_golden_lib.py`, its capture loop in
+K calls per **single-pass** request, doubled under `--brief`. An **interactive** request costs
+K × `GOLDEN_TURNS` instead — 15 at the defaults — so capture it on its own rather than as part of a
+full-set run. Re-capture the targeted request first and the full set only before committing a
+baseline.
+
+The figures above are per request *shape*, and no total for the request set appears here on purpose:
+`golden_run.py` computes the ceiling for the requests it actually parsed and selected and prints it
+before the first call, so the number to budget against is the live one rather than one written down
+on the day the set happened to have six single-pass requests in it (#290).
+
+The harness's own logic is unit-tested in `tests/test_golden_lib.py`, its capture loop in
 `tests/test_golden_capture.py`, and what it prints — the per-lens states and the union verdict — in
 `tests/test_golden_readout.py` (no API calls in any of them).
 

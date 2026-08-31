@@ -8,9 +8,17 @@ callers over it, so there is exactly one place that turns a provider reply into 
 model change.
 
 It talks to the provider through the protocol only (`analyze` / `generate` / `provenance`), never to a
-vendor's functions directly. That is what keeps the seam real rather than decorative: swapping in a
-second provider is a constructor argument, and the provenance stamped on each revision comes from the
-provider itself instead of a hard-coded `"anthropic"` string.
+vendor's functions directly. That is what keeps the seam real rather than decorative: this service
+takes a `ReasoningProvider` and nothing else, so *pointing it at* a second implementation is a
+constructor argument, and the provenance stamped on each revision comes from the provider itself
+instead of a hard-coded `"anthropic"` string.
+
+That is the cost of the swap, and it used to be written here as though it were the whole cost.
+*Writing* the second implementation is not a constructor argument: roughly 400 lines that have
+nothing to do with any vendor -- the per-operation message builders, the generator tables,
+`prompt_version()`, the JSON extraction and the corrective-nudge retry loop -- are packaged under
+`providers/anthropic` today, so a second provider re-implements or copies them. Extracting them is
+decided work, deferred with a written trigger: `decision: deferring-the-neutral-provider-layer`.
 
 It never touches the filesystem or `model.json` directly — every write goes through `SessionService`
 (validate → diff → propagate → revision → stale-flag) and `ArtifactService` (save with source

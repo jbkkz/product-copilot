@@ -51,10 +51,15 @@ plugin enablement beside it shipped in every release from 0.10.0 to 1.2.0. Both 
 file it has to be added to the allowlist in `tests/test_agent_layer.py` and described here, in the
 same change; the test fails otherwise.
 
-Three more tracked files belong to the same maintainer loop and are equally inert for a
-contributor: `.oss.json` and `.oss/` configure the `oss` plugin that runs this repository's
-maintenance (see [.oss/README.md](.oss/README.md)), and `.supertool.json` configures its shell
-tooling. Nothing in the test suite, the build or the product reads any of them.
+Three more tracked files belong to the same maintainer loop and are inert for a contributor in the
+sense that matters — you never run any of them: `.oss.json` and `.oss/` configure the `oss` plugin
+that runs this repository's maintenance (see [.oss/README.md](.oss/README.md)), and `.supertool.json`
+configures its shell tooling. Nothing in the build or the product reads them.
+
+One test does, and it is worth knowing before it goes red on you: `tests/test_version_sites.py`
+cross-checks `.oss.json`'s `version_sites` list against the files it can actually find declaring a
+version, in both directions. So adding a new file that declares the project version means adding it
+to that list, and it is the one place a contributor has a reason to edit a maintainer-loop file.
 
 So: **contributing needs Python, git and the setup above — nothing else.** If the directory bothers
 you, delete it in your working copy; just do not commit the deletion. A fresh git worktree takes its
@@ -66,12 +71,16 @@ the layer is tracked here rather than kept in a personal config.
 ```bash
 .venv/bin/python -m pytest tests/ -q         # pure-logic + offline CLI units (no API calls)
 .venv/bin/ruff check src tests scripts        # lint (same invocation as CI)
+.venv/bin/pyright                              # types (same invocation as CI; config is in pyproject.toml)
 python -m build --wheel                        # the wheel must still build (needs `pip install build`)
 ```
 
-CI runs the tests and `ruff check` on Python 3.9–3.13 and builds the wheel (then imports it and builds
-every prompt from the installed package). Please run them locally first. The project lints with ruff
-but does **not** enforce `ruff format` — match the surrounding style rather than reformatting.
+CI runs the tests and `ruff check` on Python 3.9–3.13, runs `pyright`, and builds the wheel (then
+imports it and builds every prompt from the installed package). It runs more legs than these four —
+the platform matrix, a dependency-floor install, secret scanning, plugin-manifest validation and the
+changelog gate — but these four are the ones that reproduce locally in seconds. Please run them
+first. The project lints with ruff but does **not** enforce `ruff format` — match the surrounding
+style rather than reformatting.
 
 ### What the changelog gate does not cover
 
@@ -93,6 +102,55 @@ This limit is stated rather than closed, deliberately. A `push:` trigger on `mai
 *after* the fact — a fragment cannot be added retroactively to a commit already pushed — installing a
 permanently red default branch, which is a worse lie than the one it fixes. If you push directly to
 `main`, add the fragment in that same commit; nothing will remind you.
+
+### The guards that read your source and your prose
+
+A share of this suite does not test the product at all: it tests the repository's *form* — an import,
+an encoding declaration, a version string, a comment that names a test, a heading a test parses. Each
+one is incident-backed and each one states its reason in its own file. What follows is only the map:
+what trips it, and where the fix goes. A small PR can trip several, and none of them needs you to
+read the guard to appease it.
+
+| If your change… | This goes red | The fix |
+|---|---|---|
+| reads or writes a text file anywhere in `src/`, `scripts/` or `tests/` | `test_encoding.py` | name the codec: `encoding="utf-8"`. A deliberate locale-default read is exempted **by name, with a reason**, inside the guard |
+| prints a character a console may not encode | `test_encoding.py` | route the entry point through `streams.py` / `configure_output()`; never add a bare `print` in a new harness script |
+| imports a provider from `core/`, or any new provider name from `cli.py`, `render/`, `deterministic/` or `web/` | `test_boundaries.py` | `core/` may never import one. A surface import needs an allowlist entry keyed by **(file, name)** carrying its reason — and if the concept is not the vendor's, move it out of `providers/` instead |
+| calls `core.persistence` directly from a surface | `test_boundaries.py` | use `SessionRepository`, or add a **(file, function)** allowlist entry saying why no backing-neutral form exists |
+| renames or deletes a test | `test_narrative_references.py` | **grep for the old name first** — see the coupling below |
+| adds a decision record under `docs/decisions/` | `test_narrative_references.py` | give it a `**Slug:**` line, and leave a `` `decision: <slug>` `` pointer, on one line, at whatever the record explains |
+| adds a file that declares the project version | `test_version_sites.py` | make it agree with the others, and register the path in `.oss.json`'s `version_sites` |
+| edits a heading in `docs/compatibility.md` | `test_cli_flag_names.py`, `test_cli_degraded_listing.py` | the page is parsed as data — see the coupling below |
+| adds a `--json` output, or changes a payload's shape | `test_cli_flag_names.py`, `test_public_payload_shapes.py` | add the row to `docs/compatibility.md`'s promise table and update the payload pin in the same change |
+| edits a prompt's `# Output format` example | `test_prompt_contracts.py` | the example must validate against the contract that operation actually parses replies with |
+| changes a CLI verb or flag the plugin invokes | `test_plugin.py`, `test_plugin_cli_drift.py` | update the skill that invokes it; the drift guard compares the plugin against a *released* Requivo, not this checkout |
+| adds a key to the tracked `.claude/settings.json` | `test_agent_layer.py` | allowlist it **and** describe it in this file, in the same change |
+| edits anything under `.github/workflows/` | `test_workflow_permissions.py`, `test_workflow_untrusted_output.py` | state the `permissions:` block, and never interpolate third-party output into a line that starts at column 0 |
+| adds or moves a runtime dependency bound | `test_dependency_floor.py` | the floor set must stay complete — a dependency that drops out makes the floor leg report a test it never ran |
+| adds a slot to `framework/model_schema.json` | `test_dependencies.py` | add it to `_ARTIFACT_SLOTS_RAW`, or name it in `_SLOTS_WITH_NO_SPECIFIC_ARTIFACT` with a reason |
+| renames the user-facing caption for `brief` in an asset | `test_vocabulary_boundary.py` | an asset keeping the older wording is a declared exception, never an accident |
+
+**Two of these run in the direction nobody predicts. They are the ones worth reading twice.**
+
+- **A test's *name* is load-bearing API for source prose.** This repository answers "why is this line
+  here?" by naming the test that enforces it, in `src/`, in `scripts/`, in `docs/` and in `CLAUDE.md`
+  — dozens of such references. Renaming or deleting a test therefore breaks documentation, and
+  `test_narrative_references.py` goes red naming the file that now points at nothing. *The fix:*
+  before you rename, `grep -r <the_old_test_name> src scripts docs tests CLAUDE.md` and update every
+  hit in the same commit. The same guard also fails if an identifier is **split by a line wrap**, so
+  keep a reference on one line — a name you cannot grep for is a name nobody can follow.
+- **`docs/compatibility.md` is parsed as data, not read as prose.** Two tests locate a section by its
+  exact heading string and one matches a row of the exit-code table by regex, so an innocent heading
+  edit breaks the build in a file that looks like documentation. *The fix:* if you must rename a
+  heading, update the literal in the same change — the failure message names which one, and each
+  assertion carries the promise it is protecting so you can tell a rename from a real removal.
+
+  That coupling is mechanical and this table's rows are only about the mechanics. **Whether a given
+  change is breaking or compatible is a separate judgement the page does not always settle** — the
+  exit-code and error-code promise says that "moving a condition from one code to another" is
+  breaking, and says nothing about direction, so narrowing and widening are currently argued rather
+  than looked up (#382). If your change moves a condition, say which direction and why in the PR;
+  do not read a green suite as the page having agreed with you.
 
 ## Conventions
 

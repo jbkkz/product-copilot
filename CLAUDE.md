@@ -800,10 +800,18 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
   stayed shallow. Reported only below `MEASURABLE_DEPTH`: a healthy capture is deliberately authored
   deeper than five turns, and its leftover layers are by design, not a finding (#163).
 
-Cost: K calls per request, doubled under `--brief` — a full six-request cycle is 18. An interactive
+Cost: K calls per **single-pass** request, doubled under `--brief`. An interactive
 request is K × `GOLDEN_TURNS` on its own (15 at the defaults), so capture it alone rather than as part
-of a full-set run. Re-capture the targeted request first, the full set only before committing a
-baseline.
+of a full-set run — the bare invocation skips interactive requests for that reason. Re-capture the
+targeted request first, the full set only before committing a baseline.
+
+**No total for the set is written down, here or in the script.** It used to be — *"a full six-request
+cycle is 18"*, in this file and in `golden_run.py`'s docstring, arithmetically right on the day both
+were written and silently wrong the day a seventh request landed in `requests.md`, with nothing going
+red in between (#290). `planned_calls()` derives the ceiling from the requests a given invocation
+actually parsed and selected, and `main()` prints it before the first call, so the figure a reader
+budgets against is the live one. Pinned by
+`test_the_announced_call_count_moves_with_the_request_set`.
 
 **Known limit (partially mitigated):** `load_context()` concatenates every card by default, so each new
 card dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost `doc-reapproval`
@@ -829,7 +837,9 @@ instance would justify.
      field, `config_vs_custom` today). This is the single source — `schema_slot_ids()` reads it, and
      everything else either derives from it or has to be kept consistent with it by hand.
   2. **`framework/elicitation.md`** — the pillar table and the human-readable spec. **Unguarded**:
-     nothing fails if this drifts from the schema, so check it by eye every time.
+     nothing fails if this drifts from the schema, so check it by eye every time. Unguarded on
+     purpose and not by omission — #278 asked for a guard and was answered with a measurement:
+     `decision: elicitation-schema-hand-kept`.
   3. **`core/dependencies.py`'s `_ARTIFACT_SLOTS_RAW`** — add the slot to every artifact set it
      materially shapes, or, if it genuinely feeds no *specific* artifact (only the assessment's
      judgment over the whole model, via `brief`'s `*`), name it with a reason in
@@ -849,7 +859,9 @@ instance would justify.
   **Whatever you touch, a full golden re-capture follows** — `{{SCHEMA}}` is substituted into every
   prompt, so adding a slot moves every prompt's hash. See "The golden harness" below.
 - **Docs live in `docs/`**, one file per subject (`architecture`, `cli`, `web`, `session-format`,
-  `providers`, `context-cards`, `requirements-model`, `evaluations`, `product-validation`, `roadmap`).
+  `providers`, `context-cards`, `requirements-model`, `evaluations`, `product-validation`, `roadmap`),
+  plus `docs/decisions/` for the arguments no test can go red for — see *Where a bug narrative lives*
+  above, and `docs/README.md`, which indexes all of it.
   The README is an orientation, not a manual — put depth in `docs/`. `product-validation.md` is the
   manual protocol for "is this better than a strong prompt?"; keep it out of the golden harness, which
   answers a narrow mechanical question and would lend a false precision to a judgment.
