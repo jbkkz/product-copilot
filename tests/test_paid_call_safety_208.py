@@ -98,6 +98,10 @@ def test_a_brief_lost_to_a_revision_conflict_is_still_saved_stale_not_discarded(
     assert f"requivo brief {slug}" in message
     assert exc_info.value.details["artifact_saved"] is True
     assert exc_info.value.details["artifact_stale"] is True
+    # The two sentences must not run together with no separator -- a real defect a first review
+    # caught: "...re-apply The decision brief..." with nothing between "re-apply" and "The".
+    assert "re-apply The decision brief" not in message
+    assert ". The decision brief" in message
 
 
 def test_a_brief_with_no_conflict_is_byte_identical_to_today():
@@ -121,6 +125,32 @@ def test_a_brief_with_no_conflict_is_byte_identical_to_today():
     meta = sessions.repo.read_meta(slug)
     assert meta.current_revision == 2  # the brief's own absorb-and-apply
     assert result.model.decisions == [] and result.status.stale is False
+
+
+def test_a_conflict_plus_a_secondary_write_failure_states_both_not_just_one():
+    """Found in audit: if the fallback save inside the revision-conflict handler ALSO fails at the
+    filesystem, the `ArtifactWriteFailedError` it raises must not silently drop the revision-conflict
+    context it happened alongside -- a caller reading only `.message` needs to be told the content is
+    genuinely lost (a write failure) AND that a race was the reason the model was never absorbed, not
+    just one of the two."""
+    sessions = SessionService()
+    slug = _seeded_session(sessions)
+    provider = _ConflictingBriefProvider(sessions, slug)
+    disco = DiscoveryService(provider=provider, sessions=sessions)
+
+    def _boom(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    disco.artifacts.save = _boom  # type: ignore[method-assign]
+
+    with pytest.raises(ArtifactWriteFailedError) as exc_info:
+        disco.generate(slug, "brief")
+
+    message = str(exc_info.value)
+    assert "No space left" in message  # the write failure, the more urgent of the two
+    assert "revision race" in message.lower()  # the conflict is not silently dropped
+    assert exc_info.value.details["revision_conflict"] is True
+    assert "revision_conflict_message" in exc_info.value.details
 
 
 def test_an_oserror_writing_a_generated_artifact_is_a_structured_refusal_not_a_traceback():

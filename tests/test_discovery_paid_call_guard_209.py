@@ -16,7 +16,7 @@ import os
 import pytest
 from _fakes import out, slot
 
-from requivo.core.errors import SessionLockedError
+from requivo.core.errors import RevisionConflictError, SessionLockedError
 from requivo.core.persistence import ensure_store_dir
 from requivo.services.discovery import DiscoveryService, _discovery_guard_path, fcntl
 from requivo.services.sessions import SessionService
@@ -90,6 +90,46 @@ def test_run_discovery_still_succeeds_once_the_guard_is_free():
     assert provider.calls == 1
     meta = sessions.repo.read_meta(slug)
     assert meta.current_revision == 1
+
+
+def test_a_late_caller_with_a_stale_outer_check_still_pays_nothing(monkeypatch):
+    """Found in review: the guard alone is not the whole guarantee if the revision is checked only
+    *before* it, against a snapshot that can be stale by the time the guard is actually won. A caller
+    whose own outer check genuinely read revision 0, but who is merely slow to reach the guard, must
+    not walk into an uncontended, already-released guard and pay for a call it was always going to
+    lose. The revision has to be re-read *inside* the guard, right before the provider is called.
+
+    Reproduced by monkeypatching `snapshot()` so the late caller's outer (pre-guard) read is frozen
+    at revision 0 -- as if taken before the winner ever wrote -- while its inner (post-guard) read
+    is the real, current one."""
+    from requivo.services.sessions import SessionSnapshot
+
+    sessions = SessionService()
+    slug = sessions.create_session("a leave approval system").slug
+    real_snapshot = sessions.snapshot
+
+    winner = _CountingProvider()
+    DiscoveryService(provider=winner, sessions=sessions).run_discovery(slug, surface="test")
+    assert winner.calls == 1
+    assert sessions.repo.read_meta(slug).current_revision == 1
+
+    stale = SessionSnapshot(slug=slug, revision=0, model=None,
+                            request="a leave approval system", context_cards=None)
+    seen = {"n": 0}
+
+    def fake_snapshot(s):
+        seen["n"] += 1
+        return stale if seen["n"] == 1 else real_snapshot(s)  # 1st (outer) call is stale, rest real
+
+    monkeypatch.setattr(sessions, "snapshot", fake_snapshot)
+    late = _CountingProvider()
+    late_disco = DiscoveryService(provider=late, sessions=sessions)
+
+    with pytest.raises(RevisionConflictError):
+        late_disco.run_discovery(slug, surface="test")
+
+    assert late.calls == 0  # the whole point: the late caller never reached the provider
+    assert sessions.repo.read_meta(slug).current_revision == 1  # unchanged
 
 
 @pytest.mark.skipif(fcntl is None, reason="POSIX-only branch: fcntl.flock has no Windows equivalent "

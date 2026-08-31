@@ -392,10 +392,19 @@ class DiscoveryService:
         browser tab, a refresh-and-resubmit — both idempotently reuse the session `claim_session`
         returns and both pass its revision-zero check before either has paid for anything. The
         `_discovery_guard` below is what actually decides which of them proceeds: the loser is
-        refused immediately, before it ever reaches the provider."""
+        refused immediately, before it ever reaches the provider.
+
+        **And the guard alone is not quite the guarantee either (found in review) — the revision is
+        re-checked fresh, immediately after winning it, before the provider is called.** A caller
+        whose own `claim_session` genuinely read revision 0, but whose own guard-acquire attempt is
+        merely delayed past the point a winner has already finished *and released* the guard, would
+        otherwise walk in on a stale belief and pay for a call it was always going to lose at
+        `finalize_discovery`'s own `expected_revision=0`. Re-reading here, before spending anything,
+        closes that window the same way `_require_revision_zero` above closes the wide-open one."""
         provider = self._need_provider()
         meta = self.claim_session(request, cards=cards, slug=slug)
         with _discovery_guard(meta.slug):
+            _require_revision_zero(meta.slug, self.sessions.repo.read_meta(meta.slug).current_revision)
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
             out = provider.analyze(request, only=cards)
@@ -477,11 +486,23 @@ class DiscoveryService:
         (#209).** `_require_revision_zero` above cannot: a second tab or a refresh-and-resubmit reads
         the same revision-0 snapshot before either caller has written anything, so both pass it and
         both would otherwise reach the provider — the guard is the first point either caller can lose
-        the race, and it is checked before either has spent anything."""
+        the race, and it is checked before either has spent anything.
+
+        **The pre-guard check is a fast-fail, not the guarantee — the snapshot is re-taken *inside*
+        the guard, right before the provider is called (found in review).** A caller whose own
+        revision-0 read genuinely was current at the time, but whose own guard-acquire attempt is
+        merely delayed (scheduling, a slow request pipeline) past the point the winner has already
+        finished *and released* the guard, would otherwise acquire the guard uncontended on a stale
+        belief and still pay for a call it was always going to lose at `update_model`. Re-reading the
+        revision after winning the guard, before spending anything, closes that window the same way
+        the outer check closes the wide-open one."""
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_revision_zero(slug, snap.revision)
         with _discovery_guard(slug):
+            # Fresh, not the snapshot above -- see the guard note in this method's own docstring.
+            snap = self.sessions.snapshot(slug)
+            _require_revision_zero(slug, snap.revision)
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
             out = self._need_provider().analyze(snap.request, only=snap.context_cards)
@@ -601,9 +622,26 @@ class DiscoveryService:
                 # not just the conflict — so a caller reading only `.message` (the CLI's generic
                 # `except RequivoError` handler, the Web's generic exception handler) is told the
                 # whole story with no special-casing needed on either surface.
-                status = self._save_generated(slug, "brief", brief_markdown(out, brief), source_revision)
+                try:
+                    status = self._save_generated(slug, "brief", brief_markdown(out, brief), source_revision)
+                except ArtifactWriteFailedError as write_err:
+                    # Two failures at once (found in review): the apply lost the race AND the
+                    # fallback save that was meant to preserve the paid content also failed at the
+                    # filesystem. Letting `write_err` propagate bare would silently drop the revision
+                    # conflict it happened alongside -- a caller reading only `.message` would see an
+                    # ordinary write failure and have no way to tell it apart from one that also lost
+                    # a race, which is precisely the "state both facts, not just one" argument this
+                    # branch exists for, one exception class over. Chained from the write failure,
+                    # not re-raised as the conflict: the write failure is the more urgent, unresolved
+                    # one -- this time the content really is lost, not merely unabsorbed.
+                    raise ArtifactWriteFailedError(
+                        f"{write_err.message} This session also lost a revision race in the same "
+                        f"call: {e.message}. The brief's reasoning was NOT absorbed into the model "
+                        "either way.",
+                        details={**write_err.details, "revision_conflict": True,
+                                 "revision_conflict_message": e.message}) from e
                 raise RevisionConflictError(
-                    f"{e.message} The decision brief was still generated and saved against revision "
+                    f"{e.message}. The decision brief was still generated and saved against revision "
                     f"{source_revision} (now flagged stale); its reasoning was NOT absorbed into the "
                     f"model. `requivo brief {slug}` (or the Web's Regenerate) will refresh both.",
                     details={**e.details, "artifact_saved": True, "artifact_type": "brief",

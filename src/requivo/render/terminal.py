@@ -190,7 +190,17 @@ def render_session_cost(revisions: list) -> None:
     Silent when no revision carries usage: an old session, one applied entirely through Claude Code
     (which spends no API tokens), or a workspace that never opened a `track_usage()` scope around the
     calls that produced it. Never `$0.00` -- invariant 6's rule about provenance, applied across a
-    session instead of one call."""
+    session instead of one call.
+
+    **Partial by construction, and the printed line says so (#292, found in review).** Only a
+    provider-backed *model apply* creates a `RevisionRecord` at all -- `prd`/`criteria`/`epic`/
+    `release` are real, billed `provider.generate()` calls that produce no revision (they save an
+    artifact, not a model change) and so have no `RevisionRecord` to carry usage on. A session that
+    ran those after discovering would otherwise see a "SESSION COST" figure quietly undercounting its
+    real spend with no visible sign anything was left out; the parenthetical on the header line is
+    what keeps the number honest about what it does and does not cover. Stamping those calls' spend
+    too is a real, reachable gap -- it needs `ArtifactStatus` to grow the same fields `RevisionRecord`
+    just did, which is its own change."""
     priced_revisions = [r for r in revisions if r.usage_input_tokens is not None]
     if not priced_revisions:
         return
@@ -214,7 +224,8 @@ def render_session_cost(revisions: list) -> None:
             as_of.append(r.usage_priced_as_of)
     processed = input_tokens + cache_read + cache_write
     plural = "s" if len(priced_revisions) != 1 else ""
-    print(f"\nSESSION COST  (cumulative, {len(priced_revisions)} revision{plural})")
+    print(f"\nSESSION COST  (cumulative, {len(priced_revisions)} revision{plural} -- excludes prd/"
+         "criteria/epic/release generation, which is not a revision)")
     cached = f"  ({cache_read:,} served from cache)" if cache_read else ""
     print(f"  {'Input':<11} {processed:,} tokens{cached}")
     print(f"  {'Output':<11} {output_tokens:,} tokens")

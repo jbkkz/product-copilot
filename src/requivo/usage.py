@@ -1,12 +1,14 @@
 """What a run spent — a provider-neutral ledger of API calls, tokens, latency and cost.
 
 A sibling of `paths.py` and `streams.py`: a small cross-cutting facility that belongs to no layer.
-Providers record into it, `render/terminal.py` prints it, `cli.py` scopes it around a command. It
-lives here rather than in `providers/` because nothing about it is a vendor's — calls, tokens, cache
-tiers and latency are concepts any provider has, and its own docstring already said it was
-presentation-free. It sat in `providers/anthropic.py`, which meant the purest view layer in the tree
-had to name a vendor module to print a cost line (#167). It is not in `core/` either: core validates
-and versions the model, and what an API call cost is not a fact about the model.
+Providers record into it, `render/terminal.py` prints it, `cli.py` scopes it around a command, and
+`services/discovery.py` reads it back (`current_ledger()`, #292) to stamp what a provider-backed
+apply spent onto that revision's own provenance. It lives here rather than in `providers/` because
+nothing about it is a vendor's — calls, tokens, cache tiers and latency are concepts any provider
+has, and its own docstring already said it was presentation-free. It sat in `providers/anthropic.py`,
+which meant the purest view layer in the tree had to name a vendor module to print a cost line
+(#167). It is not in `core/` either: core validates and versions the model, and what an API call cost
+is not a fact about the model.
 
 **Cost is arithmetic here and nowhere else.** A `CallRecord` carries the rate it was billed at,
 stamped by the provider that made the call, so this module holds no price table and consults none.
