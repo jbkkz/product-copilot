@@ -27,6 +27,7 @@ exists to close (CLAUDE.md invariant 15's argument, one layer up from a listing)
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_SCRIPTS = ROOT / "plugins" / "claude-code" / "scripts"
 sys.path.insert(0, str(PLUGIN_SCRIPTS))
 
+import version_skew  # noqa: E402
 from version_skew import BEHIND, COULD_NOT_LOOK, IN_STEP, check, compare  # noqa: E402
 from version_skew import tested_against_version as read_tested_against_version  # noqa: E402
 
@@ -203,3 +205,105 @@ def test_reasoning_md_names_the_skew_check_without_hardcoding_a_version():
         f"REASONING.md hardcodes what looks like a version number: {stray_versions} -- read it "
         f"from the manifest instead, or this drifts the day the manifest is bumped"
     )
+
+
+# -- main()'s subprocess arm: the third failure mode, and its must-fire twins (#363) ----------
+#
+# `subprocess.TimeoutExpired` inherits `SubprocessError -> Exception`, NOT `OSError` -- so it used
+# to fall through the `except FileNotFoundError` / `except OSError` pair in `main()` entirely and
+# escape as a raw traceback instead of becoming `COULD_NOT_LOOK`. That is this module's own third
+# state, in its own failure path: the docstring calls it "#251's own trap" and the trap caught the
+# module that names it.
+#
+# Reachable, not theoretical: #263 makes `doctor` take the per-slug session write lock with
+# `_LOCK_TIMEOUT_SECONDS = 30.0`, the same 30s this module passes to `subprocess.run(timeout=...)`.
+# A workspace with two stuck sessions can legitimately make `requivo doctor --json` outlive this
+# timeout.
+#
+# These monkeypatch `subprocess.run` rather than spawning a real process -- the exception-handling
+# logic in `main()` is what is under test, not whether `requivo` exists on this machine's PATH.
+
+
+class _FakeCompletedProcess:
+    """The one attribute `main()` reads off `subprocess.run`'s return value."""
+
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+def test_main_reports_could_not_look_on_subprocess_timeout(monkeypatch, capsys):
+    """The bug itself: a timeout must produce COULD_NOT_LOOK and exit 3, not an uncaught
+    TimeoutExpired. Before the fix this raises out of main() -- pytest reports it as an error,
+    which is the red this test is written to see."""
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["requivo", "doctor", "--json"], timeout=30)
+
+    monkeypatch.setattr(version_skew.subprocess, "run", _raise_timeout)
+    exit_code = version_skew.main()
+    message = capsys.readouterr().out
+
+    assert exit_code == COULD_NOT_LOOK
+    assert "traceback" not in message.lower()
+
+
+def test_main_distinguishes_a_timeout_from_a_missing_binary(monkeypatch, capsys):
+    """The judgment call from the brief: a timeout and a missing binary both land in
+    COULD_NOT_LOOK, but they must not read as the same sentence. Told 'not found on PATH', a
+    reader checks their install; told the CLI took too long, a reader checks what is stuck (a held
+    session lock, #263) -- pointing them at the wrong one sends them looking in the wrong place."""
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["requivo", "doctor", "--json"], timeout=30)
+
+    monkeypatch.setattr(version_skew.subprocess, "run", _raise_timeout)
+    assert version_skew.main() == COULD_NOT_LOOK
+    timeout_message = capsys.readouterr().out
+
+    def _raise_not_found(*args, **kwargs):
+        raise FileNotFoundError("requivo")
+
+    monkeypatch.setattr(version_skew.subprocess, "run", _raise_not_found)
+    assert version_skew.main() == COULD_NOT_LOOK
+    missing_message = capsys.readouterr().out
+
+    assert timeout_message != missing_message
+    assert "PATH" in missing_message and "PATH" not in timeout_message
+    assert "30" in timeout_message, (
+        f"the timeout message should name how long it waited, got {timeout_message!r}"
+    )
+
+
+def test_main_still_reports_could_not_look_on_a_plain_os_error(monkeypatch, capsys):
+    """Acceptance criteria: the other two arms behave as before. A generic OSError (not a missing
+    binary, not a timeout) still lands in COULD_NOT_LOOK, with its own wording distinct from
+    both siblings above."""
+
+    def _raise_os_error(*args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(version_skew.subprocess, "run", _raise_os_error)
+    exit_code = version_skew.main()
+    message = capsys.readouterr().out
+
+    assert exit_code == COULD_NOT_LOOK
+    assert "permission denied" in message
+
+
+def test_main_must_fire_control_a_genuine_skew_still_reports_skew(monkeypatch, capsys):
+    """The must-fire twin the brief asks for, paired with the three could-not-look arms above: a
+    guard that returned COULD_NOT_LOOK unconditionally would pass every assertion in this section
+    and never once do this module's actual job. A real BEHIND result must still surface."""
+    real_plugin_version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
+    old_version = "0.0.1"
+    assert old_version != real_plugin_version  # guard the fixture's own assumption
+
+    def _fake_run(*args, **kwargs):
+        return _FakeCompletedProcess(stdout=_doctor_json(old_version))
+
+    monkeypatch.setattr(version_skew.subprocess, "run", _fake_run)
+    exit_code = version_skew.main()
+    message = capsys.readouterr().out
+
+    assert exit_code == BEHIND
+    assert old_version in message

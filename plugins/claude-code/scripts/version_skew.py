@@ -209,15 +209,28 @@ def check(
     return compare(cli_version, plugin_version)
 
 
-def main(argv=None) -> int:  # pragma: no cover - thin CLI wrapper, exercised manually only
+def main(argv=None) -> int:
     """Standalone diagnostic: run `requivo doctor --json` and print the verdict. Not part of any
     skill's runtime Bash grant -- see the module docstring.
 
-    No CI leg calls this function -- only `check()` and `compare()`, its two callees, are exercised
-    by `tests/test_plugin_version_skew.py`. The `subprocess.run` spawn and its
-    `FileNotFoundError`/`OSError` split are therefore untested by this suite; they are ordinary,
-    narrow exception handling (the standard pair for "the binary is not on PATH" across platforms)
-    but that is an argument from reading the code, not a run of it on any platform."""
+    `tests/test_plugin_version_skew.py` exercises this function's exception handling directly, by
+    monkeypatching `subprocess.run` -- so the three `except` arms below are unit-tested, even
+    though none of them spawns a real process. What stays untested by any suite is a *real* spawn
+    against an actual `requivo` binary; that is inherently a manual/platform check, which is why
+    this function is still not asserted against by any CI leg's exit code.
+
+    Three `except` arms, not two (#363): `subprocess.TimeoutExpired` inherits `SubprocessError ->
+    Exception`, not `OSError`, so it does not land in `except OSError` below -- it used to escape
+    this function as a raw traceback instead of becoming `COULD_NOT_LOOK`, which is this module's
+    own third state, in its own failure path. Reachable, not theoretical: #263 gives `doctor` a
+    per-slug session lock with `_LOCK_TIMEOUT_SECONDS = 30.0`, the same 30s this function passes to
+    `subprocess.run(timeout=...)`, so a workspace with two stuck sessions can legitimately make
+    `requivo doctor --json` outlive this timeout.
+
+    The timeout gets its own message rather than folding into the generic OSError one: a missing
+    binary points a reader at their install (PATH), while a timeout points them at what is stuck
+    (a held session lock) -- collapsing the two into one "could not run" sentence would send a
+    reader who hit the timeout looking in the wrong place."""
     del argv
     doctor_error: Optional[str] = None
     output: Optional[str] = None
@@ -226,6 +239,11 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI wrapper, exercised ma
             ["requivo", "doctor", "--json"], capture_output=True, text=True, timeout=30
         )
         output = proc.stdout
+    except subprocess.TimeoutExpired as exc:
+        doctor_error = (
+            f"`requivo doctor --json` did not finish within {exc.timeout:g}s -- it may be stuck "
+            f"(e.g. a held session lock), not merely absent"
+        )
     except FileNotFoundError:
         doctor_error = "the `requivo` command was not found on PATH"
     except OSError as exc:
