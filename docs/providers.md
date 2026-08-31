@@ -156,12 +156,22 @@ right on both sides of it — the rate recorded is the one in force when the tok
 whichever is live when the total is printed. A provider that prices nothing leaves both fields
 absent; `cost_usd()` then returns `None` and the CLI says *no price on file* rather than guessing.
 
-`DiscoveryService` talks to the protocol and nothing else, so a second provider is a constructor
-argument rather than a fork of the orchestration:
+`DiscoveryService` talks to the protocol and nothing else, so *pointing it at* a second provider is a
+constructor argument rather than a fork of the orchestration:
 
 ```python
 DiscoveryService(MyProvider()).start("A leave approval system.")
 ```
+
+**That is the cost of the swap, not the cost of the implementation** — and the two were stated here
+as one until #273 measured them apart. Roughly 400 of the 1,057 lines under `providers/anthropic` are
+provider-neutral orchestration: the per-operation message builders, the `_GENERATORS` / `_OP_PROMPTS`
+tables, `prompt_version()`, the JSON extraction and fence-stripping, the contract validation, the
+corrective-nudge retry loop and the parse-first truncation policy. None of it touches an SDK and all
+of it sits under a vendor's name, so a second implementation re-implements or copies it. Extracting
+it into a neutral module is decided work, deferred with a written trigger —
+`decision: deferring-the-neutral-provider-layer` — so budget against that number rather than against
+the constructor.
 
 Provenance comes from the provider rather than being assembled by the service, so a revision produced
 by another implementation is stamped with *its* name and *its* prompt hash — nothing hard-codes

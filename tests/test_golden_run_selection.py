@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import golden_run  # noqa: E402
-from golden_run import select_runs  # noqa: E402
+from golden_run import planned_calls, select_runs  # noqa: E402
 
 
 def _req(slug: str, answers: dict | None = None) -> dict:
@@ -101,3 +101,58 @@ def test_main_prints_which_interactive_requests_it_skipped_and_how_to_capture_th
     assert "golden_run.py interactive-a" in err, (
         "the skip line should name the exact command to capture the skipped request alone"
     )
+
+
+# ── the announced cost is derived from the set, never written down as a total (#290) ───────────
+
+def test_the_announced_call_count_moves_with_the_request_set():
+    """must fire on the class #290 reports: a *total* written into prose ("a full six-request cycle
+    is 18") is right the day it is written and silently wrong the day an eighth request lands in
+    `requests.md`, with nothing going red in between. The fix is that no site states a total --
+    `planned_calls` derives it from the requests actually selected and `main` prints that number
+    before spending anything.
+
+    A constant satisfies the first assertion and fails the second, which is the whole test.
+    """
+    six = [_req(f"single-{i}") for i in range(6)]
+    assert planned_calls(six, with_brief=False) == 6 * golden_run.K
+    assert planned_calls(six + [_req("single-6")], with_brief=False) == 7 * golden_run.K
+
+
+def test_an_interactive_request_is_costed_at_its_own_per_turn_rate():
+    """must fire -- and it is why the total cannot be one multiplication over `len(runs)`. An
+    interactive request costs up to K x GOLDEN_TURNS where a single-pass one costs K, so a set's
+    cost depends on which shapes are in it and not only on how many."""
+    mixed = [_SINGLE, _INTERACTIVE]
+    assert planned_calls(mixed, with_brief=False) == golden_run.K * (1 + golden_run.TURNS)
+    assert planned_calls([_SINGLE, _SINGLE], with_brief=False) < planned_calls(mixed, with_brief=False)
+
+
+def test_brief_doubles_a_single_pass_request_and_leaves_an_interactive_one_alone():
+    """must not fire on the interactive half -- the positive control for the `--brief` arm.
+    `capture()` refuses `--brief` for an interactive request and says so on stderr, so costing one at
+    2x would announce a spend that never happens."""
+    assert planned_calls([_SINGLE], with_brief=True) == 2 * golden_run.K
+    assert planned_calls([_SINGLE], with_brief=True) > planned_calls([_SINGLE], with_brief=False)
+    assert planned_calls([_INTERACTIVE], with_brief=True) == planned_calls([_INTERACTIVE], with_brief=False)
+
+
+def test_main_announces_the_count_it_computed_for_the_set_it_actually_selected(
+        tmp_path, monkeypatch, capsys):
+    """The derivation is only worth having if the printed line uses it. `main()` selects the
+    single-pass request and skips the interactive one, so the announced ceiling must be the one for
+    what it selected -- not for everything it parsed. Client and capture loop stubbed: no key, no
+    call, no write."""
+    monkeypatch.setattr(golden_run, "GOLDEN", tmp_path)
+    monkeypatch.setattr(golden_run, "REPO", tmp_path.parent)
+    monkeypatch.setattr(golden_run, "REQUESTS", tmp_path / "requests.md")
+    (tmp_path / "requests.md").write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(golden_run, "Anthropic", lambda *a, **k: object())
+    monkeypatch.setattr(golden_run, "parse_requests", lambda _path: [_SINGLE, _INTERACTIVE])
+    monkeypatch.setattr(golden_run, "capture", lambda _client, _req, _with_brief: None)
+
+    assert golden_run.main([]) == 0
+
+    out = capsys.readouterr().out
+    assert f"up to {planned_calls([_SINGLE], with_brief=False)} API calls" in out
+    assert f"up to {planned_calls([_SINGLE, _INTERACTIVE], with_brief=False)} API calls" not in out

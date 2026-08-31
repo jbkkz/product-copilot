@@ -24,7 +24,7 @@ full-set run's cost (#276). Name the slug explicitly, or pass ``--all``, to capt
 discovery state. It watches the complexity verdict and the challenge headlines (what the engine chose
 to contest), which is what a change to ``prompts/brief.md`` actually moves. It doubles the API calls
 for that request, so it is opt-in. It is *described* as being for a couple of representative
-requests; in practice all six single-pass baselines in ``fixtures/golden/`` carry one, and that gap
+requests; in practice every single-pass baseline in ``fixtures/golden/`` carries one, and that gap
 matters because a lens's grading was once designed around the sentence rather than the fixtures
 (#162). Check the baselines before reasoning from this paragraph.
 
@@ -34,10 +34,14 @@ differently again: `capture_interactive` drives `DiscoveryService.draft_turn` fo
 changed — from turn 3 the interactive loop is grounded on the carried model alone, where the old one
 re-sent the whole transcript, and turns 1 and 2 are byte-identical between the two (#137).
 
-Cost: K API calls per request (default 3 × 6 single-pass requests = 18), doubled where ``--brief`` is
-on, and K × ``GOLDEN_TURNS`` for an interactive one (15 at the defaults) — so capture an interactive
-request on its own rather than as part of a full-set run: the bare invocation now does this by
-default, rather than only recommending it in prose. Needs ANTHROPIC_API_KEY in ``.env``.
+Cost: K API calls per single-pass request, doubled where ``--brief`` is on, and up to
+K × ``GOLDEN_TURNS`` for an interactive one (15 at the defaults) — so capture an interactive request
+on its own rather than as part of a full-set run: the bare invocation now does this by default,
+rather than only recommending it in prose. No total for the request set is written down here or
+anywhere else, deliberately: ``planned_calls`` derives it from the requests this invocation actually
+parsed and selected, and ``main`` prints it before the first call, so the figure a reader budgets
+against cannot go stale the day a request is added to ``requests.md`` (#290).
+Needs ANTHROPIC_API_KEY in ``.env``.
 
 Usage:
     python scripts/golden_run.py              # every single-pass request; interactive ones skipped
@@ -174,6 +178,23 @@ def capture(client: Anthropic, req: dict, with_brief: bool = False) -> None:
               f"{'; '.join(stable) or '—'}")
 
 
+def planned_calls(runs: list[dict], with_brief: bool) -> int:
+    """The API-call ceiling for exactly these requests, derived rather than written down (#290).
+
+    An interactive request costs a call per turn, so the total is per-request rather than a single
+    multiplication -- and it is an upper bound, because a conversation that runs out of answers stops
+    early. Stating it as "up to" is the honest form: the number that matters before spending is the
+    ceiling, not the average. ``--brief`` doubles a single-pass request and leaves an interactive one
+    alone, because `capture` refuses `--brief` there and says so.
+
+    This exists as a function, and no file states a total, because a total is a count in prose that
+    nothing goes red for: two sites said "18" for a set of six single-pass requests, correct the day
+    they were written and silently wrong the day a seventh landed in ``requests.md``. Pinned by
+    `test_the_announced_call_count_moves_with_the_request_set`. Pure and offline.
+    """
+    return sum(K * (TURNS if is_interactive(r) else (2 if with_brief else 1)) for r in runs)
+
+
 def select_runs(runs: list[dict], wanted: set[str], capture_all: bool) -> tuple[list[dict], list[dict]]:
     """Which of the parsed requests to actually capture, and which interactive ones were skipped.
 
@@ -223,11 +244,8 @@ def main(argv: list[str]) -> int:
 
     GOLDEN.mkdir(parents=True, exist_ok=True)
     client = Anthropic()
-    # An interactive request costs a call per turn, so the total is per-request rather than a single
-    # multiplication — and it is an upper bound, because a conversation that runs out of answers stops
-    # early. Stating it as "up to" is the honest form: the number that matters before spending is the
-    # ceiling, not the average.
-    calls = sum(K * (TURNS if is_interactive(r) else (2 if with_brief else 1)) for r in runs)
+    # Computed for the set actually selected, never quoted from prose — see `planned_calls`.
+    calls = planned_calls(runs, with_brief)
     print(f"Capturing {len(runs)} request(s) × {K} runs → {GOLDEN.relative_to(REPO)}/  "
           f"(up to {calls} API calls{', assessment included' if with_brief else ''})")
     for req in runs:
