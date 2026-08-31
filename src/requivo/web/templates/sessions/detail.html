@@ -1,5 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ slug if pending else s.slug }} — Requivo{% endblock %}
+{# The human title the page's own <h1> already computes (line ~34, non-pending branch) — the same
+   fallback chain, reused rather than recomputed, so the tab and the heading can never disagree
+   (#241). Before an objective exists (pending, or an analysis that failed before writing one), the
+   slug is still the only human name there is. #}
+{% block title %}{{ slug if pending else (s.understood.objective if s.understood.objective else s.slug) }} — Requivo{% endblock %}
 {% block content %}
 <p><a class="backlink" href="/">← All requests</a></p>
 
@@ -12,6 +16,10 @@
   <strong>Your request was saved.</strong> The analysis did not run: {{ analysis_failed }}
   <br>Retry it below, or analyse it from the CLI or Claude Code — they read the same session.
 </div>
+{# A failed analysis can still have spent tokens (#253) — the model never advanced past revision 0,
+   but the call was billed, and the retry page has to say so rather than implying the failure was
+   free. A no-op include on every ordinary "create only" visit, which passes no `usage` at all. #}
+{% include "_usage.html" %}
 {% endif %}
 <h2>The request</h2>
 <blockquote class="request">{{ request_text }}</blockquote>

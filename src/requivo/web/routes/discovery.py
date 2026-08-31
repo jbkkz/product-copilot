@@ -12,12 +12,11 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
 from requivo.core.errors import InputTooLargeError
-from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_ANSWERS_CHARS, provider_status
 from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
-from requivo.web.routes.sessions import analysis_failed
+from requivo.web.routes.sessions import _PROVIDER_FAILURE, analysis_failed
 from requivo.web.spend import track_web_usage
 from requivo.web.templating import templates
 from requivo.web.viewmodels.sessions import session_detail
@@ -36,15 +35,15 @@ def run_discovery(slug: str = Depends(safe_slug),
     exists and this page already carries the retry button, so a transient provider error goes back to
     it with the cause stated, rather than to a 500 page that hides both.
     """
-    # The spend is logged rather than shown, and that asymmetry is deliberate (#253). This path
-    # answers with a 303 so a refresh cannot re-POST a paid call, and a redirect has no body to put a
-    # figure in; carrying one to the following GET would need cross-request state this app does not
-    # have. `track_web_usage` records it to the terminal the operator started the server in, which is
-    # the channel that also survives the failure arm below.
-    with track_web_usage("web-discover"):
+    # Logged always; carried to the following GET when there is a figure to carry (#253). This path
+    # answers with a 303 so a refresh cannot re-POST a paid call, and a redirect has no body of its
+    # own — `track_web_usage(..., carry_to=slug)` stashes the view server-side for `session_page`'s
+    # GET to pop, rather than putting a forgeable number on the URL. The log line is unconditional and
+    # is what survives the failure arm below, whether or not anything was stashed.
+    with track_web_usage("web-discover", carry_to=slug):
         try:
             discovery.run_discovery(slug, surface="web-discover")
-        except EngineError as e:
+        except _PROVIDER_FAILURE as e:
             return analysis_failed(slug, e)
     return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
 

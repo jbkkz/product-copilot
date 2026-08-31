@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Requivo{% endblock %}</title>
+  {# The brand mark, shipped as a real icon rather than the browser default every tab showed before
+     (#241) -- `/favicon.ico` is also served (see routes/health.py) so the browser's own implicit
+     probe for that path stops 404ing into the operator's logs too. #}
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/css/app.css">
   {# htmx injects a <style> block for its request indicator unless told not to. Our CSP is
      `style-src 'self'`, which blocks it — the page still works, but every load logs a violation, and a
