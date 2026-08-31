@@ -144,7 +144,7 @@ requivo/
                    halves, so a module that stops registering is an ImportError rather than a quietly
                    shorter `--help`
     __init__.py      the module docstring + `register(sub)` = register_doctor/_sessions/_model/_artifacts
-    _shared.py       what more than one verb module needs — input, `_print_json`, `EXIT_DEGRADED` —
+    _shared.py       what more than one verb module needs — input, `print_json`, `EXIT_DEGRADED` —
                      and the membership rule that keeps it from becoming a second deterministic.py
     doctor.py        doctor / schema / context: the verbs that answer for the install, not a session;
                      owns card health + the two remedy hints, which `session verify` imports
@@ -603,7 +603,7 @@ Each stage has a Pydantic contract that must agree with its prompt's "Output for
 see invariant 10), `Brief` ↔ `brief.md`, `Stories` ↔ `stories.md`, `EstimateDraft` ↔
 `estimate.md`, `PRD` ↔ `prd.md`, `AcceptanceCriteria` ↔ `criteria.md`, `Epic` ↔ `epic.md`,
 `ReleaseNotes` ↔ `release.md`. Slot ids live in `framework/model_schema.json`, which also carries each
-slot's `pillar` and `label` (read back by the renderer via `_slot_meta()`).
+slot's `pillar` and `label` (read back by the renderer via `slot_meta()`).
 
 The *agreement* between each prompt and its contract is no longer kept by hand — the enumeration
 above still is, and nothing checks those eight names against the registries, so read it as a map
@@ -626,7 +626,7 @@ The slot vocabulary is enforced in two layers, with `schema_slot_ids()` as the s
 - *Completeness* — `completeness_gap()` is the single definition (the full required slot set, plus a
   non-empty objective), read by both boundaries that enforce it: the discovery `validate` hook, which
   needs a `ValueError` to ride the retry loop, and `validate_proposal`, which needs a structured
-  `RequivoError`. They used to state it separately, and drifted. As defence in depth, `_readiness_blockers()` reasons over the
+  `RequivoError`. They used to state it separately, and drifted. As defence in depth, `readiness_blockers()` reasons over the
   *schema's* required slots rather than the ones returned, and `diff_models()` walks the union of
   old/new keys so a removed slot registers as a change.
 
