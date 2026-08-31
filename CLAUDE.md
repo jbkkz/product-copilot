@@ -533,15 +533,15 @@ to this file, to `docs/`, or to the invariant list, which are already narrative'
 **A new source-scanning guard *tier* is not free, and #288 is where that got measured rather than
 assumed.** By the time it was filed the meta-guard estate (`test_boundaries.py`, `test_encoding.py`,
 `test_narrative_references.py`, `test_version_sites.py`, `test_plugin_cli_drift.py` and its script,
-`test_cli_flag_names.py`) was already larger than `src/`. Three of those tiers had each grown their
-own `scan`/`_parse`/empty-root-refusal from nothing, which is how the same ten-line function came to
-exist almost identically three times before anyone shared it (`tests/_scan.py` is that fix). The bar
-for the *next* one is the same the codebase already applies to itself elsewhere: a plausible first
-instance does not justify a new guard tier on its own, any more than one context card colliding with
-its neighbour justified automatic relevance routing — see the golden harness's "Known limit" note.
-**Two real instances of the drift a new tier would have caught**, named by issue number, is what
-funds a third scanning implementation; short of that, extend an existing tier's scan set (as #355 did
-for `providers/`) rather than starting a fourth.
+`test_cli_flag_names.py`) was already ~5,300 lines across six files. Three of those tiers had each
+grown their own `scan`/`_parse`/empty-root-refusal from nothing, which is how the same ten-line
+function came to exist almost identically three times before anyone shared it (`tests/_scan.py` is
+that fix). The bar for the *next* one is the same the codebase already applies to itself elsewhere: a
+plausible first instance does not justify a new guard tier on its own, any more than one context card
+colliding with its neighbour justified automatic relevance routing — see the golden harness's "Known
+limit" note. **Two real instances of the drift a new tier would have caught**, named by issue number,
+is what funds a third scanning implementation; short of that, extend an existing tier's scan set (as
+#355 did for `providers/`) rather than starting a fourth.
 
 ## Two vocabularies, one meaning
 
