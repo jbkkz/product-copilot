@@ -699,6 +699,18 @@ rule as a CLI flag: removing one, or changing what one means, is breaking.
 which nothing has written since 0.8.0 and only `requivo session migrate` still reads. A live knob for a
 dead path is worth retiring while retiring is still free.
 
+**`MODEL` is deprecated too, in favour of `REQUIVO_MODEL`** (#268). It was the one model override in
+the package not `REQUIVO_`-prefixed, which matters because `MODEL` is a generic name other tools set
+— a CI job, a docker-compose file, an unrelated ML script sharing the same shell — so it can collide
+silently and steer Requivo at a differently-priced or nonexistent model with no hint the value came
+from outside. `current_model_name()` reads `REQUIVO_MODEL` first and falls back to bare `MODEL` only
+when `REQUIVO_MODEL` is unset, so nothing already working today stops working. This page's own
+promise applies: the fallback keeps working for at least one minor version and is named in the
+deprecations table below; it prints no runtime notice on the fallback path (a working call has
+nothing wrong to report — see the comment in `client.py`), so `requivo doctor` is where a future
+notice would belong if the silent collision this issue exists to prevent turns out to still happen in
+practice.
+
 ### Requivo Web's HTTP routes — **paths stable, bodies not**
 
 This page already contemplates a client scripting `POST /sessions` and branching on its status, so the
@@ -800,6 +812,7 @@ change without notice.
 | **Implicit `out/<slug>/` fallback** | **Removed** — migration is explicit | deprecated 0.8.0 | 0.9.8 | `requivo session migrate`, then `.requivo/sessions/` |
 | **`/requivo-<skill>` plugin skill names** | Renamed | 0.9.2 | gone | `/requivo:<skill>` — Claude Code namespaces plugin skills |
 | **`REQUIVO_OUTPUT_DIR`** | Deprecated | #89 | with `requivo session migrate` | nothing — it configures the retired `out/` layout that only the migrator reads. `REQUIVO_WORKSPACE` is the knob for where sessions live |
+| **Bare `MODEL` env var** | Deprecated | #268 | not yet set | `REQUIVO_MODEL` — every other env var this package reads is `REQUIVO_`-prefixed; bare `MODEL` is read only when `REQUIVO_MODEL` is unset |
 | **`epic --json`** | **Renamed** — it wrote a file, it never emitted JSON | #83 | gone in the same change | `epic --export-json`, beside `--github` and `--gitlab`. `epic` deliberately has no stdout `--json`; the flag also silently switched the error channel, which is the half the rename fixes |
 
 The policy: anything deprecated keeps working for at least one minor version, says so when used where

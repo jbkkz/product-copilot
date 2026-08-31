@@ -19,10 +19,15 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 
 from pydantic import ValidationError
 
 from requivo.core.errors import ProviderOutputError
+from requivo.core.persistence import _atomic_write, ensure_store_dir
+from requivo.paths import debug_root
 from requivo.providers.anthropic.client import (
     _NO_KEY_MESSAGE,
     APIError,
@@ -34,6 +39,54 @@ from requivo.providers.anthropic.client import (
 from requivo.providers.anthropic.pricing import price_call
 from requivo.providers.errors import EngineError
 from requivo.usage import CallRecord, record_call
+
+# How many failed replies `.requivo/debug/` keeps before the oldest are pruned -- documented here
+# because #283's acceptance criteria calls for a stated retention, not just a bounded one. Kept
+# generous: these are debugging artifacts a user attaches to a bug report, and a directory holding
+# the last 20 malformed replies costs at most a few hundred KB.
+_DEBUG_RETENTION = 20
+
+
+def _save_failed_reply(raw: str, contract: str) -> Path | None:
+    """Write the final raw reply that never validated, so a bug report has something to attach
+    (#283). Called only from the retry loop's give-up exit, and only there.
+
+    **Best-effort.** A failure here -- a read-only workspace, a full disk -- must not shadow the
+    `ProviderOutputError` this exists to make debuggable; every exception is caught and `None` is
+    returned, so the error message simply doesn't name a file rather than replacing a clean failure
+    with an unrelated traceback. `ensure_store_dir` is the same call every other writer under
+    `.requivo/` goes through, so this directory gets the privacy `.gitignore` for free the first time
+    the store root is created -- see `debug_root()`'s own docstring in `paths.py`.
+
+    **The retention bound below is a soft cap, not a lock-guarded invariant, and that is deliberate.**
+    A strict "exactly N files" guarantee needs the list-then-prune sequence serialised against every
+    other writer, and the only lock this codebase has (`session_lock`) is keyed by session slug --
+    this directory is not one, and taking a new global lock just for a debugging aid is a cost this
+    feature does not justify. Every unlink below is `missing_ok=True`, so two processes pruning at
+    once at worst transiently retain a few more than `_DEBUG_RETENTION` files -- corrected on the very
+    next write, by whichever process happens to run it -- and never race destructively, because
+    nothing here is ever read back by a running process; a human reads these by hand.
+    """
+    try:
+        root = debug_root()
+        ensure_store_dir(root)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        path = root / f"{stamp}-{contract}-{uuid.uuid4().hex[:8]}.txt"
+        _atomic_write(path, raw)
+        _prune_debug_dir(root)
+        return path
+    except Exception:
+        return None
+
+
+def _prune_debug_dir(root: Path) -> None:
+    """Keep the newest `_DEBUG_RETENTION` files, oldest-first by name -- the leading UTC timestamp in
+    every filename makes lexicographic and chronological order the same sort. See `_save_failed_reply`
+    for why this is a soft cap rather than a locked one."""
+    files = sorted(root.glob("*.txt"))
+    for stale in files[: max(0, len(files) - _DEBUG_RETENTION)]:
+        stale.unlink(missing_ok=True)
+
 
 # Output-token ceiling per call. Discovery emits a full slot model + questions + summary; on a rich
 # multi-feature request that JSON exceeds 8k output tokens and the whole reply is discarded as
@@ -249,11 +302,24 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
             ]
     rec.latency_ms = int((time.perf_counter() - started) * 1000)
     _record(rec)  # record the spend even on give-up — those tokens were still billed
+    # The final raw reply never validated, and give-up is the one exit where that reply is worth
+    # keeping (#283): a user filing "the provider returned output that did not match the contract"
+    # otherwise has nothing to attach, and the maintainer cannot tell a prompt regression from a
+    # model-side change. `raw` is whatever the last loop iteration set it to -- every iteration that
+    # reaches this point in the function has already assigned it, so it is always defined here.
+    # Best-effort: `_save_failed_reply` swallows its own failures and returns None rather than ever
+    # raising something that shadows the ProviderOutputError below.
+    debug_path = _save_failed_reply(raw, out_model.__name__)
+    details = {"contract": out_model.__name__, "attempts": retries + 1, "last_error": str(last_err)}
+    saved_note = ""
+    if debug_path is not None:
+        details["raw_reply_path"] = str(debug_path)
+        saved_note = f" — the reply that failed validation was saved to {debug_path}"
     # A structured Requivo error, not a bare RuntimeError: exhausting the retry loop is a *known*
     # provider condition with an actionable cause, and every surface catches RequivoError. Raised as
     # anything else, it escaped the CLI's handler and reached the user as a traceback.
     raise ProviderOutputError(
         f"the provider returned output that did not match the {out_model.__name__} contract after "
-        f"{retries + 1} attempts — the last failure was: {last_err}",
-        details={"contract": out_model.__name__, "attempts": retries + 1, "last_error": str(last_err)},
+        f"{retries + 1} attempts — the last failure was: {last_err}{saved_note}",
+        details=details,
     ) from last_err

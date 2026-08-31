@@ -14,7 +14,7 @@ own output — is in English.
 ## Run and test
 
 ```bash
-cp .env.example .env                    # ANTHROPIC_API_KEY; MODEL defaults to claude-sonnet-5
+cp .env.example .env                    # ANTHROPIC_API_KEY; REQUIVO_MODEL defaults to claude-sonnet-5
 uv run requivo demo                     # replays a saved run — no key, no network, no arguments
 uv run requivo discover "We'd like a leave approval system."   # → .requivo/sessions/<slug>/
 uv run requivo status <slug>            # understanding checklist + readiness (offline)
