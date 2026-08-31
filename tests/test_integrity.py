@@ -18,7 +18,7 @@ from requivo.core import persistence as store
 from requivo.core.context import check_selection
 from requivo.core.contracts import _schema_order, schema_slot_ids
 from requivo.core.errors import InvalidSlugError, RequivoError, RevisionConflictError
-from requivo.core.integrity import check_session, inspect_session
+from requivo.core.integrity import check_session, inspect_session, newest_readable_revision, readable_revision
 from requivo.core.persistence import _atomic_write
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
@@ -1042,3 +1042,103 @@ def test_a_context_card_that_no_longer_resolves_is_not_an_integrity_problem(work
     assert check_session(slug) == [], "integrity must not depend on what this machine has installed"
     # …and the environment check, which is where it belongs, does see it.
     assert check_selection(store.read_meta(slug).context_cards) is not None
+
+
+# ── newest_readable_revision: the repair-target search (#210) ─────────────────
+#
+# `session verify`'s remedy line and `session restore`'s default target both come from here. It is
+# deliberately not a verdict about the session -- it never raises -- only a fact about which history
+# this build can actually open, read newest first because a repair wants the most recent trustworthy
+# state.
+
+
+def test_newest_readable_revision_returns_the_latest_when_everything_parses(workspace):
+    _healthy()  # revision 1, then 2 (see _healthy's own docstring)
+    d = store.canonical_dir("s")
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 2
+    # byte-for-byte, not a re-serialized model -- restoring from this payload must reproduce the
+    # revision file's own content_hash (see ReadableRevision's docstring).
+    assert found.payload == (d / "revisions" / "0002-model.json").read_text(encoding="utf-8")
+
+
+def test_newest_readable_revision_skips_a_broken_file_and_returns_an_older_one(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    (d / "revisions" / "0002-model.json").write_text("{not json", encoding="utf-8")
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 1
+
+
+def test_newest_readable_revision_treats_a_missing_file_the_same_as_an_unreadable_one(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    (d / "revisions" / "0002-model.json").unlink()
+    found = newest_readable_revision(d, 2)
+    assert found is not None and found.revision == 1
+
+
+def test_newest_readable_revision_returns_none_when_nothing_in_range_is_readable(workspace):
+    """The honest third answer -- must be able to say plainly that there is nothing to restore from,
+    never invent one. The must-fire control above already proves the same session's revision 2 is
+    found when it is readable; corrupting every file is what earns the None here rather than a bug
+    in the search."""
+    _healthy()
+    d = store.canonical_dir("s")
+    for f in (d / "revisions").glob("*.json"):
+        f.write_text("{not json", encoding="utf-8")
+    assert newest_readable_revision(d, 2) is None
+
+
+# ── trusted, not merely parseable: the hash check (found in review, #210) ─────
+#
+# A revision file edited by hand after being frozen still parses as a valid model -- the exact case
+# `inspect_session_dir`'s own `revision_hash_mismatch` exists to catch. `newest_readable_revision` and
+# `readable_revision` must not trust a candidate that parses but disagrees with the hash
+# `session.json`'s own revision log recorded for it, or a repair tool would trust what the diagnostic
+# it is paired with already refuses to.
+
+
+def test_newest_readable_revision_skips_a_revision_whose_hash_no_longer_matches(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    meta = store.read_meta("s")
+    hashes = {r.revision: r.model_hash for r in meta.revisions}
+
+    # must-fire control: with the real hashes, revision 2 (the latest) is trusted
+    assert newest_readable_revision(d, 2, expected_hashes=hashes).revision == 2
+
+    # tamper with revision 2's file after the fact -- it still parses, but no longer matches
+    f = d / "revisions" / "0002-model.json"
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
+    found = newest_readable_revision(d, 2, expected_hashes=hashes)
+    assert found is not None and found.revision == 1, (
+        "a tampered-but-parseable revision must be skipped, not trusted")
+
+
+def test_newest_readable_revision_with_no_expected_hashes_trusts_anything_that_parses(workspace):
+    """The permissive default, stated as behaviour: when the caller has no hash log to check against
+    (or passes none), a revision that merely parses is still returned -- `expected_hashes` narrows
+    trust, it does not become a requirement nothing can satisfy."""
+    _healthy()
+    d = store.canonical_dir("s")
+    f = d / "revisions" / "0002-model.json"
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
+    assert newest_readable_revision(d, 2).revision == 2
+
+
+def test_readable_revision_checks_one_specific_number(workspace):
+    _healthy()
+    d = store.canonical_dir("s")
+    meta = store.read_meta("s")
+    hashes = {r.revision: r.model_hash for r in meta.revisions}
+
+    assert readable_revision(d, 2, expected_hashes=hashes).revision == 2
+    assert readable_revision(d, 1, expected_hashes=hashes).revision == 1
+    assert readable_revision(d, 3, expected_hashes=hashes) is None  # does not exist
+
+    f = d / "revisions" / "0002-model.json"
+    f.write_text(f.read_text(encoding="utf-8").replace('"completeness": 0', '"completeness": 5', 1))
+    assert readable_revision(d, 2, expected_hashes=hashes) is None, (
+        "a named revision that no longer matches its recorded hash must be refused, not silently "
+        "returned")

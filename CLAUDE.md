@@ -542,6 +542,60 @@ would have caught**, named by issue number, is what funds a third scanning imple
 that, extend an existing tier's scan set (as #355 did for `providers/`) rather than starting a
 fourth.
 
+**#287 widens that bar from "a scanning tier" to every prose/CI/script guard that does not exercise
+shipped runtime code, because the same trajectory shows up one level up.** The issue's own filing
+quoted a 2026-08-29 count that had already drifted the day it was written — `test_agent_layer.py`
+tripled that same day, in the commit that stopped the tracked `.claude/settings.json` configuring
+every contributor — so the figures below are re-measured directly against this repository rather than
+carried forward from the issue: `test_narrative_references.py` (441), `test_version_sites.py` (506),
+`test_workflow_untrusted_output.py` (673), `test_workflow_permissions.py` (207),
+`test_agent_layer.py` (552), `test_vocabulary_boundary.py` (113), `test_dependency_floor.py` (153),
+`test_plugin.py` (353), `test_plugin_cli_drift.py` (1,153) and `test_golden_{lib,readout,capture}.py`
+(967) — 5,118 lines, ~20% of the 26,186-line suite — guard the repo's own self-description: comment
+references, version strings, CI YAML, `.claude/` inertness, asset wording, plugin-doc drift, a harness
+script. `test_boundaries.py` (1,167) and `test_encoding.py` (1,080) — another 2,247 lines, ~9% — guard
+source *form* (an import, an encoding declaration) rather than behaviour. Each one is incident-backed
+and individually defensible, same as every scanning tier above. The risk is the trajectory, not the
+estate: this culture adds a guard per incident, and an incident in prose is cheap to have, while
+nothing automated fails when the engine's questions or artifacts get materially worse —
+`docs/product-validation.md`'s own verdict, "well tested and under-validated," which #169 exists to
+fix and this file does not. Re-measure before citing this line again — a suite this actively guarded
+moves fast enough that even a same-day count can already be wrong.
+
+**The meta-guard estate is at budget.** A new prose/CI/script guard needs the same two-named-instance
+bar #288 already applies to a scanning tier, one level up: name two real instances of the drift it
+would have caught, by issue number, or it is a taste rather than a budget line. Folding into an
+existing meta-guard file is preferred over opening a new one — most of the files above already hold
+more than one concern, and a new file is a new standing cost every future run pays, kept or not.
+
+**The next testing investment is #169, not another guard.** Running the product-validation protocol
+and recording its findings as the baseline is a judgment about the product that no meta-guard can
+stand in for, and it is the gap this repository has actually been missing.
+
+## The persistence diagnostics tier is frozen
+
+A parallel drift, in the store rather than in the test suite: the report-only diagnostics in
+`core/persistence.py` and `deterministic/doctor.py` —
+`NonSessionEntry`/`UnexaminableEntry`/`_describe_non_session`/`scan_session_root`/`list_*` (~290
+lines) and the lock-residue scan (`scan_lock_root`, `_lock_health`, ~110 lines together) — have grown
+faster than the states they report actually occur. Each addition is well built and each mints public
+`--json` surface that `docs/compatibility.md` then makes expensive to remove, so the tier only ever
+ratchets outward. Meanwhile the residue that genuinely accumulates — a dot-prefixed scratch file left
+behind by any compound write hard-killed mid-write, from `create_session`'s staging directories and
+`_swap_in`'s `.replaced` backups to `session restore`'s own `.model.json.<pid>.restore.tmp` (#210,
+landing beside this paragraph) — is reported by nothing, so the tier's coverage was never even
+aligned with what actually piles up, and every new writer keeps adding another unreported instance of
+the identical shape (#287).
+
+**No new report-only diagnostic lands in this tier without a reproduced field instance of the state it
+reports, and it must name what a user should do about it** — a residue with no action is not reported.
+This is a decision, applied once and retroactively rather than as a deletion: the shipped lock-residue
+check stays (its `--json` is already public, and removing it would be the breaking change, not keeping
+it — see [compatibility.md](docs/compatibility.md)), and the tier stops **here**. If a diagnostics
+change is ever wanted again, the stale dot-prefixed staging/backup class above is the one actually
+worth adding — it is the one this paragraph can point at a real, reproduced instance of, which is
+exactly the bar every other addition to this tier must now clear too.
+
 ## Two vocabularies, one meaning
 
 The engine's vocabulary is precise: slots, evidence, coverage, artifacts, staleness, revisions. It is
@@ -768,8 +822,32 @@ instance would justify.
   helps its target request and can quietly cost a neighbour.
 - **`config_vs_custom`** is the one `optional: true` slot — the platform edge (hardcoded / configurable
   / per-client / reusable-for-all). On for configurable multi-client platforms, off for one-shot apps.
-- `framework/elicitation.md` is the human-readable spec of the framework; `model_schema.json` is the
-  machine version fed to the model. Keep them consistent when adding or renaming a slot.
+- **Adding a slot** touches more files than any other kind of change, and it used to be possible to
+  miss the one file that silently mattered most (#269). Three are mandatory:
+  1. **`framework/model_schema.json`** — the slot itself (`id`, `pillar`, `impact_default`,
+     `label`, `probe`; `optional: true` only for a platform-edge slot with no dedicated artifact
+     field, `config_vs_custom` today). This is the single source — `schema_slot_ids()` reads it, and
+     everything else either derives from it or has to be kept consistent with it by hand.
+  2. **`framework/elicitation.md`** — the pillar table and the human-readable spec. **Unguarded**:
+     nothing fails if this drifts from the schema, so check it by eye every time.
+  3. **`core/dependencies.py`'s `_ARTIFACT_SLOTS_RAW`** — add the slot to every artifact set it
+     materially shapes, or, if it genuinely feeds no *specific* artifact (only the assessment's
+     judgment over the whole model, via `brief`'s `*`), name it with a reason in
+     `tests/test_dependencies.py`'s `_SLOTS_WITH_NO_SPECIFIC_ARTIFACT`. **Guarded since #269**:
+     `test_every_required_slot_is_consumed_by_a_specific_artifact_or_is_exempted` fails on a required
+     slot that is in neither. Before that test existed nothing caught this — a new slot silently
+     marked nothing stale for prd/stories/estimate/criteria/epic/release, only the assessment,
+     invariant 1's exact failure shape landing on the most routine change the schema will ever see.
+
+  Six more, conditional on whether the slot should surface in a *specific* buildable artifact rather
+  than only shape the assessment's judgment through `*`: a slot-named field on the relevant contract
+  in `core/contracts.py` (e.g. `PRD`'s `workflow`/`business_rules`/`permissions`/`integrations`/
+  `edge_cases`); the matching writer in `render/markdown.py`; guidance in the relevant prompt(s)
+  (`prd.md`, `stories.md`, `estimate.md`, `brief.md`, …) telling the model what the slot means for
+  that artifact; and any context-card activation line (`assets/context/*.md`) that names slot ids.
+
+  **Whatever you touch, a full golden re-capture follows** — `{{SCHEMA}}` is substituted into every
+  prompt, so adding a slot moves every prompt's hash. See "The golden harness" below.
 - **Docs live in `docs/`**, one file per subject (`architecture`, `cli`, `web`, `session-format`,
   `providers`, `context-cards`, `requirements-model`, `evaluations`, `product-validation`, `roadmap`).
   The README is an orientation, not a manual — put depth in `docs/`. `product-validation.md` is the
