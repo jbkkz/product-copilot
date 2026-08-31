@@ -168,6 +168,38 @@ _CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 
 # defect lived between two files, so no per-file test could see it.
 _REFERRER_POLICY = "same-origin"
 
+# Nothing this app answers with may be written to the browser's disk cache, except the assets it
+# ships (#218).
+#
+# Every page renders the reader's own client request and the model built from it, plus the cross-site
+# request token; `/sessions/{slug}/export` hands back the whole model as JSON and an artifact download
+# hands back the PRD as Markdown. On a shared machine a disk copy outlives the "sessions stay on this
+# machine" promise in spirit, and it also produces the two stale states this app already has to
+# apologise for: a cached page carries an old `expected_revision` (409 with a reload link) and, after
+# a restart, an old token (403 saying reload the page).
+#
+# **The rule is keyed on the path and fails closed, deliberately not on the content type.** Keying on
+# `text/html` is the reflex and it is wrong here: it covers the pages and the HTMX fragments and
+# misses `export` (`application/json`) and the artifact download (`text/markdown`) — the two
+# responses carrying the most of the reader's material there is. So `no-store` is the default and
+# what this package *ships* is the exception. A route added later is covered by nobody remembering to
+# cover it; the cost of the default being wrong is one re-fetch of a stylesheet, and the cost of the
+# allowlist being wrong is a session page on somebody's disk.
+#
+# `/static` is the mount, `/favicon.ico` is `health.py` serving one file out of the same directory.
+# Both are fingerprint-free, so this deliberately says nothing about *how long* they may be cached —
+# an ETag/max-age strategy is a separate question and is out of scope here.
+# `test_no_response_carrying_the_readers_material_may_be_written_to_the_disk_cache` and
+# `test_a_bundled_asset_stays_cacheable` are the two halves.
+_BUNDLED_ASSET_PREFIXES = ("/static/",)
+_BUNDLED_ASSET_PATHS = ("/favicon.ico",)
+_CACHE_CONTROL = "no-store"
+
+
+def _is_bundled_asset(path: str) -> bool:
+    """Does this path name a file shipped inside the package rather than anything of the reader's?"""
+    return path in _BUNDLED_ASSET_PATHS or path.startswith(_BUNDLED_ASSET_PREFIXES)
+
 # Under `requivo web` this rides uvicorn's handler, so a traceback lands in the terminal the user
 # started the server in — the only place a local, single-user app has to put one.
 logger = logging.getLogger("requivo.web")
@@ -224,6 +256,8 @@ def create_app() -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", _REFERRER_POLICY)
         response.headers.setdefault("Content-Security-Policy", _CSP)
+        if not _is_bundled_asset(request.url.path):
+            response.headers.setdefault("Cache-Control", _CACHE_CONTROL)
         return response
 
     @app.exception_handler(RequivoError)

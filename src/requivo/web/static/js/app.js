@@ -198,6 +198,105 @@
     setBusy(true);
   });
 
+  // ── counting, never clipping (#239) ────────────────────────────────────────
+  //
+  // The server *refuses* an over-long request rather than trimming it (invariant 3): half a request
+  // folded into the model reads exactly like a whole one, so the reader would never learn which half
+  // the engine saw. That is why no field in this app carries `maxlength` — a browser drops
+  // everything past the ceiling with no event, no message and no visual difference, so an over-long
+  // paste arrives at exactly the ceiling and sails through the very check written to stop it (#8),
+  // and `test_no_template_carries_a_clipping_attribute` keeps it that way.
+  //
+  // What was missing is the other half of that decision. `docs/web.md` asked for it in as many
+  // words — an affordance is welcome, but it has to count and warn and must never trim — and until
+  // now the only feedback for a 26,000-character client email was a refusal after the submit.
+  //
+  // So this counts and warns and does nothing else: it never assigns to the field, never puts an
+  // attribute on it, and never blocks a submit. An over-long submission still goes to the server and
+  // still comes back refused, with what was typed preserved in the form (#30). With JavaScript off
+  // nothing here runs and the page behaves exactly as before — no counter, and still no clipping,
+  // which is the only one of the two that would be a bug.
+  //
+  // Below 80% of the ceiling it says nothing at all. A counter that is always on is decoration and
+  // carries no information at the moment it matters; its *appearance* is the signal.
+  //
+  // Pinned by `test_the_character_counter_counts_and_warns_without_ever_touching_the_text`, which
+  // drives this file against a DOM whose field records every write it receives — so "never trims" is
+  // observed rather than argued.
+  var COUNTER_SHOWS_AT = 0.8;
+  var LIMIT_ATTR = "data-limit";
+  var FIELD_SELECTOR = "textarea[" + LIMIT_ATTR + "]";
+  var OVER_LIMIT_NOTE = " — over the limit; this will be refused when you submit.";
+
+  // Grouped by hand rather than through `toLocaleString`, whose separator comes from the *runtime's*
+  // locale: the same code says "18,400" on one machine and "18 400" or "18.400" on another, so the
+  // page and its test would only agree by accident of where they ran.
+  function grouped(n) {
+    var digits = String(n), out = "", i;
+    for (i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 === 0) out += ",";
+      out += digits.charAt(i);
+    }
+    return out;
+  }
+
+  // Created next to the field rather than rendered by the template, so the no-JS page carries no
+  // empty region that never fills. `aria-live=polite` because the count is a state change a reader
+  // who is not looking at it still needs; `polite` and not `assertive` — it is a heads-up, not an
+  // interruption. The node is kept on the field itself, so a swap that replaces the textarea gets a
+  // fresh counter rather than one writing into a node the document no longer holds.
+  function counterFor(field) {
+    if (field.requivoCounter) return field.requivoCounter;
+    var node = document.createElement("p");
+    node.className = "counter";
+    node.setAttribute("aria-live", "polite");
+    if (field.parentNode) field.parentNode.insertBefore(node, field.nextSibling);
+    field.requivoCounter = node;
+    return node;
+  }
+
+  function updateCounter(field) {
+    var limit = parseInt(field.getAttribute(LIMIT_ATTR), 10);
+    // A field whose ceiling we cannot read gets no counter at all, rather than one counting against
+    // a number this file invented. A guessed ceiling is worse than none: it would warn about a
+    // submission the server accepts, or stay quiet about one it refuses.
+    if (!(limit > 0)) return;
+    var used = field.value ? field.value.length : 0;
+    var node = counterFor(field);
+    if (used < limit * COUNTER_SHOWS_AT) {
+      // Read off the field every time and never latched, so deleting text takes the counter away
+      // again.
+      node.className = "counter";
+      node.textContent = "";
+      return;
+    }
+    // The ceiling is the maximum *permitted* length, not the first refused one — the server accepts
+    // exactly `MAX_INPUT_CHARS` — so `>` and not `>=`: styling the legal boundary as an error would
+    // tell the reader a submission that will be accepted is about to be refused.
+    var over = used > limit;
+    node.className = over ? "counter danger" : "counter";
+    node.textContent = grouped(used) + " / " + grouped(limit) + " characters"
+      + (over ? OVER_LIMIT_NOTE : "");
+  }
+
+  function refreshCounters() {
+    var fields = document.querySelectorAll(FIELD_SELECTOR);
+    for (var i = 0; i < fields.length; i++) updateCounter(fields[i]);
+  }
+
+  // Delegated, so a textarea an htmx swap brought in is covered without re-binding anything.
+  document.addEventListener("input", function (e) {
+    var field = e.target;
+    if (field && field.getAttribute && field.getAttribute(LIMIT_ATTR) !== null) updateCounter(field);
+  });
+  // …and swept after a swap as well, because the count has to be right *before* a key is pressed:
+  // the answers refusal re-renders the region with what the reader submitted still in the field
+  // (#30), which is precisely the case where they are already over the ceiling.
+  document.body.addEventListener("htmx:afterSwap", refreshCounters);
+  // The same reasoning for the first paint: the request form comes back from a refusal carrying the
+  // text that was refused.
+  refreshCounters();
+
   // Reset the bar if the user navigates back to a cached page.
   window.addEventListener("pageshow", function () {
     if (bar) { bar.classList.remove("on"); bar.style.width = "0%"; }
