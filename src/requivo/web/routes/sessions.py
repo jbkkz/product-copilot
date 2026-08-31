@@ -38,6 +38,14 @@ _PROVIDER_FAILURE = (EngineError, ProviderOutputError)
 # message.
 _MAX_NOTICE_CHARS = 300
 
+# The exact text `completion.py`'s give-up exit puts between the failure sentence and the saved-reply
+# path (`saved_note = f" — the reply that failed validation was saved to {debug_path}"`), duplicated
+# here rather than imported: importing from `providers.anthropic` would cross the surface-provider
+# boundary this file otherwise stays clear of, for one string. `analysis_failed()` below matches it
+# via `endswith` against the whole clause -- prefix and path together -- so the notice it truncates
+# never ends on a dangling "...was saved to" with the path removed and nothing left to complete it.
+_SAVED_NOTE_PREFIX = " — the reply that failed validation was saved to "
+
 
 def analysis_failed(slug: str, exc: EngineError | ProviderOutputError) -> RedirectResponse:
     """Send the reader to the session that *was* saved, carrying why the analysis was not (#207).
@@ -60,16 +68,26 @@ def analysis_failed(slug: str, exc: EngineError | ProviderOutputError) -> Redire
     `_MAX_NOTICE_CHARS` of it; on the shortest possible cause the notice ends *mid-filename*, at a
     path that does not resolve. Neither is a message that has merely lost some words -- the second is
     actively worse than no path, since it looks complete and is not. `exc.details["raw_reply_path"]`
-    (only `ProviderOutputError` ever sets it) rides as its own query parameter, untruncated, and is
-    stripped from the text `notice` is sliced from -- an `endswith` check on the path itself, not on
-    the sentence around it, so a future reword of that sentence does not silently stop matching. The
-    CLI is unaffected: `exc.message` itself is never touched, only what this function derives from a
-    local copy of it.
+    (only `ProviderOutputError` ever sets it) rides as its own query parameter, untruncated, and the
+    whole connector clause is stripped from the text `notice` is sliced from -- not only the path.
+
+    **Stripping the path alone and not the clause around it was tried first and reviewed out**: it
+    left the notice ending "...was saved to" with nothing after it, and the template's own sentence
+    for the path then repeats "was saved to" immediately underneath -- a dangling half-sentence
+    followed by its own completion, worse to read than the truncation this fix exists to close. So
+    `_SAVED_NOTE_PREFIX` below is `completion.py`'s own connector text, matched via `endswith` against
+    the *whole* clause (prefix + path). It is deliberately best-effort: a future reword of that
+    sentence in `completion.py` that this constant is not updated alongside simply stops matching, and
+    the notice reverts to carrying the unstripped clause -- redundant with the path block again, but
+    never broken, and never silently wrong. The CLI is unaffected either way: `exc.message` itself is
+    never touched, only what this function derives from a local copy of it.
     """
     message = exc.message
     saved_path = exc.details.get("raw_reply_path") if isinstance(exc, ProviderOutputError) else None
-    if saved_path and message.endswith(str(saved_path)):
-        message = message[: -len(str(saved_path))].rstrip()
+    if saved_path:
+        full_clause = f"{_SAVED_NOTE_PREFIX}{saved_path}"
+        if message.endswith(full_clause):
+            message = message[: -len(full_clause)]
     notice = quote(message[:_MAX_NOTICE_CHARS])
     url = f"/sessions/{slug}?analysis_failed={notice}"
     if saved_path:

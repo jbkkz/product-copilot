@@ -822,6 +822,14 @@ def test_a_retry_exhausted_analysis_carries_the_full_saved_reply_path_on_the_web
         "the full path must appear exactly once -- a second occurrence would mean a truncated "
         "fragment is still leaking into the page alongside the complete one"
     )
+    # Found in review: stripping only the path (and not the connector clause around it) left the
+    # notice ending "...was saved to" with nothing after it, immediately followed by the template's
+    # own "The reply that failed validation was saved to <path>." -- the same four words twice in a
+    # row across two lines. The connector clause is stripped whole now, so the phrase appears once.
+    assert r.text.count("was saved to") == 1, (
+        "the connector phrase must appear once, from the separately-rendered path sentence -- twice "
+        "means the truncated notice still carries the dangling clause the path sentence repeats"
+    )
     saved[0].unlink()  # isolate the second POST below to its own single debug file
 
     short_reply = "not json"
@@ -840,6 +848,14 @@ def test_a_retry_exhausted_analysis_carries_the_full_saved_reply_path_on_the_web
     assert r.text.count(fragment) == 1, (
         "the debug filename's own characters must appear only where the complete path does -- a "
         "second, partial occurrence is exactly the mid-path truncation this fix closes"
+    )
+    # This is the short-message case where the connector clause -- not just the path -- sits inside
+    # the first _MAX_NOTICE_CHARS, so it is the one the dangling-clause regression (found in review)
+    # actually reaches: the long-message case above never gets far enough into the message to include
+    # the clause at all, truncated or otherwise, so it cannot exercise this.
+    assert r.text.count("was saved to") == 1, (
+        "the connector phrase must appear once, from the separately-rendered path sentence -- twice "
+        "means the truncated notice still carries the dangling clause the path sentence repeats"
     )
 
 
