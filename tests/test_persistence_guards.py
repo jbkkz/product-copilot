@@ -218,8 +218,12 @@ def test_an_interrupted_migration_is_reported_distinctly_from_already_present(wo
 
     _legacy("half-done", "NEVER-COPIED")
     # The crash window `migrate_legacy` documents: the slug is claimed but the model was never
-    # applied, so the canonical session sits at revision 0.
-    SessionService().create_session("A real request.", slug="half-done")
+    # applied, so the canonical session sits at revision 0. Empty request text, not an arbitrary one
+    # -- `_legacy` writes no request.md/request.txt, so `migrate_legacy` would have claimed this slug
+    # with request="" (its own fallback), and the interrupted/unrelated discriminator compares
+    # exactly this against the legacy request text. An arbitrary request here would make this fixture
+    # indistinguishable from the *unrelated*-session case the sibling test below covers.
+    SessionService().create_session("", slug="half-done")
 
     with pytest.raises(SystemExit) as ei:
         _cmd_session_migrate(type("Args", (), {"json": True})(), None)
@@ -230,6 +234,62 @@ def test_an_interrupted_migration_is_reported_distinctly_from_already_present(wo
     assert out["interrupted"] == ["half-done"]
     # The legacy model was never copied in -- the canonical session is still empty, current_revision 0.
     assert SessionService().repo.read_meta("half-done").current_revision == 0
+
+
+def test_a_canonical_session_that_cannot_be_read_is_reported_not_crashed(workspace, capsys):
+    """Found in review of #262 itself. `repo.read_meta(slug)` -- the call that decides
+    `skipped_already_present` vs `interrupted` for an occupied slug -- can itself raise
+    `SessionUnreadableError` when the *canonical* session's own `session.json` is corrupt, and that
+    call sat outside the loop's per-slug isolation: an unreadable canonical session for an occupied
+    legacy slug aborted the whole pass exactly the way an unparseable *legacy* `model.json` did before
+    #262 was filed -- the identical defect, one call away from the one the issue named. Must-fire:
+    every other legacy session in the sweep (sorted before and after the unreadable one) still
+    migrates, and the run exits with a receipt rather than an unhandled `SessionUnreadableError`."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    _legacy("aaa-first", "FIRST")
+    _legacy("broken-canonical", "NEVER-READ")
+    store.canonical_dir("broken-canonical").mkdir(parents=True, exist_ok=True)
+    (store.canonical_dir("broken-canonical") / "session.json").write_text(
+        "{not valid json", encoding="utf-8")
+    _legacy("zzz-last", "LAST")
+
+    with pytest.raises(SystemExit) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert ei.value.code == EXIT_DEGRADED
+    out = json.loads(capsys.readouterr().out)
+    assert sorted(out["migrated"]) == ["aaa-first", "zzz-last"]
+    assert [e["slug"] for e in out["errors"]] == ["broken-canonical"]
+    assert _problem("aaa-first", 1) == "FIRST"
+    assert _problem("zzz-last", 1) == "LAST"
+
+
+def test_an_unrelated_revision_zero_session_at_a_legacy_slug_is_not_called_interrupted(
+        workspace, capsys):
+    """Found in review of #262 itself. `current_revision == 0` alone is not evidence of a crashed
+    migrate -- any ordinary session (`session init`, or discovery not yet through its first turn) can
+    legitimately sit at revision 0, and if its slug happens to coincide with an `out/` legacy
+    directory's, `interrupted`'s own printed remedy ("delete .requivo/sessions/<slug> and re-run")
+    would destroy that session's real, unrelated work. The discriminator is the request hash:
+    `create_session` stamps `request_hash` from the exact request text it is passed, so a genuine
+    crash window (where `migrate_legacy` claimed the slug with the *legacy* request text) leaves that
+    hash identical to the legacy request's -- and an unrelated session, created with its own request,
+    does not match. Must-not-fire: the same slug, occupied by a session with a different request,
+    stays `skipped_already_present`, never `interrupted`."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    d = store.legacy_dir("shared-slug")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "request.md").write_text("The legacy request text.", encoding="utf-8")
+    (d / "model.json").write_text(json.dumps(
+        _full_model(**{"problem": _slot(10, "inferred", "low", "LEGACY")})))
+
+    SessionService().create_session("A completely different, unrelated request.", slug="shared-slug")
+
+    _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    out = json.loads(capsys.readouterr().out)
+    assert out["interrupted"] == []
+    assert out["skipped_already_present"] == ["shared-slug"]
 
 
 # ── #5: filename is a write target, so it is validated like its slug sibling ─────

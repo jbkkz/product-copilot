@@ -289,9 +289,9 @@ class UnreadableArchiveError(InvalidSessionError):
 
 
 class InvalidArchiveError(InvalidSessionError):
-    """The archive opens, but its *shape* is not an export: no entries, too many, expanding past the
-    size ceiling, an entry that is not safely inside exactly one session directory, or more than one
-    session in it.
+    """The archive opens, but its *shape* is not an export: no entries, too many raw entries (files
+    and directories together), too many files, expanding past the size ceiling, an entry that is not
+    safely inside exactly one session directory, or more than one session in it.
 
     **Why it is in this family and not on its own.** It sits between `unreadable_archive` and
     `inconsistent_archive` on one code path in `_cmd_session_import`, and the three answer the same

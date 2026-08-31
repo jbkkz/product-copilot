@@ -329,6 +329,25 @@ def _cmd_session_show(a, client) -> None:
                   f"rev {st.revision}  {'STALE' if st.stale else 'fresh'}")
 
 
+def _legacy_request_text(legacy_dir: Path) -> str:
+    """The exact request text `migrate_legacy` would read from this legacy directory -- `request.md`
+    if it exists, else `request.txt`, else empty. Mirrors that function's own fallback in
+    `core/persistence.py` byte for byte, because `_cmd_session_migrate` compares it against a
+    canonical session's own recorded request text to tell an interrupted migrate apart from an
+    unrelated session that happens to occupy the same slug (#262).
+
+    **Takes the directory, not the slug.** The one caller already has it — `output_root() / slug`,
+    the exact path the sweep's own `slugs` listing walked to find `model.json` in the first place —
+    so resolving it a second time through `store.legacy_dir` would be a fresh, unjustified reach past
+    `SessionRepository` into `core.persistence` (`tests/test_boundaries.py`'s surface-storage
+    allowlist, a file this lane does not own this round)."""
+    for name in ("request.md", "request.txt"):
+        p = legacy_dir / name
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    return ""
+
+
 def _cmd_session_migrate(a, client) -> None:
     """The bulk migration of every legacy out/<slug>/ session into the canonical store. Since 0.9.8
     this is the *only* thing that reads that layout — there is no automatic migrate-on-first-write.
@@ -345,12 +364,19 @@ def _cmd_session_migrate(a, client) -> None:
     and only afterwards, under a separate lock, applies the legacy model — a crash between the two
     leaves a revision-0 shell at the canonical slug. Reporting that as `skipped_already_present`, which
     means *the work is done*, told the user their session had migrated when the model never arrived
-    and `out/` was the only copy. `current_revision == 0` is what tells the two apart: a genuinely
-    completed migration always has revision 1 (`migrate_legacy` applies the model as its very last
-    step), so an occupied slug still sitting at 0 can only be this crash window, never a normal skip.
-    It renders under its own key, `interrupted`, naming the recovery step, and counts toward
-    `EXIT_DEGRADED` below like a bad legacy session does — the same shape as `skipped_already_present`
-    would be if the phrase did not already mean something else.
+    and `out/` was the only copy. It renders under its own key, `interrupted`, naming the recovery
+    step, and counts toward `EXIT_DEGRADED` below like a bad legacy session does — the same shape as
+    `skipped_already_present` would be if the phrase did not already mean something else.
+
+    **`current_revision == 0` is necessary and, on its own, not sufficient — found in review of this
+    same change.** An ordinary session (`session init`, or discovery not yet through its first turn)
+    can legitimately sit at revision 0 too, and if its slug happens to coincide with a legacy `out/`
+    directory's, calling it `interrupted` prints a remedy — delete `.requivo/sessions/<slug>` and
+    re-run — that would destroy that session's real, unrelated work. `_legacy_request_text` is the
+    second check: `create_session` writes `request.md` from the exact request text it is passed, so a
+    genuine crash window (where `migrate_legacy` claimed the slug with the *legacy* request) leaves
+    `repo.request_text(slug)` identical to the legacy directory's own request text, and an unrelated
+    session, created with its own request, does not match. Both conditions have to hold.
 
     **A legacy session whose `model.json` does not parse used to abort the whole pass, per invariant
     15's "a listing survives its own members" applied to this loop.** `migrate_legacy` raises before
@@ -359,7 +385,14 @@ def _cmd_session_migrate(a, client) -> None:
     every one before it, however many had already migrated, never printed either. It is caught now,
     narrowly: `RequivoError` is the vocabulary every structured failure in this store already speaks
     (a bad `model.json`, an unreadable file), so catching it rather than `Exception` still lets a
-    genuine bug in the migration code itself surface as a traceback instead of one more list row."""
+    genuine bug in the migration code itself surface as a traceback instead of one more list row.
+
+    **`repo.read_meta(slug)` on the occupied-slug branch needs the identical isolation — also found in
+    review.** It reads the *canonical* session's own `session.json`, which can be just as corrupt as a
+    legacy `model.json` (unrelated to this migration, or itself a symptom of an interrupted write of
+    some other kind), and it sat outside any per-slug guard: an unreadable canonical session for an
+    already-occupied legacy slug aborted the whole pass exactly the way the unparseable-legacy-model
+    case did before this issue was filed. It is wrapped the same way `migrate_legacy` is below."""
     from requivo.paths import output_root
     root = output_root()
     slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
@@ -367,7 +400,13 @@ def _cmd_session_migrate(a, client) -> None:
     repo = SessionService().repo
     for slug in slugs:
         if repo.exists(slug):
-            if repo.read_meta(slug).current_revision == 0:
+            try:
+                meta = repo.read_meta(slug)
+            except RequivoError as e:
+                errors.append({"slug": slug, "error": str(e)})
+                continue
+            if (meta.current_revision == 0
+                    and repo.request_text(slug) == _legacy_request_text(root / slug)):
                 interrupted.append(slug)
             else:
                 skipped.append(slug)
