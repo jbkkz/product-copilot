@@ -66,6 +66,13 @@ def _save_failed_reply(raw: str, contract: str) -> Path | None:
     once at worst transiently retain a few more than `_DEBUG_RETENTION` files -- corrected on the very
     next write, by whichever process happens to run it -- and never race destructively, because
     nothing here is ever read back by a running process; a human reads these by hand.
+
+    **The write and the prune are two separate failure domains, deliberately** (found in review). A
+    prune failure -- this codebase already knows a `PermissionError` on an open handle is real and
+    platform-specific, invariant 18's own `_replace_with_retry` exists because of it -- must not
+    discard the path of a reply the write just saved successfully: that would report "nothing was
+    captured" about a reply that genuinely was, which is worse than the soft cap being late for one
+    cycle. `test_a_prune_failure_does_not_discard_an_already_saved_reply` pins it.
     """
     try:
         root = debug_root()
@@ -73,10 +80,13 @@ def _save_failed_reply(raw: str, contract: str) -> Path | None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         path = root / f"{stamp}-{contract}-{uuid.uuid4().hex[:8]}.txt"
         _atomic_write(path, raw)
-        _prune_debug_dir(root)
-        return path
     except Exception:
         return None
+    try:
+        _prune_debug_dir(root)
+    except Exception:
+        pass  # best-effort, and secondary to the write above -- see the docstring
+    return path
 
 
 def _prune_debug_dir(root: Path) -> None:
