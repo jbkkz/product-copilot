@@ -25,6 +25,7 @@ from _fakes import _ENGINE_REPLY, FakeClient, _run_app, full_slots, slot
 
 from requivo.cli import MAX_TURNS, app, converse
 from requivo.core.contracts import Brief, EngineOutput, Question, Slot, Summary
+from requivo.core.errors import ProviderOutputError
 from requivo.providers.base import ReasoningProvider
 from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
@@ -653,3 +654,69 @@ def test_a_top_level_interrupt_on_an_existing_session_exits_130_with_no_tracebac
     err = capsys.readouterr().err
     assert "Traceback" not in err
     assert "Interrupted." in err
+
+
+# ── found in review of #206: `except (EngineError, ...)` is narrower than the RequivoError family ──
+
+
+def test_a_provider_output_failure_in_the_once_path_also_names_the_claimed_session(monkeypatch, capsys):
+    """`ProviderOutputError` (raised when the provider's JSON retry loop gives up) is a `RequivoError`
+    sibling of `EngineError`, not a subclass of it -- so the quick path's `except (EngineError,
+    KeyboardInterrupt)` let it straight through to `app()`'s generic handler with the claimed session
+    unnamed, contradicting #206's own changelog entry ("if that call was interrupted or the provider
+    failed"). Found in review of this diff, not in the issue as filed."""
+    monkeypatch.setattr(DiscoveryService, "start",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(ProviderOutputError("bad json")))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert len(sessions) == 1, "the failed call left no claimed session to retry"
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err
+    assert "re-run `requivo discover`" in err
+
+
+def test_a_provider_output_failure_mid_turn_also_names_the_claimed_session(monkeypatch, capsys):
+    """The same gap, one layer in: `converse()`'s own turn-draft catch is the identical
+    `except (EngineError, KeyboardInterrupt)`, pre-dating #206 and not part of its diff, but sharing
+    the file and the exact class the two counted findings above are about -- swept once the first
+    instance turned up. A `ProviderOutputError` on turn 2 used to reach `app()` as a bare
+    `RequivoError` with up to `MAX_TURNS - 1` paid, un-rescued turns behind it."""
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, ProviderOutputError("bad json"))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], "turn 1 was drafted, paid for, and dropped"
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err and "requivo answer" in err
+
+
+def test_a_second_interrupt_during_the_rescues_own_save_exits_130(monkeypatch, capsys):
+    """`_rescue_drafted`'s own save is guarded against `RequivoError`/`OSError` (#320) but not
+    against a second `KeyboardInterrupt` landing on the save itself -- which used to propagate bare
+    and silent (no message at all) before reaching `app()`'s generic handler. Found in review of
+    this diff: the function this diff rewrote to promise "every abort path ... must name the
+    session" did not hold for this one abort path inside it."""
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, EngineError("API unavailable"))
+    monkeypatch.setattr(DiscoveryService, "finalize_discovery",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 130, "a second Ctrl-C should exit 130 like every other interrupt here"
+    err = capsys.readouterr().err
+    assert "could NOT be saved" in err
+    assert "interrupted" in err.lower(), (
+        f"a KeyboardInterrupt stringifies to '', so the message trailed off into nothing: {err!r}"
+    )

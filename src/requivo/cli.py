@@ -198,7 +198,11 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
         print(f"\n──────────── TURN {turn} ────────────")
         try:
             out = disco.draft_turn(request, current_model=out, answers=answers, cards=only)
-        except (EngineError, KeyboardInterrupt) as e:
+        except (RequivoError, KeyboardInterrupt) as e:
+            # `RequivoError`, not `EngineError`: `ProviderOutputError` (the JSON retry loop giving
+            # up) is a `RequivoError` sibling of `EngineError`, not a subclass of it, and used to
+            # reach `app()` as a bare, un-rescued failure -- every turn already drafted lost with no
+            # message naming the claimed session or the kept turns (found in review of #206).
             # `out` still holds the last turn that succeeded, because the failed assignment did not
             # land — and that model is every answer the client has given so far, since the model is
             # what this loop carries. Handing it to the caller is the difference between a transient
@@ -319,11 +323,21 @@ def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str)
         try:
             slug = disco.finalize_discovery(request, e.last, cards=cards, slug=slug,
                                             brief=None, surface="cli-discover")
-        except (RequivoError, OSError) as save_failed:
+        except (RequivoError, OSError, KeyboardInterrupt) as save_failed:
+            # `KeyboardInterrupt` added here in review of #206: a second Ctrl-C landing on the
+            # rescue's own save used to propagate bare and silent past this except -- no message at
+            # all, in the one function this diff rewrote to promise every abort path names what was
+            # kept. `_why()`, not the bare object, for the same reason as everywhere else in this
+            # file: a `KeyboardInterrupt` stringifies to `''`.
             print(f"\nTurn {e.turn} failed, and the {kept} turn(s) before it could NOT be saved: "
-                  f"{save_failed}", file=sys.stderr)
+                  f"{_why(save_failed)}", file=sys.stderr)
             print(f"The request is still captured at {store.canonical_dir(slug)}.", file=sys.stderr)
             print(f"The failure that stopped the run was: {_why(e.cause)}", file=sys.stderr)
+            if isinstance(save_failed, KeyboardInterrupt):
+                # Re-raised bare, like every other interrupt in this file, so `app()`'s handler
+                # assigns the one exit code they all share (130) instead of this branch inventing a
+                # second one for `RequivoError`/`OSError` to keep.
+                raise
             raise SystemExit(1) from save_failed
         print(f"\nTurn {e.turn} failed, so the {kept} turn(s) before it were saved rather than "
               f"discarded.", file=sys.stderr)
@@ -377,7 +391,11 @@ def _cmd_discover(a, client) -> None:
         try:
             slug = disco.start(request, cards=only, slug=meta.slug, finalize=False,
                                surface="cli-discover")
-        except (EngineError, KeyboardInterrupt):
+        except (RequivoError, KeyboardInterrupt):
+            # `RequivoError`, not `EngineError`: the identical gap as `converse()`'s own catch above,
+            # found in review of this diff -- `ProviderOutputError` is a `RequivoError` sibling of
+            # `EngineError`, not a subclass, so it slipped straight past this except and reached
+            # `app()`'s generic handler with the claimed session unnamed.
             _say_nothing_drafted(meta.slug)
             raise
         out = disco.sessions.load_model(slug)
