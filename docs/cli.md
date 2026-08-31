@@ -21,7 +21,7 @@ flag the parser binds cannot ship silently undocumented.
 | Flag | Does |
 |---|---|
 | `requivo --version` | Print `requivo <version>` and exit 0. Read from the package, so it is the version you actually have |
-| `requivo --workspace DIR <command>` | Where sessions are read and written (default: cwd). Place it *before* the command |
+| `requivo --workspace DIR <command>` | Where sessions are read and written (default: cwd). Accepted *before or after* the command |
 
 `requivo --help` lists the verbs in journey order — `demo` and `discover` first, then refinement,
 then the generators, then the offline plumbing — and marks the nine that spend money **`(API)`**.
@@ -50,7 +50,7 @@ The `--json` envelope is unchanged: `code` is still `session_not_found`, with th
 
 | Command | Does |
 |---|---|
-| `requivo discover <request\|file>` | Analyse a request and create a session (interactive; `--once` for a single pass, `--context a,b` to scope cards) |
+| `requivo discover <request\|file\|->` | Analyse a request and create a session (interactive; `-` reads the request from stdin, `--once` for a single pass, `--context a,b` to scope cards) |
 | `requivo answer <slug> "<answers>"` | Fold answers in and refine the model one more turn |
 | `requivo status <slug>` | Understanding checklist + readiness, closing with the single next command (`--json` for a machine snapshot, with no pointer). No network |
 | `requivo impact <slug> [slots…]` | What rests on given slots — decisions to re-validate + artifacts that go stale (no slots = full map). No network |
@@ -314,6 +314,7 @@ JSON
 
 requivo artifact save <slug> --type prd --file - --revision 3 --json < prd.md
 echo "We need a leave approval system." | requivo session init -
+cat request.txt | requivo discover -
 ```
 
 This is what the Claude Code skills use. A caller that already holds the content should not have to

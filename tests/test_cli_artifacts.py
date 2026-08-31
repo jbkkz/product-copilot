@@ -16,6 +16,7 @@ it has not.
 """
 from __future__ import annotations
 
+import argparse
 import io
 import json
 from contextlib import redirect_stdout
@@ -141,11 +142,19 @@ def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
     fabricated provenance the refusal exists to stop. Two reviewers found it independently on the #6
     branch, which is how it reached #57 instead of being fixed there.
 
-    Both halves are asserted. That the flag says it is required is the weaker claim; that no option on
-    this subcommand *advertises* a default is the one that catches the next instance, because
-    `argparse` renders every option's `help` into that one string. The two forms this repository
-    writes a default in are checked — `(default: …)` and "defaults to" — rather than the bare word,
-    which the corrected text itself uses to deny having one.
+    Both halves are asserted. That the flag says it is required is the weaker claim; that no option
+    this subcommand *owns* advertises a default is the one that catches the next instance. The two
+    forms this repository writes a default in are checked — `(default: …)` and "defaults to" —
+    rather than the bare word, which the corrected text itself uses to deny having one.
+
+    The sweep reads each action's own `help` rather than searching the rendered blob, and skips the
+    flags the *root* parser binds (#249). `--workspace` is now re-declared on every subparser so its
+    position stops mattering, and it genuinely has a default — the current directory — which it is
+    right to state; a substring search over the whole help text cannot tell that from `--revision`
+    growing one back. Excluding it by *provenance* rather than by name is what keeps this a guard:
+    the only things it can skip are the two flags declared on the root parser, every option and
+    positional this subcommand actually owns is still read, and the failure now names the offending
+    flag instead of printing a page.
     """
     buf = io.StringIO()
     with redirect_stdout(buf), pytest.raises(SystemExit) as ei:
@@ -159,7 +168,31 @@ def test_the_revision_flag_does_not_advertise_a_default_it_no_longer_has():
     # `rsplit` because the usage line names `--revision` first; the options block is the last mention.
     chunk = help_text.rsplit("--revision", 1)[1].split("--json", 1)[0].lower()
     assert "required" in chunk, f"`--revision` does not say it is required: {chunk!r}"
-    for form in ("default:", "defaults to"):
-        assert form not in help_text.lower(), (
-            f"an `artifact save` option advertises a default ({form!r}); `--revision` has had none "
-            f"since #6 and no other option on this subcommand has one either:\n{help_text}")
+
+    root = _build_parser()
+    inherited = {opt for a in root._actions for opt in a.option_strings}
+    save = _subparser(_subparser(root, "artifact"), "save")
+    own = [a for a in save._actions if not (set(a.option_strings) & inherited)]
+    # Must fire, and specifically on `--revision`: a count alone still passes if a future change to
+    # `inherited` swallows the one flag this test is named for -- `own` merely drops from five to
+    # four and the sweep reads a set that no longer contains the thing it is guarding (found in
+    # review of #249). The count stays as the blunt half; this line is the sharp one.
+    assert any("--revision" in a.option_strings for a in own), (
+        "must fire: `--revision` fell out of the set this sweep reads, so the flag the test is "
+        "named for is no longer being checked at all")
+    assert len(own) >= 4, f"must fire: the walk found only {len(own)} option(s) on `artifact save`"
+    offenders = [(a.option_strings or a.dest, form)
+                 for a in own for form in ("default:", "defaults to")
+                 if form in (a.help or "").lower()]
+    assert not offenders, (
+        "an option `artifact save` owns advertises a default; `--revision` has had none since #6 "
+        f"and no other option on this subcommand has one either: {offenders}")
+
+
+def _subparser(parser, name):
+    """The named child parser, or an assertion failure — never None, which would make the caller
+    above pass over a subcommand that had been renamed away."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name]
+    raise AssertionError(f"no `{name}` subparser under {parser.prog!r}")
