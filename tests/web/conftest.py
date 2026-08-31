@@ -125,6 +125,13 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("REQUIVO_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    # Since #334 the credential guard asks the SDK, which also discovers an active profile on disk --
+    # so clearing the environment is no longer enough to describe a credential-free install: on a
+    # machine whose developer has one, these tests would read that. The SDK's discovery entry point
+    # is neutralised too. `raising=False` because the older majors in `anthropic>=0.40.0,<2` have no
+    # such chain. The full reasoning, including why `ANTHROPIC_CONFIG_DIR` is not the lever it looks
+    # like, is on `_no_credentials` in `tests/test_provider.py`.
+    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
     return tmp_path
 
 
