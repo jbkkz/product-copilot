@@ -309,6 +309,41 @@ def test_credential_present_is_the_one_definition_new_client_reads(monkeypatch):
 # ── #334: the guard asks the SDK, instead of keeping a list of the names it reads ─────────────
 
 
+def _sdk_has_credential_chain() -> bool:
+    """Whether the installed SDK has the profile/federation discovery chain at all.
+
+    `anthropic>=0.40.0,<2` spans SDKs that resolve two environment variables and SDKs that resolve
+    five sources, and the **Dependency floor** leg installs the former -- which is the point of that
+    leg, and why it is the one that caught this.
+
+    The production guard needs no branch for it: `_resolve_client` reads the three attributes through
+    `getattr` defaults, so an SDK with no `credentials` attribute simply has no such source and
+    resolves from the two variables it does understand. The *tests* do need one. A test that exports
+    federation variables and asserts a credential resolved is asserting a capability the floor does
+    not have, and it fails there for a reason that is not a defect.
+
+    Skipped with a stated reason rather than weakened to pass everywhere: the assertion is the whole
+    value of the test, and a version-agnostic rewrite of it would assert nothing on any leg. The
+    modern-SDK legs keep it; this one records that it could not look.
+    """
+    import anthropic._client as sdk_client
+
+    return hasattr(sdk_client, "default_credentials")
+
+
+_NEEDS_CHAIN = pytest.mark.skipif(
+    not _sdk_has_credential_chain(),
+    reason=(
+        "the installed anthropic SDK has no profile/federation discovery chain (the floor of "
+        "`anthropic>=0.40.0,<2` predates it). UNTESTED ON THIS SDK: that a credential resolved from "
+        "a source other than ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not false-refused. The legs "
+        "on a current SDK do test it."
+    ),
+)
+
+
+
+@_NEEDS_CHAIN
 def test_a_federation_install_is_not_false_refused(monkeypatch):
     """The #334 defect itself, and the reason this file no longer keeps a list of variable names.
 
@@ -341,22 +376,37 @@ def test_the_resolved_credential_attributes_are_read_through_getattr_defaults():
     """
     import anthropic as sdk
 
-    from requivo.providers.anthropic.client import _CREDENTIAL_ATTRS, _resolve_client
+    from requivo.providers.anthropic.client import _CREDENTIAL_ATTRS
 
-    for attr in _CREDENTIAL_ATTRS:
-        assert hasattr(sdk.Anthropic(api_key="sk-ant-whatever"), attr), (
-            f"the SDK no longer exposes `{attr}`; the guard is reading a name that is gone and will "
+    client = sdk.Anthropic(api_key="sk-ant-whatever")
+    # `api_key` and `auth_token` exist on every major in `anthropic>=0.40.0,<2`; `credentials` is the
+    # one that does not, so it is checked only where the chain that populates it exists. Asserting it
+    # unconditionally is what went red on the Dependency floor leg -- a test contradicting the
+    # `getattr` default it was written to justify.
+    always = tuple(a for a in _CREDENTIAL_ATTRS if a != "credentials")
+    for attr in always:
+        assert hasattr(client, attr), (
+            f"the SDK no longer exposes `{attr}`; the guard is reading a name that is gone and would "
             f"report every install as credential-free"
         )
+    if _sdk_has_credential_chain():
+        assert hasattr(client, "credentials"), (
+            "this SDK has the discovery chain but no `credentials` attribute to leave its result on; "
+            "the guard would resolve a profile or federation credential and then not see it"
+        )
 
+    # The other half, and the one that has to hold on *every* supported major: an SDK object missing
+    # an attribute must read as "no credential from that source", never as an AttributeError.
     class _OldSdkClient:  # only the two attributes every supported major has
         api_key = None
-        auth_token = "bearer"
+        auth_token = None
 
-    assert all(getattr(_OldSdkClient(), a, None) is None for a in _CREDENTIAL_ATTRS) is False
-    assert _resolve_client is not None
+    assert all(getattr(_OldSdkClient(), a, None) is None for a in _CREDENTIAL_ATTRS), (
+        "reading a missing attribute must yield None, not raise -- the floor SDK has no `credentials`"
+    )
 
 
+@_NEEDS_CHAIN
 def test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason(monkeypatch):
     """A third state the env-var guard could not reach: configured, and unloadable.
 
@@ -381,6 +431,7 @@ def test_an_unloadable_profile_is_refused_with_the_sdk_s_own_reason(monkeypatch)
     )
 
 
+@_NEEDS_CHAIN
 def test_credential_present_does_not_raise_on_an_unloadable_profile(monkeypatch):
     """`deterministic/doctor.py` calls `credential_present()` bare, so the verb that answers *is this
     install healthy* would traceback on exactly the unhealthy install it exists to describe. False,
