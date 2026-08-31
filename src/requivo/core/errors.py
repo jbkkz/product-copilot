@@ -463,7 +463,9 @@ class ArtifactWriteFailedError(RequivoError):
     a bare traceback surfacing out from under a paid provider call. The content itself is not
     recoverable from here — it was never handed back to a caller that could retry the save on its
     own — so the honest remedy is "regenerate", not a guess at what a partial write left behind.
-    `details`: `{slug, type, cause}`.
+    `details`: `{slug, type, path, cause}` — `path` is the resolved target through the same
+    `artifact_path` chokepoint every successful write's own printed path goes through, `None` only
+    when `artifact_type` itself is not one this build's `ARTIFACT_FILENAMES` knows.
     """
 
     code = "artifact_write_failed"

@@ -174,3 +174,6 @@ def test_an_oserror_writing_a_generated_artifact_is_a_structured_refusal_not_a_t
     assert exc_info.value.details["slug"] == slug
     assert exc_info.value.details["type"] == "prd"
     assert "No space left" in exc_info.value.details["cause"]
+    # Names the target path, not just the type -- the acceptance criterion's own wording (#208).
+    assert exc_info.value.details["path"].endswith("prd.md")
+    assert "prd.md" in str(exc_info.value)

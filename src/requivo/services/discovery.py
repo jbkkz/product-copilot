@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from requivo.core.contracts import EngineOutput
+from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import (
     ArtifactWriteFailedError,
     InvalidSlugError,
@@ -33,7 +34,7 @@ from requivo.core.errors import (
     SessionLockedError,
     SessionUnreadableError,
 )
-from requivo.core.persistence import ArtifactStatus, ensure_store_dir, is_contained, validate_slug
+from requivo.core.persistence import ArtifactStatus, artifact_path, ensure_store_dir, is_contained, validate_slug
 from requivo.core.validation import require_input_within_bounds
 from requivo.paths import lock_root
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
@@ -672,12 +673,19 @@ class DiscoveryService:
         here was already paid for — a provider call that ran for seconds to minutes — so a write that
         then fails at the filesystem (a full disk, a permissions error, anything `_atomic_write` did
         not itself turn into a `RequivoError`) must not surface as a bare traceback out from under
-        that call. `ArtifactWriteFailedError` names what was lost and where it was going; the caller
-        still has to regenerate, because the content itself was never handed back to be retried."""
+        that call. `ArtifactWriteFailedError` names what was lost and where it was going — the target
+        path, through the same `artifact_path` chokepoint `_wrote()` prints a successful write's path
+        through, since a disclosed path is a disclosed path whether the write succeeded or not — and
+        the caller still has to regenerate, because the content itself was never handed back to be
+        retried."""
         try:
             return self.artifacts.save(slug, artifact_type, content, source_revision=source_revision)
         except OSError as e:
+            filename = ARTIFACT_FILENAMES.get(artifact_type)
+            target = artifact_path(slug, filename) if filename else None
             raise ArtifactWriteFailedError(
-                f"{artifact_type!r} was generated for session '{slug}' but could not be saved: {e}",
+                f"{artifact_type!r} was generated for session '{slug}' but could not be saved"
+                f"{f' to {target}' if target else ''}: {e}",
                 details={"slug": slug, "type": artifact_type,
+                         "path": str(target) if target else None,
                          "cause": f"{type(e).__name__}: {e}"}) from e
