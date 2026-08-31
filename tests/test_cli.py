@@ -11,6 +11,7 @@ no-LLM verbs live in the `test_cli_*.py` set that mirrors `requivo/deterministic
 render-safety class that runs across all of them (#141).
 """
 import argparse
+import io
 import json
 import os
 import shutil
@@ -472,6 +473,88 @@ def test_pc_discover_rejects_empty_request():
     for blank in ("", "   "):
         with pytest.raises(SystemExit):
             _run_app(["discover", blank], client=FakeClient(_ENGINE_REPLY))
+
+
+# ── `discover -` reads stdin, like every other document-taking verb (#360) ───────────────────
+#
+# `session init -`, `model apply <slug> -` and `artifact save --file -` all route through
+# `deterministic/_shared.py`, which special-cases a bare `-` as "read the document from stdin".
+# `discover` called `is_file_argument` directly instead, and `is_file_argument("-")` is False -- so
+# the argument fell through to the treat-as-literal-text branch and the engine was asked, at full
+# price, to discover a product from the two-character request `-`. Quiet, plausible-looking, and
+# billed. Every case below is paired with its opposite in the same fixture, because "stdin was read"
+# and "stdin was ignored" are only distinguishable when both are asserted.
+
+
+class _Tty(io.StringIO):
+    """Stdin as an interactive terminal: everything a pipe is, except `isatty()`."""
+
+    def isatty(self):
+        return True
+
+
+def _saved_request(slug: str) -> str:
+    return (store.canonical_dir(slug) / "request.md").read_text(encoding="utf-8")
+
+
+def _only_slug() -> str:
+    from requivo.services.sessions import SessionService
+
+    slugs = [m.slug for m in SessionService().list_sessions()]
+    assert len(slugs) == 1, f"expected exactly one session, got {slugs}"
+    return slugs[0]
+
+
+def test_discover_reads_the_request_from_stdin_when_the_argument_is_a_dash(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("We would like a leave approval system."))
+    fake = FakeClient(_ENGINE_REPLY)
+    _run_app(["discover", "-"], client=fake)
+    assert "leave approval system" in _saved_request(_only_slug())
+    # The bug is not only that the text was wrong -- it is that a paid call went out carrying it.
+    assert "leave approval system" in json.dumps(fake.calls[0])
+
+
+def test_a_one_character_request_that_is_not_a_dash_is_still_literal_text(monkeypatch):
+    """The must-not-fire half. A fix that read stdin whenever stdin happened to be a pipe would
+    hijack an ordinary short request -- and CI itself runs with a non-tty stdin, so that mistake
+    would be invisible in exactly the environment that grades it."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("PIPED TEXT THAT MUST NOT BE READ"))
+    _run_app(["discover", "x"], client=FakeClient(_ENGINE_REPLY))
+    assert _saved_request(_only_slug()).strip() == "x"
+
+
+def test_a_dash_with_a_terminal_on_stdin_is_refused_rather_than_discovered_on(monkeypatch):
+    """`_read_stdin` refuses a terminal rather than hanging on input nobody meant to type. The
+    assertion that matters is the second one: the refusal has to arrive *before* the provider call,
+    or the fix has only changed which wrong request got paid for."""
+    monkeypatch.setattr(sys, "stdin", _Tty(""))
+    fake = FakeClient(_ENGINE_REPLY)
+    with pytest.raises(SystemExit) as e:
+        _run_app(["discover", "-"], client=fake)
+    assert e.value.code == 1
+    assert fake.calls == []
+
+
+def test_an_empty_stdin_is_refused_rather_than_discovered_on(monkeypatch):
+    """`printf "" | requivo discover -` is the same nothing-to-discover-from case the blank literal
+    request above already refuses; it must reach the same refusal rather than the provider."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("   \n "))
+    fake = FakeClient(_ENGINE_REPLY)
+    with pytest.raises(SystemExit) as e:
+        _run_app(["discover", "-"], client=fake)
+    assert e.value.code == 2
+    assert fake.calls == []
+
+
+def test_a_file_path_argument_still_behaves_exactly_as_before(monkeypatch, tmp_path):
+    """The third arm of the same branch, kept honest: routing `-` through the shared reader must not
+    disturb the file case, whose filename is also what suggests the slug."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("PIPED TEXT THAT MUST NOT BE READ"))
+    req = tmp_path / "Leave Approval v3.md"
+    req.write_text("We would like a leave approval system.", encoding="utf-8")
+    _run_app(["discover", str(req)], client=FakeClient(_ENGINE_REPLY))
+    assert _only_slug() == "leave-approval-v3"
+    assert "leave approval system" in _saved_request("leave-approval-v3")
 
 
 def test_pc_answer_refines_the_model():

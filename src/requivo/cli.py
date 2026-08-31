@@ -21,7 +21,7 @@ from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
 from requivo.core.selectors import display_text
-from requivo.deterministic import is_file_argument, print_json, read_user_text
+from requivo.deterministic import is_file_argument, print_json, read_source
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
 
@@ -341,14 +341,36 @@ def _rescue_drafted(disco, request: str, e: DraftingFailed, *, cards, slug: str)
     raise e.cause
 
 
+# The three shapes `discover`'s argument can take, said once so the two refusals below cannot
+# describe different products. `-` is named here because a message that lists two of three ways in
+# is how a reader concludes the third does not exist (#360).
+_REQUEST_SHAPES = ("a sentence describing what to build, a path to a file containing one, or '-' to "
+                   "read one from stdin.")
+
+
 def _cmd_discover(a, client) -> None:
     if not a.request or not a.request.strip():
-        print("discover needs a request: a sentence describing what to build, or a path to a file "
-              "containing one.", file=sys.stderr)
+        print(f"discover needs a request: {_REQUEST_SHAPES}", file=sys.stderr)
         raise SystemExit(2)
     client = client or new_client()
     is_file = is_file_argument(a.request)
-    request = read_user_text(Path(a.request)) if is_file else a.request
+    # `read_source`, the shared reader, and not `read_user_text` alone: the argument has *three*
+    # shapes, not two, and the third is `-` (#360). `is_file_argument("-")` is False -- correctly,
+    # `-` is not a file -- so reading the file case here and letting everything else fall through as
+    # literal text meant `requivo discover -` discovered on the two characters `-`, silently and at
+    # full price, while `session init -`, `model apply <slug> -` and `artifact save --file -` all
+    # read stdin. Pinned by `test_discover_reads_the_request_from_stdin_when_the_argument_is_a_dash`
+    # and, for the half a pipe-sniffing fix would break,
+    # `test_a_one_character_request_that_is_not_a_dash_is_still_literal_text`.
+    request = read_source(a.request)
+    if not request.strip():
+        # The blank-argument refusal above cannot see this one: `-` and a path are both perfectly
+        # good arguments whose *contents* turn out to be empty, and discovering a product from
+        # nothing is the same non-answer either way. Same code, same sentence, one noun different --
+        # a separate exit code here would be a code per condition rather than per shape of answer.
+        source = "stdin" if a.request == "-" else "that file"
+        print(f"discover needs a request and {source} is empty: {_REQUEST_SHAPES}", file=sys.stderr)
+        raise SystemExit(2)
 
     # One resolver, in Core, shared with the deterministic verbs and the Web: an unknown card is a hard
     # error. This used to warn and carry on with `only = None`, which does not mean "the cards you
@@ -907,9 +929,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # `test_the_version_flag_declares_nothing_that_test_version_sites_cannot_see`.
     p.add_argument("--version", action="version", version=f"requivo {__version__}",
                    help="print the Requivo version and exit")
-    p.add_argument("--workspace", metavar="DIR",
-                   help="workspace root for sessions (default: cwd). Sessions live in "
-                        "<workspace>/.requivo/sessions/. Place before the command.")
+    p.add_argument("--workspace", metavar="DIR", help=_WORKSPACE_HELP)
     sub = p.add_subparsers(dest="command", required=True, metavar="<command>")
 
     # Registration order IS render order in argparse, so this list is the first screen (#244). It
@@ -931,8 +951,13 @@ def _build_parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo", help="replay a real run from saved output — no API key needed")
     demo.set_defaults(func=_cmd_demo)
 
-    d = sub.add_parser("discover", help="analyse a request (a string or a file path) and start a session (API)")
-    d.add_argument("request", help="the client request, or a path to a file containing it")
+    d = sub.add_parser("discover",
+                       help="analyse a request (a string, a file path or '-') and start a session (API)")
+    # `-` named in the help, not only implemented (#360): it is the shape a reader reaches for when
+    # piping a messy client email in, and the three sibling verbs that already accept it say so.
+    d.add_argument("request",
+                   help="the client request, a path to a file containing it, or '-' to read it "
+                        "from stdin")
     d.add_argument("--once", action="store_true", help="single pass (status + questions), no interactive loop")
     # `--cards` is a permanent alias of `--context` (#85): the same selector was spelled two ways
     # across three verbs. One action with two option strings, never two arguments — two arguments
@@ -994,7 +1019,68 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
     web.set_defaults(func=_cmd_web)
 
+    # Last, after every verb group has registered: a global flag is global wherever it is written.
+    _accept_workspace_after_the_command(p)
     return p
+
+
+# One string, bound to every copy of the flag, so the global one and the per-verb ones cannot
+# describe two different things. The clause it used to end on -- "Place before the command." -- is
+# gone with the constraint it stated (#249); prose that outlives its rule is what turned a working
+# CLI into `unrecognized arguments`.
+_WORKSPACE_HELP = ("workspace root for sessions (default: cwd). Sessions live in "
+                   "<workspace>/.requivo/sessions/. Accepted before or after the command.")
+
+
+def _accept_workspace_after_the_command(parser: argparse.ArgumentParser) -> None:
+    """Re-declare `--workspace` on every subparser, at every depth, so its position stops mattering.
+
+    `--workspace` lived on the root parser alone, and argparse hands everything after the
+    subcommand to the subparser -- so `requivo status <slug> --workspace DIR` died with
+    `unrecognized arguments: --workspace DIR` at exit 2. That message is wrong about the one thing a
+    reader needs from it: the flag is not unrecognized, it is misplaced, and the constraint saying
+    so lived only in `--help` text, which the person who just hit the error is by definition not
+    reading. The natural phrasing is the one that failed.
+
+    **`default=argparse.SUPPRESS` on every copy, and that is the whole of the correctness here.**
+    `_SubParsersAction` parses into a fresh namespace and copies every attribute of it onto the
+    parent's, so a copy defaulting to `None` would overwrite a perfectly good
+    `requivo --workspace DIR <command>` with None for every verb at once -- the fix silently
+    breaking the position it was meant to preserve. `web` has carried this pattern, with that
+    reasoning written beside it, since long before this function existed; all this does is stop it
+    being the only verb that has it. Pinned by
+    `test_an_absent_subcommand_workspace_does_not_clobber_the_global_one`.
+
+    Walked rather than added at each registration site, for two reasons. The verb groups register
+    from four modules under `deterministic/`, so a per-site edit is a list to keep in step with the
+    next subcommand anybody adds -- and `session`, `model` and `artifact` nest their own subparsers,
+    where the flag has to be on the *leaf* to be reachable at all. `test_cli_flag_names.py`'s
+    `test_every_verb_accepts_workspace_after_its_own_name` reads the built parser rather than a
+    list, for the same reason.
+
+    argparse exposes no public way to enumerate subparsers, so `_actions`/`_SubParsersAction` are
+    read directly. They are as stable as anything in that module and `tests/test_cli_flag_names.py`
+    has walked them the same way since #72; a private attribute that disappears fails loudly at
+    import, which is the acceptable direction.
+    """
+    seen: set[int] = set()
+
+    def walk(p: argparse.ArgumentParser) -> None:
+        for action in p._actions:
+            if not isinstance(action, argparse._SubParsersAction):
+                continue
+            # `.choices` maps every alias to the same parser object, so a parser reached twice would
+            # be given the option twice and argparse would raise on the conflict.
+            for sp in action.choices.values():
+                if id(sp) in seen:
+                    continue
+                seen.add(id(sp))
+                if not any("--workspace" in a.option_strings for a in sp._actions):
+                    sp.add_argument("--workspace", metavar="DIR", default=argparse.SUPPRESS,
+                                    help=_WORKSPACE_HELP)
+                walk(sp)
+
+    walk(parser)
 
 
 def app(argv: list[str] | None = None, client=None) -> None:

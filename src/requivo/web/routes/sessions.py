@@ -222,7 +222,7 @@ def session_page(request: Request, slug: str = Depends(safe_slug),
             "pending": True, "slug": slug,
             "request_text": sessions.request_text(slug), "context_cards": meta.context_cards,
             "provider": provider_status(),
-            # Set only by `_analysis_failed`'s redirect. Anyone can put it in a URL by hand, which on a
+            # Set only by `analysis_failed`'s redirect. Anyone can put it in a URL by hand, which on a
             # local single-user server with no authentication is not a boundary worth defending -- and
             # Jinja escapes it either way.
             "analysis_failed": request.query_params.get("analysis_failed"),

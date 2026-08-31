@@ -101,6 +101,10 @@ def is_file_argument(arg: str) -> bool:
     `Path(arg).is_file()` falls into on this kind of argument -- one that is legitimately either a
     path or the content itself.
 
+    Note what this does **not** answer: `is_file_argument("-")` is False, because `-` is not a file.
+    It is not literal text either -- it is stdin. A caller that has to tell all three apart wants
+    `read_source` below, which is what `discover` was missing (#360).
+
     A blank string makes `Path("")` resolve to the current directory, which exists; a bare
     directory name exists too, and a naive `.exists()` check accepts both, where the caller then
     reads the "file" with `read_text()` and raises. `.is_file()`, which this function actually calls,
@@ -112,7 +116,7 @@ def is_file_argument(arg: str) -> bool:
 
     Public since #301: `cli.py`'s `discover` re-implemented these same three traps under its own
     name (`_is_file_arg`) rather than sharing this one -- the classic two-session duplicate, where a
-    future fix to one copy has no way to reach the other. `_read_source` below is this function's
+    future fix to one copy has no way to reach the other. `read_source` below is this function's
     other caller.
     """
     if not arg.strip():
@@ -123,14 +127,27 @@ def is_file_argument(arg: str) -> bool:
         return False
 
 
-def _read_source(arg: str) -> str:
-    """A request/answers argument that may be an inline string, a path to a file, or `-` for stdin."""
+def read_source(arg: str) -> str:
+    """A request/answers argument that may be an inline string, a path to a file, or `-` for stdin.
+
+    Public since #360, for the same reason `is_file_argument` above became public in #301: `cli.py`'s
+    `discover` needed the middle of this function and reached for the one public piece of it, so
+    `discover -` never met the `-` branch at all and discovered on the two-character request `-`,
+    at full price. A verb that documents its argument as "the client request, or a path to a file
+    containing it" wants this whole function, not one third of it.
+    """
     if arg == "-":
-        return _read_stdin()
+        return read_stdin()
     return read_user_text(Path(arg)) if is_file_argument(arg) else arg
 
 
-def _read_stdin() -> str:
+# The old private spelling, kept alive for `deterministic/sessions.py`'s import while that file is
+# held by another change in flight (#360). It is one binding to one function object, so both names
+# behave identically; drop it, and switch that import to `read_source`, once that change lands.
+_read_source = read_source
+
+
+def read_stdin() -> str:
     """Everything on stdin, as text. Refused when stdin is a terminal, which would otherwise hang
     waiting for input the caller never meant to type."""
     if sys.stdin is None or sys.stdin.isatty():
@@ -141,7 +158,7 @@ def _read_stdin() -> str:
 
 
 def _read_document(arg: str) -> str:
-    """A *document* argument: a path, or `-` for stdin. Unlike `_read_source`, the text is never
+    """A *document* argument: a path, or `-` for stdin. Unlike `read_source`, the text is never
     itself the content — `model apply <session> proposal.json` takes a path, so a non-existent path is
     a mistake to report, not a proposal whose body happens to be a filename.
 
@@ -150,7 +167,7 @@ def _read_document(arg: str) -> str:
     (`:` is illegal in a filename there), that needed `rm` to clean up — a command the plugin does not
     grant itself — and that two concurrent sessions would have shared."""
     if arg == "-":
-        return _read_stdin()
+        return read_stdin()
     p = Path(arg)
     if not p.is_file():
         raise InvalidModelError(f"no such file: {display_token(arg)} (use '-' to read from stdin)",

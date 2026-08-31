@@ -351,6 +351,90 @@ def test_documented_cli_commands_exist():
     assert not missing, f"documented CLI commands missing from the parser: {sorted(missing)}"
 
 
+# ── a global flag is global wherever it is written (#249) ────────────────────
+#
+# `--workspace` was declared on the root parser alone, so `requivo status <slug> --workspace DIR`
+# died with argparse's bare `unrecognized arguments: --workspace DIR` at exit 2 -- a message that
+# names a flag this CLI absolutely does know as unknown, and sends the reader looking for a typo.
+# The constraint ("Place before the command") lived only in `--help` text, which the user who
+# triggered it is the one user not reading. `web` already carried the working pattern: the same
+# option re-declared on the subparser with `default=argparse.SUPPRESS`, so an absent subcommand
+# copy leaves the global value alone. It is now on every subparser, at every depth.
+
+
+def _verbs_missing_workspace(parser: argparse.ArgumentParser, prefix: str = "") -> list[str]:
+    """Every verb path whose parser does not bind `--workspace`, read off the built parser rather
+    than off a list -- a list is what leaves the next subcommand out."""
+    missing, subs = [], []
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            subs.extend((name, sp) for name, sp in action.choices.items())
+    if prefix and not any("--workspace" in a.option_strings for a in parser._actions):
+        missing.append(prefix)
+    for name, sp in subs:
+        missing.extend(_verbs_missing_workspace(sp, f"{prefix} {name}".strip()))
+    return missing
+
+
+def test_every_verb_accepts_workspace_after_its_own_name():
+    missing = _verbs_missing_workspace(_build_parser())
+    assert not missing, (
+        "these verbs do not bind `--workspace`, so writing it after the command still dies with "
+        f"argparse's `unrecognized arguments`: {sorted(set(missing))}")
+
+
+def test_workspace_parses_identically_before_and_after_the_command():
+    before = _build_parser().parse_args(["--workspace", "/w", "status", "m.json"])
+    after = _build_parser().parse_args(["status", "m.json", "--workspace", "/w"])
+    assert before.workspace == after.workspace == "/w"
+    assert before.model == after.model == "m.json"
+    # Two levels down, where the flag has to be on the *leaf* parser to be reachable at all.
+    assert _build_parser().parse_args(["session", "list", "--workspace", "/w"]).workspace == "/w"
+
+
+def test_an_absent_subcommand_workspace_does_not_clobber_the_global_one():
+    """The reason every copy carries `default=argparse.SUPPRESS`, and the half a naive fix breaks:
+    argparse copies the subparser's namespace over the root's, so a copy defaulting to None would
+    silently erase `requivo --workspace DIR <command>` for every verb at once."""
+    assert _build_parser().parse_args(["--workspace", "/w", "status", "m.json"]).workspace == "/w"
+    assert _build_parser().parse_args(["--workspace", "/w", "session", "list"]).workspace == "/w"
+    assert _build_parser().parse_args(["--workspace", "/w", "web"]).workspace == "/w"
+
+
+def test_an_unknown_flag_after_the_command_is_still_refused():
+    """The must-fire control. A fix that simply stopped argparse minding unknown arguments would
+    pass every assertion above and lose the refusal that makes a typo visible."""
+    for argv in (["status", "m.json", "--worksapce", "/w"], ["session", "list", "--nonsuch"]):
+        with pytest.raises(SystemExit) as e:
+            _build_parser().parse_args(argv)
+        assert e.value.code == 2
+
+
+def test_the_workspace_help_no_longer_tells_the_reader_to_place_it_first():
+    """The constraint is gone, so the sentence stating it has to go with it -- prose that outlives
+    the rule it describes is the thing this issue was actually about."""
+    root = _build_parser()
+    action = next(a for a in root._actions if "--workspace" in a.option_strings)
+    assert "before the command" not in (action.help or ""), (
+        "the global --workspace help still tells the reader to place it before the command")
+    # Read off the action, never off `format_help()`: argparse rewraps help text to the terminal
+    # width, so the sentence under test can be split across two lines and a substring search over
+    # the rendered page passes while the constraint is still being stated. Verified: it does.
+
+
+def test_workspace_after_the_command_reaches_the_session_store(tmp_path):
+    """End to end, not only through the parser: `app()` reads the flag position-independently
+    (`getattr(args, "workspace", None)`), so the session has to land under the directory named
+    after the verb."""
+    root = tmp_path / "elsewhere"
+    root.mkdir()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        app(["session", "init", "A leave approval system", "--slug", "ws-after",
+             "--workspace", str(root)], client=None)
+    assert (root / ".requivo" / "sessions" / "ws-after" / "session.json").is_file()
+
+
 # ── every real flag is mentioned in docs/cli.md (#284, the inverse of #72's direction) ───────
 #
 # #72 (above) guards that a command docs/cli.md promises really exists in the parser. This is the
@@ -359,15 +443,57 @@ def test_documented_cli_commands_exist():
 # `--provider` existed and were absent from the reference).
 
 
-def _real_flags(parser: argparse.ArgumentParser, prefix: str = ""):
+def _real_flags(parser: argparse.ArgumentParser, prefix: str = "",
+                inherited: frozenset[str] = frozenset()):
     """Yield (verb path, action) for every argparse action that carries a real option string --
-    `-h`/`--help` excluded, since every verb has it and documenting it would be noise."""
+    `-h`/`--help` excluded, since every verb has it and documenting it would be noise.
+
+    `inherited` carries the option strings already bound *above* this parser, and an action that
+    re-declares one of them is skipped rather than yielded (#249). A global flag re-declared on
+    every subparser so that its position stops mattering is still one flag: it is documented once,
+    on its own top-level row, and that row is checked by this same walk when the recursion is at the
+    root. Demanding a per-verb row for it would ask docs/cli.md for thirty-three lines that all say
+    the same sentence, which is not what "documented" means to a reader.
+
+    Deliberately keyed on *inherited from an ancestor*, not on `help=argparse.SUPPRESS`: hiding a
+    flag from `--help` would then be enough to escape this guard, and a hidden flag is the one most
+    in need of being written down. Only `--version` and `--workspace` are bound at the root, so the
+    exemption cannot reach a flag that is genuinely a verb's own.
+    """
+    own = {opt for a in parser._actions for opt in a.option_strings}
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
             for name, sub in action.choices.items():
-                yield from _real_flags(sub, f"{prefix} {name}".strip())
+                yield from _real_flags(sub, f"{prefix} {name}".strip(), inherited | own)
         elif set(action.option_strings) - {"-h", "--help"}:
+            if set(action.option_strings) & inherited:
+                continue
             yield (prefix, action)
+
+
+def test_the_inherited_flag_exemption_skips_only_a_re_declared_global_flag():
+    """The must-fire control on `_real_flags`' one exemption. Skipping a re-declared global flag is
+    only safe while it cannot reach a flag a verb genuinely owns -- and a walk that quietly stopped
+    yielding would make the guard below pass over an undocumented CLI."""
+    p = argparse.ArgumentParser(prog="x")
+    p.add_argument("--workspace")
+    sp = p.add_subparsers().add_parser("go")
+    sp.add_argument("--workspace", default=argparse.SUPPRESS)   # the position-independence copy
+    sp.add_argument("--only-here")                              # genuinely this verb's own
+
+    yielded = {(verb, tuple(a.option_strings)) for verb, a in _real_flags(p)}
+    assert ("go", ("--only-here",)) in yielded, "a verb's own flag must still be demanded"
+    assert ("go", ("--workspace",)) not in yielded, "the re-declared global copy is not a new flag"
+    assert ("", ("--workspace",)) in yielded, "and the global flag is still demanded, once, at root"
+
+
+def test_the_only_flags_the_root_parser_binds_are_the_two_global_ones():
+    """What bounds the exemption above: it can only ever skip something the root parser declares.
+    If a third flag ever moves onto the root, this fails and the exemption gets re-argued rather
+    than silently widening to cover it."""
+    root = _build_parser()
+    bound = {opt for a in root._actions for opt in a.option_strings} - {"-h", "--help"}
+    assert bound == {"--version", "--workspace"}
 
 
 def test_every_real_flag_is_documented_in_the_cli_reference():
