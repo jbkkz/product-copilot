@@ -375,21 +375,33 @@ def test_every_real_flag_is_documented_in_the_cli_reference():
     let `--provider` ship silently undocumented in the first place. Checked against the *long*
     option string only (`--output`, never `-o`): a short flag is one or two characters and is
     already, coincidentally, a substring of ordinary prose almost everywhere, so checking it would
-    make the assertion pass whether or not anyone had actually written the flag down."""
+    make the assertion pass whether or not anyone had actually written the flag down.
+
+    Checked *on the same line as the flag's own verb*, not merely present anywhere on the page. A
+    page-wide substring search cannot tell "documented under this command" from "documented under
+    the wrong one" -- a flag moved to a neighbouring table row would still read as present. Every
+    row in docs/cli.md's reference tables is one physical line (a markdown table forbids anything
+    else), so a real entry always carries the verb's own `requivo <verb>` invocation and the flag
+    on the same line; this is what lets the two be checked together instead of merely both existing
+    somewhere in the file. Found in review of #284's own first version of this test."""
     page = Path(__file__).resolve().parents[1] / "docs" / "cli.md"
-    text = page.read_text(encoding="utf-8")
+    lines = page.read_text(encoding="utf-8").splitlines()
 
     checked, missing = 0, []
     for verb, action in _real_flags(_build_parser()):
         long_forms = [opt for opt in action.option_strings if opt.startswith("--")]
         candidates = long_forms or list(action.option_strings)
         checked += 1
-        if not any(opt in text for opt in candidates):
+        marker = f"requivo {verb}".strip() if verb else "requivo"
+        documented = any(marker in line and any(opt in line for opt in candidates)
+                          for line in lines)
+        if not documented:
             missing.append((verb or "(top level)", action.option_strings))
 
     # must fire: an empty walk would make the assertion below vacuously true.
     assert checked >= 30, f"the parser walk looks blind: only {checked} flag(s) found"
     assert not missing, (
-        "these flags are real (the parser binds them) and appear nowhere in docs/cli.md, so a "
-        f"user hunting for them will not find them: {missing}"
+        "these flags are real (the parser binds them) and no line of docs/cli.md names both the "
+        "flag and its own `requivo <verb>` invocation -- so the flag is either undocumented, or "
+        f"documented under a different command than the one that binds it: {missing}"
     )
