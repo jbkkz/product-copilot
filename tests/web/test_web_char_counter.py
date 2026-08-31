@@ -119,6 +119,26 @@ def test_the_character_counter_counts_and_warns_without_ever_touching_the_text()
     swapped = t["swapped in, already full"]
     assert swapped["text"] == "19,000 / 20,000 characters"
 
+    # ── a ceiling the page cannot read ────────────────────────────────────────
+    # The third state of the affordance, and the one the guard `!(limit > 0)` exists for. A counter
+    # that invented a ceiling would be worse than none: it would warn about a submission the server
+    # accepts, or stay quiet about one it refuses. So it declines — and declining has to mean *no
+    # counter node at all*, not an empty one, because a node that exists is a node a later change can
+    # start writing a guessed number into.
+    for label in ("ceiling unparseable", "ceiling is zero", "no ceiling declared"):
+        row = t[label]
+        assert row["text"] is None, (
+            f"at '{label}' the page built a counter against a ceiling it could not read — "
+            f"got {row['text']!r}")
+
+    # must fire, for that whole block: every one of those fields holds 19,000+ characters, which on a
+    # readable ceiling is well past the threshold and demonstrably does produce a counter (the
+    # "swapped in, already full" row above, same length, same code path). So the silence is the guard
+    # firing, not the harness failing to reach these fields.
+    assert t["swapped in, already full"]["length"] >= 19_000
+    assert t["ceiling unparseable"]["length"] >= 19_000
+    assert t["ceiling is zero"]["length"] >= 19_000
+
     # ── the two halves that must never fire ───────────────────────────────────
     for label, row in t.items():
         assert row["writes"] == [], (

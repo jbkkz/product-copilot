@@ -155,4 +155,31 @@ fields.push(answers);
 fire("htmx:afterSwap", {});
 snap("swapped in, already full", answers);
 
+// ── the ceiling the page cannot read ──────────────────────────────────────────
+//
+// `updateCounter` refuses to count against a number it had to invent, and refusing is the right
+// answer: a guessed ceiling would warn about a submission the server accepts, or stay quiet about
+// one it refuses. Both spellings of "cannot read" are driven here, because the guard is
+// `!(limit > 0)` and only one of them produces `NaN`.
+var unreadable = makeField("unreadable", 0, new Array(19001).join("x"));
+unreadable.attributes["data-limit"] = "not-a-number";
+fields.push(unreadable);
+
+var zeroed = makeField("zeroed", 0, new Array(19001).join("x"));
+zeroed.attributes["data-limit"] = "0";
+fields.push(zeroed);
+
+fire("htmx:afterSwap", {});
+snap("ceiling unparseable", unreadable);
+snap("ceiling is zero", zeroed);
+
+// …and a textarea that declares no ceiling at all. The sweep selector would never return it in a
+// browser, so the only way the page meets one is the delegated `input` listener, which sees every
+// input event on the document — including one from a field that is none of its business.
+var unlimited = makeField("unlimited", 0, "");
+delete unlimited.attributes["data-limit"];
+unlimited.harness.type(500);
+fire("input", { target: unlimited });
+snap("no ceiling declared", unlimited);
+
 process.stdout.write(JSON.stringify(log));

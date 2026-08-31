@@ -155,6 +155,55 @@ def test_the_web_verb_configures_the_logger_before_it_serves(pristine_web_logger
     assert pristine_web_logger.propagate is False
 
 
+def test_a_character_the_console_cannot_encode_is_escaped_rather_than_dropped(monkeypatch):
+    """Invariant 16, on the one stream this change newly writes to.
+
+    `web/spend.py` logs an em dash, and until #291 that record reached no handler at all — so this is
+    the first release in which a `requivo.web` record is actually encoded to a console. On Windows
+    that console is typically cp1252, and the failure mode is not a crash: `StreamHandler.emit` routes
+    an encoding failure to `handleError`, so the process survives and the **record is silently lost**,
+    which is the same hole `streams.py` rejects `errors="replace"` for.
+
+    What makes it safe is an ordering, not the handler: `cli.app()` calls `configure_streams()` before
+    dispatching to `_cmd_web`, so `sys.stderr` already carries `errors="backslashreplace"` by the time
+    the handler resolves it. This drives both sides of that ordering against a real cp1252 encoder on
+    every platform rather than reasoning about a Windows leg — the same trick `tests/test_encoding.py`
+    uses to exercise a codec question on Linux.
+    """
+    # `handleError` writes to the real stderr when this is on; the strict half below deliberately
+    # triggers it. monkeypatch restores it even if an assertion fails.
+    monkeypatch.setattr(logging, "raiseExceptions", False)
+
+    def cp1252(errors: str):
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors=errors, newline="")
+
+    safe = cp1252("backslashreplace")
+    # An em dash IS representable in cp1252; U+2192 is not, and this product prints arrows — a
+    # provider string reaching a message could carry either.
+    configure_web_logging(stream=safe).info("answers spent 1 call — cost → unknown")
+    safe.flush()
+    written = safe.buffer.getvalue().decode("cp1252")
+
+    assert "—" in written, "a character cp1252 can represent must survive unchanged"
+    # Derived from the same codec rather than spelled out, so this asserts *that an escape arrived*
+    # rather than pinning one particular rendering of it.
+    escaped = "→".encode("cp1252", "backslashreplace").decode("ascii")
+    assert escaped in written, (
+        "the character cp1252 cannot represent has to arrive as a visible escape — a reader must be "
+        f"able to tell a substituted character from one that was never there; expected {escaped!r}")
+    assert "cost" in written and "unknown" in written, "the rest of the record has to arrive intact"
+
+    # must fire, and it is the whole argument for the ordering: on a strict stream the same record is
+    # dropped entirely, and the process survives, so nothing announces the loss. If this ever stops
+    # being true the assertions above have stopped being about the stream configuration.
+    logging.getLogger(WEB_LOGGER).handlers = []
+    strict = cp1252("strict")
+    configure_web_logging(stream=strict).info("answers spent 1 call — cost → unknown")
+    strict.flush()
+    assert strict.buffer.getvalue() == b"", (
+        "a strict console was expected to lose this record silently")
+
+
 def test_configuring_twice_leaves_one_handler(pristine_web_logger):
     """`--reload`, a repeated entry, a test calling it after the app did: none of them may double
     every line. The same argument `_atomic_write`'s retry makes — the operation is idempotent, so
@@ -169,8 +218,10 @@ def test_a_logger_somebody_else_configured_is_left_alone(pristine_web_logger):
     configured `requivo.web` has said what they want; taking it over would be the import-time hijack
     this module exists to avoid, arriving one function later.
 
-    Reported rather than silent: the return value says which of the two happened, so a caller that
-    cares can say so instead of assuming."""
+    What is asserted is the *logger*, not the return value. `configure_web_logging` returns the same
+    `getLogger(WEB_LOGGER)` object in all three states by design — its docstring says so, and the one
+    caller discards it — so there is nothing in the return to read, and a test claiming otherwise
+    would be describing an API this does not have."""
     theirs = logging.StreamHandler(io.StringIO())
     pristine_web_logger.addHandler(theirs)
 
