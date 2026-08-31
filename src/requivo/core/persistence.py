@@ -99,7 +99,7 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
 
 # ── Session locking ────────────────────────────────────────────────────────────
 # A session mutation is a *compound* write: read the metadata, check the revision precondition, write
-# model.json, write revisions/NNNN-model.json, then rewrite session.json. Between the check and the
+# revisions/NNNN-model.json, write model.json, then rewrite session.json. Between the check and the
 # last write, another writer reading the same revision would produce a second revision from the same
 # base and silently overwrite the first. `expected_revision` alone cannot prevent that — it is checked
 # and then acted on, and the gap between the two is the race. These helpers close it.
@@ -996,9 +996,11 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
 
 def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                   provenance: dict | None = None) -> tuple[int, SessionMeta]:
-    """Persist a new model revision: write model.json AND revisions/NNNN-model.json (the prior model
-    is already frozen in an earlier revision file), record the revision's provenance, then bump
-    current_revision + updated_at. Returns (new_revision, updated_meta).
+    """Persist a new model revision: freeze revisions/NNNN-model.json, replace model.json with the
+    same payload (the prior model is already frozen in an earlier revision file), record the
+    revision's provenance, then bump current_revision + updated_at. Returns (new_revision,
+    updated_meta). The order of those writes is a guarantee rather than a detail; see the comment on
+    the two `_atomic_write` calls below.
 
     `expected_revision` is an optimistic-locking precondition: when given, the write fails with
     `RevisionConflictError` unless the session is still at that revision — so two updates racing from
@@ -1021,8 +1023,16 @@ def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | No
         ensure_store_dir(d / "revisions")
         rev = meta.current_revision + 1
         payload = model.model_dump_json(indent=2)
-        _atomic_write(d / "model.json", payload)
+        # Frozen revision file first, then model.json. Three writes and no transaction, so the order
+        # decides what a crash between two of them leaves: reversed, a death here served every reader
+        # content no revision records while session.json still named the previous one. Pinned by
+        # `test_a_crash_after_the_first_payload_write_still_reads_as_the_recorded_revision` and, on
+        # the revision 0 -> 1 arm that reports different codes,
+        # `test_a_crash_in_the_very_first_apply_leaves_a_session_still_at_revision_zero`. The window
+        # this does *not* close is pinned beside them by
+        # `test_a_crash_after_both_payload_writes_is_still_reported_as_inconsistent`.
         _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+        _atomic_write(d / "model.json", payload)
         prov = dict(provenance or {})
         meta.revisions.append(RevisionRecord(
             revision=rev,

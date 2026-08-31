@@ -220,6 +220,18 @@ requivo session verify <slug> --json   # {"ok": false, "problems": [{"code": …
 The same check gates `session import` (an archive is held to exactly the standard a live session is)
 and appears in `requivo doctor`, which names any session in the workspace that no longer adds up.
 
+**What an interrupted apply leaves.** Applying a revision is three writes and no transaction — the
+frozen `revisions/NNNN-model.json`, then `model.json`, then `session.json` — so a machine that dies
+between two of them leaves a real state, and the order is chosen so that the first of those gaps is
+harmless. Only the frozen file is on disk, nothing reads it yet, and every read path goes on serving
+the revision `session.json` records; `verify` reports `orphan_revision_file` and the next apply mints
+the same revision number again, overwriting it. The revision number is never spent by a write that
+did not finish. Die in the *second* gap, with `model.json` already replaced, and the session really
+is inconsistent: `verify` says `model_is_not_the_last_revision` — the current model and the history
+describe different states — or `model_without_revision` when the interrupted apply was the session's
+first, since there is then no recorded revision for the model to disagree with. Re-applying is again
+the repair.
+
 A recorded artifact's `filename` is treated as untrusted while this runs. It is an unconstrained
 string in the format, and a session may arrive from an archive or a hand edit, so it goes through the
 same bare-filename guard every artifact write uses; a name that is not a plain file inside
