@@ -1111,6 +1111,13 @@ def test_creating_a_reserved_slug_is_still_refused_through_canonical_dir_directl
             pass  # pragma: no cover - refused before the body ever runs
 
 
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture cannot be built on this platform: "
+                     "Windows refuses to create a directory literally named 'con' at the OS level, "
+                     "independent of anything Requivo's own code does (see the module comment above "
+                     "_RESERVED_DEVICE_NAMES) -- so a session already on disk under a reserved name "
+                     "is a state only a platform that never enforced the restriction can reach. "
+                     "REASONED, NOT OBSERVED: no Windows machine confirmed this by hand; it follows "
+                     "from the documented Windows behaviour #221 already relies on.")
 def test_a_session_already_on_disk_under_a_reserved_slug_is_readable_by_every_verb_that_named_it(
         workspace):
     # #372: a session already on disk under a Windows reserved name -- created before #221 shipped,
@@ -1151,6 +1158,9 @@ def test_a_session_already_on_disk_under_a_reserved_slug_is_readable_by_every_ve
             pass  # pragma: no cover - refused before the body ever runs
 
 
+@pytest.mark.skipif(store.fcntl is None, reason="same platform limit as the sibling test above: "
+                     "the fixture needs a directory literally named 'con' already on disk, which "
+                     "Windows itself refuses to create. REASONED, NOT OBSERVED.")
 def test_idempotent_reinit_of_an_existing_reserved_slug_returns_it_rather_than_creating_one(
         workspace):
     # #372, the corollary that validates the read/creation split is drawn in the right place:

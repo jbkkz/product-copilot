@@ -343,6 +343,14 @@ def lock_path(slug: str) -> Path:
     # a first lock. Without this, taking the read-consistency lock `session export` holds would be
     # the one thing standing between an already-on-disk reserved name and the data filed under it,
     # even though locking creates nothing under that name.
+    #
+    # `<slug>.lock` is itself a reserved-stem-shaped name on Windows -- `con.lock` matches the same
+    # before-the-first-dot rule `validate_filename` enforces for artifact names (raised in review).
+    # Not a live gap: the precondition for reaching this line at all is a session already occupying
+    # `slug` on disk, and Windows's own `CreateDirectory` refuses to *materialize* a directory named
+    # `con` in the first place -- independent of anything this file does, and true before #221 ever
+    # shipped. So a reserved-named session cannot exist on a real Windows filesystem for this branch
+    # to be reached from, which is also why the sibling tests that build one are POSIX-only.
     _refuse_new_reserved_slug(slug, session_root() / slug)
     p = root / (slug + ".lock")
     if not is_contained(p, root):
@@ -1564,9 +1572,12 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     `_scan_session_root`, one root over.
 
     **A `<slug>.lock` regular file is the only thing this store ever writes here.** `lock_path`
-    joins `lock_root()` with `validate_slug(slug) + ".lock"`, so anything else under this root —
-    a stray file with a different name, a directory, a symlink at a `.lock` name — did not come
-    from `session_lock` and is reported as `unexpected` rather than folded into the lock count.
+    joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always, and the
+    reserved-device-name refusal only when nothing already occupies the matching *session* name
+    (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
+    against `session_root()`, not this root) -- so anything else under this root — a stray file with
+    a different name, a directory, a symlink at a `.lock` name — did not come from `session_lock`
+    and is reported as `unexpected` rather than folded into the lock count.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
 

@@ -70,6 +70,12 @@ def test_session_list_and_show(workspace, tmp_path):
     assert shown["slug"] == "one" and shown["format_version"] == 1
 
 
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs a directory literally named "
+                     "'con' already on disk, which Windows itself refuses to create at the OS level "
+                     "regardless of anything Requivo's own code does (see core/persistence.py's "
+                     "comment above _RESERVED_DEVICE_NAMES). REASONED, NOT OBSERVED on an actual "
+                     "Windows machine; it follows from the documented behaviour #221 already relies "
+                     "on for the reserved-name refusal itself.")
 def test_a_reserved_slug_already_on_disk_is_readable_by_list_show_and_verify(workspace):
     # #372: `.requivo/sessions/con/` already on disk (created before #221 shipped, or on a platform
     # that never refused the name) must stay reachable through every read verb this module owns,
@@ -145,6 +151,48 @@ def test_session_migrate_survives_one_undecodable_legacy_request_beside_a_health
     assert store.session_exists("zzz-good")
     assert [err["slug"] for err in r["errors"]] == ["bad"]
     assert good_legacy.joinpath("model.json").exists()  # originals preserved either way
+
+
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs a directory literally named "
+                     "'con' already on disk (under the legacy out/ root here), which Windows itself "
+                     "refuses to create at the OS level. REASONED, NOT OBSERVED -- same limit as the "
+                     "sibling #372 fixtures.")
+def test_session_migrate_survives_a_reserved_name_legacy_directory_beside_a_healthy_one(workspace):
+    # #371 (found in review of that same fix): `repo.exists(slug)` -- the check that decides whether
+    # a slug is "occupied" -- is itself outside any per-slug guard, and it resolves through
+    # `canonical_dir`, which #372 lets refuse a *legacy-only* slug that is a reserved Windows device
+    # name (correctly: migrating one would create a brand-new reserved-name directory, which #221 and
+    # invariant 11 both say must stay refused). What must not happen is that refusal escaping the loop
+    # uncaught -- the identical "abort the whole pass, no receipt" shape #371 closed for the two reads
+    # a few lines further in. `app()`'s own top-level `except RequivoError` catches it before it
+    # becomes a raw traceback, but the effect on this verb is the same one #371 fixed: exit 1 with
+    # the generic error envelope instead of `4` with the migrate receipt, and no per-slug outcome for
+    # anything in the sweep -- not even "zzz-good", sorted after "con" and never reached.
+    # `store.legacy_dir("con")` would itself refuse -- nothing exists there yet either, so building
+    # the fixture has to bypass the same guard the test is about, exactly like the persistence-level
+    # #372 tests do for a canonical session.
+    con_legacy = store.output_root() / "con"
+    con_legacy.mkdir(parents=True)
+    con_legacy.joinpath("model.json").write_text(json.dumps(_full_model()))
+    con_legacy.joinpath("request.txt").write_text("A legacy request under a reserved name.")
+
+    good_legacy = store.legacy_dir("zzz-good")
+    good_legacy.mkdir(parents=True)
+    good_legacy.joinpath("model.json").write_text(json.dumps(_full_model()))
+    good_legacy.joinpath("request.txt").write_text("A healthy legacy request.")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "migrate", "--json"], client=None)
+    assert e.value.code == 4  # EXIT_DEGRADED — the receipt still printed, in full, ahead of it
+
+    r = json.loads(buf.getvalue())
+    assert "zzz-good" in r["migrated"]
+    assert store.session_exists("zzz-good")
+    assert [err["slug"] for err in r["errors"]] == ["con"]
+    # `store.session_exists("con")` would itself raise for this same reason -- the reserved name was
+    # never created, so it is still refused, not tolerated -- so the raw path is the honest check.
+    assert not (store.session_root() / "con").exists()  # refused, never half-created
 
 
 # ── the revision contract on the CLI surface ────────────────────────────────────
