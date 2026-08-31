@@ -349,3 +349,47 @@ def test_documented_cli_commands_exist():
                   "session", "model", "artifact"}
     missing = documented - set(sub.choices)
     assert not missing, f"documented CLI commands missing from the parser: {sorted(missing)}"
+
+
+# ── every real flag is mentioned in docs/cli.md (#284, the inverse of #72's direction) ───────
+#
+# #72 (above) guards that a command docs/cli.md promises really exists in the parser. This is the
+# other direction: a flag the parser actually binds and docs/cli.md never mentions is a flag a user
+# hunting for it will not find -- the exact gap #284 was filed over (`session init --slug` and
+# `--provider` existed and were absent from the reference).
+
+
+def _real_flags(parser: argparse.ArgumentParser, prefix: str = ""):
+    """Yield (verb path, action) for every argparse action that carries a real option string --
+    `-h`/`--help` excluded, since every verb has it and documenting it would be noise."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, sub in action.choices.items():
+                yield from _real_flags(sub, f"{prefix} {name}".strip())
+        elif set(action.option_strings) - {"-h", "--help"}:
+            yield (prefix, action)
+
+
+def test_every_real_flag_is_documented_in_the_cli_reference():
+    """Read off the built parser, not off a hand-maintained list -- a hand-maintained list is what
+    let `--provider` ship silently undocumented in the first place. Checked against the *long*
+    option string only (`--output`, never `-o`): a short flag is one or two characters and is
+    already, coincidentally, a substring of ordinary prose almost everywhere, so checking it would
+    make the assertion pass whether or not anyone had actually written the flag down."""
+    page = Path(__file__).resolve().parents[1] / "docs" / "cli.md"
+    text = page.read_text(encoding="utf-8")
+
+    checked, missing = 0, []
+    for verb, action in _real_flags(_build_parser()):
+        long_forms = [opt for opt in action.option_strings if opt.startswith("--")]
+        candidates = long_forms or list(action.option_strings)
+        checked += 1
+        if not any(opt in text for opt in candidates):
+            missing.append((verb or "(top level)", action.option_strings))
+
+    # must fire: an empty walk would make the assertion below vacuously true.
+    assert checked >= 30, f"the parser walk looks blind: only {checked} flag(s) found"
+    assert not missing, (
+        "these flags are real (the parser binds them) and appear nowhere in docs/cli.md, so a "
+        f"user hunting for them will not find them: {missing}"
+    )

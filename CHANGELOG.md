@@ -4,9 +4,24 @@ All notable changes to Requivo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Each release opens with a **Highlights** block — at most six single-line, user-facing bullets,
+before the `Added`/`Changed`/`Fixed` detail. It is a summary of what already follows, never a
+replacement for it: nothing below a Highlights block is trimmed or rewritten because of it. When
+cutting a release, write the block for that release's own section before tagging (#229) — the
+fragments in `changelog.d/` are the material to summarize from.
+
 ## [Unreleased]
 
 ## [1.3.0] - 2026-08-30
+
+### Highlights
+
+- New `requivo session rescope` re-scopes an existing session's context cards without redoing discovery or losing its artifacts.
+- `requivo doctor` and `requivo --version` now print the version, OS and model together — the three facts a bug report needs, in one paste.
+- Requivo Web shows what every paid action cost, and sets honest expectations for how long a call takes instead of promising "a few seconds".
+- Requivo Web renders saved artifacts (brief, PRD, stories…) as formatted documents instead of raw Markdown in a code block.
+- Session slugs read as words again in any Latin language — `track-vendor-invoices`, not `we-need-a-way-to` — instead of the first five tokens of the request verbatim.
+- The tracked `.claude/settings.json` no longer silently enables the maintainer's own Claude Code plugins on your machine when you clone this repository.
 
 ### Added
 
@@ -666,6 +681,17 @@ All notable changes to Requivo are recorded here. The format follows
   remembers to add it to a list.
 
 ## [1.2.0] - 2026-08-23
+
+### Highlights
+
+Mostly internal: a provider split, three CI legs, and a narrative-reference convention this
+CHANGELOG's own entries follow. The changes below are the ones with a visible effect.
+
+- `requivo discover` on a session that already has a model now refuses before spending any API calls — it used to run up to nine paid turns first and then refuse.
+- Fixed a rare data-loss race: a concurrent write and `session import --force` could corrupt each other's session. The per-session write lock now lives outside the session directory it guards.
+- `pip install requivo[anthropic]` could resolve a pydantic version this project does not actually work on; the declared floor is corrected.
+- `session import` gives the same, clearer error on every platform when something occupies the slug you are importing into, instead of a Windows-only "could not move" message that pointed at the wrong cause.
+- The "Decision brief" naming is now consistent everywhere: the CLI, the terminal banner, and `requivo answer` all said "solution assessment" in places the rest of the product had already renamed.
 
 ### Added
 
@@ -1408,6 +1434,14 @@ All notable changes to Requivo are recorded here. The format follows
 - No user-visible change and nothing about what any workflow prints; that is #147, #176 and #177.
 
 ## [1.1.0] - 2026-08-21
+
+### Highlights
+
+- Every Claude Code skill now checks the `requivo` CLI is installed before it runs anything, and says exactly how to fix it — five of six skills used to fail a new user's first command with a bare shell error.
+- The Claude Code plugin README is rewritten as a landing page for someone who installed it from a marketplace and has never cloned the repository.
+- `/requivo:discover` now reports the absolute directory a session was written to, not only its slug, so a discovery started from the wrong directory does not silently hide the result.
+- The `status`, `prd` and `brief` skills close by naming the next step, matching `discover`, `answer` and `impact`.
+- CI now validates both Claude Code manifests with `--strict` and checks the plugin's `requivo` invocations against the released CLI on PyPI, not just the code in the same checkout.
 
 ### Added
 

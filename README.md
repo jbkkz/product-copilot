@@ -210,6 +210,11 @@ senior colleague's read, not an oracle, and get expert review for any legal/tax/
 raises.
 See the [roadmap][roadmap].
 
+**Ran it on a real request? [Tell us how it did][discovery-feedback].** No telemetry means this
+report is how the questions get better — say whether they were useful, useless or redundant, and
+what a senior PM/BA would have asked that Requivo did not. Anonymise anything client-confidential
+before posting.
+
 ---
 
 ## How this is built
@@ -261,5 +266,6 @@ the code license — see [TRADEMARKS.md][trademarks].
 [docs-index]: https://github.com/jbkkz/requivo/blob/main/docs/README.md
 [compatibility]: https://github.com/jbkkz/requivo/blob/main/docs/compatibility.md
 [roadmap]: https://github.com/jbkkz/requivo/blob/main/docs/roadmap.md
+[discovery-feedback]: https://github.com/jbkkz/requivo/issues/new?template=discovery-feedback.md
 [contributing]: https://github.com/jbkkz/requivo/blob/main/CONTRIBUTING.md
 [trademarks]: https://github.com/jbkkz/requivo/blob/main/TRADEMARKS.md
