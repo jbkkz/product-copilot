@@ -132,10 +132,17 @@ requivo/
     repository.py    SessionRepository protocol + FileSessionRepository (Postgres-swappable)
     discovery.py     DiscoveryService — reason → apply → save (+ draft_turn), shared by CLI + Web
   render/          views (data → str/stdout, no side effects)
-  cli.py           the `requivo` CLI: provider verbs (discover/answer/generators/web)
-  deterministic/   the no-LLM verbs — one module per axis of change (#73); `register(sub)` is the
-                   single seam `cli.py` binds through and it names its four halves, so a module that
-                   stops registering is an ImportError rather than a quietly shorter `--help`
+  cli.py           the `requivo` CLI: the *journey* verbs, in the order a user meets them (demo →
+                   discover → refine → generate → web) — most call the provider, and three do not
+                   (status, demo, impact: pure reads over a model or the bundled example, no client
+                   ever built). The axis here is the journey, not the API call; deterministic/ below
+                   is the other axis, and the two cut across each other rather than nesting (#296)
+  deterministic/   the *plumbing* verbs — session/model/artifact CRUD and install diagnostics, one
+                   module per axis of *that* split (#73); every verb here happens to be no-LLM, which
+                   follows from being plumbing rather than being the split's own boundary.
+                   `register(sub)` is the single seam `cli.py` binds through and it names its four
+                   halves, so a module that stops registering is an ImportError rather than a quietly
+                   shorter `--help`
     __init__.py      the module docstring + `register(sub)` = register_doctor/_sessions/_model/_artifacts
     _shared.py       what more than one verb module needs — input, `_print_json`, `EXIT_DEGRADED` —
                      and the membership rule that keeps it from becoming a second deterministic.py

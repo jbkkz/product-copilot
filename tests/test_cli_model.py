@@ -166,3 +166,56 @@ def test_a_corrupt_model_gives_the_json_envelope_its_own_code(workspace):
     with pytest.raises(SystemExit) as e:
         _run_json(["status", "corrupt-json", "--json"])
     assert e.value.code == 1
+
+
+# ── #250: a claimed-but-undiscovered session vs one that was never created at all ─────────────────
+
+
+def test_status_and_model_show_agree_on_a_revision_zero_session(workspace, capsys):
+    """The issue as filed claimed `status` exits 1 and `model show` exits 0 on the identical
+    revision-0 session, printing the identical message. Reproducing it against this tree found both
+    already exiting 1 -- so this pins the (already-true) agreement rather than a fix for it, and
+    guards the copy fix that *is* real: engine jargon ("apply a proposal first") replaced by the
+    actual remedy, naming `requivo discover`.
+    """
+    _run(["session", "init", "A tiny tool to track something.", "--slug", "rev0"])
+
+    for argv in (["status", "rev0"], ["model", "show", "rev0"]):
+        with pytest.raises(SystemExit) as e:
+            _run(argv)
+        assert e.value.code == 1, argv
+        err = capsys.readouterr().err
+        assert "requivo discover" in err, (argv, err)
+        assert "apply a proposal first" not in err, (
+            f"{argv} still speaks engine jargon instead of naming the remedy: {err!r}"
+        )
+
+
+def test_model_show_does_not_claim_a_request_was_captured_for_a_session_that_never_existed(
+    workspace, capsys,
+):
+    """The trap on the other side of the copy fix above: the friendlier revision-zero wording says
+    "only the request was captured", which is true of a claimed session and false of a slug nobody
+    has ever used. `load_session_model` raises the identical `session_not_found` code either way, so
+    the CLI has to tell the two apart itself rather than trust the message it is handed."""
+    with pytest.raises(SystemExit) as e:
+        _run(["model", "show", "no-such-slug-at-all"])
+    assert e.value.code == 1
+    err = capsys.readouterr().err
+    assert "only the request was captured" not in err, (
+        f"claimed a request was captured for a session that was never created: {err!r}"
+    )
+    assert "requivo session list" in err, "the genuine no-session message names how to see what exists"
+
+
+def test_impact_on_an_unmatched_slot_exits_1_not_0(workspace, tmp_path):
+    """A wrong probe used to be indistinguishable from an empty result -- both exited 0 (#250)."""
+    _run(["session", "init", "Something.", "--slug", "s"])
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", "s", str(proposal)])
+
+    with pytest.raises(SystemExit) as e:
+        _run(["impact", "s", "not-a-real-slot"])
+    assert e.value.code == 1
+

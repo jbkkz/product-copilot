@@ -12,6 +12,7 @@ the package's single `register()` by `deterministic/__init__.py`.
 
 from __future__ import annotations
 
+from requivo.core.errors import SessionNotFoundError
 from requivo.core.validation import validate_proposal
 from requivo.deterministic._shared import _print_json, _read_document
 from requivo.services.sessions import SessionService
@@ -19,7 +20,28 @@ from requivo.services.sessions import SessionService
 
 def _cmd_model_show(a, client) -> None:
     svc = SessionService()
-    model = svc.load_model(svc.resolve_slug(a.session))
+    slug = svc.resolve_slug(a.session)
+    # `resolve_slug` does not check existence -- a bare slug it does not recognise passes through
+    # unchanged -- and `load_model` below raises the identical `session_not_found` code whether the
+    # directory is missing entirely or exists with no model yet. Checked here so the two do not share
+    # a message: the pre-existing behaviour already blurred them ("has no model yet" for a slug that
+    # was never created at all), and reusing #250's friendlier wording without this check would have
+    # made that worse -- "only the request was captured" is affirmatively false when nothing was.
+    if not svc.exists(slug):
+        raise svc.no_session(slug)
+    try:
+        model = svc.load_model(slug)
+    except SessionNotFoundError:
+        # The existence check above ruled out "no such session", so this is the narrower "claimed but
+        # never discovered" case -- the same one `cli.py`'s `_resolve_ref` reconstructs for `status`
+        # and `impact` (#250). Kept in sync with that copy rather than shared with it: the two live on
+        # opposite sides of a layer boundary this package does not import across.
+        raise SessionNotFoundError(
+            f"session '{slug}' has no model yet — only the request was captured. Run "
+            f"`requivo discover` on the same request to analyse it (or, in Claude Code, "
+            f"/requivo:discover).",
+            details={"slug": slug},
+        ) from None
     print(model.model_dump_json(indent=2))
 
 

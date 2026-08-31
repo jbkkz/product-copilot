@@ -25,6 +25,7 @@ from _fakes import _ENGINE_REPLY, FakeClient, _run_app, full_slots, slot
 
 from requivo.cli import MAX_TURNS, app, converse
 from requivo.core.contracts import Brief, EngineOutput, Question, Slot, Summary
+from requivo.core.errors import ProviderOutputError
 from requivo.providers.base import ReasoningProvider
 from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
@@ -525,7 +526,7 @@ def test_an_interrupt_inside_a_draft_turn_is_not_a_traceback(monkeypatch, capsys
     with pytest.raises(SystemExit) as exit_:
         app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
 
-    assert exit_.value.code == 1
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
     sessions = SessionService().list_sessions()
     assert [m.current_revision for m in sessions] == [1], "the interrupt discarded a paid turn"
     err = capsys.readouterr().err
@@ -548,7 +549,7 @@ def test_an_interrupt_during_the_brief_reports_the_saved_session(monkeypatch, ca
     with pytest.raises(SystemExit) as exit_:
         app(["discover", _REQUEST], client=FakeClient(_ENGINE_REPLY))
 
-    assert exit_.value.code == 1
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
     sessions = SessionService().list_sessions()
     assert [m.current_revision for m in sessions] == [1], "the interrupt discarded the drafted turn"
     err = capsys.readouterr().err
@@ -585,4 +586,137 @@ def test_a_rescue_that_cannot_save_says_so_and_still_names_the_original_failure(
     assert "529" in err, (
         f"the original provider failure was masked by the save's, so the user cannot tell what "
         f"stopped the run: {err!r}"
+    )
+
+
+# ── #206: the quick (`--once`/non-tty) path had no rescue of its own ──────────────────────────────
+
+
+def test_an_interrupt_in_the_once_path_names_the_claimed_session_and_the_retry(monkeypatch, capsys):
+    """`--once`/non-tty `discover` claims a session and makes exactly one paid call, through
+    `disco.start()` -- and until now nothing in `_cmd_discover` wrapped that call. A Ctrl-C landing
+    inside it reached `app()` as a bare `KeyboardInterrupt` with the claimed session unnamed, the same
+    trap `_rescue_drafted` already closed for the interactive loop (#202) and never closed here.
+
+    `start()` itself is stubbed to raise once the session it claims is on disk, so what's under test
+    is `_cmd_discover`'s own handling of the call raising -- not how the SDK's interrupt becomes one.
+    """
+    monkeypatch.setattr(DiscoveryService, "start",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 130, "a Ctrl-C should exit 130, not the generic 1 (#206)"
+    sessions = SessionService().list_sessions()
+    assert len(sessions) == 1, "the interrupted call left no claimed session to retry"
+    assert sessions[0].current_revision == 0, "nothing was drafted, so revision 0 is the truth"
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert sessions[0].slug in err
+    assert "re-run `requivo discover`" in err
+
+
+def test_an_interrupt_before_a_session_is_claimed_names_no_slug(monkeypatch, capsys):
+    """The trap on the other side of the fix above (#206): an abort point that has genuinely claimed
+    nothing must not invent a session to name -- a message naming a slug that does not exist is worse
+    than the traceback it replaces. `_is_file_arg` runs before any session is claimed on every
+    `discover` call, so patching it to interrupt reproduces the earliest realistic abort point."""
+    monkeypatch.setattr("requivo.cli._is_file_arg",
+                        lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 130
+    assert SessionService().list_sessions() == [], (
+        "a session was claimed before the request was even read"
+    )
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "Interrupted." in err
+    assert "Saved" not in err, f"named a session that does not exist: {err!r}"
+
+
+def test_a_top_level_interrupt_on_an_existing_session_exits_130_with_no_traceback(monkeypatch, capsys):
+    """Every command other than `discover` reaches the provider with no claim of its own to make --
+    the session it operates on already existed before this run started -- so `app()`'s own top-level
+    handler is the whole fix for it, with nothing discover-specific to say (#206)."""
+    _run_app(["discover", _REQUEST, "--once"], client=FakeClient(_ENGINE_REPLY))
+    slug = SessionService().list_sessions()[0].slug
+    monkeypatch.setattr(DiscoveryService, "generate",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["brief", slug])
+
+    assert exit_.value.code == 130
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "Interrupted." in err
+
+
+# ── found in review of #206: `except (EngineError, ...)` is narrower than the RequivoError family ──
+
+
+def test_a_provider_output_failure_in_the_once_path_also_names_the_claimed_session(monkeypatch, capsys):
+    """`ProviderOutputError` (raised when the provider's JSON retry loop gives up) is a `RequivoError`
+    sibling of `EngineError`, not a subclass of it -- so the quick path's `except (EngineError,
+    KeyboardInterrupt)` let it straight through to `app()`'s generic handler with the claimed session
+    unnamed, contradicting #206's own changelog entry ("if that call was interrupted or the provider
+    failed"). Found in review of this diff, not in the issue as filed."""
+    monkeypatch.setattr(DiscoveryService, "start",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(ProviderOutputError("bad json")))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST, "--once"], client=FakeClient())
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert len(sessions) == 1, "the failed call left no claimed session to retry"
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err
+    assert "re-run `requivo discover`" in err
+
+
+def test_a_provider_output_failure_mid_turn_also_names_the_claimed_session(monkeypatch, capsys):
+    """The same gap, one layer in: `converse()`'s own turn-draft catch is the identical
+    `except (EngineError, KeyboardInterrupt)`, pre-dating #206 and not part of its diff, but sharing
+    the file and the exact class the two counted findings above are about -- swept once the first
+    instance turned up. A `ProviderOutputError` on turn 2 used to reach `app()` as a bare
+    `RequivoError` with up to `MAX_TURNS - 1` paid, un-rescued turns behind it."""
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, ProviderOutputError("bad json"))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 1
+    sessions = SessionService().list_sessions()
+    assert [m.current_revision for m in sessions] == [1], "turn 1 was drafted, paid for, and dropped"
+    err = capsys.readouterr().err
+    assert sessions[0].slug in err and "requivo answer" in err
+
+
+def test_a_second_interrupt_during_the_rescues_own_save_exits_130(monkeypatch, capsys):
+    """`_rescue_drafted`'s own save is guarded against `RequivoError`/`OSError` (#320) but not
+    against a second `KeyboardInterrupt` landing on the save itself -- which used to propagate bare
+    and silent (no message at all) before reaching `app()`'s generic handler. Found in review of
+    this diff: the function this diff rewrote to promise "every abort path ... must name the
+    session" did not hold for this one abort path inside it."""
+    _at_a_terminal(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "the line manager approves")
+    _fail_draft_turn_on(monkeypatch, 2, EngineError("API unavailable"))
+    monkeypatch.setattr(DiscoveryService, "finalize_discovery",
+                        lambda self, *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exit_:
+        app(["discover", _REQUEST], client=FakeClient(_ASKING_REPLY))
+
+    assert exit_.value.code == 130, "a second Ctrl-C should exit 130 like every other interrupt here"
+    err = capsys.readouterr().err
+    assert "could NOT be saved" in err
+    assert "interrupted" in err.lower(), (
+        f"a KeyboardInterrupt stringifies to '', so the message trailed off into nothing: {err!r}"
     )
