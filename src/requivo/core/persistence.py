@@ -142,14 +142,24 @@ def _acquire(fd: int, slug: str) -> None:
     blocks once or polls. Pinned by
     `test_reentrant_acquisition_within_a_thread_still_never_touches_the_lock_twice`; the deadline
     itself by `test_a_contended_lock_raises_within_the_deadline_instead_of_hanging` (POSIX;
-    the `msvcrt` branch's own bound is unchanged and untouched here)."""
+    the `msvcrt` branch's own bound is unchanged and untouched here).
+
+    **`BlockingIOError`, not a bare `OSError`** (caught in review before this shipped). `flock(...,
+    LOCK_NB)` raises exactly that -- CPython maps `EAGAIN`/`EWOULDBLOCK` to it since PEP 3151 -- when
+    and only when the lock is genuinely held elsewhere; a bare `except OSError` would also catch
+    `ENOLCK`, `EBADF` or a filesystem that refuses `flock` outright (NFS misconfigured, some network
+    mounts), none of which will ever resolve by waiting. The single blocking call this replaced let
+    such an error surface immediately as what it was; masking it behind up to 30 seconds of retries
+    and then relabelling it "locked by another process" would trade a loud, honest failure for a
+    quiet, misleading one -- the same rule `_replace_with_retry`'s own narrow `except PermissionError`
+    states two functions up in this file. Anything else still fails immediately and honestly."""
     deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     if fcntl is not None:
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return
-            except OSError:
+            except BlockingIOError:
                 if time.monotonic() >= deadline:
                     raise SessionLockedError(
                         f"session '{slug}' is locked by another process; retry in a moment",

@@ -675,6 +675,46 @@ def test_reentrant_acquisition_within_a_thread_still_never_touches_the_lock_twic
         f"a nested acquisition on the same thread must not call _acquire again: {calls}")
 
 
+@pytest.mark.skipif(store.fcntl is None, reason="POSIX-only branch. REASONED, NOT OBSERVED on "
+                     "Windows -- see #265.")
+def test_a_non_contention_lock_error_fails_immediately_instead_of_waiting_out_the_deadline(
+        workspace, monkeypatch):
+    """Caught in review before this shipped: a first draft caught a bare `OSError` around the poll
+    loop, which also catches `ENOLCK`, `EBADF` or a filesystem that refuses `flock` outright -- none
+    of which will ever resolve by waiting. Masking one of those behind the retry loop for up to 30
+    seconds and then raising `SessionLockedError` ("locked by another process") would trade a loud,
+    honest failure for a quiet, misleading one. Only `BlockingIOError` -- what `flock(..., LOCK_NB)`
+    raises for genuine contention -- may be retried; everything else must still fail immediately,
+    exactly as the single blocking call this loop replaced already did.
+
+    `OSError(errno.ENOLCK, ...)` stands in for "the kernel is out of lock resources" -- a real
+    condition `flock` can raise that retrying can never fix."""
+    import errno
+
+    SessionService().create_session("A real request.", slug="broken-lock")
+    monkeypatch.setattr(store, "_LOCK_TIMEOUT_SECONDS", 10.0)  # would dominate the test if hit
+    real_flock = store.fcntl.flock
+
+    def refusing_flock(fd, op):
+        if op & store.fcntl.LOCK_EX:
+            raise OSError(errno.ENOLCK, "No locks available")
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(store.fcntl, "flock", refusing_flock)
+
+    started = time.monotonic()
+    with pytest.raises(OSError) as ei:
+        with store.session_lock("broken-lock"):
+            pass  # pragma: no cover - must never be granted
+    elapsed = time.monotonic() - started
+
+    assert ei.value.errno == errno.ENOLCK
+    assert not isinstance(ei.value, RequivoError), (
+        "a kernel resource error must surface as what it is, not be relabelled as SessionLockedError")
+    # Immediate, not the 10s deadline this test set specifically so a masked error would be visible.
+    assert elapsed < 1.0, elapsed
+
+
 # ── #36: a path that is only printed is still a path this code built ─────────────
 #
 # `deterministic/artifacts.py`'s `artifact save` and `cli.py`'s `_wrote` each re-joined

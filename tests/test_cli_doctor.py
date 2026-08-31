@@ -661,6 +661,48 @@ def test_doctor_and_verify_flag_a_session_whose_context_card_is_gone(workspace, 
     assert "REQUIVO_CONTEXT_DIR" in broken_text, "the reader is not told how to recover"
 
 
+def test_doctor_reports_a_locked_session_as_could_not_check_not_as_broken(workspace, monkeypatch):
+    """#263/#265, caught by review before this shipped: a first draft of the `SessionLockedError`
+    handler in `_session_health` still built a default-severity `IntegrityProblem`, so `blocking()`
+    kept it and it landed straight in `inconsistent` -- driving the identical ❌ glyph a genuinely
+    broken session gets, which is exactly the accusation shape this whole issue family exists to
+    remove. A lock timeout must land in its own bucket and the warning glyph, never the failure one.
+
+    Must-fire control: the same session, unpatched, still reports ✅ with an empty `inconsistent`."""
+    from requivo.core.errors import SessionLockedError
+    from requivo.deterministic import doctor as doctor_mod
+
+    _run(["session", "init", "A real one.", "--slug", "locked-one", "--json"])
+
+    healthy = _run_json(["doctor", "--json"])["sessions"]
+    assert healthy["inconsistent"] == {}
+    assert healthy.get("locked", {}) == {}
+    assert "✅" in _check_line(_run(["doctor"]), "sessions")
+
+    real_inspect = doctor_mod.inspect_session
+
+    def locked_for_our_slug(slug):
+        if slug == "locked-one":
+            raise SessionLockedError(
+                "session 'locked-one' is locked by another process; retry in a moment",
+                details={"slug": slug})
+        return real_inspect(slug)
+
+    monkeypatch.setattr(doctor_mod, "inspect_session", locked_for_our_slug)
+
+    found = _run_json(["doctor", "--json"])["sessions"]
+    assert found["inconsistent"] == {}, (
+        f"a lock timeout must not be reported as an integrity problem: {found['inconsistent']}")
+    assert "locked-one" in found.get("locked", {})
+
+    text = _run(["doctor"])
+    sessions_line = _check_line(text, "sessions")
+    assert "❌" not in sessions_line, (
+        "a session that is merely locked must not earn the same glyph as a broken one")
+    assert "🟡" in sessions_line
+    assert "locked" in sessions_line.lower()
+
+
 def test_context_can_be_asked_for_by_session(workspace):
     # A session's card selection is held constant across its turns; a later turn that reads every card
     # reasons from a wider context than the model was built on. Asking by session makes that unmissable.
