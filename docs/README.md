@@ -9,6 +9,8 @@ depth — each has one clear responsibility; the README links to them rather tha
 - [Web](web.md) — the primary interface: the local, single-user browser workspace
 - [Claude Code plugin](../plugins/claude-code/) — the integration: skills, workflow, install (no extra API key)
 - [CLI reference](cli.md) — every command and flag
+- [Integrations](integrations.md) — driving Requivo from an automation: the CLI contract, the
+  `requivo-epic` envelope, a worked n8n flow, and what deliberately is not built
 
 ## Reference
 
@@ -26,6 +28,10 @@ depth — each has one clear responsibility; the README links to them rather tha
 
 - [Roadmap](roadmap.md) — what exists and what's next
 - [Open-source strategy](open-source-strategy.md) — what is public and what stays private
+- [Cloud boundary](cloud-boundary.md) — the consumption contract any hosted deployment builds
+  against, and the upstream changes that make it clean
+- [Readiness audits](audits/) — point-in-time 360° assessments; latest:
+  [2026-09](audits/2026-09-product-readiness-audit.md)
 - [Plugin bundling](plugin-bundling.md) — why the Claude Code plugin does not bundle the CLI
 - [Decision records](decisions/) — the arguments no test can go red for: a fact about something
   outside the repository, a rejected alternative, a cost tradeoff with a threshold

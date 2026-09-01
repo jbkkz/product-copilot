@@ -26,7 +26,8 @@ B2B products.
 uvx --from requivo requivo demo
 ```
 
-Ten seconds, offline. A messy client email, the questions Requivo raised against it, the decision
+Ten seconds, offline — or [watch the short demo video][demo-video] instead. A messy client
+email, the questions Requivo raised against it, the decision
 brief it wrote, and then the part that is not reasoned at all: change one answer, and it reports what
 that invalidates, computed from the dependency graph. No Anthropic key, no network, no extras — the
 `demo` path needs neither the provider SDK nor a credential.
@@ -46,9 +47,9 @@ Analysing a request of your own needs a key: set `ANTHROPIC_API_KEY` in your env
 file. Without one the interface still opens, reads existing sessions and tells you what is missing —
 and its home page offers **Explore a worked example**, which materialises the same messy client email
 `requivo demo` replays as a real, browsable session in your workspace. One click, no key, no network:
-the understanding, the open questions, the readiness verdict and the decision brief, all read from the
-payload bundled with the install. Refining it or generating a new document is the part that needs the
-key.
+the understanding, the open questions and the readiness verdict, read from the payload bundled with
+the install. Refining it or generating a document — the decision brief included — is the part that
+needs the key.
 
 **What it costs.** You pay Anthropic directly, on your own key: roughly **$0.03 to $0.06 per call**,
 and **$0.46 to $1.01** for a complete session — a full discovery plus every artifact — at current
@@ -258,6 +259,7 @@ the code license — see [TRADEMARKS.md][trademarks].
      what stops that from costing the prose its line width. -->
 [license]: https://github.com/jbkkz/requivo/blob/main/LICENSE
 [shot-session]: https://raw.githubusercontent.com/jbkkz/requivo/main/docs/images/web-session.webp
+[demo-video]: https://github.com/jbkkz/requivo/releases/download/v3.0.0/requivo-demo.mp4
 [getting-started]: https://github.com/jbkkz/requivo/blob/main/docs/getting-started.md
 [web]: https://github.com/jbkkz/requivo/blob/main/docs/web.md
 [claude-code]: https://github.com/jbkkz/requivo/tree/main/plugins/claude-code/

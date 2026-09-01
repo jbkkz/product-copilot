@@ -171,7 +171,7 @@ at all.
 | `--json` field | Reads |
 |---|---|
 | `requivo_version` / `python_version` / `os` | The three facts a bug report needs, printed as the first rows of the human view so a paste of them is a bug report |
-| `model.name` / `model.source` | The model this install will reason with, and whether it came from the `MODEL` environment override (`env`) or the built-in `default` |
+| `model.name` / `model.source` | The model this install will reason with, and whether it came from an environment override (`env` — `REQUIVO_MODEL`, or the deprecated bare `MODEL`) or the built-in `default` |
 | `schema.ok` / `schema.slots` / `schema.error` | The slot schema loaded, and how many slots it defines |
 | `context.status` | `ok`, `empty` (the install has no context cards) or `unreadable` (a card directory exists but could not be enumerated — permissions, usually). `context.ok` is true only for `ok` |
 | `context_cards` | The card names themselves — the plain list it has always been |

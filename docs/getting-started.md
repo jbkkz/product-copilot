@@ -141,6 +141,15 @@ requivo impact <slug> permissions          # what rests on a slot
 
 Full reference: [cli.md](cli.md).
 
+## Upgrading (and rolling back)
+
+`pip install -U requivo` is safe for your sessions. Upgrades never touch a session until you write
+to it; a session written by a newer Requivo still opens in an older one (unknown fields are
+preserved, unknown artifact types are tolerated); the one hard refusal is a future `format_version`
+bump, which will say so in a structured error rather than corrupting anything. Avoid running two
+Requivo versions against one workspace *concurrently* — the full promises, including that caveat,
+live in [compatibility.md](compatibility.md).
+
 ## Your sessions stay out of git
 
 Sessions are written to `.requivo/` in the directory you run from — your project repository, for the
