@@ -50,10 +50,10 @@ anything. `requivo demo` is free and needs no key at all.
 
 | Step | Calls | Input tokens | Output tokens | Estimated cost |
 |---|---|---|---|---|
-| One provider call | 1 | 7,300–8,900 | 1,300–3,800 | **$0.03–$0.06** |
-| A full interactive discovery (8 turns + the assessment) | 9 | — | — | **$0.25–$0.50** |
-| Every remaining artifact (prd, stories, estimate, criteria, epic, release) | 7 | — | — | **$0.19–$0.39** |
-| A complete session, end to end | 16 | — | — | **$0.44–$0.89** |
+| One provider call | 1 | 8,000–11,000 | 1,300–3,800 | **$0.03–$0.06** |
+| A full interactive discovery (8 turns + the assessment) | 9 | — | — | **$0.26–$0.54** |
+| Every remaining artifact (prd, stories, estimate, criteria, epic, release) | 7 | — | — | **$0.20–$0.42** |
+| A complete session, end to end | 16 | — | — | **$0.46–$0.96** |
 
 Priced at **$2.00 / $10.00 per million tokens** (input / output) for `claude-sonnet-5`, rates as of
 **2026-08-29**. An estimate, never a bill — and a *derived* one: `tests/test_cost_claims.py`
@@ -63,10 +63,16 @@ fails when the two disagree, so a price change breaks this page instead of quiet
 Two honest limits, because a number with an unstated method is worth less than no number.
 
 - **The token counts are estimated at four characters per token.** The input figure is the real
-  assembled system prompt for each operation; the output figure is the real replies captured in
-  `fixtures/golden/`. Neither is a token count from the API — no ledger output is committed to this
-  repository, and the test suite makes no calls. Both are bracketed by the same test, so a prompt
-  that grows past the published range is a red build.
+  assembled system prompt **plus the real resolved model a call attaches after it**, because a call is
+  more than its system prompt: every generator (`brief`, `stories`, `estimate`, `prd`, `criteria`,
+  `epic`, `release`) and every discovery turn but the first sends the whole model as its own user
+  message, and the figure is measured from the same captured replies in `fixtures/golden/`, resolved
+  the way a provider actually resolves them — not a guess. The one call genuinely priced on the system
+  prompt alone is the very first discovery turn, which has no model yet to attach. The output figure
+  is the real replies captured in `fixtures/golden/`. Neither is a token count from the API — no
+  ledger output is committed to this repository, and the test suite makes no calls. Both are bracketed
+  by the same test, so a prompt or a generator's payload that grows past the published range is a red
+  build.
 - **The table charges every call at full price.** Prompt caching (below) makes a long interactive
   discovery cheaper than nine independent calls, and the retry path makes a rare one dearer. The
   range is wide enough to hold both, and the exact number for *your* request is printed by the verb

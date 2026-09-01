@@ -16,8 +16,12 @@ Four things are checked, and each fails independently so a red names its own cau
   go red, which is the whole point: the alternative is a doc that agrees with the code on the day it
   is written and disagrees quietly on the day the price moves.
 * **The token ranges bracket what this repository actually assembles and actually received.** Input
-  is `build_prompt` for every operation; output is the captured replies in `fixtures/golden/`. Edit
-  a prompt or re-capture a baseline far enough and the published range stops being true.
+  is `build_prompt`'s system prompt plus, for every operation but the first discovery turn, the real
+  resolved model a call sends as its own user message -- taken from the same captured discovery
+  replies in `fixtures/golden/`, resolved through `ModelProposal.resolve()` the way a provider
+  actually does it, not guessed. Output is the captured replies in `fixtures/golden/`. Edit a prompt,
+  change what a generator sends, or re-capture a baseline far enough and the published range stops
+  being true.
 * **Every dollar figure is arithmetic over the two above**, so a hand-typed number cannot survive.
 * **The call counts are stated in the table itself** and multiplied here, so a row claiming a total
   that does not follow from its own call count goes red.
@@ -34,6 +38,7 @@ import re
 from pathlib import Path
 
 from requivo.core.context import build_prompt
+from requivo.core.contracts import ModelProposal
 from requivo.providers.anthropic.generators import _OP_PROMPTS
 from requivo.providers.anthropic.pricing import PRICING_AS_OF, price_per_mtok
 
@@ -54,9 +59,37 @@ def _tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
+def _resolved_model_dump_tokens() -> list:
+    """The size, in tokens, of a real resolved model exactly as a generator or a refinement turn
+    sends it -- `out.model_dump_json()` in `generators.py`. Built from the same captured discovery
+    replies `measured_output_tokens()` reads, run through `ModelProposal.resolve()` the way the
+    provider itself resolves a reply, so this is a real serialization rather than a guessed number."""
+    sizes = []
+    for path in sorted((ROOT / "fixtures" / "golden").glob("*.runs.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for run in data.get("runs") or []:
+            resolved = ModelProposal.model_validate(run).resolve(None)
+            sizes.append(_tokens(resolved.model_dump_json()))
+    assert sizes, "no golden captures were read -- an empty scan cannot support a published range"
+    return sizes
+
+
 def measured_input_tokens() -> tuple:
-    """Every operation's assembled system prompt, as tokens. This is what a call actually sends."""
-    sizes = [_tokens(build_prompt(name, None)) for name in _OP_PROMPTS.values()]
+    """Every operation's assembled system prompt -- and, for every operation but the first discovery
+    turn, the resolved model a real call sends on top of it as its own user message. This is what a
+    call actually sends, not the system prompt alone: a refinement turn and every generator call
+    (`brief`, `stories`, `estimate`, `prd`, `criteria`, `epic`, `release`) attach the whole model, and
+    only the very first discovery turn genuinely has nothing yet to attach -- `analyze` is measured
+    system-prompt-only for that reason, a real state rather than an oversight."""
+    dumps = _resolved_model_dump_tokens()
+    sizes = []
+    for op, name in _OP_PROMPTS.items():
+        system = _tokens(build_prompt(name, None))
+        if op == "analyze":
+            sizes.append(system)
+        else:
+            sizes.append(system + min(dumps))
+            sizes.append(system + max(dumps))
     return min(sizes), max(sizes)
 
 
