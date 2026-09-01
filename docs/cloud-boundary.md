@@ -7,9 +7,8 @@
 [open-source-strategy.md](open-source-strategy.md) draws the *distribution* boundary — what is
 Apache-2.0 and what stays private — and accepts, in its own words, that third parties may host
 Requivo as a service. This page is the *consumption* boundary: the contract any hosted product,
-first-party or not, builds against. It is written against a real first-party scaffold (a private
-sibling repository that consumes `requivo` from PyPI through exactly one adapter module), and every
-gap it names was observed there rather than predicted.
+first-party or not, builds against. It is written against a real first-party deployment scaffold, and every gap it names was
+observed rather than predicted.
 
 Two rules govern everything below, and each is the other's mirror:
 
@@ -22,11 +21,11 @@ Two rules govern everything below, and each is the other's mirror:
 - **The hosted product never reimplements an apply, a generation, or a staleness rule.** CLAUDE.md
   already says it for the three local surfaces — *"there is never a second implementation of an
   apply, a generation, or a staleness rule"* — and a hosted deployment is the fourth surface, not
-  an exception. The standing counterexample is instructive: the first-party scaffold's adapter
-  calls the provider's free functions (`run`, `answer_turn`, `advise`, `generate_prd`) plus
-  `SessionService` directly — the exact shape this repo's own CLI had before #77 — so its
-  refinement turn applies with **no** `expected_revision`, its generations persist **no** artifact
-  and track **no** staleness, and nothing stamps what a call spent into provenance. None of that is
+  an exception. The standing counterexample is instructive: an adapter written before the facade existed
+  calls the provider layer's free functions plus `SessionService` directly — the exact shape this
+  repo's own CLI had before #77 — so its refinement turn applies with **no** `expected_revision`,
+  its generations persist **no** artifact and track **no** staleness, and nothing stamps what a
+  call spent into provenance. None of that is
   a cloud feature gap; all of it is orchestration `DiscoveryService` already owns. The fix is the
   same as #77's: consume the service, delete the second implementation.
 
@@ -80,8 +79,8 @@ deployment, it is cloud-only.
 internals … are importable and documented, but they are the engine's own structure, not a published
 API."* That sentence was right while the only consumers were this repository's own surfaces. The
 moment an external deployment pins the package, it consumes undeclared internals — which is why the
-first-party scaffold routes every import through one adapter module, and why its pin sat two majors
-stale without anything going red.
+first-party scaffold routes every import through one adapter module, and why an early pin could
+sit majors stale without anything going red.
 
 The contract this page proposes, in three parts:
 
@@ -100,7 +99,7 @@ The contract this page proposes, in three parts:
   v2.0.0 on 2026-08-31, v3.0.0 on 2026-09-01), because a major here prices a break to *anything* on
   the compatibility page — usually the CLI, the `--json` envelopes or an HTTP status, and almost
   never the Python seam. Under that cadence a range ceiling reads as prudence and works as
-  starvation: the observed `>=1.2.0,<2.0.0` pin quietly aged two majors. So: `requivo==X.Y.Z`,
+  starvation: an observed early range ceiling quietly aged majors behind. So: `requivo==X.Y.Z`,
   bumped as a routine chore whose gate is the conformance suite below plus the consumer's own
   tests. A compatible-release range is worth revisiting only after the declared seam has survived
   several majors untouched — a decision then, not a default now.
@@ -123,9 +122,9 @@ Ordered; each entry says why a hosted consumer needs it and what it does until t
 
 Every `core/persistence` function resolves `session_root()` from `REQUIVO_WORKSPACE`/cwd per call,
 so `FileSessionRepository` — the seam documented as Postgres-swappable — has an identity that lives
-in process globals. The recorded consequence one repo over (Gap A): the adapter points the engine
-at a per-session directory by mutating `os.environ` under a process-wide mutex, which serialises
-*every* engine call — and an engine call runs minutes, so one tenant's discovery parks every other
+in process globals. The recorded consequence for any hosted consumer: pointing the engine at a chosen
+directory means mutating `os.environ`, and doing that safely means a process-wide mutex that
+serialises *every* engine call — and an engine call runs minutes, so one tenant's discovery parks every other
 tenant's request behind a lock for its whole duration. Concurrency ceiling: exactly one.
 
 **Constructor state, not a ContextVar — and the threadpool fact cuts the way you might not
@@ -161,8 +160,8 @@ a per-workspace or injected card source rather than a process-global directory.
 ### 3.2 The declared seam + `py.typed` (#423)
 
 Why: §2 — until the seam exists, every hosted import is a bet on internals two refactors have
-already moved (#73, #74/#167). **Meanwhile:** the single-adapter-module rule (already the
-scaffold's own law: *"exactly one module imports the engine"*) plus the exact pin bound the blast
+already moved (#73, #74/#167). **Meanwhile:** the single-adapter-module rule (exactly one module
+imports the engine) plus the exact pin bound the blast
 radius of any move to one file and one deliberate bump.
 
 ### 3.3 The error-to-status table leaves the `[web]` extra (#422)
@@ -199,8 +198,8 @@ possible in that order precisely because #113 moved the lock outside the directo
 concurrent writer conflicts cleanly instead of writing into a half-removed tree. Erasure semantics:
 the directory *is* the session — model, revisions, artifacts, request text — so removal retains
 nothing. The CLI verb and the web affordance are the same issue's other slices; the hosted product
-needs only the protocol + store half first. **Meanwhile:** the scaffold's layout (one workspace per
-session, §4) makes retiring the whole workspace directory an acceptable stand-in — acceptable
+needs only the protocol + store half first. **Meanwhile:** a per-session workspace layout (§4)
+makes retiring the whole workspace directory an acceptable stand-in — acceptable
 *only* under that layout; on a shared per-tenant workspace it would be exactly the lock-skipping
 `rm -rf` the issue warns against.
 
@@ -209,8 +208,7 @@ session, §4) makes retiring the whole workspace directory an acceptable stand-i
 The per-tenant *credential* needs no upstream change: `AnthropicProvider(client=…)` already accepts
 a constructed SDK client and `DiscoveryService(client=…)` threads it through. The model id is the
 missing half: `_complete()` resolves it from `REQUIVO_MODEL`/`MODEL` per call, so per-tenant or
-per-plan model selection today means process-env mutation — the scaffold's config documents doing
-exactly that. The change: an optional `model=` on `AnthropicProvider`, threaded into the completion
+per-plan model selection today means process-env mutation. The change: an optional `model=` on `AnthropicProvider`, threaded into the completion
 calls, `model_name()` and provenance; default `None` keeps env resolution byte-identical.
 **Meanwhile:** one model per deployment, set in the environment — the current de facto state.
 
@@ -223,10 +221,9 @@ calls, `model_name()` and provenance; default `None` keeps env resolution byte-i
   brought in from the legacy layout), carried in `session.json`, and therefore the one identity
   that survives `session export` / `session import` and any future rename. The hosted mapping row
   records it; a cloud-side public id may exist alongside, but the join to the store is this field.
-  (The scaffold currently mints its own uuid and never records the engine's — one identity too
-  many.)
+  (A consumer minting its own id without recording the engine's has one identity too many.)
 - **Cloud owns the mapping** tenant / cloud-id → (workspace root, slug), and the layout. Two
-  legitimate layouts: **one workspace per session** (the scaffold today — strongest isolation,
+  legitimate layouts: **one workspace per session** (strongest isolation,
   delete retires the directory, the DB is the only tenant-level listing) and **one workspace per
   tenant** (engine-native `session list`, whole-workspace export — the "continue locally" story —
   at the cost of a tenant-visible slug namespace and a genuinely shared write domain). Start
@@ -257,7 +254,7 @@ synchronous Python throughout — and at this seam that is a feature: sync code 
 under a threadpool and in a queue worker, so the deployment chooses the execution model and the
 engine's guarantees hold under both.
 
-**Request-held threadpool** (the scaffold today: sync-def routes → Starlette `run_in_threadpool` →
+**Request-held threadpool** (sync-def routes → Starlette `run_in_threadpool` →
 `anyio.to_thread.run_sync`). What the engine guarantees: ContextVars *do* cross into the worker
 thread — verified against anyio 4.12.1, which copies the caller's context at submission and runs
 the function inside the copy — so a `track_usage()` scope opened in the handler is the ledger the
