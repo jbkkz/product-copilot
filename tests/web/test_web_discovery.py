@@ -87,6 +87,26 @@ def test_revision_conflict_is_clean(client, with_provider):
     assert r.status_code == 409  # RevisionConflictError → clean 409, not a traceback
 
 
+def test_a_hand_crafted_answers_post_on_a_revision_zero_session_is_refused(client, with_provider):
+    """The web's own door onto #421, named in its acceptance criteria: the rendered page never shows
+    the answers form at revision 0 (`routes/sessions.py`'s "offer to run discovery" branch), but
+    invariant 14 says the service is the boundary, not the form — a client that posts straight to
+    `POST /sessions/{slug}/answers` with `expected_revision=0` is exactly as real a caller as the
+    browser. Before the fix this reached the provider (`fake.calls == 1`) with the typed answers
+    appearing in no kwarg of the call, per the issue's own fake-client probe; the service gate closes
+    that regardless of which surface reaches it, so no route-level check is needed here."""
+    fake = with_provider()  # no reply queued — a call reaching the provider fails loudly, not silently
+    client.post("/sessions", data={"request_text": "x", "slug": "bare-rev0", "provider": "create_only"})
+    assert fake.calls == []                            # create_only never touches the provider
+
+    r = client.post("/sessions/bare-rev0/answers",
+                    data={"answers": "…", "expected_revision": "0"})
+
+    assert r.status_code == 409                         # RevisionConflictError → clean 409
+    assert fake.calls == []                             # refused before any provider construction
+    assert "requivo answer" not in r.text                # the remedy no longer routes back into this path
+
+
 def test_a_stale_answers_form_is_refused_before_the_provider_is_paid(client, with_provider):
     """A conflict that is already certain must not be discovered by paying for it (#205).
 
