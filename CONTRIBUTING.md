@@ -145,11 +145,12 @@ read the guard to appease it.
   heading, update the literal in the same change — the failure message names which one, and each
   assertion carries the promise it is protecting so you can tell a rename from a real removal.
 
-  That coupling is mechanical and this table's rows are only about the mechanics. **Whether a given
-  change is breaking or compatible is a separate judgement the page does not always settle** — the
-  exit-code and error-code promise says that "moving a condition from one code to another" is
-  breaking, and says nothing about direction, so narrowing and widening are currently argued rather
-  than looked up (#382). If your change moves a condition, say which direction and why in the PR;
+  That coupling is mechanical and this table's rows are only about the mechanics. **Whether a
+  given change is breaking or compatible turns on direction, not on judgement** — the CLI
+  exit-code promise now says so explicitly (#382): moving a condition onto 0 is compatible, moving
+  one onto or between nonzero codes is breaking. The sibling `RequivoError.code` promise still
+  reads as "moving a condition from one code to another is breaking" with no direction clause of
+  its own, so treat a move there the same way and say which direction it is in the PR either way;
   do not read a green suite as the page having agreed with you.
 
 ## Conventions

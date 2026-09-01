@@ -814,6 +814,19 @@ existing code means. A script gating on an exit code is doing the documented thi
 consumer with the least ability to notice a silent change — there is no payload to inspect, only a
 number that is still a number.
 
+**"Moving a condition" has a direction, and the direction decides it (#382).** Read literally,
+the sentence above makes every move breaking regardless of which way it goes — and one release
+shipped one of each and declared them differently: #360 moved three invocations off exit 0 onto 1
+or 2 and was declared breaking; #249 moved one from exit 2 onto 0 and was declared compatible.
+**Moving a condition onto 0 is not breaking. Moving one onto a nonzero code, or from one nonzero
+code to another, is.** An invocation a script depended on succeeding cannot start failing without
+that being a breaking change; an invocation nothing could have depended on succeeding — because it
+never did — cannot break anything by starting to. Direction is a mechanical fact about the two
+codes on either end of the move, checked by comparing them, never a question about whether this
+particular narrowing happens to be safe — that door was closed by #255 below, on exactly that kind
+of argument, and this clause does not reopen it: it adds a second mechanical fact to check, it does
+not excuse the first one from being checked.
+
 **4 is deliberately general.** It was `EXIT_DEGRADED_LISTING` and named one verb; #86 generalised it,
 because an exit code describes a *shape of answer* — the work was done, part of it was unreachable —
 rather than the verb that produced it. Minting a code per verb would rebuild the problem 4 was
@@ -893,13 +906,11 @@ behaviours was a defect and none was ever documented here. #255 was first declar
 exactly that kind of harm argument and had to be corrected before its tag; the rule in this section
 is mechanical for that reason.
 
-**Note what the rule does not say, because the same change ran into it from the other side.** #249,
-in the same release, moves `requivo status <slug> --workspace DIR` from exit 2 to exit 0 — also a
-condition moving between codes, and declared *compatible* on the grounds that it only widens:
-nothing that worked stops working. The promise above is written without a direction, so read
-literally it covers both. Whether widening deserves its own clause is open (#382); until it is
-settled, the two are being treated differently in practice and this paragraph is where that is
-recorded rather than left to be rediscovered.
+**#249, in the same release, is the case the direction clause above was written for.** It moves
+`requivo status <slug> --workspace DIR` from exit 2 to exit 0 — also a condition moving between
+codes, but onto 0, so it is compatible under the rule stated above, not merely tolerated by it
+despite what the rule says. #360 above narrows; #249 widens; #382 is where that asymmetry was made
+mechanical rather than left to be rediscovered the next time a release carries one of each.
 
 ### The web error banner's `code` — **not stable**
 
