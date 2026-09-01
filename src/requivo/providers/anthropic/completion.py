@@ -175,7 +175,13 @@ def _system_blocks(system: str, reuse_system: bool) -> list[dict]:
     templates. That is a change to what the model reads, so it owes the golden harness a cycle
     (`docs/evaluations.md`) and is deliberately not bundled here.
     """
-    block = {"type": "text", "text": system}
+    # `dict[str, object]`, not the inferred `dict[str, str]` an untyped literal would give this
+    # (#271): the value at `"text"` is a `str`, the value at `"cache_control"` is a nested `dict`, and
+    # a dict's value type is invariant across every key once inferred -- assigning the nested dict
+    # into a `dict[str, str]`-inferred `block` is what pyright refused. `list[dict]` is a wide return
+    # annotation on this function already; this is the same looseness stated one level down, at the
+    # one dict literal that actually mixes value shapes.
+    block: dict[str, object] = {"type": "text", "text": system}
     if reuse_system:
         block["cache_control"] = {"type": "ephemeral"}
     return [block]
