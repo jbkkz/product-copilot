@@ -9,8 +9,23 @@ surface that only wants to probe whether the extra is present (`web/config.py`).
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, cast
 
 from requivo.providers.errors import EngineError
+
+if TYPE_CHECKING:
+    # A *separately named* alias of the real SDK class, for annotation purposes only (#271). The
+    # optional-import fallback below binds `Anthropic` itself to `None` at runtime when the extra is
+    # absent, and `new_client()`'s own `-> Anthropic` return annotation then names a *value* (`None`),
+    # not a type, in type-expression position (`reportInvalidTypeForm`) -- importing the same name
+    # `Anthropic` here too does not fix that: pyright merges every binding site of one name into its
+    # declared type, `if TYPE_CHECKING:` included, so `Anthropic` would still widen to
+    # `type[Anthropic] | None`. A distinct name has nothing to merge with. `TYPE_CHECKING` is `False`
+    # at runtime and always `True` for the checker, so this import is free when the extra is missing
+    # (the branch never executes) and gives the checker the one thing it needs: an unconditionally
+    # real class to annotate `new_client()`'s return with, regardless of what the runtime branch below
+    # binds `Anthropic` itself to.
+    from anthropic import Anthropic as _AnthropicClient
 
 try:  # The SDK is an optional extra: the deterministic core + CLI work without it (Claude Code mode).
     from anthropic import Anthropic, APIError, AuthenticationError, PermissionDeniedError, RateLimitError
@@ -162,7 +177,7 @@ def credential_diagnosis() -> tuple[bool, str | None]:
 
 
 
-def new_client() -> Anthropic:
+def new_client() -> _AnthropicClient:
     """Construct an Anthropic client, or refuse cleanly when the install cannot make a call.
 
     Every provider-backed verb funnels through here, so the two install/config remedies are stated
@@ -188,7 +203,19 @@ def new_client() -> Anthropic:
     client, problem = _resolve_client()
     if client is None:
         raise EngineError(problem or _NO_KEY_MESSAGE)
-    return client
+    # `_resolve_client()` deliberately returns `object` (see its own docstring) rather than
+    # `Anthropic | None`, which is what keeps *that* function's annotation valid without the
+    # `TYPE_CHECKING` alias this function needed above. The cast is the one place that looseness has
+    # to be undone: past the `is None` check, the only way `_resolve_client()` produces a non-None
+    # value is `Anthropic()` succeeding, so the value really is an `Anthropic` instance.
+    #
+    # `"_AnthropicClient"` is quoted -- `_AnthropicClient` only exists under `TYPE_CHECKING`, which is
+    # `False` at runtime, so the bare name would raise `NameError` the moment this line actually ran
+    # (caught once, by `tests/test_provider.py`'s federation-credential case, which is the one
+    # `new_client()` path that reaches a real return rather than a raise). `cast()`'s first argument
+    # is never evaluated as a type at runtime -- it only has to exist as an *expression* -- and a
+    # string is a valid one pyright still resolves for the static check.
+    return cast("_AnthropicClient", client)
 
 
 def current_model_name() -> str:
