@@ -275,6 +275,34 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   session occupies is still reported, as is a stray file, a directory, a symlink or a malformed
   stem.
 
+- **`doctor --json`'s `locks.unexpected` no longer names a reserved-device-name lock or guard file
+  whose session has since been deleted, and `locks.unmatched` names it instead** (#409). Narrowing
+  again, same terms as the two entries above it. `_is_lock_stem` used to re-ask the #401 conditional
+  rule (`_refuse_new_reserved_slug` against `session_root()`), so a `nul.lock` file `session_lock`
+  legitimately wrote while a `nul` session was open kept reading as "not a lock file Requivo
+  recognises" once that session was removed — the entry's classification flipped on a directory it
+  does not even name. The stem's *shape* alone decides now whether either writer here could have
+  produced it; whether a session still matches it is `locks.unmatched`'s question, answered
+  separately, exactly as `scan_lock_root`'s own docstring always said it should be. A consumer sees
+  `locks.total` count one more lock and `locks.unexpected` name one fewer entry for such a stem, with
+  the stem itself appearing in `locks.unmatched` instead — on any workspace that has ever locked a
+  reserved-name session and later removed it, and no change at all on a workspace that has not,
+  which is every workspace created on Windows. A stray file, a directory, a symlink or a malformed
+  stem is still reported exactly as before.
+
+- **`doctor --json`'s `sessions.non_sessions[].slug_shaped` is `true` now for a non-session directory
+  whose name is a Windows reserved device name** (#408). Widening, on the same terms as #401 above:
+  the key is unchanged and still a bool per entry. `_describe_non_session` asked `is_slug` — the
+  unconditional creation-time refusal — so a `con` directory holding no `session.json` read
+  `slug_shaped: false` and `doctor`'s `[name taken]` hint never named it, even though
+  `create_session('con', ...)` reads straight through the very same directory under #372's
+  conditional read-time rule and loses its rename to it. The field asks that read-time question now
+  — in practice `_shape_only`, since the directory being described already occupies the path in
+  question, so the conditional half of the rule could never actually refuse — matching `lock_path`,
+  `_child_of`, `web/dependencies.py`, `services/discovery.py` and `scan_lock_root` (#409, above). A
+  consumer sees `slug_shaped: true` where it used to see `false` for such a directory, and the
+  `[name taken]` hint follows it; nothing changes for a non-reserved name.
+
 - **`session list --json` is an object, not an array** (#87). **Breaking**, and the one change on this
   page that a parser cannot survive: the payload was a bare array of rows and is now
   `{"sessions": [...], "degraded": <int>, "session_root": "<path>"}`. The rows are unchanged — the
