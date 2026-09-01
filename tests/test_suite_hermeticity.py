@@ -37,6 +37,10 @@ def test_the_net_fires_when_a_credential_is_ambient():
     which is what makes the probe above more than a keyless-CI tautology."""
     env = dict(os.environ)
     env["ANTHROPIC_API_KEY"] = "sk-test-ambient-should-never-survive"
+    # Same pin as `_run_in`, for the same reason: in a worktree the venv's editable install still
+    # resolves `requivo` to the main checkout, and the child's conftest must import THIS tree's
+    # `requivo.cli` or the probe fails for a reason no diff explains (found in review of #420).
+    env["PYTHONPATH"] = str(_REPO_ROOT / "src")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          "tests/test_suite_hermeticity.py::test_no_ambient_credential_reaches_a_test"],

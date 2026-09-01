@@ -34,7 +34,11 @@ def _no_ambient_credentials(monkeypatch):
     # every in-process CLI test running from the repo root would put the developer's real key
     # straight back after layer 1. The contract that `app()` *does* load `.env` is covered where a
     # subprocess owns its own environment: `test_a_verb_still_reads_the_dotenv_file`.
-    monkeypatch.setattr("requivo.cli.load_dotenv", lambda *a, **kw: False, raising=False)
+    # `raising` stays at its default (True) on purpose: if `requivo.cli` ever stops importing
+    # `load_dotenv` under that name, this layer must fail loudly here rather than silently stop
+    # guarding — keyless CI would never notice the loss, and the first symptom would be a keyed
+    # machine billing again (found in review of #420).
+    monkeypatch.setattr("requivo.cli.load_dotenv", lambda *a, **kw: False)
     # Layer 3: a call that still escapes — an on-disk profile resolves without a single variable
     # set, and a future path may hand the SDK a key some other way — dies on an unroutable loopback
     # port in milliseconds, unpaid, instead of reaching Anthropic.
