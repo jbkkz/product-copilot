@@ -184,7 +184,7 @@ at all.
 | `sessions.unexaminable` | Names under the session root that could **not be examined**, so whether they are sessions is unknown — `name` and `error` per entry. Not folded into `non_sessions`, which states a fact, nor into `total`, which stays what could be confirmed. `null`, not `[]`, when the root could not be listed. See [Design notes](#something-here-that-could-not-be-examined) |
 | `locks.readable` / `locks.total` / `locks.error` | Whether `.requivo/locks/` could be listed at all, and how many `<slug>.lock` files it holds (#180) |
 | `locks.sessions_checked` / `locks.unmatched` | Which of those slugs currently name no session — candidate residue from a hand-deleted one, since there is no `session delete` verb. `unmatched` is `null`, not `[]`, when the *current session list* itself could not be read, on the same reasoning as `sessions.cards_checked` |
-| `locks.unexpected` | Names under `.requivo/locks/` that are neither a `<slug>.lock` file `session_lock` could have written nor a `<slug>.discovering` guard file a first discovery could have left (#391) — a stray file, a directory, a symlink, a stem neither writer could have been given. A session already on disk under a Windows reserved device name has both of its own files recognised here, on the same read-time rule that lets every other verb reach it (#372, #401). `null`, not `[]`, when the lock root could not be listed at all |
+| `locks.unexpected` | Names under `.requivo/locks/` that are neither a `<slug>.lock` file `session_lock` could have written nor a `<slug>.discovering` guard file a first discovery could have left (#391) — a stray file, a directory, a symlink, a stem neither writer could have been given. A reserved-name stem such as `nul` or `con` is recognised by shape alone (#372, #401, #409) whether or not a session by that name currently exists on disk — `locks.unmatched` is the separate question of whether one does. `null`, not `[]`, when the lock root could not be listed at all |
 | `locks.unexaminable` | Entries under `.requivo/locks/` whose examination raised — `name` and `error` per entry, on the same terms as `sessions.unexaminable`. `null`, not `[]`, when the lock root could not be listed |
 | `output.streams[].state` | `safe` (a character the console cannot encode is escaped visibly, never fatal), `lossy` (it cannot crash but drops or blanks the character with no mark — only reachable by setting `errors=replace`/`ignore` yourself), `will_crash` (a strict handler on a narrow codec, so a glyph would kill the command mid-report) or `unknown` (the stream does not expose a codec, so this check could not look) |
 
@@ -486,9 +486,12 @@ almost certainly is not enough: a half-extracted archive and an interrupted copy
 from the outside, and this project's rule is that the evidence is the directory and only the
 directory. So each entry carries what was found — `name`, `kind` (`directory` / `file` / `symlink` /
 `other` / `unknown`), `entries` (up to five names) and `entry_count` — and one derived flag,
-`slug_shaped`, which is a property of the *name*: whether `create_session` can be asked for it at
-all, and so whether the entry costs anybody anything. A name too long to be a slug is `false` there,
-because `canonical_dir` refuses such a name outright and loudly rather than substituting silently.
+`slug_shaped`, which is a property of the *name*: whether `create_session`'s rename would collide
+with this directory rather than being refused outright, and so whether the entry costs anybody
+anything. A name too long to be a slug is `false` there, because `canonical_dir` refuses such a name
+outright and loudly rather than substituting silently. A Windows reserved device name (`con`, `nul`,
+`lpt1`, ...) is `true`, since #408: the directory already occupies the name, so `create_session`'s
+own reserved-name refusal never gets a chance to fire and the rename simply loses instead.
 There is no field spelling a conclusion.
 
 A **symlink is not followed**. It would otherwise be reported as whatever it points at, and the

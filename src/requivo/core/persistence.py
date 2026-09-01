@@ -832,27 +832,47 @@ def validate_slug(slug: str) -> str:
 
 
 def is_slug(name: str) -> bool:
-    """Whether `name` is a slug `create_session` can be asked for — the same question `validate_slug`
-    answers, as a predicate.
+    """Whether `name` is a slug that could be *created* right now — the same question `validate_slug`
+    answers, as a predicate: the unconditional, creation-time form, which refuses a reserved
+    Windows device name whether or not anything already occupies it.
 
     Deliberately implemented by *calling* it rather than by re-testing `_SLUG_RE`. Validity is the
-    pattern **and** the length, and a second statement of that drifts: `slug_shaped` was written
-    against the pattern alone and marked an 81-character kebab-case directory as a name a session
-    would silently lose, when `canonical_dir` refuses such a name outright and loudly. One rule, one
-    place, found by review.
+    pattern **and** the length, and a second statement of that drifts: an earlier `slug_shaped` was
+    written against the pattern alone and marked an 81-character kebab-case directory as a name a
+    session would silently lose, when `canonical_dir` refuses such a name outright and loudly. One
+    rule, one place, found by review.
 
-    **One rule, one place -- for the *creation* question, which is now not the only one** (#401).
-    #372 split the reserved-device-name half of validity into an unconditional creation-time
-    refusal and a conditional read-time one, so "is this a valid slug" stopped being a single
-    question that a name alone can answer: the read-time form needs the path it is asked about.
-    This function keeps the creation-time question, because that is what its one caller asks --
-    `NonSessionEntry.slug_shaped` decides whether a `create_session` can be *asked for* the name.
-    A caller *classifying* something already on disk wants `_is_lock_stem` or its own equivalent
-    instead; `scan_lock_root` asked this one for a release and reported a reserved-name session's
-    own lock and guard files as residue nobody recognises. Pinned by
-    `test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue`."""
+    **Has no caller in this codebase as of #408, and that is correct rather than dead weight.**
+    `NonSessionEntry.slug_shaped` used to be this function, on the reasoning that its one caller was
+    asking the creation-time question -- and it was not: the caller is describing an entry that
+    already exists on disk, so the question is whether *that* directory's rename would collide, which
+    is `_shape_only` (#408, see `_describe_non_session`), not this. `is_slug` stays as the creation-
+    time predicate `validate_slug` is missing a bool form of -- the same relationship `_shape_only`
+    has to `_slug_shape` -- for a caller that genuinely does ask about creating a fresh name, the way
+    `_is_lock_stem` (#401) and `_describe_non_session` (#408) both learned the hard way that they do
+    not."""
     try:
         validate_slug(name)
+    except InvalidSlugError:
+        return False
+    return True
+
+
+def _shape_only(name: str) -> bool:
+    """Whether `name` matches `_slug_shape` -- pattern and length -- with no reserved-device-name
+    question asked at all, as a bool.
+
+    The read-time predicate for a caller that already knows, by construction, that something
+    occupies the path it would ask `_refuse_new_reserved_slug` about -- so that conditional check
+    could only ever answer "does not refuse" and asking it anyway would be a filesystem read with no
+    possible other outcome. `_is_lock_stem` (#409) and `_describe_non_session`'s own `slug_shaped`
+    (#408) are both this now, one for a lock-root entry classifying itself, one for a session-root
+    entry doing the same -- see each for why its own "something occupies the path" holds.
+
+    Not `_slug_shape` bare, which raises rather than returning a bool -- a caller wanting a
+    predicate wants this, the same relationship `is_slug` has to `validate_slug`."""
+    try:
+        _slug_shape(name)
     except InvalidSlugError:
         return False
     return True
@@ -863,10 +883,24 @@ def _is_lock_stem(stem: str) -> bool:
     have written -- the **stem** half of what `lock_path` and
     `services.discovery._discovery_guard_path` each validate before joining their own suffix.
 
-    Two calls, and they are the two both writers make on the bare stem: `_slug_shape`, then
-    `_refuse_new_reserved_slug` against `session_root() / stem`. Core may not import services, and
-    does not need to -- `_discovery_guard_path`'s own docstring says its stem rule is `lock_path`'s,
-    and this is that rule.
+    **Shape alone, since #409 -- not `_slug_shape` plus a read of `session_root()`, which is what
+    this was from #401 until #409 corrected it.** The reserved-device-name half of that read-time
+    rule (`_refuse_new_reserved_slug`) asks whether a *session* currently occupies
+    `session_root() / stem` -- a different resource, in a different root, from the lock-root entry
+    being classified. `session_lock` and `_discovery_guard_path` can only ever produce a reserved-
+    stem lock file for a session that existed *at write time* (#372's conditional refusal), so the
+    file's provenance is fixed the moment it is written. Asking the read-time question anyway made
+    the classification of a fixed fact depend on whether that *other* directory still exists *now*
+    -- so `nul.lock`, written while a `nul` session was open, read as "not a lock file Requivo
+    recognises" the moment that session was deleted, exactly invariant 17's shape: a verdict
+    decided by a resource the answer does not name. `scan_lock_root`'s own docstring already
+    forbade this ("never *is `slug` still a session*"); this function had come to violate it.
+    Whether a session still matches a recognised stem is `_lock_health`'s question
+    (`locks.unmatched`), asked separately and a moment apart -- never folded back in here. Pinned by
+    `test_a_reserved_lock_stems_classification_survives_the_session_being_deleted` and the renamed
+    `test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_recognised_not_residue`, which
+    used to pin the opposite answer on purpose (see its own docstring for why that assumption did
+    not hold).
 
     **Deliberately *not* `lock_path(stem)` in a `try`, which is what this was first written as**
     (found in review of #401, before it shipped). That reads as the tidier "one rule, one place",
@@ -883,28 +917,18 @@ def _is_lock_stem(stem: str) -> bool:
     separator or a dot segment unrepresentable in a stem, and a symlink at the entry *itself* is
     already excluded before this is called.
 
-    **Not `is_slug`, and the difference is #372's whole point** (#401). `is_slug` is
-    `validate_slug`, whose reserved-device-name refusal is unconditional because it guards
-    *creation*. `scan_lock_root` is *classifying* a file already on disk, and for a session that
-    already occupies a reserved name both this store's writers happily produce these files -- so
-    asking the creation-time question there reported them as residue nobody recognises, which is
-    #391's defect one predicate over. A shape-only predicate would be the opposite error: it would
-    recognise `nul.lock` in a workspace with no `nul` session, a file no writer here could have
-    produced. Pinned from both sides by
-    `test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue` and
-    `test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_still_unexpected`.
+    **Not `is_slug` either.** `is_slug` is `validate_slug`, whose reserved-device-name refusal is
+    unconditional because it guards *creation*; asking the creation-time question here reported a
+    reserved-name session's own lock and guard files as residue nobody recognises, which is #391's
+    defect one predicate over (#401). Pinned by
+    `test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue`.
 
-    `InvalidSlugError` alone is caught. `_refuse_new_reserved_slug` probes the session root through
-    `_probe`, which raises `SessionUnreadableError` rather than guessing when it cannot stat -- that
-    is a could-not-look, not a not-a-lock-file, and it is left to propagate into `scan_lock_root`'s
-    own `unexaminable` bucket. Pinned by
-    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`."""
-    try:
-        _slug_shape(stem)
-        _refuse_new_reserved_slug(stem, session_root() / stem)
-    except InvalidSlugError:
-        return False
-    return True
+    **No longer probes the filesystem at all, and that is itself pinned** -- `_shape_only` never
+    touches `session_root()`, so the `SessionUnreadableError` this used to be able to raise (through
+    `_refuse_new_reserved_slug`'s own `_probe`) cannot happen here any more; that source of
+    `scan_lock_root`'s `unexaminable` bucket is gone by design. Pinned by
+    `test_a_reserved_lock_stem_no_longer_probes_the_session_root`."""
+    return _shape_only(stem)
 
 
 # A filename is the *other* half of an artifact write target, and it was unvalidated while its slug
@@ -1428,12 +1452,21 @@ class NonSessionEntry:
     conclusion, because a reader acts on the name of the field and not on the paragraph beside it.
 
     `slug_shaped` is the one derived value, and it is a property of the *name* rather than a guess at
-    the entry's history: whether `create_session` can be asked for it, which is what decides whether
-    this entry costs anybody anything. A name that is not slug-shaped is unreachable — `canonical_dir`
-    refuses it before any rename is attempted, loudly — so it is reported and carries no consequence.
-    It is answered by `is_slug`, which calls `validate_slug`, because validity is the pattern *and*
-    the length and testing the pattern alone marked an 81-character name as one a session would
-    silently lose (found by review).
+    the entry's history: whether `create_session`'s rename would reach this directory and collide
+    with it, which is what decides whether this entry costs anybody anything. A name that is not
+    slug-shaped is unreachable — `canonical_dir` refuses it before any rename is attempted, loudly —
+    so it is reported and carries no consequence. It is answered by `_shape_only`, pattern *and*
+    length, because testing the pattern alone once marked an 81-character name as one a session
+    would silently lose (found by review).
+
+    **Not `is_slug` (#408).** `is_slug` answers whether `create_session` could be *asked* for the
+    name from nothing, which for a reserved Windows device name (`con`, `nul`, `lpt1`, ...) is
+    unconditionally no -- and this entry is not "from nothing": the directory already exists, so
+    `canonical_dir` reads straight through the very same conditional rule `_shape_only`'s siblings
+    apply (#372), and the rename that follows loses to it rather than being refused. Asking `is_slug`
+    here read a taken reserved name as unreachable and left `doctor`'s `[name taken]` hint silent
+    about the one directory it exists to name. `_describe_non_session` explains why the reserved-
+    device half of that read-time rule can be skipped rather than asked, for this caller specifically.
 
     `entries` is capped at `_NON_SESSION_SAMPLE` and `entry_count` is the true total. Three states,
     as everywhere:
@@ -1557,8 +1590,25 @@ def _describe_non_session(p: Path) -> NonSessionEntry:
     against — it is the same third state reached from a wider set of causes, and the cause I could not
     rule out is real: on Linux a filename that is not valid UTF-8 comes back from `iterdir` carrying
     surrogates, and every consumer of `p.name` downstream is a candidate. APFS refuses such a name, so
-    it could not be constructed here to be ruled out either way."""
-    slug_shaped = is_slug(p.name)
+    it could not be constructed here to be ruled out either way.
+
+    **`slug_shaped` is `_shape_only(p.name)`, not the full read-time rule, and not `is_slug`** (#408).
+    `p` is an entry `_scan_session_root`'s own `iterdir()` just found under `session_root()`, so
+    `p.name` is already known to occupy `session_root() / p.name` -- the one path
+    `_refuse_new_reserved_slug` would be asked to probe if this called the full rule
+    (`_slug_shape` plus that conditional check) the way `_child_of` and `lock_path` do. Given
+    something already occupies it, that probe can only ever answer "does not refuse", so calling it
+    would be a filesystem read -- one this "never raise" function would then have to guard against
+    failing -- for an answer already implied by the fact that `p` exists. `_shape_only` gives the
+    identical bool without the read: shape is what decides whether `create_session` refuses this name
+    outright; existence is what decides whether it collides instead, and existence is already
+    established here. `is_slug` asked the *unconditional* creation-time question instead, which
+    refuses a reserved Windows device name regardless of what already occupies it -- so a `con`
+    directory with no `session.json` read `slug_shaped: False` and `doctor` never named the one
+    directory its `[name taken]` hint exists for, even though `create_session('con', ...)` reads
+    straight through it and loses its rename. Pinned by
+    `test_a_reserved_name_directory_that_is_not_a_session_is_reported_as_taken`."""
+    slug_shaped = _shape_only(p.name)
     try:
         # `is_symlink` first, and it does not follow. `is_dir()` does: a symlink at a slug name
         # pointing anywhere else reported as a plain `directory`, and then `iterdir` listed the
@@ -1664,20 +1714,22 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
     lock file Requivo recognises" about a file this store's own code had just written, on the very
     first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
-    regular file, not a symlink, whose stem is one `lock_path` accepts (`_is_lock_stem`) -- is
-    recognised now and excluded from `unexpected`. Anything else under this root — a stray file
-    with a different name, a directory, a symlink at a `.lock` or `.discovering` name, a stem
-    neither writer could have been given — is not a shape either writer ever produces, and is still
-    reported exactly as before.
+    regular file, not a symlink, with a stem either writer could have been given (`_is_lock_stem`,
+    shape alone since #409) -- is recognised now and excluded from `unexpected`. Anything else
+    under this root — a stray file with a different name, a directory, a symlink at a `.lock` or
+    `.discovering` name, a stem neither writer could have been given — is not a shape either writer
+    ever produces, and is still reported exactly as before.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
 
-    **The stem question is `lock_path`'s, not `validate_slug`'s** (#401). It was `is_slug` for a
-    release, which is `validate_slug`, which refuses a reserved Windows device name
-    *unconditionally* because it guards creation. Both writers here apply #372's conditional form
-    instead, so a session already on disk at such a name had the two files this store wrote for it
-    classified as residue nobody recognises -- the #391 sentence above, resurrected one predicate
-    over. `_is_lock_stem` carries the argument and the two tests that pin it from both sides.
+    **The stem question is `_is_lock_stem`'s, not `validate_slug`'s, and it is shape alone** (#401,
+    corrected by #409). It was `is_slug` for a release, which is `validate_slug`'s unconditional
+    creation-time refusal, and reported a reserved-name session's own lock and guard files as
+    residue nobody recognises. It was then the read-time rule (`_slug_shape` plus
+    `_refuse_new_reserved_slug` against `session_root()`) for a release, which fixed that and broke
+    the opposite case: a lock file's classification changed when the session it was written for was
+    later deleted, because that rule reads the *session* root, a resource this function's own answer
+    must not depend on (see the paragraph below). `_is_lock_stem` carries the full argument now.
 
     **What a matching slug means is left to the caller, deliberately.** This function answers only
     *is there a `<slug>.lock` file*, never *is `slug` still a session* — that needs the session
@@ -1691,12 +1743,13 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
     reasoning `_scan_session_root` gives for its own third bucket (#80).
 
-    **That bucket has a second source since #401, and it is a different root.** `_is_lock_stem`
-    stats `session_root() / stem` through `_probe` for a reserved stem, which raises rather than
-    guessing on EACCES -- so an entry can reach `unexaminable` with the file-type probe above it
-    having answered perfectly well. The reasoning is the same one and the cause is not, which is why
-    it is named here rather than left to be inferred from the loop body. Pinned by
-    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`.
+    **That bucket had a second source from #401 to #409, and it is gone by design.** `_is_lock_stem`
+    used to stat `session_root() / stem` through `_probe` for a reserved stem, which could raise on
+    EACCES -- so an entry could reach `unexaminable` with the file-type probe above it having
+    answered perfectly well. #409 removed that stat entirely (`_is_lock_stem` is shape alone now),
+    so this bucket's only source is the file-type probe immediately above it in the loop. Pinned by
+    `test_a_reserved_lock_stem_no_longer_probes_the_session_root`, which replaced the test that used
+    to pin the removed source.
 
     A root that does not exist is an empty lock directory and returns nothing, matching
     `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same
@@ -1717,18 +1770,13 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
         guard_slug = p.name[: -len(".discovering")] if p.name.endswith(".discovering") else None
         try:
             is_ordinary_file = p.is_file() and not p.is_symlink()
-            # `_is_lock_stem`, not `is_slug` (#401). This is a classification, not a creation: it
-            # asks whether a writer *here* could have produced this file, and both writers apply
-            # #372's conditional reserved-name rule rather than `validate_slug`'s unconditional
-            # one. Asked the creation-time question instead, a reserved-name session already on
-            # disk had its own `.lock` and `.discovering` files reported as "not a lock file
-            # Requivo recognises" -- #391's defect one predicate over.
-            #
-            # Inside this `try` rather than beside it, because it can fail the same way the probe
-            # above it can: `_refuse_new_reserved_slug` stats the session root through `_probe`,
-            # which raises rather than guessing on EACCES. That is the third outcome again, and it
-            # belongs in `unexaminable` for this entry -- not escaping to make `_lock_health` claim
-            # the whole root was unreadable, which is invariant 15's shape one layer down.
+            # `_is_lock_stem`, not `is_slug` (#401), and shape alone -- not a read of the session
+            # root (#409). This is a classification, not a creation: it asks whether a writer
+            # *here* could have produced this file, which is a fact about the file's own name and
+            # nothing else. Asked the creation-time question, a reserved-name session's own lock and
+            # guard files read as residue nobody recognises (#391's defect one predicate over).
+            # Asked the read-time question against the *session* root instead, the answer for a
+            # fixed file flipped when that unrelated directory was later deleted (#409).
             if is_ordinary_file and lock_slug and _is_lock_stem(lock_slug):
                 lock_slugs.append(lock_slug)
                 continue
