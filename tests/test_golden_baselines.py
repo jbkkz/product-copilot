@@ -45,9 +45,11 @@ from golden_lib import GOLDEN, REQUESTS, parse_requests  # noqa: E402
 # owns the re-capture. The same idiom `tests/test_encoding.py` and `tests/test_persistence_guards.py`
 # already use for a by-design allowlist: an entry whose files have since come back into agreement is
 # stale and goes red in `test_a_stale_declared_exception_that_now_agrees_is_flagged` below.
-_DECLARED_DRIFT: dict[str, str] = {
-    "training-budget": "#194",
-}
+# Empty, and that is the healthy state: every baseline currently agrees with requests.md. The
+# mechanism stays because the next asset edit that outruns its re-capture needs it again -- the
+# `training-budget`/#194 entry that lived here was retired by the full re-capture in #405, which
+# is what an entry is for.
+_DECLARED_DRIFT: dict[str, str] = {}
 
 
 def _drifted_fields(req: dict, baseline: dict) -> list[str]:
