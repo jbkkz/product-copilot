@@ -309,3 +309,37 @@ def test_an_unreadable_session_directory_refuses_cleanly_instead_of_crashing(
         SessionService().resolve_slug(ref)
     assert exc.value.details["ref"] == ref
 
+
+def test_a_directory_reference_under_a_blocked_ancestor_refuses_cleanly_too(tmp_path, request):
+    """Found in review of #414 itself. The referenced directory's own contents being unreadable is
+    not the only way this branch's probes can raise: `p.exists()`/`p.is_dir()` on the *entry gate*
+    -- unchanged by this fix, and still outside any `try` -- independently stat `p` itself, which
+    re-raises `PermissionError` when an ANCESTOR of the reference denies traversal, a distinct case
+    from the referenced directory's own contents being blocked (which is all `_unreadable_session_
+    directory` above exercises). A directory that is otherwise perfectly healthy -- it carries its
+    own `session.json` -- must still refuse cleanly rather than crash, purely because something
+    above it on the path could not be traversed."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that the "
+                    "directory branch's entry gate (not just its marker probe) converts an "
+                    "ancestor PermissionError into a clean SessionNotFoundError.")
+    parent = tmp_path / "blocked-parent"
+    parent.mkdir()
+    target = parent / "session-slug"
+    target.mkdir()
+    (target / "session.json").write_text("{}", encoding="utf-8")
+    request.addfinalizer(lambda: parent.chmod(0o755))
+    parent.chmod(0o000)
+    ref = str(target)
+    try:
+        Path(ref).exists()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("chmod 000 on the parent did not deny the exists() probe on this run "
+                    "(running as root?). UNTESTED HERE: the ancestor-blocked arm of the "
+                    "directory branch's entry gate.")
+    with pytest.raises(SessionNotFoundError) as exc:
+        SessionService().resolve_slug(ref)
+    assert exc.value.details["ref"] == ref
+

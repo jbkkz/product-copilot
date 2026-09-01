@@ -379,7 +379,17 @@ def _scan_legacy_root(root: Path) -> tuple[list[str], list[UnexaminableEntry]]:
     public name `services/repository.py` imports outside its home module.
 
     A root that does not exist has nothing to migrate and returns two empty lists, on the same
-    terms `_scan_session_root` states for the canonical root."""
+    terms `_scan_session_root` states for the canonical root.
+
+    **A root that exists but cannot itself be *listed* is not the same answer, and this still
+    raises rather than flattening the two -- found in review of this same change.** Wrapping only
+    the per-entry probe left `root.iterdir()` itself outside any guard: a legacy `out/` root the
+    process cannot even open into (as opposed to one unreadable entry inside an otherwise-listable
+    root, the case the rest of this function closes) raised uncaught past this function and past
+    its caller, the identical crash #411 was filed to fix, one level up. That failure is genuinely
+    the whole root -- there is no entry to name it against -- so on the same terms
+    `_scan_session_root` already states for itself, this raises rather than guessing; the caller
+    is the one that has to be able to say `we could not look`."""
     if not root.exists():
         return [], []
     slugs: list[str] = []
@@ -471,7 +481,20 @@ def _cmd_session_migrate(a, client) -> None:
     reason to split the code."""
     from requivo.paths import output_root
     root = output_root()
-    slugs, unreadable = _scan_legacy_root(root)
+    try:
+        slugs, unreadable = _scan_legacy_root(root)
+    except OSError as e:
+        # `_scan_legacy_root` raises when the root itself could not be listed -- deliberately, on
+        # the same terms `_scan_session_root` states for the canonical root -- and this is the
+        # catch that turns that into a clean, expected failure rather than the bare traceback #411
+        # was filed to close one level down. A `RequivoError`: `cli.py`'s `app()` already prints
+        # it as a clean receipt (the `--json` envelope or a one-line message) and exits 1 -- "no
+        # answer", not "the answer is incomplete", because nothing here was even examined, so
+        # `EXIT_DEGRADED`'s partial-answer meaning would overstate what happened (found in review).
+        raise SessionUnreadableError(
+            f"could not list legacy sessions under {display_token(str(root))}: {e}",
+            details={"source": str(root)},
+        ) from e
     migrated, skipped, interrupted, errors = [], [], [], []
     repo = SessionService().repo
     for slug in slugs:

@@ -305,6 +305,42 @@ def test_the_bulk_migrate_command_degrades_an_unreadable_legacy_directory_rather
     assert _problem("zzz-last", 1) == "LAST"
 
 
+def test_a_totally_unlistable_legacy_root_refuses_cleanly_instead_of_crashing(workspace, request):
+    """Found in review of #411 itself. Wrapping only the per-entry probe inside `_scan_legacy_root`
+    left `root.iterdir()` itself -- the call that lists the root in the first place -- outside any
+    guard: a legacy `out/` root the process cannot even open into is a distinct case from one
+    unreadable *entry* inside an otherwise-listable root (the sibling test above,
+    test_the_bulk_migrate_command_degrades_an_unreadable_legacy_directory_rather_than_crashing),
+    and it raised an uncaught `PermissionError` past `_cmd_session_migrate` -- the identical crash
+    #411 was filed to fix, one level up. `_scan_legacy_root` still raises for this case,
+    deliberately, on the same terms `_scan_session_root` already states for the canonical root;
+    what changed is that the caller now turns that into a clean `SessionUnreadableError` (a
+    `RequivoError`), which `cli.py`'s `app()` already knows how to report and exit 1 for -- "no
+    answer", since nothing here was even examined, distinct from the partial-answer
+    `EXIT_DEGRADED` the sibling test above exits with."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that a "
+                    "totally unlistable legacy root converts an uncaught PermissionError into a "
+                    "clean SessionUnreadableError rather than a bare traceback.")
+    out_dir = store.output_root()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    request.addfinalizer(lambda: out_dir.chmod(0o755))
+    out_dir.chmod(0o000)
+    try:
+        list(out_dir.iterdir())
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("chmod 000 did not deny iterdir() on this run (running as root?). UNTESTED "
+                    "HERE: the whole-root-unlistable arm of the legacy-root scan.")
+
+    with pytest.raises(RequivoError) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert str(out_dir) in str(ei.value)
+
+
 def test_an_unrelated_revision_zero_session_at_a_legacy_slug_is_not_called_interrupted(
         workspace, capsys):
     """Found in review of #262 itself. `current_revision == 0` alone is not evidence of a crashed

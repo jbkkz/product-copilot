@@ -483,6 +483,12 @@ so both are noted here and in the changelog rather than only in the latter.
   crash was never a documented `0`, so converting it into a receipt is additive rather than a
   condition moving off a promised code.
 
+  A whole-root failure — the legacy `out/` root itself unlistable, rather than one entry inside it
+  — is the same reasoning one level up, found in review of this same change: it used to crash with
+  the identical undefined code, and now exits `1` with a clean, one-line refusal (or `--json` error
+  envelope) naming the root. Additive for the same reason — never a documented `0` — and `1` rather
+  than `4` because nothing here was even examined: "no answer", not "the answer is incomplete".
+
 ### HTTP statuses in Requivo Web
 
 The Web maps each code to a status, and **every code has an explicit mapping** — the table used to

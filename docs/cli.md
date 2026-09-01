@@ -442,6 +442,11 @@ The command exits `4` (the same code `session list` and `session verify` use for
 and part of the answer was unreachable") whenever `errors`, `interrupted` or `unreadable` is
 non-empty, so a script reading only the exit code still learns the run was not a clean success.
 
+**The `out/` root itself being unlistable is a different, firmer failure**, distinct from one
+unreadable entry inside it: nothing at all could be examined, so there is no partial receipt to
+print. That case exits `1` with a clean, one-line refusal (or the `--json` error envelope) naming
+the root — "no answer", not "the answer is incomplete."
+
 ## Design notes
 
 Everything above is what a flag does. Everything below is *why it works that way* — a bug this

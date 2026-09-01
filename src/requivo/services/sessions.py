@@ -224,17 +224,31 @@ class SessionService:
                     details={"ref": ref},
                 ) from e
             return p.parent.name if is_real_file else ref
-        if p.exists() and p.is_dir():
-            # **The same wrong-cause class #402 closed for the model.json/session.json branch,
-            # one branch over** (#414). This used to mine ANY directory's own name, unconditional
-            # on whether a session actually lived behind it -- so a path merely sharing its final
-            # segment with an unrelated real session silently resolved to that session, and a
-            # failure on a path that resolved to nothing named a slug the user never wrote. On
-            # the same terms as the file branch above ("only mined when the file is actually
-            # there"), a directory is only mined for its own name when it carries a session's own
-            # marker -- canonical `session.json` or legacy `model.json`. The probe re-raises the
-            # same way `is_file()` does above (`Path.exists()` has two returns and three outcomes)
-            # and gets the identical third state rather than an uncaught traceback.
+        # **The same wrong-cause class #402 closed for the model.json/session.json branch, one
+        # branch over** (#414). This used to mine ANY directory's own name, unconditional on
+        # whether a session actually lived behind it -- so a path merely sharing its final segment
+        # with an unrelated real session silently resolved to that session, and a failure on a
+        # path that resolved to nothing named a slug the user never wrote. On the same terms as
+        # the file branch above ("only mined when the file is actually there"), a directory is
+        # only mined for its own name when it carries a session's own marker -- canonical
+        # `session.json` or legacy `model.json`.
+        #
+        # **Two probes here, not one, and both re-raise -- found in review of this same change.**
+        # `p.exists()`/`p.is_dir()` independently stat `p` itself, which fails with `PermissionError`
+        # when an ANCESTOR of the reference denies traversal, a distinct case from the marker probe
+        # below failing on the referenced directory's *own* contents. Wrapping only the marker probe
+        # left the entry gate itself able to raise a bare, uncaught traceback for a directory that
+        # is otherwise perfectly healthy, purely because something above it on the path could not be
+        # examined -- the identical third state `is_file()` above is already guarded against, missed
+        # one probe over.
+        try:
+            is_dir = p.exists() and p.is_dir()
+        except OSError as e:
+            raise SessionNotFoundError(
+                f"could not tell whether {display_token(ref)} is a session directory: {e}",
+                details={"ref": ref},
+            ) from e
+        if is_dir:
             try:
                 looks_like_a_session = (p / "session.json").exists() or (p / "model.json").exists()
             except OSError as e:
