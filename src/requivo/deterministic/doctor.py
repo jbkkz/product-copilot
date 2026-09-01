@@ -255,7 +255,7 @@ def _session_health(*, cards_readable: bool = True) -> dict:
       Cards are not checked for a locked slug either, for the same reason `session verify` skips
       them when its own probe could not run: nothing here was established well enough to build on.
     - `non_sessions` — what is under the session root and is *not* a session: the name, what kind of
-      thing it is and what it holds, from `list_non_session_entries`. Nothing could see one of these
+      thing it is and what it holds, from `scan_session_root`'s second part. Nothing could see one of these
       at all (#67), and the symptom is not in this report — it is the next `create_session` on that
       name quietly landing under `<slug>-<hash>` instead. `None`, never `[]`, in the arm where the
       root could not be listed: an empty list there reads as *we looked and there is nothing else*,
@@ -275,8 +275,8 @@ def _session_health(*, cards_readable: bool = True) -> dict:
     unresolved: dict[str, dict] = {}
     locked: dict[str, str] = {}
     try:
-        # One listing for all three parts. Calling `list_session_slugs`, `list_non_session_entries`
-        # and `list_unexaminable_entries` separately reads the directory at three instants, and a
+        # One listing for all three parts. Calling `list_session_slugs` and
+        # `list_unexaminable_entries` separately reads the directory at two instants, and a
         # `session.json` landing between them puts a name in *no* answer at all — the invisible
         # state this key exists to end, reintroduced by the key itself. Neither
         # `_describe_non_session` nor the partition's third bucket raises, so what this `except`
@@ -333,7 +333,7 @@ def _lock_health() -> dict:
     session goes here, since there is no `session delete` verb (#180). It is never reported as
     *orphan*: this scan and the session scan it is checked against run a moment apart, and a session
     created or removed in that gap reads exactly the same way for a tick without being residue at
-    all — the same caution `list_non_session_entries` states for its own bucket, applied to the root
+    all — the same caution `scan_session_root` states for its own second bucket, applied to the root
     #113 created.
 
     Three questions, each with its own third state:

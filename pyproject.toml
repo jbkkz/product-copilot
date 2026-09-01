@@ -124,14 +124,17 @@ dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx>=0.25.0,<1",
 # `DiscoveryService.generate`, keyed on the `Literal` string every call site already passes) and two
 # narrower SDK-optionality gaps in `providers/anthropic/{client,completion}.py` were fixed.
 #
-# `render/` is excluded below rather than folded in: it carries real, pre-existing errors of its own
-# -- `render/html.py`:89 and :146, five `pyright --outputjson` diagnostics from two distinct `None`-
-# narrowing gaps (`re.Match.lastgroup` and `re.Match | None` used without a check) -- that this
-# issue's own Scope section does not name and that #271's acceptance criteria explicitly does not ask
-# this change to fix ("no runtime files besides the three named change behavior"). Reported
-# separately rather than fixed here so the diff stays the size the issue scoped.
+# `render/` was the one exception #271 left behind, on five diagnostics from two `None`-narrowing
+# gaps in `render/html.py` believed to be false positives -- and *believed* was the whole of it. Both
+# were checked in #393 and both were right, so each is now an `assert` that states, at the site that
+# depends on it, the fact somewhere else in the file that makes it sound: `_INLINE_MARKUP` has only
+# named alternation branches, and `markdown_to_html` gathers a list line only when one of the two
+# item patterns matched it. A `# type: ignore` would have bought the same 0 errors and preserved
+# neither fact. `test_every_inline_markup_branch_is_a_named_group_with_a_tag` and
+# `test_a_list_line_that_matches_neither_marker_is_refused_by_name` are what go red when either
+# moves. Every directory of the shipped package is checked now, and there is no un-scoped one left
+# to write a successor condition for.
 include = ["src/requivo"]
-exclude = ["src/requivo/render"]
 
 # The floor `requires-python` declares, not the interpreter the leg happens to run. A checker at 3.12
 # accepts what the oldest supported interpreter refuses, which is the same shape of unverified claim

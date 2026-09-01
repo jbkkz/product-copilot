@@ -75,11 +75,6 @@ def estimate_confidence(n_soft: int) -> str:
     return "low"
 
 
-def _is_deferred(s: Slot) -> bool:
-    """Low-impact, unfilled slots are intentionally parked, not weaknesses."""
-    return s.impact is Impact.low and s.completeness < SOFT_COMPLETENESS
-
-
 def readiness_blockers(out: EngineOutput) -> list[str]:
     """High-impact slots not yet confirmed AND covered — what stands between here and build.
 

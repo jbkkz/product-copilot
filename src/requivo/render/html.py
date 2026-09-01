@@ -86,6 +86,29 @@ def _inline(text: str) -> str:
     """
     def tag(match: re.Match) -> str:
         name = match.lastgroup
+        # Every alternation branch of `_INLINE_MARKUP` is a *named* group, so exactly one of them
+        # participates in any match reaching here and `lastgroup` is never None. That fact lives in
+        # the pattern above, not here, which is what makes an assert worth its line: an edit adding
+        # an unnamed branch would otherwise turn this into a `KeyError` out of a renderer whose
+        # module promises that anything outside the dialect degrades to escaped text and never
+        # worse (#393).
+        #
+        # **Two different things hold this, and saying "pinned by" once would overstate one of
+        # them** -- found in review of this change, which is the whole reason it is spelled out.
+        # `test_every_inline_markup_branch_is_a_named_group_with_a_tag` pins the *invariant*: it
+        # compares the pattern's own `groups` against `groupindex`, so it goes red on the unnamed
+        # branch and would go red with or without this line. What holds *this line* is the pyright
+        # leg -- `render/` is inside `[tool.pyright]`'s `include` since #393, and deleting the
+        # assert puts the four `str | None` diagnostics back. Neither guard covers `python -O`,
+        # where an assert is compiled out; nothing here runs under it, and the pre-#393 baseline
+        # had no runtime check at all, so `-O` is that baseline rather than a regression.
+        #
+        # This and the one in `_list_items` are the **first two `assert`s in `src/requivo/`** —
+        # measured at the base commit, not assumed. Said out loud because it is a precedent rather
+        # than a local choice: #393 asked for a narrowing that *documents* the invariant it rests
+        # on, and an assert is the only option that survives an edit to the pattern, where a
+        # `# type: ignore` preserves nothing.
+        assert name is not None, f"an unnamed _INLINE_MARKUP branch matched {match.group(0)!r}"
         return f"<{_INLINE_TAGS[name]}>{match.group(name)}</{_INLINE_TAGS[name]}>"
 
     return _INLINE_MARKUP.sub(tag, escape(text, quote=True))
@@ -141,9 +164,24 @@ def _list_items(lines: list[str], ordered: bool) -> list[str]:
     out = [f"<{tag}>"]
     nested = False
     for line in lines:
-        match = _BULLET.match(line)
-        indent, text = (len(match.group(1)), match.group(2)) if match else (
-            0, _ORDERED.match(line).group(1))
+        bullet = _BULLET.match(line)
+        if bullet:
+            indent, text = len(bullet.group(1)), bullet.group(2)
+        else:
+            # `markdown_to_html` collects a line into `lines` only when `_BULLET` or `_ORDERED`
+            # matched it, so a line that is not a bullet is an ordered item. The invariant is the
+            # *caller's*, which is exactly why it is asserted rather than left implicit: this
+            # function cannot see it, and a second caller handing it arbitrary lines got
+            # `AttributeError: 'NoneType' object has no attribute 'group'`, naming neither the line
+            # nor the rule it broke. Pinned by
+            # `test_a_list_line_that_matches_neither_marker_is_refused_by_name`, which calls this
+            # function directly and really does discriminate -- against the code before #393 it
+            # gets the `AttributeError` rather than the named refusal. Compiled out under
+            # `python -O` like any assert, which returns to the pre-#393 behaviour and does not go
+            # below it (#393).
+            item = _ORDERED.match(line)
+            assert item is not None, f"a list item matched neither marker: {line!r}"
+            indent, text = 0, item.group(1)
         if indent >= 2 and not nested:
             out.append(f"<{tag}>")
             nested = True

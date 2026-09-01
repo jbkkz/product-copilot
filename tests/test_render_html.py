@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import re
 
-from requivo.render.html import markdown_to_html
+import pytest
+
+from requivo.render.html import _BULLET, _INLINE_MARKUP, _INLINE_TAGS, _ORDERED, _inline, _list_items, markdown_to_html
 
 # Anything a browser would run, fetch or lay out from bytes it did not choose.
 _LIVE_MARKUP = re.compile(r"<\s*(script|iframe|object|embed|style|img|svg)\b", re.I)
@@ -293,3 +295,92 @@ def test_a_paragraph_stops_at_the_heading_that_follows_it():
     assert "<p>Some paragraph text.</p>" in html
     assert "<h2>A heading right after</h2>" in html
     assert "<li>and a bullet</li>" in html
+
+
+# -- the two narrowing invariants pyright could not see (#393) -------------------------------------
+#
+# `render/` was the one package directory outside `[tool.pyright]`'s scope, kept out by five
+# diagnostics from two `None`-narrowing gaps that were argued to be false positives and never
+# checked. Both arguments turned out to be right, and both rest on a fact stated *somewhere else* --
+# one on the shape of `_INLINE_MARKUP`, one on what `markdown_to_html` collects before it calls
+# `_list_items`. That is exactly the shape that goes stale silently, so each now has an `assert` at
+# the site that depends on it and a test here that fires when the fact moves.
+
+
+def test_every_inline_markup_branch_is_a_named_group_with_a_tag():
+    """`_inline`'s callback indexes `_INLINE_TAGS` with `match.lastgroup` and never checks it for
+    `None`. That is sound only while every capturing group in `_INLINE_MARKUP` is *named* -- one
+    unnamed alternation branch and a match through it has `lastgroup` `None`, which before #393
+    meant a `KeyError` out of a renderer whose module promises that anything outside the dialect
+    degrades to escaped text and never worse.
+
+    Asserted on the pattern's own counts rather than by rendering samples: a sample suite only
+    covers the branches somebody thought to write, and the failure being guarded against is a
+    branch nobody here knows about yet. `groups` counts every capturing group, `groupindex` only
+    the named ones, so their equality *is* the claim."""
+    assert _INLINE_MARKUP.groups == len(_INLINE_MARKUP.groupindex), (
+        "an unnamed capturing group was added to _INLINE_MARKUP: `match.lastgroup` can now be None "
+        f"in `_inline`'s callback (groups={_INLINE_MARKUP.groups}, "
+        f"named={sorted(_INLINE_MARKUP.groupindex)})")
+    assert set(_INLINE_MARKUP.groupindex) == set(_INLINE_TAGS), (
+        "every named branch needs a tag to render it, and every tag needs a branch to fire it: "
+        f"{sorted(set(_INLINE_MARKUP.groupindex) ^ set(_INLINE_TAGS))}")
+    # must fire: the pattern really is the three-branch one the claim is about, so the equality
+    # above is not two zeroes agreeing.
+    assert _INLINE_MARKUP.groups == 3, sorted(_INLINE_MARKUP.groupindex)
+
+
+def test_every_inline_marker_still_names_the_group_that_matched_it():
+    """The runtime half of the claim above, on the dialect's own three markers plus the awkward
+    combinations. `lastgroup` naming a group is what makes the `_INLINE_TAGS` lookup total.
+
+    **This drives `_inline` itself, not only the pattern**, and that was a review finding on the
+    change that added it: asserting over `_INLINE_MARKUP.finditer` alone never enters the callback
+    where `lastgroup` is actually read, so the test passed identically against the code before
+    #393 and was evidence about the regex rather than about the renderer. The guard on the
+    callback's own narrowing is the pyright leg, which `render/` is inside since #393; this test
+    is what makes the callback *run* on all three branches, so a `lastgroup` that stopped naming a
+    group would surface here as a tag rather than only as a type error."""
+    text = "plain `code` and **bold** and _italic_ and `**not bold**` and a_b_c"
+    matched = [m.lastgroup for m in _INLINE_MARKUP.finditer(text)]
+    assert None not in matched, matched
+    # must fire: the fixture really exercised all three branches rather than matching nothing.
+    assert set(matched) == {"code", "bold", "italic"}, matched
+
+    rendered = _inline(text)
+    assert "<code>code</code>" in rendered, rendered
+    assert "<strong>bold</strong>" in rendered, rendered
+    assert "<em>italic</em>" in rendered, rendered
+    # The code-first ordering holds inside the span, and `a_b_c` keeps its underscores -- both are
+    # the callback having chosen a branch rather than fallen through.
+    assert "<code>**not bold**</code>" in rendered, rendered
+    assert "a_b_c" in rendered, rendered
+    # must fire: no tag anywhere carries a group that failed to name itself.
+    assert "<None>" not in rendered and "None>" not in rendered, rendered
+
+
+def test_a_list_line_that_matches_neither_marker_is_refused_by_name():
+    """`_list_items` reads `_ORDERED.match(line).group(1)` with no `None` check, and it is right to:
+    `markdown_to_html` collects a line only when `_BULLET` or `_ORDERED` matched it, so a line that
+    is not a bullet is an ordered item. The invariant belongs to the *caller*, which is why the
+    assert is worth having -- this function cannot see it, and a second caller handing it arbitrary
+    lines used to get `AttributeError: 'NoneType' object has no attribute 'group'`, which names
+    neither the line nor the rule it broke.
+
+    Called directly on purpose. There is no document that reaches this state through
+    `markdown_to_html`, and a test that could only be written by breaking the collector would be
+    pinning the collector instead."""
+    with pytest.raises(AssertionError, match="matched neither marker"):
+        _list_items(["not a list item at all"], ordered=True)
+
+
+def test_the_two_list_markers_between_them_cover_every_line_the_collector_gathers():
+    """The must-fire half: the assert above must not be the only thing standing, and the ordinary
+    shapes have to keep reaching `_list_items` cleanly. Both nesting levels and both marker
+    characters, since `_BULLET` accepts `-` and `*` and `_ORDERED` accepts any run of digits."""
+    for line in ("- a", "* b", "  - nested", "1. one", "10. ten", "   2. nested ordered"):
+        assert _BULLET.match(line) or _ORDERED.match(line), line
+    html = markdown_to_html(md("- a", "* b", "  - nested"))
+    assert html.count("<li>") == 3, html
+    ordered = markdown_to_html(md("1. one", "10. ten"))
+    assert ordered.startswith("<ol>") and ordered.count("<li>") == 2, ordered

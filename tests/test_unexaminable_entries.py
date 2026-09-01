@@ -138,7 +138,29 @@ def test_list_session_slugs_still_answers_only_what_is_known_to_be_a_session(blo
     """The contract that must not widen. `doctor`, `session verify` and every read path reason over
     these names, and an entry nobody could examine is not one of them."""
     assert store.list_session_slugs() == [HEALTHY]
-    assert [e.name for e in store.list_non_session_entries()] == []
+    assert [e.name for e in store.list_unexaminable_entries()] == [BLOCKED]
+
+    # The second part has no reader of its own since #300 — `list_non_session_entries` was
+    # production-dead and this assertion was one of its two callers. Taken from
+    # `scan_session_root`, which is what `doctor` calls, so the claim is about the partition the
+    # product actually reads rather than about a function only this test ran.
+    #
+    # **The old line was `[... for e in list_non_session_entries()] == []` and it could not fire.**
+    # Asserting a bucket is empty passes when the scan looked and found nothing *and* when the
+    # scan is broken and always answers nothing — this repository's own defect class, sitting
+    # inside a test written to pin it, and carried across unchanged by #300's first cut until
+    # review named it. So the bucket is *populated* here rather than asserted empty: a stray
+    # directory is created after the fixture, which is what a non-session entry actually is, and
+    # it has to come back from the second part and from nowhere else. The empty answer is no
+    # longer an answer this test accepts.
+    (store.session_root() / "not-a-session").mkdir()
+
+    slugs, others, blind = store.scan_session_root()
+    assert (slugs, [e.name for e in others], [e.name for e in blind]) == (
+        [HEALTHY], ["not-a-session"], [BLOCKED])
+    # ...and the contract this test is named for still holds with one there: a non-session widens
+    # neither of its neighbours.
+    assert store.list_session_slugs() == [HEALTHY]
     assert [e.name for e in store.list_unexaminable_entries()] == [BLOCKED]
 
 
