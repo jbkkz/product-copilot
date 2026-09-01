@@ -1714,11 +1714,11 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
     lock file Requivo recognises" about a file this store's own code had just written, on the very
     first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
-    regular file, not a symlink, whose stem is one `lock_path` accepts (`_is_lock_stem`) -- is
-    recognised now and excluded from `unexpected`. Anything else under this root — a stray file
-    with a different name, a directory, a symlink at a `.lock` or `.discovering` name, a stem
-    neither writer could have been given — is not a shape either writer ever produces, and is still
-    reported exactly as before.
+    regular file, not a symlink, with a stem either writer could have been given (`_is_lock_stem`,
+    shape alone since #409) -- is recognised now and excluded from `unexpected`. Anything else
+    under this root — a stray file with a different name, a directory, a symlink at a `.lock` or
+    `.discovering` name, a stem neither writer could have been given — is not a shape either writer
+    ever produces, and is still reported exactly as before.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
 
