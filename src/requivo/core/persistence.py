@@ -34,7 +34,8 @@ from requivo.core.errors import (
     UnsupportedSchemaVersionError,
 )
 from requivo.core.selectors import display_token
-from requivo.paths import lock_root, output_root, session_root, store_root
+from requivo.paths import output_root as _ambient_output_root
+from requivo.paths import workspace_root
 
 try:  # POSIX
     import fcntl
@@ -185,6 +186,976 @@ def _release(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
+class Store:
+    """One workspace's `.requivo/` layout, addressed by an explicit `root` rather than by reading
+    `paths.workspace_root()` (`REQUIVO_WORKSPACE`/cwd) fresh on every call (#272).
+
+    Every method below used to be a free function in this module, each resolving
+    `session_root()`/`lock_root()`/`store_root()`/`output_root()` from `requivo.paths` ambiently --
+    which is what made two `FileSessionRepository` instances in one process indistinguishable (see
+    that class's own docstring in `services/repository.py`). This class is the "one construction
+    site" `docs/cloud-boundary.md` (§3.1) argues for: an object holds the root, and
+    everything that needs to know *which* workspace it is addressing reads it off `self` instead of
+    off the process.
+
+    **That file will not resolve on this branch alone.** It lands via the 2026-09 readiness audit
+    (#441/#442), which merged to `main` after this branch was cut from an older commit -- confirmed
+    with `git merge-tree` to bring in no conflict here, `services/discovery.py` included (disjoint
+    hunks). Found in review, twice, independently: a reader on this branch who follows the citation
+    before it is rebased or merged onto current `main` finds nothing. The argument itself is
+    reproduced in full in `docs/decisions/0004-workspace-root-as-constructor-state.md`'s own first
+    draft, which this branch drafted independently and then deleted once the landed audit page
+    turned out to say the same thing in more depth -- see this issue's pull request body for that
+    history, since the record itself no longer exists on this branch to point at.
+
+    The module-level functions of the same names, below, are kept -- unchanged in name and signature
+    -- as thin wrappers over a **freshly-resolved default instance**, `Store(workspace_root())`,
+    built again on every call. That is what preserves the CLI's `--workspace`/`REQUIVO_WORKSPACE`
+    behaviour byte-for-byte: mutating the environment mid-process (`cli.py`'s `--workspace` handling)
+    is picked up by the very next ambient call, exactly as before this class existed. An explicit
+    `Store(root)` -- what `FileSessionRepository(root=...)` builds once, at construction -- is immune
+    to that mutation by design; see that class's own docstring for the ambient-vs-fixed asymmetry
+    this is for.
+
+    **Root identity, not object identity, decides lock re-entrancy.** `session_lock`'s re-entrancy
+    depth used to be tracked in a thread-local dict keyed by `slug` alone, which was safe only because
+    there was ever exactly one implicit root live in a process at a time. Two genuinely different
+    roots that happen to share a slug name are two different sessions and must never be treated as
+    the same held lock -- and the *ambient* module-level wrapper below constructs a fresh `Store`
+    instance on every call, so keying by `id(self)` would have broken re-entrancy for that path
+    instead (a nested ambient call would look like a different lock and either deadlock retrying the
+    OS lock, or -- worse -- silently skip acquiring it while believing it already holds it). Keyed by
+    the resolved root instead, both properties hold at once. Pinned by
+    `test_two_roots_sharing_a_slug_do_not_share_a_lock` and
+    `test_reentrant_acquisition_across_fresh_ambient_stores_is_still_recognised`.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        # Resolved once, here, rather than by `_lock_key` on every `session_lock` call (found in
+        # review, #272). `self.root` never changes after construction, so re-resolving it on every
+        # acquisition -- including every re-entrant nested one -- bought nothing but a repeated
+        # `os.path.realpath` stat on a hot path that used to cost zero syscalls (the pre-#272 key was
+        # the bare `slug` string). Worse than wasteful if the *answer* could ever change between an
+        # outer and inner acquisition of the same instance -- an ancestor symlink of `root` being
+        # repointed mid-hold -- since `session_lock`'s re-entrancy check would then miss, and a
+        # second `os.open`/`flock` on what POSIX treats as a distinct open file description can block
+        # the process against its own already-held lock (`flock` is scoped to the open file
+        # description, not the process). Fixing it here removes the question rather than arguing it
+        # cannot occur: the value is now fixed at the same moment `self.root` itself is.
+        self._root_key = str(_resolve(root))
+
+    # ── roots -- mirroring paths.py's ambient functions, bound to self.root instead of the process ──
+
+    def store_root(self) -> Path:
+        return self.root / ".requivo"
+
+    def session_root(self) -> Path:
+        return self.store_root() / "sessions"
+
+    def lock_root(self) -> Path:
+        return self.store_root() / "locks"
+
+    def debug_root(self) -> Path:
+        return self.store_root() / "debug"
+
+    def output_root(self) -> Path:
+        """The retired `out/` layout root -- deliberately NOT derived from `self.root`, unlike every
+        other root on this class. `paths.output_root()`'s own docstring already says why:
+        `REQUIVO_OUTPUT_DIR`/cwd was always a knob independent of `REQUIVO_WORKSPACE` -- so
+        `--workspace <dir>` alone, with no `REQUIVO_OUTPUT_DIR`, has always looked for the legacy
+        `out/` layout under the process's cwd, never under `<dir>`. Reading `self.root / "out"` here
+        (an earlier version of this method did) silently substituted the workspace root for cwd,
+        breaking `session migrate` for anyone using `--workspace` without also setting
+        `REQUIVO_OUTPUT_DIR` -- found in review (#272), before it shipped past this branch. #272's
+        own scope excludes changing env-var semantics, so this reads the identical ambient value
+        `paths.output_root()` always has, on every `Store` alike, explicit root or not. An
+        explicitly-rooted deployment has no legacy `out/` layout to migrate from in the first place;
+        this is dead code for that shape rather than a workspace-scoped feature worth inventing.
+        Pinned by `test_an_explicit_stores_legacy_root_still_honours_the_ambient_output_dir_override`."""
+        return _ambient_output_root()
+
+    def _lock_key(self, slug: str) -> tuple[str, str]:
+        """The re-entrancy key for `slug` in *this* store -- see the class docstring for why root
+        identity, not `id(self)`, is what has to decide it. `self._root_key` is resolved once, at
+        construction (`__init__`), not recomputed here -- see that comment for why."""
+        return (self._root_key, slug)
+
+    # ── everything below was a free function; each docstring is the original, unchanged, and each
+    # body is unchanged except that it now reads its root off `self` -----------------------------
+
+    def ensure_store_dir(self, path: Path) -> Path:
+        """`mkdir(parents=True, exist_ok=True)` for anything under `.requivo/`, writing the privacy
+        `.gitignore` on the call that brings the store root into existence.
+
+        **Every directory creation under the store goes through here, and that is the point** (#211).
+        `.requivo/` lands in the caller's *workspace*, which defaults to cwd — for the Claude Code plugin
+        that is the user's project repository by construction — and `create_session` writes the client's
+        request there verbatim. A routine `git add .` then publishes confidential requirements to whatever
+        remote that project pushes to, silently, against the local-first confidentiality this product
+        states as its wedge. This repository's own `.gitignore` covers `.requivo/`, so the maintainer was
+        the one person who could not experience it.
+
+        The issue proposed writing the file at "the one place `.requivo` is first created". There is no
+        such place: every call site creates it as a `parents=True` ancestor — the lock directory, the
+        session root in `create_session`, `write_meta`, `save_revision`, `save_session_artifact`,
+        `write_artifact_file`, and `session import`. Whichever of them a given workspace happens to reach
+        first is the one that creates the root, so guarding one guards nothing. Hence a single ensure
+        function rather than a single call site, with
+        `test_no_store_directory_is_created_outside_ensure_store_dir` failing on one that goes around it.
+
+        **Written once, on creation, and never recreated.** A user who deletes it to commit sessions
+        deliberately stays committed, and a user who edits it keeps their edit. Pinned by
+        `test_the_privacy_gitignore_is_written_once_and_never_restored`.
+
+        **The trigger is `mkdir` winning, not `exists()` answering, and that is the whole of #320.** This
+        first read `not root.exists()` before creating anything, which broke in two directions at once.
+        `Path.exists()` re-raises `EACCES` rather than swallowing it — invariant 15's #80, one function
+        along — and `PermissionError` is not a `RequivoError`, so the first command run in a workspace
+        whose parent denies stat ended in a traceback instead of a refusal. And the answer it gave was
+        the wrong question: *does the root exist* is not *did I create the root*, so a marker write that
+        failed once left `.requivo/` present and unignored, after which every later call read
+        `fresh = False` and never tried again. One transient error switched the confidentiality
+        guarantee off for the life of that workspace, silently, and left the result indistinguishable
+        from a user who had deleted the file on purpose — the one state this design means to be
+        irreversible.
+
+        `mkdir(parents=True)` with **no** `exist_ok` answers the real question atomically and probes
+        nothing: it either creates the root or raises `FileExistsError`, and only the winner writes.
+        Pinned by `test_a_failed_marker_write_leaves_no_root_behind_to_suppress_the_next_attempt`.
+
+        **All-or-nothing, so a failure is retryable.** If the marker cannot be written, the root this
+        call just made is removed again before the error surfaces. That keeps the store's two possible
+        states to "root and marker" or "neither" — the alternative is the silent hole above. `rmdir`
+        only removes an empty directory, so a concurrent creator's work is never destroyed; if it cannot
+        be removed the error still surfaces, because a visible failure is the point.
+        """
+        root = self.store_root()
+        fresh = True
+        try:
+            root.mkdir(parents=True)
+        except FileExistsError:
+            # Somebody else owns the root — this process, an earlier run, or a concurrent creator whose
+            # marker decision already stands. Losing this race is success.
+            fresh = False
+        except OSError as e:
+            raise SessionUnreadableError(
+                f"could not create the session store at {root}: {e}", details={"path": str(root)}) from e
+        if fresh:
+            marker = root / ".gitignore"
+            try:
+                # `x` rather than a plain write: the loser of a race must not truncate the winner's file.
+                with open(marker, "x", encoding="utf-8") as fh:
+                    fh.write(_STORE_GITIGNORE)
+            except FileExistsError:
+                pass
+            except OSError as e:
+                with suppress(OSError):
+                    root.rmdir()
+                raise SessionUnreadableError(
+                    f"could not write the privacy marker at {marker}: {e}",
+                    details={"path": str(marker)}) from e
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise SessionUnreadableError(
+                f"could not create {path}: {e}", details={"path": str(path)}) from e
+        return path
+
+    def no_session_message(self, ref: str, *, what: str = "session") -> str:
+        """The one sentence for "there is no such session" — every CLI-facing site builds it here (#243).
+
+        Three facts, and the two that were missing are the ones that end the trap. **Where Requivo
+        looked**, because the way a session actually goes missing is a user running from a different
+        directory — the plugin README calls it a failure with no visible symptom — and a root printed at
+        the moment of the refusal is what makes that visible. **How to see what is really there**, so a
+        typo'd slug is a step rather than a dead end. The third is the reference itself, which was the
+        only one all five previous wordings carried.
+
+        A method rather than a constant because the session root is workspace-dependent and must be
+        read when the refusal happens, not at import — and, since #272, dependent on *which* store is
+        asking, not only on the ambient process root.
+
+        `what` exists for the one caller whose absence is genuinely wider: `_resolve_ref` accepts a
+        *path* to a `model.json` as well as a slug, so "no session" would name half of what it looked
+        for. Everything else takes the default.
+
+        The word `canonical` is deliberately gone. It distinguished this layout from the retired `out/`
+        one — a fact about the store's history that a user cannot act on, and it appeared only in the
+        three sites reachable from none of the main verbs, so the jargon and the missing help arrived
+        together.
+
+        `display_token` for the same reason every other render of an untrusted string calls it (#40):
+        the reference is raw argv, a newline in it ends the line, and everything after that point reads
+        as a sentence Requivo is saying. **On every current CLI route it cannot fire**, because
+        `validate_slug` refuses a control character first — it is here as the second line of defence
+        invariant 14 asks for, since this function is public and an external consumer calls this layer
+        rather than a careful surface. Pinned as such, against the builder, by
+        `test_the_shared_builder_escapes_a_reference_it_could_be_handed_directly`; a test routed through
+        a verb would have been green whether or not this call escaped anything.
+
+        The whole set is pinned by `tests/test_session_not_found.py`, which sweeps the *verbs* rather
+        than the sites, because the builder this replaced was itself correct and reached by nothing a
+        user runs.
+        """
+        return (f"no {what} named {display_token(ref)} under {self.session_root()}. "
+                "`requivo session list` shows the sessions in this workspace; a different --workspace "
+                "(or REQUIVO_WORKSPACE) changes where Requivo looks.")
+
+    def _no_session(self, slug: str) -> SessionNotFoundError:
+        """The one refusal for "there is no such session", so the lock and the metadata read cannot drift
+        into telling a caller two different stories about the same absence."""
+        return SessionNotFoundError(self.no_session_message(slug), details={"slug": slug})
+
+    def lock_path(self, slug: str) -> Path:
+        """The write lock for `slug`: `<workspace>/.requivo/locks/<slug>.lock`.
+
+        **Outside the session directory, which is the whole of #113's fix.** `lock_root()` carries why;
+        the short version is that a lock inside a directory `session import --force` renames is a claim
+        on an inode that every writer under it has already stopped agreeing with.
+
+        Validated exactly as `canonical_dir` and `artifact_path` validate theirs, and for the same
+        reason: the slug reaches here from `session_lock`, whose callers include the service layer and
+        therefore, under invariant 14, an external consumer. The pattern already makes a separator or a
+        dot segment unrepresentable; `is_contained` is the belt to that pair of braces, and it is the
+        one shared statement of that rule rather than a fourth local one."""
+        root = self.lock_root()
+        slug = _slug_shape(slug)
+        # Checked against the *session* root, never against `root` above (#372). A lock file is not
+        # itself a session, and what decides whether #221's refusal still applies is whether a session
+        # already claims this name -- not whether a `<slug>.lock` file happens to, which it never does on
+        # a first lock. Without this, taking the read-consistency lock `session export` holds would be
+        # the one thing standing between an already-on-disk reserved name and the data filed under it,
+        # even though locking creates nothing under that name.
+        #
+        # `<slug>.lock` is itself a reserved-stem-shaped name on Windows -- `con.lock` matches the same
+        # before-the-first-dot rule `validate_filename` enforces for artifact names (raised in review).
+        # Not a live gap: the precondition for reaching this line at all is a session already occupying
+        # `slug` on disk, and Windows's own `CreateDirectory` refuses to *materialize* a directory named
+        # `con` in the first place -- independent of anything this file does, and true before #221 ever
+        # shipped. So a reserved-named session cannot exist on a real Windows filesystem for this branch
+        # to be reached from, which is also why the sibling tests that build one are POSIX-only.
+        _refuse_new_reserved_slug(slug, self.session_root() / slug)
+        p = root / (slug + ".lock")
+        if not is_contained(p, root):
+            raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
+                                   details={"slug": slug})
+        return p
+
+    @contextmanager
+    def session_lock(self, slug: str) -> Iterator[None]:
+        """Hold the exclusive lock on a session for the duration of the block.
+
+        Re-entrant within a thread: a service that wraps a whole update can take the lock once, and the
+        core calls inside it (`save_revision`, `save_session_artifact`) re-enter without deadlocking.
+        Across threads and across processes the lock is genuinely exclusive.
+
+        **The lock file lives outside the session** (`lock_path`), so this function no longer touches the
+        session directory at all. That is what lets `session import --force` hold it across the swap it
+        could not hold it across before (#113), and it retires #22's coupling permanently rather than
+        guarding it: `session_lock` is structurally incapable of producing a directory under the session
+        root, so it can never again make `create_session`'s rename — the only claim on a slug under
+        invariant 11 — lose to a ghost nobody created.
+
+        **A session must still exist to be locked, and the check that decides that is taken *after* the
+        lock is held.** It used to be closed by accident rather than by ordering: the lock file lived
+        inside the session, so a directory deleted after the check made `os.open` raise
+        `FileNotFoundError` and that arm mapped it onto "no such session". Opening
+        `.requivo/locks/<slug>.lock` establishes nothing about `<slug>`, so the accident is gone and the
+        check has to earn its place — which it does by moving under the lock, where invariant 9's rule
+        ("a precondition is held across the writes it authorises") applies to it like any other.
+        `test_a_session_deleted_before_the_lock_is_granted_is_refused` goes red if it moves back out.
+
+        **The check before the open stays, and is deliberately not authoritative.** It buys one thing
+        and decides nothing: a slug with no session refuses without leaving an empty lock file behind.
+        A reserved Windows device name (`con`, `nul`, `lpt1`) never reaches this far when nothing already
+        exists under it — `session_exists` resolves through `canonical_dir`, which refuses a genuinely
+        *new* one exactly as before (#221, `test_reserved_windows_device_names_are_refused_as_slugs`).
+        One that already exists on disk *does* reach this far, deliberately (#372): `session_exists`
+        answers True for it, and `lock_path` applies the identical existing-session exception, so a verb
+        like `session export` — which locks for read-consistency rather than to write anything new — can
+        still take this lock for data that predates #221's refusal rather than being blocked by it. It
+        can be wrong in exactly one direction — `_swap_in` holds this lock across two renames and
+        `<root>/<slug>` does not exist for the microseconds between them, so a caller sampling that
+        instant refuses `session_not_found` about a session that is merely being replaced. That window is
+        the one the pre-#113 code already had at its `os.open`, and a refusal is the safe direction: this
+        check can decline a lock, never grant one.
+
+        Neither the lock file nor a session directory is ever removed here. Unlinking a lock file a
+        concurrent process may be holding is legal on POSIX and silently breaks mutual exclusion — the
+        repair #22 rejected, and the same reason `_swap_in` could not be written as a contents swap.
+
+        **Legacy `.lock` files inside existing session directories are inert.** Nothing opens them now,
+        `session export` already skips every dot-prefixed entry, and `check_session_dir` does not look
+        for unexpected files. They cost a few empty bytes and are safe to delete.
+
+        **Re-entrancy is keyed by root identity plus slug, not by slug alone** (#272) — see the class
+        docstring for why: the ambient module-level wrapper builds a fresh `Store` per call, so keying
+        on `id(self)` would break re-entrancy across two ambient calls of the same workspace, and keying
+        on `slug` alone would wrongly treat two *different* workspaces sharing a slug name as one lock.
+        """
+        depths: dict[tuple[str, str], int] = getattr(_held_locks, "depths", None) or {}
+        _held_locks.depths = depths
+        key = self._lock_key(slug)
+        if depths.get(key):
+            depths[key] += 1
+            try:
+                yield
+            finally:
+                depths[key] -= 1
+            return
+
+        if not self.session_exists(slug):     # cheap, non-authoritative — see above
+            raise self._no_session(slug)
+        p = self.lock_path(slug)
+        # Outside the `try` on purpose (#320). That handler says "could not open the write lock", and
+        # `ensure_store_dir` fails about the store root or the privacy marker — reporting one operation's
+        # failure under the other's name sends the reader to the wrong file. It raises a structured error
+        # of its own, so nothing is swallowed by moving it out.
+        self.ensure_store_dir(p.parent)
+        try:
+            fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as e:
+            # Not `SessionNotFoundError`: the session's existence is not what this failed to establish.
+            # The old code mapped a `FileNotFoundError` here onto "no such session" because the lock file
+            # lived inside the session; it no longer does, so that mapping would now be a sentence about
+            # a session naming a cause that is not the cause — the shape #114 was filed for.
+            raise SessionUnreadableError(
+                f"could not open the write lock for session '{slug}': {e}", details={"slug": slug}) from e
+        acquired = False
+        try:
+            _acquire(fd, slug)
+            acquired = True
+            if not self.session_exists(slug):
+                raise self._no_session(slug)
+            depths[key] = 1
+            yield
+        finally:
+            depths[key] = 0
+            try:
+                if acquired:
+                    _release(fd)
+            finally:
+                os.close(fd)
+
+    def canonical_dir(self, slug: str) -> Path:
+        """The canonical session directory `<workspace>/.requivo/sessions/<slug>/`."""
+        return _child_of(self.session_root(), slug)
+
+    def legacy_dir(self, slug: str) -> Path:
+        """The legacy `out/<slug>/` directory — read-only, and migrated only by an explicit
+        `requivo session migrate`, never on a read or a first write (see `migrate_legacy`)."""
+        return _child_of(self.output_root(), slug)
+
+    def artifact_path(self, slug: str, filename: str) -> Path:
+        """`<session>/artifacts/<filename>`, with **both** halves validated — the single chokepoint every
+        artifact read and write goes through.
+
+        One function rather than a check at each call site, for the reason `_child_of` gives for the slug:
+        a rule applied per-caller is a rule the next caller forgets. Belt-and-suspenders in the same
+        shape too — the pattern already makes a separator or a dot segment unrepresentable, and the
+        result is confirmed to be a genuine child of `artifacts/` anyway, through the same
+        `is_contained` the slug half uses. `artifacts/` is created lazily, so the race that check is
+        written around is real here too.
+
+        **Display-only callers come through here too, and that is not ceremony.** Two sites printed
+        `canonical_dir(slug) / "artifacts" / <recorded filename>` inline — a path neither of them ever
+        opened — and survived both the sweep that closed the writes (#5) and the one that closed the
+        read (#23), because "it only prints it" reads as harmless. It is a different harm rather than an
+        absent one: a read traversal answers what this code may *disclose* rather than what it may
+        create, and a printed path is the plainest disclosure there is.
+
+        The name in both arrives on an `ArtifactStatus`, whose `filename` is a plain `str` that nothing
+        re-validates when `read_meta` loads it back — so it is invariant 14's threat model exactly: the
+        external consumer holding the services over a repository that is not this file backing, where
+        `save_artifact` hands back whatever its store held. **`session import` is not that door, and
+        saying so is the point.** The invariant's argument is written about `context_cards`, which import
+        deliberately cannot resolve, and it does *not* carry over here: `check_session_dir` puts every
+        recorded filename through `validate_filename` and `is_contained`, and `session import` refuses
+        the whole archive when either fails — reproduced, both for a traversal and for a merely wrong
+        name. Read as covering both fields, this would claim a vector that is shut and quietly drop the
+        one that is open.
+
+        **Since #260 that is the whole of what a filename is pinned to when the artifact *type* is one
+        this build does not know**, because there is then no `ARTIFACT_FILENAMES` value to pin it against
+        — an unknown type is a note rather than a refusal, so `session import` accepts the entry. This
+        paragraph said "pins every recorded filename to its `ARTIFACT_FILENAMES` value" and would have
+        read as a stronger claim than the code makes. The claim that matters is unchanged and is the one
+        stated above: the name is a bare file inside `artifacts/` or the archive is refused, whether or
+        not anything here recognises the type it is filed under. `artifact_filename_mismatch` still
+        refuses a *known* type stored under the wrong name.
+
+        Coming through here also means such a name cannot forge a line in the terminal it is printed to:
+        `_FILENAME_RE` is anchored at end-of-string and admits no line break (#40).
+
+        A target that is not there is not an error here. `is_contained` does stat it — `exists()` is a
+        stat — and answers True for what it cannot find rather than raising, so routing a display site
+        through this does not turn a session with nothing generated into a refusal. Absence and refusal
+        stay the two different answers `read_artifact_file` keeps them as."""
+        d = self.canonical_dir(slug) / "artifacts"
+        p = d / validate_filename(filename)
+        if not is_contained(p, d):
+            raise InvalidFilenameError(
+                f"artifact filename {filename!r} does not resolve to a path inside {d}",
+                details={"slug": slug, "filename": filename})
+        return p
+
+    def session_exists(self, slug: str) -> bool:
+        return _probe(self.canonical_dir(slug) / "session.json", slug)
+
+    def legacy_exists(self, slug: str) -> bool:
+        return _probe(self.legacy_dir(slug) / "model.json", slug)
+
+    def write_meta(self, slug: str, meta: SessionMeta) -> Path:
+        d = self.canonical_dir(slug)
+        self.ensure_store_dir(d)
+        return _atomic_write(d / "session.json", meta.model_dump_json(indent=2))
+
+    def read_meta(self, slug: str) -> SessionMeta:
+        p = self.canonical_dir(slug) / "session.json"
+        # Through `_probe`, not a bare `p.exists()` (#264): `Path.exists()` re-raises `EACCES`, and this
+        # check used to sit outside the `try` below that wraps `OSError`, so a session.json the process
+        # cannot stat escaped as a raw `PermissionError` instead of `SessionUnreadableError` -- the
+        # identical unguarded probe #80 removed from `_scan_session_root` and #97 removed from
+        # `session_exists`, a third time here.
+        if not _probe(p, slug):
+            raise self._no_session(slug)
+        try:
+            return migrate_session(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError) as e:
+            raise SessionUnreadableError(f"session '{slug}' has an unreadable session.json: {e}",
+                                         details={"slug": slug}) from e
+
+    def create_session(self, slug: str, request: str, *, provider: str | None = None,
+                       model_name: str | None = None, context_cards: list[str] | None = None) -> SessionMeta:
+        """Create a fresh session directory from a request — no model yet (current_revision 0). The
+        model is applied later via `save_revision` (deterministic `model apply`, or a provider turn).
+
+        The session is assembled beside its destination and moved in with a single rename, which is the
+        *claim* on the slug: either this call created the session, or it learns one was already there
+        (`SessionExistsError`). Two things follow, and both were bugs before. Creation is atomic, where a
+        preceding `has_meta` check was not — two concurrent creations both passed it, and the second
+        rewrote the first's metadata, giving the session a new id and losing the provider and context
+        cards the first had recorded. And a session becomes visible *complete*: with a directory created
+        first and the metadata written after, a concurrent reader could find a session whose `session.json`
+        did not exist yet."""
+        now = _now()
+        meta = SessionMeta(
+            session_id=uuid.uuid4().hex, slug=slug, created_at=now, updated_at=now,
+            provider=provider, model_name=model_name, context_cards=context_cards,
+            request_hash=content_hash(request),
+        )
+        d = self.canonical_dir(slug)
+        self.ensure_store_dir(d.parent)
+        # Dot-prefixed, so a staging directory can never be mistaken for a session: slugs are validated and
+        # cannot start with a dot, and `list_session_slugs` skips them.
+        staging = d.with_name(f".{d.name}.new-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+        try:
+            (staging / "revisions").mkdir(parents=True)
+            (staging / "artifacts").mkdir()
+            _atomic_write(staging / "request.md", request)
+            _atomic_write(staging / "session.json", meta.model_dump_json(indent=2))
+            try:
+                staging.rename(d)
+            except OSError as e:
+                if not d.exists():  # the rename failed for some other reason — don't mislabel it
+                    raise
+                raise SessionExistsError(f"session '{slug}' already exists", details={"slug": slug}) from e
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        return meta
+
+    def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: int | None = None,
+                      provenance: dict | None = None) -> tuple[int, SessionMeta]:
+        """Persist a new model revision: freeze revisions/NNNN-model.json, replace model.json with the
+        same payload (the prior model is already frozen in an earlier revision file), record the
+        revision's provenance, then bump current_revision + updated_at. Returns (new_revision,
+        updated_meta). The order of those writes is a guarantee rather than a detail; see the comment on
+        the two `_atomic_write` calls below.
+
+        `expected_revision` is an optimistic-locking precondition: when given, the write fails with
+        `RevisionConflictError` unless the session is still at that revision — so two updates racing from
+        the same base can't both land silently. The single-user CLI omits it (last-writer-wins is fine
+        locally); a concurrent Web service passes the revision the client read. `provenance` carries the
+        surface-supplied fields (provider / model_name / surface / prompt_version) for the revision log.
+
+        The precondition and every write it guards run under `session_lock`, because a check that is not
+        held across the writes it authorises is not a precondition — two writers could both read revision
+        N, both pass the check, and both write revision N+1."""
+        with self.session_lock(slug):
+            meta = self.read_meta(slug)  # raises SessionNotFoundError if the session isn't there
+            if expected_revision is not None and meta.current_revision != expected_revision:
+                raise RevisionConflictError(
+                    f"session '{slug}' is at revision {meta.current_revision}, not the expected "
+                    f"{expected_revision} — reload the current model and re-apply",
+                    details={"slug": slug, "expected": expected_revision,
+                             "actual": meta.current_revision})
+            d = self.canonical_dir(slug)
+            self.ensure_store_dir(d / "revisions")
+            rev = meta.current_revision + 1
+            payload = model.model_dump_json(indent=2)
+            # Frozen revision file first, then model.json. Three writes and no transaction, so the order
+            # decides what a crash between two of them leaves: reversed, a death here served every reader
+            # content no revision records while session.json still named the previous one. Pinned by
+            # `test_a_crash_after_the_first_payload_write_still_reads_as_the_recorded_revision` and, on
+            # the revision 0 -> 1 arm that reports different codes,
+            # `test_a_crash_in_the_very_first_apply_leaves_a_session_still_at_revision_zero`. The window
+            # this does *not* close is pinned beside them by
+            # `test_a_crash_after_both_payload_writes_is_still_reported_as_inconsistent`.
+            _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
+            _atomic_write(d / "model.json", payload)
+            prov = dict(provenance or {})
+            meta.revisions.append(RevisionRecord(
+                revision=rev,
+                created_at=_now(),
+                previous_revision=meta.current_revision or None,
+                model_hash=content_hash(payload),
+                provider=prov.get("provider"),
+                model_name=prov.get("model_name"),
+                surface=prov.get("surface"),
+                prompt_version=prov.get("prompt_version"),
+                usage_input_tokens=prov.get("usage_input_tokens"),
+                usage_output_tokens=prov.get("usage_output_tokens"),
+                usage_cache_read_tokens=prov.get("usage_cache_read_tokens"),
+                usage_cache_write_tokens=prov.get("usage_cache_write_tokens"),
+                usage_rate_per_mtok=prov.get("usage_rate_per_mtok"),
+                usage_priced_as_of=prov.get("usage_priced_as_of"),
+            ))
+            meta.current_revision = rev
+            meta.updated_at = _now()
+            self.write_meta(slug, meta)
+            return rev, meta
+
+    def load_session_model(self, slug: str) -> EngineOutput:
+        """The current model of a canonical session."""
+        p = self.canonical_dir(slug) / "model.json"
+        if not p.exists():
+            raise SessionNotFoundError(
+                f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
+        return _read_model(p, slug=slug)
+
+    def load_revision_model(self, slug: str, revision: int) -> EngineOutput:
+        """A historical model revision — the basis for `impact` since a given point."""
+        p = self.canonical_dir(slug) / "revisions" / f"{revision:04d}-model.json"
+        if not p.exists():
+            raise SessionNotFoundError(
+                f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
+        return _read_model(p, slug=slug, revision=revision)
+
+    def session_request(self, slug: str) -> str:
+        p = self.canonical_dir(slug) / "request.md"
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def save_session_artifact(self, slug: str, artifact_type: str, filename: str, content: str,
+                              source_revision: int, *, stale: bool = False) -> ArtifactStatus:
+        """Write an artifact under artifacts/ and record its provenance (source revision) in session.json.
+
+        The revision is validated against the session's history first: provenance that cannot be true is
+        worse than none, because every freshness question downstream is answered from it. A revision in
+        the future (or before the first model) is refused rather than recorded.
+
+        `stale` is supplied by the caller, which is the layer that knows the dependency graph — see
+        `ArtifactService.save`. Core records freshness; it does not decide it.
+
+        `filename` is validated exactly as `slug` is, and before the lock is taken: it is the *other* half
+        of the write target, and it is also recorded into session.json, where `integrity.py` and the
+        artifact-show paths read it back — so an unvalidated one both escapes the directory and persists.
+        """
+        path = self.artifact_path(slug, filename)   # refuse a bad target before taking the lock
+        with self.session_lock(slug):
+            meta = self.read_meta(slug)
+            if not 1 <= source_revision <= meta.current_revision:
+                raise ArtifactRevisionOutOfRangeError(
+                    f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' "
+                    f"has revisions 1..{meta.current_revision or 0}",
+                    details={"slug": slug, "source_revision": source_revision,
+                             "current_revision": meta.current_revision})
+            self.ensure_store_dir(path.parent)
+            _atomic_write(path, content)
+            st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=stale)
+            meta.artifact_status[artifact_type] = st
+            meta.updated_at = _now()
+            self.write_meta(slug, meta)
+            return st
+
+    def write_artifact_file(self, slug: str, filename: str, content: str) -> Path:
+        """Write a raw file into a session's artifacts/ directory (no status tracking) — for the neutral
+        epic exports (epic.json / epic.github.json / …) that are extra views of one generated artifact.
+
+        Both halves of the target go through `artifact_path`: the mutating route validated its slug and
+        not the filename beside it, so `write_artifact_file(slug, '../../../x.md', …)` wrote outside the
+        session entirely."""
+        path = self.artifact_path(slug, filename)
+        self.ensure_store_dir(path.parent)
+        return _atomic_write(path, content)
+
+    def read_artifact_file(self, slug: str, filename: str) -> Optional[str]:
+        """The saved content of a file under a session's artifacts/, or None if there is no such file.
+
+        The read sibling of `write_artifact_file`, and it exists so that the read goes through
+        `artifact_path` instead of re-joining the path a second time. `FileSessionRepository` built
+        `canonical_dir(slug) / "artifacts" / filename` inline, one layer above the chokepoint — which is
+        precisely how it escaped the sweep that routed the two *mutating* paths through it, and
+        precisely what `_child_of` means by a rule the next caller forgets. A read traversal is also a
+        different exposure from a write one: not what this code may create, but what it may disclose.
+
+        **Absence and refusal are deliberately different answers.** An unsafe `filename` raises
+        `InvalidFilenameError`; only a genuinely missing file returns None. Returning None for both
+        would be the quiet answer — a rejected traversal would then be indistinguishable from an
+        artifact nobody has generated yet, and the caller cannot tell it has been refused.
+
+        Decoded as UTF-8 explicitly, matching `_atomic_write`'s encoding on the way in. `read_text()`
+        with no encoding uses the locale's, which on Windows is typically cp1252 and silently mojibakes
+        any generated artifact containing an em-dash rather than failing."""
+        p = self.artifact_path(slug, filename)
+        return p.read_text(encoding="utf-8") if p.exists() else None
+
+    def _scan_session_root(self) -> tuple[list[str], list[Path], list[UnexaminableEntry]]:
+        """One listing of the session root, partitioned three ways: the canonical sessions, everything
+        else, and the entries whose examination raised.
+
+        **Three outcomes, because the predicate can fail.** `(p / "session.json").exists()` is what
+        decides whether a name is a session, and `Path.exists()` swallows only the errnos in
+        `pathlib._IGNORED_ERRNOS` — ENOENT, ENOTDIR, EBADF, ELOOP. `EACCES` is not among them, so a
+        directory the process cannot stat into propagated out of this loop and aborted the partition for
+        *every* entry: `session list` exited 1 with an empty stdout and a raw traceback, and every
+        healthy session in the workspace was invisible (#80).
+
+        The first two halves used to be described here as each other's complement, and for two states
+        that was exactly right. It is not right for three, and the third belongs in neither of theirs:
+
+        * in `others` it would never come back from `list_session_slugs`, so `session list` would omit it
+          silently — the invisible entry #67 exists to close, reintroduced one function along;
+        * in `slugs` it would be claimed to *be* a session, which is the one thing the failed probe did
+          not establish, and every read path downstream reasons over that list.
+
+        So the predicate is still stated once and the buckets are still disjoint; what changed is that
+        the answer has a third value, and a caller has to be able to say *we could not tell*.
+
+        Dot-prefixed entries are in none of the three, on purpose. A slug cannot start with a dot, so
+        they are `create_session`'s staging areas: a session in flight rather than something left behind,
+        and reporting one is a race the reader cannot act on.
+
+        A root that does not exist is an empty workspace and returns nothing. A root that cannot be
+        *listed* is not the same answer, and this still raises rather than flattening the two — that
+        failure is genuinely the whole root, there is no entry to name it against, and the caller is the
+        one that has to be able to say `we could not look`. Per-entry and whole-root are two different
+        claims and this function must not merge them in either direction."""
+        root = self.session_root()
+        if not root.exists():
+            return [], [], []
+        slugs: list[str] = []
+        others: list[Path] = []
+        unexaminable: list[UnexaminableEntry] = []
+        for p in sorted(root.iterdir(), key=lambda p: p.name):
+            if p.name.startswith("."):
+                continue
+            try:
+                is_session = (p / "session.json").exists()
+            except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
+                # `Exception` rather than `OSError`, for `_describe_non_session`'s reason one function
+                # down: the set of ways a probe of a name off a directory listing can fail is open —
+                # EACCES here, and on Linux a filename that is not valid UTF-8 comes back from
+                # `iterdir` carrying surrogates, which every path operation on `p` is a candidate for.
+                # Whatever it was, it lands in a state this partition now has. `BaseException` is not
+                # caught: a `KeyboardInterrupt` is not an unexaminable directory.
+                unexaminable.append(UnexaminableEntry(p.name, str(e)))
+                continue
+            if is_session:
+                slugs.append(p.name)
+            else:
+                others.append(p)
+        return slugs, others, unexaminable
+
+    def list_session_slugs(self) -> list[str]:
+        """Slugs of all canonical sessions, sorted — the backbone of `session list`.
+
+        **Names known to be sessions, and this contract does not widen.** `doctor`, `session verify` and
+        every read path reason over what comes back here, so an entry the partition could not examine is
+        deliberately not in it — see `list_unexaminable_entries`, which is where it goes instead."""
+        return self._scan_session_root()[0]
+
+    def scan_session_root(self) -> tuple[list[str], list[NonSessionEntry], list[UnexaminableEntry]]:
+        """All three parts of the session root from **one** listing — and the only way to reach the
+        second one, since #300 (see below).
+
+        `list_session_slugs` and `list_unexaminable_entries` each scan on their own, which is right when
+        only one question is being asked and wrong when more than one is. `doctor` asks all three, and
+        two scans are two instants: a `session.json` appearing between them puts a name in *neither*
+        answer, which is the invisible state #67 is about, reintroduced by the report meant to close it;
+        one disappearing puts it in both. Transient and diagnostic-only, and still not something to
+        leave in the one verb whose job is to say whether anything is wrong. Found by review.
+
+        **The second part is what nothing could see before #67**, and the reason it is worth returning
+        at all is not in this module's output — it is at the next `create_session` on that name.
+        `list_session_slugs` skips such an entry for want of a `session.json`, so `doctor` and
+        `session verify` never reach one; `check_session` answers about a directory it is handed, which
+        nobody can hand it a name for. The rename that *is* the claim on a slug (invariant 11) then
+        loses to a directory that is already there, and `SessionService` falls through to its
+        `<slug>-<identity hash>` candidate — so the user gets a session under a name they did not ask
+        for, with nothing anywhere explaining why the one they asked for was unavailable.
+
+        **A report, not a repair.** This reads; it never deletes, moves or rewrites. #22 stopped
+        `session_lock` producing these, and clearing one on sight would be the same mistake pointing the
+        other way: unlinking a `.lock` a concurrent process is holding is legal on POSIX and silently
+        breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted
+        archive.
+
+        Second of three since #80, not the other half of two: an entry whose examination *raised* is
+        neither a session nor established to be one of these, and is the third part instead. Folding it
+        into the second would hide it from `session list` for want of a `session.json` nobody could look
+        for, which is that part's own defect class.
+
+        It lives in Core beside `list_session_slugs` because that function owns the store layout and the
+        answers come out of one predicate. Core reading a directory is not a boundary crossing:
+        invariant 7 forbids importing a provider and touching argv, the streams, the environment and
+        process exit — not IO, which this module is made of.
+
+        The describe step is here rather than in `_scan_session_root` so that `list_session_slugs` — on
+        every one of its call paths, `session list` included — keeps paying nothing for it: a stray
+        directory holding ten thousand files is one `iterdir` this function makes and that one does not.
+        The third part carries no describe step at all: whatever we would ask it, we have just failed to
+        ask it once."""
+        slugs, others, unexaminable = self._scan_session_root()
+        return slugs, [_describe_non_session(p) for p in others], unexaminable
+
+    def list_unexaminable_entries(self) -> list[UnexaminableEntry]:
+        """Names under the session root whose examination raised — the partition's third answer (#80).
+
+        Neither `list_session_slugs` nor `scan_session_root`'s second part returns one, and that is the
+        point: calling it a session claims what the failed probe did not establish, and calling it a
+        non-session hides it from `session list`, which is #67's defect one function along. It reaches a
+        surface as a fact of its own — a degraded row on `session list`, its own line under `doctor`'s
+        sessions check.
+
+        **A report, not a repair**, on the same terms `scan_session_root` states for the second part:
+        Requivo reads a workspace and does not chmod anything in it. What is here is a name and the
+        reason the probe failed.
+
+        A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
+        on its own, and two scans are two instants."""
+        return self.scan_session_root()[2]
+
+    def scan_lock_root(self) -> tuple[list[str], list[str], list[UnexaminableEntry]]:
+        """Partition `lock_root()` three ways, for `doctor`'s lock-residue check (#180): the slugs a
+        `<slug>.lock` file names, the entries that are neither that nor a recognised
+        `<slug>.discovering` guard file (#209, #391), and the entries whose examination raised. The
+        session-root sibling of `_scan_session_root`, one root over.
+
+        **Two regular-file shapes are what this store writes here, and both are recognised.**
+        `lock_path` joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always,
+        and the reserved-device-name refusal only when nothing already occupies the matching *session*
+        name (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
+        against `session_root()`, not this root). `services.discovery._discovery_guard_path` writes the
+        second shape, `<slug>.discovering` -- deliberately never unlinked (#209), on the identical
+        POSIX reasoning that leaves a deleted session's `.lock` file behind, so it outlives every
+        discovery it ever served.
+
+        **This function was written the release before the second shape shipped, and #209 never came
+        back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
+        lock file Requivo recognises" about a file this store's own code had just written, on the very
+        first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
+        regular file, not a symlink, with a stem either writer could have been given (`_is_lock_stem`,
+        shape alone since #409) -- is recognised now and excluded from `unexpected`. Anything else
+        under this root — a stray file with a different name, a directory, a symlink at a `.lock` or
+        `.discovering` name, a stem neither writer could have been given — is not a shape either writer
+        ever produces, and is still reported exactly as before.
+        Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
+        symlink's target would read another file into a report about this workspace.
+
+        **The stem question is `_is_lock_stem`'s, not `validate_slug`'s, and it is shape alone** (#401,
+        corrected by #409). It was `is_slug` for a release, which is `validate_slug`'s unconditional
+        creation-time refusal, and reported a reserved-name session's own lock and guard files as
+        residue nobody recognises. It was then the read-time rule (`_slug_shape` plus
+        `_refuse_new_reserved_slug` against `session_root()`) for a release, which fixed that and broke
+        the opposite case: a lock file's classification changed when the session it was written for was
+        later deleted, because that rule reads the *session* root, a resource this function's own answer
+        must not depend on (see the paragraph below). `_is_lock_stem` carries the full argument now.
+
+        **What a matching slug means is left to the caller, deliberately.** This function answers only
+        *is there a `<slug>.lock` file*, never *is `slug` still a session* — that needs the session
+        root's own listing, a second read a moment apart, and conflating the two here would make this
+        function's own answer depend on an argument it does not take. `doctor._lock_health` is where the
+        two lists meet.
+
+        Three outcomes on each entry, because the same predicate that decides *session or not* in
+        `_scan_session_root` can fail here too: `p.is_symlink()` / `p.is_file()` raise on the errnos
+        `Path.exists()` does not swallow (EACCES chief among them), and a name that failed that probe is
+        neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
+        reasoning `_scan_session_root` gives for its own third bucket (#80).
+
+        **That bucket had a second source from #401 to #409, and it is gone by design.** `_is_lock_stem`
+        used to stat `session_root() / stem` through `_probe` for a reserved stem, which could raise on
+        EACCES -- so an entry could reach `unexaminable` with the file-type probe above it having
+        answered perfectly well. #409 removed that stat entirely (`_is_lock_stem` is shape alone now),
+        so this bucket's only source is the file-type probe immediately above it in the loop. Pinned by
+        `test_a_reserved_lock_stem_no_longer_probes_the_session_root`, which replaced the test that used
+        to pin the removed source.
+
+        A root that does not exist is an empty lock directory and returns nothing, matching
+        `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same
+        claim and is left to raise, for the caller to report as `readable: False` rather than as a clean
+        scan of nothing — the whole-root-versus-per-entry distinction `_scan_session_root`'s docstring
+        already makes."""
+        root = self.lock_root()
+        if not root.exists():
+            return [], [], []
+        lock_slugs: list[str] = []
+        unexpected: list[str] = []
+        unexaminable: list[UnexaminableEntry] = []
+        for p in sorted(root.iterdir(), key=lambda p: p.name):
+            lock_slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
+            # `_discovery_guard_path` (services/discovery.py, #209) writes this second shape and never
+            # unlinks it -- recognised and excluded from `unexpected`, not folded into `lock_slugs`:
+            # it is not a `<slug>.lock` file and answers a different question (#391).
+            guard_slug = p.name[: -len(".discovering")] if p.name.endswith(".discovering") else None
+            try:
+                is_ordinary_file = p.is_file() and not p.is_symlink()
+                # `_is_lock_stem`, not `is_slug` (#401), and shape alone -- not a read of the session
+                # root (#409). This is a classification, not a creation: it asks whether a writer
+                # *here* could have produced this file, which is a fact about the file's own name and
+                # nothing else. Asked the creation-time question, a reserved-name session's own lock and
+                # guard files read as residue nobody recognises (#391's defect one predicate over).
+                # Asked the read-time question against the *session* root instead, the answer for a
+                # fixed file flipped when that unrelated directory was later deleted (#409).
+                if is_ordinary_file and lock_slug and _is_lock_stem(lock_slug):
+                    lock_slugs.append(lock_slug)
+                    continue
+                if is_ordinary_file and guard_slug and _is_lock_stem(guard_slug):
+                    continue
+            except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
+                unexaminable.append(UnexaminableEntry(p.name, str(e)))
+                continue
+            unexpected.append(p.name)
+        return lock_slugs, unexpected, unexaminable
+
+    def migrate_legacy(self, slug: str) -> SessionMeta:
+        """Copy a legacy `out/<slug>/` session into the canonical store, **preserving the originals**.
+
+        Called explicitly (`requivo session migrate`), never on a read. The existing model becomes
+        revision 1; provenance is recovered from the old session.json where present; known artifact files
+        are copied into artifacts/ and recorded at revision 1. The legacy directory is left untouched.
+
+        **The claim on the slug is `create_session`'s rename**, not an existence check. This function
+        *creates* a session, so it makes its claim the same way the only other creator does, and invariant
+        11 applies to it verbatim: a preceding check is passed by two concurrent callers at once. It used
+        to check only that the legacy *model* existed, so pointed at a slug a live session already
+        occupied it rewrote session.json at revision 0 and then wrote the legacy model over
+        revisions/0001-model.json — and revisions/ is the only durable copy, so revision 1 was destroyed
+        with no copy anywhere. Now the rename loses and `SessionExistsError` is raised before anything is
+        written; the caller decides whether that is a skip or a failure.
+
+        Everything after the claim runs under one `session_lock` (invariant 9), so the metadata patch, the
+        revision and the artifact writes are a single unit rather than three separately-locked ones, and
+        `expected_revision=0` holds the session to the state the claim left it in."""
+        from requivo.core.dependencies import ARTIFACT_FILES  # local import avoids a load-time cycle
+
+        src = self.legacy_dir(slug)
+        if not (src / "model.json").exists():
+            raise SessionNotFoundError(f"no legacy session '{slug}' under {self.output_root()}",
+                                       details={"slug": slug})
+        request = ""
+        for name in ("request.md", "request.txt"):
+            if (src / name).exists():
+                request = (src / name).read_text(encoding="utf-8")
+                break
+        old: dict = {}
+        if (src / "session.json").exists():
+            try:
+                old = json.loads((src / "session.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                old = {}
+        # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
+        # leaving an empty session behind holding a name nothing can now use.
+        #
+        # Through `_read_model` like the other three, and it is the fourth door rather than an extra:
+        # #204 named `load_model` and `load_revision_model`, and this site reads a model exactly the same
+        # way. Wrapping three of four would be the defect the helper exists to prevent, one file later.
+        # `slug=` is deliberately not passed: the legacy `out/<slug>/` layout has no `revisions/`, so the
+        # recovery remedy would be a sentence about a directory that is not there. The path names the
+        # session by itself.
+        model = _read_model(src / "model.json")
+
+        if request:
+            req_hash = content_hash(request)
+        else:
+            # Fall back to the legacy session.json's hash, normalising a bare hex digest to "sha256:…".
+            legacy_hash = str(old.get("request_sha256", ""))
+            req_hash = legacy_hash if legacy_hash.startswith("sha256:") or not legacy_hash else "sha256:" + legacy_hash
+
+        # The claim. Raises SessionExistsError if a canonical session already occupies the slug.
+        self.create_session(slug, request, provider=old.get("provider"), model_name=old.get("model_name"),
+                            context_cards=old.get("context_cards"))
+
+        with self.session_lock(slug):
+            # The three fields `create_session` cannot know, because they belong to the *legacy* session:
+            # its original creation date, the request hash a migration may have to recover from the old
+            # metadata when no request file survived, and an id derived from the slug so re-reading a
+            # migrated session finds the identity a previous migration of it would have given.
+            meta = self.read_meta(slug)
+            meta.session_id = uuid.uuid5(uuid.NAMESPACE_URL, f"requivo:legacy:{slug}").hex
+            meta.created_at = old.get("created_at", meta.created_at)
+            meta.request_hash = req_hash
+            self.write_meta(slug, meta)
+
+            rev, _ = self.save_revision(slug, model, expected_revision=0)  # existing model → revision 1
+
+            filename_to_type = {fn: t for t, fn in ARTIFACT_FILES.items() if fn}
+            for fn, atype in filename_to_type.items():
+                legacy_file = src / fn
+                if legacy_file.exists():
+                    content = legacy_file.read_text(encoding="utf-8")
+                    self.save_session_artifact(slug, atype, fn, content, source_revision=rev)
+            return self.read_meta(slug)
+
+
+def _default_store() -> Store:
+    """A fresh `Store` resolved from the ambient workspace root, built again on every call. This is
+    what keeps every module-level function below behaving byte-identically to before this class
+    existed: `workspace_root()` reads `REQUIVO_WORKSPACE`/cwd afresh each time, so a CLI `--workspace`
+    env mutation mid-process (`cli.py`) is picked up by the very next call, exactly as it was when
+    these functions read the root directly. See `Store`'s own docstring and
+    `docs/cloud-boundary.md` (§3.1)."""
+    return Store(workspace_root())
+
+
+# Ambient-default wrappers over `Store`'s own root methods, kept for the same reason every other
+# function above is: before #272 this module imported these four names straight from `paths.py`
+# (`from requivo.paths import lock_root, output_root, session_root, store_root`), which made them
+# reachable as `persistence.session_root()` etc. -- a convenience the whole test suite relies on
+# (`store.session_root()`, `store.lock_root()`, ...). Three of these four -- `store_root`,
+# `session_root`, `lock_root` (and `debug_root` beside them) -- are `Store` computing the identical
+# path from an explicit root instead of reading `paths.py` ambiently, so a bare re-import would
+# silently diverge from `Store`'s own math the moment one of the two was edited without the other;
+# wrapping `Store` via `_default_store()`, like every other function in this file, keeps there being
+# exactly one definition of what these paths are. `output_root` is the one exception -- see
+# `Store.output_root`'s own docstring for why it deliberately reads `paths.output_root()` rather
+# than `self.root`, on every `Store` alike.
+def store_root() -> Path:
+    """Ambient-default wrapper (#272) -- see `Store.store_root`."""
+    return _default_store().store_root()
+
+
+def session_root() -> Path:
+    """Ambient-default wrapper (#272) -- see `Store.session_root`."""
+    return _default_store().session_root()
+
+
+def lock_root() -> Path:
+    """Ambient-default wrapper (#272) -- see `Store.lock_root`."""
+    return _default_store().lock_root()
+
+
+def debug_root() -> Path:
+    """Ambient-default wrapper (#272) -- see `Store.debug_root`."""
+    return _default_store().debug_root()
+
+
+def output_root() -> Path:
+    """Ambient-default wrapper (#272) -- see `Store.output_root`."""
+    return _default_store().output_root()
+
+
 # What `.requivo/.gitignore` is written with. `*` ignores the directory's whole contents including
 # the ignore file itself -- the self-ignoring pattern `uv` writes into `.venv/` and terraform into
 # `.terraform/`, chosen so nothing has to be added to the *user's* `.gitignore`, which is a file
@@ -199,254 +1170,32 @@ _STORE_GITIGNORE = """\
 
 
 def ensure_store_dir(path: Path) -> Path:
-    """`mkdir(parents=True, exist_ok=True)` for anything under `.requivo/`, writing the privacy
-    `.gitignore` on the call that brings the store root into existence.
-
-    **Every directory creation under the store goes through here, and that is the point** (#211).
-    `.requivo/` lands in the caller's *workspace*, which defaults to cwd — for the Claude Code plugin
-    that is the user's project repository by construction — and `create_session` writes the client's
-    request there verbatim. A routine `git add .` then publishes confidential requirements to whatever
-    remote that project pushes to, silently, against the local-first confidentiality this product
-    states as its wedge. This repository's own `.gitignore` covers `.requivo/`, so the maintainer was
-    the one person who could not experience it.
-
-    The issue proposed writing the file at "the one place `.requivo` is first created". There is no
-    such place: every call site creates it as a `parents=True` ancestor — the lock directory, the
-    session root in `create_session`, `write_meta`, `save_revision`, `save_session_artifact`,
-    `write_artifact_file`, and `session import`. Whichever of them a given workspace happens to reach
-    first is the one that creates the root, so guarding one guards nothing. Hence a single ensure
-    function rather than a single call site, with
-    `test_no_store_directory_is_created_outside_ensure_store_dir` failing on one that goes around it.
-
-    **Written once, on creation, and never recreated.** A user who deletes it to commit sessions
-    deliberately stays committed, and a user who edits it keeps their edit. Pinned by
-    `test_the_privacy_gitignore_is_written_once_and_never_restored`.
-
-    **The trigger is `mkdir` winning, not `exists()` answering, and that is the whole of #320.** This
-    first read `not root.exists()` before creating anything, which broke in two directions at once.
-    `Path.exists()` re-raises `EACCES` rather than swallowing it — invariant 15's #80, one function
-    along — and `PermissionError` is not a `RequivoError`, so the first command run in a workspace
-    whose parent denies stat ended in a traceback instead of a refusal. And the answer it gave was
-    the wrong question: *does the root exist* is not *did I create the root*, so a marker write that
-    failed once left `.requivo/` present and unignored, after which every later call read
-    `fresh = False` and never tried again. One transient error switched the confidentiality
-    guarantee off for the life of that workspace, silently, and left the result indistinguishable
-    from a user who had deleted the file on purpose — the one state this design means to be
-    irreversible.
-
-    `mkdir(parents=True)` with **no** `exist_ok` answers the real question atomically and probes
-    nothing: it either creates the root or raises `FileExistsError`, and only the winner writes.
-    Pinned by `test_a_failed_marker_write_leaves_no_root_behind_to_suppress_the_next_attempt`.
-
-    **All-or-nothing, so a failure is retryable.** If the marker cannot be written, the root this
-    call just made is removed again before the error surfaces. That keeps the store's two possible
-    states to "root and marker" or "neither" — the alternative is the silent hole above. `rmdir`
-    only removes an empty directory, so a concurrent creator's work is never destroyed; if it cannot
-    be removed the error still surfaces, because a visible failure is the point.
-    """
-    root = store_root()
-    fresh = True
-    try:
-        root.mkdir(parents=True)
-    except FileExistsError:
-        # Somebody else owns the root — this process, an earlier run, or a concurrent creator whose
-        # marker decision already stands. Losing this race is success.
-        fresh = False
-    except OSError as e:
-        raise SessionUnreadableError(
-            f"could not create the session store at {root}: {e}", details={"path": str(root)}) from e
-    if fresh:
-        marker = root / ".gitignore"
-        try:
-            # `x` rather than a plain write: the loser of a race must not truncate the winner's file.
-            with open(marker, "x", encoding="utf-8") as fh:
-                fh.write(_STORE_GITIGNORE)
-        except FileExistsError:
-            pass
-        except OSError as e:
-            with suppress(OSError):
-                root.rmdir()
-            raise SessionUnreadableError(
-                f"could not write the privacy marker at {marker}: {e}",
-                details={"path": str(marker)}) from e
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        raise SessionUnreadableError(
-            f"could not create {path}: {e}", details={"path": str(path)}) from e
-    return path
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh, from
+    `paths.workspace_root()`, on every call. Full contract on `Store.ensure_store_dir`, which this
+    delegates to; see `Store`'s own docstring and `docs/cloud-boundary.md` (§3.1) for why the root
+    is resolved this way rather than read off `self`."""
+    return _default_store().ensure_store_dir(path)
 
 
 def no_session_message(ref: str, *, what: str = "session") -> str:
-    """The one sentence for "there is no such session" — every CLI-facing site builds it here (#243).
-
-    Three facts, and the two that were missing are the ones that end the trap. **Where Requivo
-    looked**, because the way a session actually goes missing is a user running from a different
-    directory — the plugin README calls it a failure with no visible symptom — and a root printed at
-    the moment of the refusal is what makes that visible. **How to see what is really there**, so a
-    typo'd slug is a step rather than a dead end. The third is the reference itself, which was the
-    only one all five previous wordings carried.
-
-    It is a function rather than a constant because `session_root()` is workspace-dependent and must
-    be read when the refusal happens, not at import.
-
-    `what` exists for the one caller whose absence is genuinely wider: `_resolve_ref` accepts a
-    *path* to a `model.json` as well as a slug, so "no session" would name half of what it looked
-    for. Everything else takes the default.
-
-    The word `canonical` is deliberately gone. It distinguished this layout from the retired `out/`
-    one — a fact about the store's history that a user cannot act on, and it appeared only in the
-    three sites reachable from none of the main verbs, so the jargon and the missing help arrived
-    together.
-
-    `display_token` for the same reason every other render of an untrusted string calls it (#40):
-    the reference is raw argv, a newline in it ends the line, and everything after that point reads
-    as a sentence Requivo is saying. **On every current CLI route it cannot fire**, because
-    `validate_slug` refuses a control character first — it is here as the second line of defence
-    invariant 14 asks for, since this function is public and an external consumer calls this layer
-    rather than a careful surface. Pinned as such, against the builder, by
-    `test_the_shared_builder_escapes_a_reference_it_could_be_handed_directly`; a test routed through
-    a verb would have been green whether or not this call escaped anything.
-
-    The whole set is pinned by `tests/test_session_not_found.py`, which sweeps the *verbs* rather
-    than the sites, because the builder this replaced was itself correct and reached by nothing a
-    user runs.
-    """
-    return (f"no {what} named {display_token(ref)} under {session_root()}. "
-            "`requivo session list` shows the sessions in this workspace; a different --workspace "
-            "(or REQUIVO_WORKSPACE) changes where Requivo looks.")
-
-
-def _no_session(slug: str) -> SessionNotFoundError:
-    """The one refusal for "there is no such session", so the lock and the metadata read cannot drift
-    into telling a caller two different stories about the same absence."""
-    return SessionNotFoundError(no_session_message(slug), details={"slug": slug})
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.no_session_message`, which this delegates to."""
+    return _default_store().no_session_message(ref, what=what)
 
 
 def lock_path(slug: str) -> Path:
-    """The write lock for `slug`: `<workspace>/.requivo/locks/<slug>.lock`.
-
-    **Outside the session directory, which is the whole of #113's fix.** `lock_root()` carries why;
-    the short version is that a lock inside a directory `session import --force` renames is a claim
-    on an inode that every writer under it has already stopped agreeing with.
-
-    Validated exactly as `canonical_dir` and `artifact_path` validate theirs, and for the same
-    reason: the slug reaches here from `session_lock`, whose callers include the service layer and
-    therefore, under invariant 14, an external consumer. The pattern already makes a separator or a
-    dot segment unrepresentable; `is_contained` is the belt to that pair of braces, and it is the
-    one shared statement of that rule rather than a fourth local one."""
-    root = lock_root()
-    slug = _slug_shape(slug)
-    # Checked against the *session* root, never against `root` above (#372). A lock file is not
-    # itself a session, and what decides whether #221's refusal still applies is whether a session
-    # already claims this name -- not whether a `<slug>.lock` file happens to, which it never does on
-    # a first lock. Without this, taking the read-consistency lock `session export` holds would be
-    # the one thing standing between an already-on-disk reserved name and the data filed under it,
-    # even though locking creates nothing under that name.
-    #
-    # `<slug>.lock` is itself a reserved-stem-shaped name on Windows -- `con.lock` matches the same
-    # before-the-first-dot rule `validate_filename` enforces for artifact names (raised in review).
-    # Not a live gap: the precondition for reaching this line at all is a session already occupying
-    # `slug` on disk, and Windows's own `CreateDirectory` refuses to *materialize* a directory named
-    # `con` in the first place -- independent of anything this file does, and true before #221 ever
-    # shipped. So a reserved-named session cannot exist on a real Windows filesystem for this branch
-    # to be reached from, which is also why the sibling tests that build one are POSIX-only.
-    _refuse_new_reserved_slug(slug, session_root() / slug)
-    p = root / (slug + ".lock")
-    if not is_contained(p, root):
-        raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
-                               details={"slug": slug})
-    return p
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.lock_path`, which this delegates to."""
+    return _default_store().lock_path(slug)
 
 
 @contextmanager
 def session_lock(slug: str) -> Iterator[None]:
-    """Hold the exclusive lock on a session for the duration of the block.
-
-    Re-entrant within a thread: a service that wraps a whole update can take the lock once, and the
-    core calls inside it (`save_revision`, `save_session_artifact`) re-enter without deadlocking.
-    Across threads and across processes the lock is genuinely exclusive.
-
-    **The lock file lives outside the session** (`lock_path`), so this function no longer touches the
-    session directory at all. That is what lets `session import --force` hold it across the swap it
-    could not hold it across before (#113), and it retires #22's coupling permanently rather than
-    guarding it: `session_lock` is structurally incapable of producing a directory under the session
-    root, so it can never again make `create_session`'s rename — the only claim on a slug under
-    invariant 11 — lose to a ghost nobody created.
-
-    **A session must still exist to be locked, and the check that decides that is taken *after* the
-    lock is held.** It used to be closed by accident rather than by ordering: the lock file lived
-    inside the session, so a directory deleted after the check made `os.open` raise
-    `FileNotFoundError` and that arm mapped it onto "no such session". Opening
-    `.requivo/locks/<slug>.lock` establishes nothing about `<slug>`, so the accident is gone and the
-    check has to earn its place — which it does by moving under the lock, where invariant 9's rule
-    ("a precondition is held across the writes it authorises") applies to it like any other.
-    `test_a_session_deleted_before_the_lock_is_granted_is_refused` goes red if it moves back out.
-
-    **The check before the open stays, and is deliberately not authoritative.** It buys one thing
-    and decides nothing: a slug with no session refuses without leaving an empty lock file behind.
-    A reserved Windows device name (`con`, `nul`, `lpt1`) never reaches this far when nothing already
-    exists under it — `session_exists` resolves through `canonical_dir`, which refuses a genuinely
-    *new* one exactly as before (#221, `test_reserved_windows_device_names_are_refused_as_slugs`).
-    One that already exists on disk *does* reach this far, deliberately (#372): `session_exists`
-    answers True for it, and `lock_path` applies the identical existing-session exception, so a verb
-    like `session export` — which locks for read-consistency rather than to write anything new — can
-    still take this lock for data that predates #221's refusal rather than being blocked by it. It
-    can be wrong in exactly one direction — `_swap_in` holds this lock across two renames and
-    `<root>/<slug>` does not exist for the microseconds between them, so a caller sampling that
-    instant refuses `session_not_found` about a session that is merely being replaced. That window is
-    the one the pre-#113 code already had at its `os.open`, and a refusal is the safe direction: this
-    check can decline a lock, never grant one.
-
-    Neither the lock file nor a session directory is ever removed here. Unlinking a lock file a
-    concurrent process may be holding is legal on POSIX and silently breaks mutual exclusion — the
-    repair #22 rejected, and the same reason `_swap_in` could not be written as a contents swap.
-
-    **Legacy `.lock` files inside existing session directories are inert.** Nothing opens them now,
-    `session export` already skips every dot-prefixed entry, and `check_session_dir` does not look
-    for unexpected files. They cost a few empty bytes and are safe to delete."""
-    depths: dict[str, int] = getattr(_held_locks, "depths", None) or {}
-    _held_locks.depths = depths
-    if depths.get(slug):
-        depths[slug] += 1
-        try:
-            yield
-        finally:
-            depths[slug] -= 1
-        return
-
-    if not session_exists(slug):     # cheap, non-authoritative — see above
-        raise _no_session(slug)
-    p = lock_path(slug)
-    # Outside the `try` on purpose (#320). That handler says "could not open the write lock", and
-    # `ensure_store_dir` fails about the store root or the privacy marker — reporting one operation's
-    # failure under the other's name sends the reader to the wrong file. It raises a structured error
-    # of its own, so nothing is swallowed by moving it out.
-    ensure_store_dir(p.parent)
-    try:
-        fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
-    except OSError as e:
-        # Not `SessionNotFoundError`: the session's existence is not what this failed to establish.
-        # The old code mapped a `FileNotFoundError` here onto "no such session" because the lock file
-        # lived inside the session; it no longer does, so that mapping would now be a sentence about
-        # a session naming a cause that is not the cause — the shape #114 was filed for.
-        raise SessionUnreadableError(
-            f"could not open the write lock for session '{slug}': {e}", details={"slug": slug}) from e
-    acquired = False
-    try:
-        _acquire(fd, slug)
-        acquired = True
-        if not session_exists(slug):
-            raise _no_session(slug)
-        depths[slug] = 1
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh, from
+    `paths.workspace_root()`, on every call. Full contract, including the re-entrancy keying, on
+    `Store.session_lock`, which this delegates to."""
+    with _default_store().session_lock(slug):
         yield
-    finally:
-        depths[slug] = 0
-        try:
-            if acquired:
-                _release(fd)
-        finally:
-            os.close(fd)
 
 
 # A slug becomes a directory name, so it is bounded by what the filesystem accepts (~255 bytes on ext4
@@ -1088,14 +1837,15 @@ def _child_of(root: Path, slug: str) -> Path:
 
 
 def canonical_dir(slug: str) -> Path:
-    """The canonical session directory `<workspace>/.requivo/sessions/<slug>/`."""
-    return _child_of(session_root(), slug)
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.canonical_dir`, which this delegates to."""
+    return _default_store().canonical_dir(slug)
 
 
 def legacy_dir(slug: str) -> Path:
-    """The legacy `out/<slug>/` directory — read-only, and migrated only by an explicit
-    `requivo session migrate`, never on a read or a first write (see `migrate_legacy`)."""
-    return _child_of(output_root(), slug)
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.legacy_dir`, which this delegates to."""
+    return _default_store().legacy_dir(slug)
 
 
 def artifact_path(slug: str, filename: str) -> Path:
@@ -1179,17 +1929,18 @@ def _probe(marker: Path, slug: str) -> bool:
 
 
 def session_exists(slug: str) -> bool:
-    return _probe(canonical_dir(slug) / "session.json", slug)
+    """Ambient-default wrapper (#272) -- see `Store.session_exists`."""
+    return _default_store().session_exists(slug)
 
 
 def legacy_exists(slug: str) -> bool:
-    return _probe(legacy_dir(slug) / "model.json", slug)
+    """Ambient-default wrapper (#272) -- see `Store.legacy_exists`."""
+    return _default_store().legacy_exists(slug)
 
 
 def write_meta(slug: str, meta: SessionMeta) -> Path:
-    d = canonical_dir(slug)
-    ensure_store_dir(d)
-    return _atomic_write(d / "session.json", meta.model_dump_json(indent=2))
+    """Ambient-default wrapper (#272) -- see `Store.write_meta`."""
+    return _default_store().write_meta(slug, meta)
 
 
 # Keys a past Requivo wrote (or declared) and no longer means anything. `extra="allow"` preserves
@@ -1225,211 +1976,54 @@ def migrate_session(data: dict) -> SessionMeta:
 
 
 def read_meta(slug: str) -> SessionMeta:
-    p = canonical_dir(slug) / "session.json"
-    # Through `_probe`, not a bare `p.exists()` (#264): `Path.exists()` re-raises `EACCES`, and this
-    # check used to sit outside the `try` below that wraps `OSError`, so a session.json the process
-    # cannot stat escaped as a raw `PermissionError` instead of `SessionUnreadableError` -- the
-    # identical unguarded probe #80 removed from `_scan_session_root` and #97 removed from
-    # `session_exists`, a third time here.
-    if not _probe(p, slug):
-        raise _no_session(slug)
-    try:
-        return migrate_session(json.loads(p.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError) as e:
-        raise SessionUnreadableError(f"session '{slug}' has an unreadable session.json: {e}",
-                                     details={"slug": slug}) from e
+    """Ambient-default wrapper (#272) -- see `Store.read_meta`."""
+    return _default_store().read_meta(slug)
 
 
 def create_session(slug: str, request: str, *, provider: str | None = None,
                    model_name: str | None = None, context_cards: list[str] | None = None) -> SessionMeta:
-    """Create a fresh session directory from a request — no model yet (current_revision 0). The
-    model is applied later via `save_revision` (deterministic `model apply`, or a provider turn).
-
-    The session is assembled beside its destination and moved in with a single rename, which is the
-    *claim* on the slug: either this call created the session, or it learns one was already there
-    (`SessionExistsError`). Two things follow, and both were bugs before. Creation is atomic, where a
-    preceding `has_meta` check was not — two concurrent creations both passed it, and the second
-    rewrote the first's metadata, giving the session a new id and losing the provider and context
-    cards the first had recorded. And a session becomes visible *complete*: with a directory created
-    first and the metadata written after, a concurrent reader could find a session whose `session.json`
-    did not exist yet."""
-    now = _now()
-    meta = SessionMeta(
-        session_id=uuid.uuid4().hex, slug=slug, created_at=now, updated_at=now,
-        provider=provider, model_name=model_name, context_cards=context_cards,
-        request_hash=content_hash(request),
-    )
-    d = canonical_dir(slug)
-    ensure_store_dir(d.parent)
-    # Dot-prefixed, so a staging directory can never be mistaken for a session: slugs are validated and
-    # cannot start with a dot, and `list_session_slugs` skips them.
-    staging = d.with_name(f".{d.name}.new-{os.getpid()}-{uuid.uuid4().hex[:8]}")
-    try:
-        (staging / "revisions").mkdir(parents=True)
-        (staging / "artifacts").mkdir()
-        _atomic_write(staging / "request.md", request)
-        _atomic_write(staging / "session.json", meta.model_dump_json(indent=2))
-        try:
-            staging.rename(d)
-        except OSError as e:
-            if not d.exists():  # the rename failed for some other reason — don't mislabel it
-                raise
-            raise SessionExistsError(f"session '{slug}' already exists", details={"slug": slug}) from e
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    return meta
+    """Ambient-default wrapper (#272) -- see `Store.create_session`."""
+    return _default_store().create_session(
+        slug, request, provider=provider, model_name=model_name, context_cards=context_cards)
 
 
 def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                   provenance: dict | None = None) -> tuple[int, SessionMeta]:
-    """Persist a new model revision: freeze revisions/NNNN-model.json, replace model.json with the
-    same payload (the prior model is already frozen in an earlier revision file), record the
-    revision's provenance, then bump current_revision + updated_at. Returns (new_revision,
-    updated_meta). The order of those writes is a guarantee rather than a detail; see the comment on
-    the two `_atomic_write` calls below.
-
-    `expected_revision` is an optimistic-locking precondition: when given, the write fails with
-    `RevisionConflictError` unless the session is still at that revision — so two updates racing from
-    the same base can't both land silently. The single-user CLI omits it (last-writer-wins is fine
-    locally); a concurrent Web service passes the revision the client read. `provenance` carries the
-    surface-supplied fields (provider / model_name / surface / prompt_version) for the revision log.
-
-    The precondition and every write it guards run under `session_lock`, because a check that is not
-    held across the writes it authorises is not a precondition — two writers could both read revision
-    N, both pass the check, and both write revision N+1."""
-    with session_lock(slug):
-        meta = read_meta(slug)  # raises SessionNotFoundError if the session isn't there
-        if expected_revision is not None and meta.current_revision != expected_revision:
-            raise RevisionConflictError(
-                f"session '{slug}' is at revision {meta.current_revision}, not the expected "
-                f"{expected_revision} — reload the current model and re-apply",
-                details={"slug": slug, "expected": expected_revision,
-                         "actual": meta.current_revision})
-        d = canonical_dir(slug)
-        ensure_store_dir(d / "revisions")
-        rev = meta.current_revision + 1
-        payload = model.model_dump_json(indent=2)
-        # Frozen revision file first, then model.json. Three writes and no transaction, so the order
-        # decides what a crash between two of them leaves: reversed, a death here served every reader
-        # content no revision records while session.json still named the previous one. Pinned by
-        # `test_a_crash_after_the_first_payload_write_still_reads_as_the_recorded_revision` and, on
-        # the revision 0 -> 1 arm that reports different codes,
-        # `test_a_crash_in_the_very_first_apply_leaves_a_session_still_at_revision_zero`. The window
-        # this does *not* close is pinned beside them by
-        # `test_a_crash_after_both_payload_writes_is_still_reported_as_inconsistent`.
-        _atomic_write(d / "revisions" / f"{rev:04d}-model.json", payload)
-        _atomic_write(d / "model.json", payload)
-        prov = dict(provenance or {})
-        meta.revisions.append(RevisionRecord(
-            revision=rev,
-            created_at=_now(),
-            previous_revision=meta.current_revision or None,
-            model_hash=content_hash(payload),
-            provider=prov.get("provider"),
-            model_name=prov.get("model_name"),
-            surface=prov.get("surface"),
-            prompt_version=prov.get("prompt_version"),
-            usage_input_tokens=prov.get("usage_input_tokens"),
-            usage_output_tokens=prov.get("usage_output_tokens"),
-            usage_cache_read_tokens=prov.get("usage_cache_read_tokens"),
-            usage_cache_write_tokens=prov.get("usage_cache_write_tokens"),
-            usage_rate_per_mtok=prov.get("usage_rate_per_mtok"),
-            usage_priced_as_of=prov.get("usage_priced_as_of"),
-        ))
-        meta.current_revision = rev
-        meta.updated_at = _now()
-        write_meta(slug, meta)
-        return rev, meta
+    """Ambient-default wrapper (#272) -- see `Store.save_revision`."""
+    return _default_store().save_revision(
+        slug, model, expected_revision=expected_revision, provenance=provenance)
 
 
 def load_session_model(slug: str) -> EngineOutput:
-    """The current model of a canonical session."""
-    p = canonical_dir(slug) / "model.json"
-    if not p.exists():
-        raise SessionNotFoundError(
-            f"session '{slug}' has no model yet (apply a proposal first)", details={"slug": slug})
-    return _read_model(p, slug=slug)
+    """Ambient-default wrapper (#272) -- see `Store.load_session_model`."""
+    return _default_store().load_session_model(slug)
 
 
 def load_revision_model(slug: str, revision: int) -> EngineOutput:
-    """A historical model revision — the basis for `impact` since a given point."""
-    p = canonical_dir(slug) / "revisions" / f"{revision:04d}-model.json"
-    if not p.exists():
-        raise SessionNotFoundError(
-            f"session '{slug}' has no revision {revision}", details={"slug": slug, "revision": revision})
-    return _read_model(p, slug=slug, revision=revision)
+    """Ambient-default wrapper (#272) -- see `Store.load_revision_model`."""
+    return _default_store().load_revision_model(slug, revision)
 
 
 def session_request(slug: str) -> str:
-    p = canonical_dir(slug) / "request.md"
-    return p.read_text(encoding="utf-8") if p.exists() else ""
+    """Ambient-default wrapper (#272) -- see `Store.session_request`."""
+    return _default_store().session_request(slug)
 
 
 def save_session_artifact(slug: str, artifact_type: str, filename: str, content: str,
                           source_revision: int, *, stale: bool = False) -> ArtifactStatus:
-    """Write an artifact under artifacts/ and record its provenance (source revision) in session.json.
-
-    The revision is validated against the session's history first: provenance that cannot be true is
-    worse than none, because every freshness question downstream is answered from it. A revision in
-    the future (or before the first model) is refused rather than recorded.
-
-    `stale` is supplied by the caller, which is the layer that knows the dependency graph — see
-    `ArtifactService.save`. Core records freshness; it does not decide it.
-
-    `filename` is validated exactly as `slug` is, and before the lock is taken: it is the *other* half
-    of the write target, and it is also recorded into session.json, where `integrity.py` and the
-    artifact-show paths read it back — so an unvalidated one both escapes the directory and persists.
-    """
-    path = artifact_path(slug, filename)   # refuse a bad target before taking the lock
-    with session_lock(slug):
-        meta = read_meta(slug)
-        if not 1 <= source_revision <= meta.current_revision:
-            raise ArtifactRevisionOutOfRangeError(
-                f"cannot record {artifact_type!r} against revision {source_revision}: session '{slug}' "
-                f"has revisions 1..{meta.current_revision or 0}",
-                details={"slug": slug, "source_revision": source_revision,
-                         "current_revision": meta.current_revision})
-        ensure_store_dir(path.parent)
-        _atomic_write(path, content)
-        st = ArtifactStatus(revision=source_revision, filename=filename, updated_at=_now(), stale=stale)
-        meta.artifact_status[artifact_type] = st
-        meta.updated_at = _now()
-        write_meta(slug, meta)
-        return st
+    """Ambient-default wrapper (#272) -- see `Store.save_session_artifact`."""
+    return _default_store().save_session_artifact(
+        slug, artifact_type, filename, content, source_revision, stale=stale)
 
 
 def write_artifact_file(slug: str, filename: str, content: str) -> Path:
-    """Write a raw file into a session's artifacts/ directory (no status tracking) — for the neutral
-    epic exports (epic.json / epic.github.json / …) that are extra views of one generated artifact.
-
-    Both halves of the target go through `artifact_path`: the mutating route validated its slug and
-    not the filename beside it, so `write_artifact_file(slug, '../../../x.md', …)` wrote outside the
-    session entirely."""
-    path = artifact_path(slug, filename)
-    ensure_store_dir(path.parent)
-    return _atomic_write(path, content)
+    """Ambient-default wrapper (#272) -- see `Store.write_artifact_file`."""
+    return _default_store().write_artifact_file(slug, filename, content)
 
 
 def read_artifact_file(slug: str, filename: str) -> Optional[str]:
-    """The saved content of a file under a session's artifacts/, or None if there is no such file.
-
-    The read sibling of `write_artifact_file`, and it exists so that the read goes through
-    `artifact_path` instead of re-joining the path a second time. `FileSessionRepository` built
-    `canonical_dir(slug) / "artifacts" / filename` inline, one layer above the chokepoint — which is
-    precisely how it escaped the sweep that routed the two *mutating* paths through it, and
-    precisely what `_child_of` means by a rule the next caller forgets. A read traversal is also a
-    different exposure from a write one: not what this code may create, but what it may disclose.
-
-    **Absence and refusal are deliberately different answers.** An unsafe `filename` raises
-    `InvalidFilenameError`; only a genuinely missing file returns None. Returning None for both
-    would be the quiet answer — a rejected traversal would then be indistinguishable from an
-    artifact nobody has generated yet, and the caller cannot tell it has been refused.
-
-    Decoded as UTF-8 explicitly, matching `_atomic_write`'s encoding on the way in. `read_text()`
-    with no encoding uses the locale's, which on Windows is typically cp1252 and silently mojibakes
-    any generated artifact containing an em-dash rather than failing."""
-    p = artifact_path(slug, filename)
-    return p.read_text(encoding="utf-8") if p.exists() else None
+    """Ambient-default wrapper (#272) -- see `Store.read_artifact_file`."""
+    return _default_store().read_artifact_file(slug, filename)
 
 
 # How much of a non-session directory's contents is worth carrying into a report. A lock ghost holds
@@ -1512,70 +2106,14 @@ class UnexaminableEntry:
 
 
 def _scan_session_root() -> tuple[list[str], list[Path], list[UnexaminableEntry]]:
-    """One listing of the session root, partitioned three ways: the canonical sessions, everything
-    else, and the entries whose examination raised.
-
-    **Three outcomes, because the predicate can fail.** `(p / "session.json").exists()` is what
-    decides whether a name is a session, and `Path.exists()` swallows only the errnos in
-    `pathlib._IGNORED_ERRNOS` — ENOENT, ENOTDIR, EBADF, ELOOP. `EACCES` is not among them, so a
-    directory the process cannot stat into propagated out of this loop and aborted the partition for
-    *every* entry: `session list` exited 1 with an empty stdout and a raw traceback, and every
-    healthy session in the workspace was invisible (#80).
-
-    The first two halves used to be described here as each other's complement, and for two states
-    that was exactly right. It is not right for three, and the third belongs in neither of theirs:
-
-    * in `others` it would never come back from `list_session_slugs`, so `session list` would omit it
-      silently — the invisible entry #67 exists to close, reintroduced one function along;
-    * in `slugs` it would be claimed to *be* a session, which is the one thing the failed probe did
-      not establish, and every read path downstream reasons over that list.
-
-    So the predicate is still stated once and the buckets are still disjoint; what changed is that
-    the answer has a third value, and a caller has to be able to say *we could not tell*.
-
-    Dot-prefixed entries are in none of the three, on purpose. A slug cannot start with a dot, so
-    they are `create_session`'s staging areas: a session in flight rather than something left behind,
-    and reporting one is a race the reader cannot act on.
-
-    A root that does not exist is an empty workspace and returns nothing. A root that cannot be
-    *listed* is not the same answer, and this still raises rather than flattening the two — that
-    failure is genuinely the whole root, there is no entry to name it against, and the caller is the
-    one that has to be able to say `we could not look`. Per-entry and whole-root are two different
-    claims and this function must not merge them in either direction."""
-    root = session_root()
-    if not root.exists():
-        return [], [], []
-    slugs: list[str] = []
-    others: list[Path] = []
-    unexaminable: list[UnexaminableEntry] = []
-    for p in sorted(root.iterdir(), key=lambda p: p.name):
-        if p.name.startswith("."):
-            continue
-        try:
-            is_session = (p / "session.json").exists()
-        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
-            # `Exception` rather than `OSError`, for `_describe_non_session`'s reason one function
-            # down: the set of ways a probe of a name off a directory listing can fail is open —
-            # EACCES here, and on Linux a filename that is not valid UTF-8 comes back from
-            # `iterdir` carrying surrogates, which every path operation on `p` is a candidate for.
-            # Whatever it was, it lands in a state this partition now has. `BaseException` is not
-            # caught: a `KeyboardInterrupt` is not an unexaminable directory.
-            unexaminable.append(UnexaminableEntry(p.name, str(e)))
-            continue
-        if is_session:
-            slugs.append(p.name)
-        else:
-            others.append(p)
-    return slugs, others, unexaminable
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store._scan_session_root`, which this delegates to."""
+    return _default_store()._scan_session_root()
 
 
 def list_session_slugs() -> list[str]:
-    """Slugs of all canonical sessions, sorted — the backbone of `session list`.
-
-    **Names known to be sessions, and this contract does not widen.** `doctor`, `session verify` and
-    every read path reason over what comes back here, so an entry the partition could not examine is
-    deliberately not in it — see `list_unexaminable_entries`, which is where it goes instead."""
-    return _scan_session_root()[0]
+    """Ambient-default wrapper (#272) -- see `Store.list_session_slugs`."""
+    return _default_store().list_session_slugs()
 
 
 def _describe_non_session(p: Path) -> NonSessionEntry:
@@ -1633,237 +2171,22 @@ def _describe_non_session(p: Path) -> NonSessionEntry:
 
 
 def scan_session_root() -> tuple[list[str], list[NonSessionEntry], list[UnexaminableEntry]]:
-    """All three parts of the session root from **one** listing — and the only way to reach the
-    second one, since #300 (see below).
-
-    `list_session_slugs` and `list_unexaminable_entries` each scan on their own, which is right when
-    only one question is being asked and wrong when more than one is. `doctor` asks all three, and
-    two scans are two instants: a `session.json` appearing between them puts a name in *neither*
-    answer, which is the invisible state #67 is about, reintroduced by the report meant to close it;
-    one disappearing puts it in both. Transient and diagnostic-only, and still not something to
-    leave in the one verb whose job is to say whether anything is wrong. Found by review.
-
-    **The second part is what nothing could see before #67**, and the reason it is worth returning
-    at all is not in this module's output — it is at the next `create_session` on that name.
-    `list_session_slugs` skips such an entry for want of a `session.json`, so `doctor` and
-    `session verify` never reach one; `check_session` answers about a directory it is handed, which
-    nobody can hand it a name for. The rename that *is* the claim on a slug (invariant 11) then
-    loses to a directory that is already there, and `SessionService` falls through to its
-    `<slug>-<identity hash>` candidate — so the user gets a session under a name they did not ask
-    for, with nothing anywhere explaining why the one they asked for was unavailable.
-
-    **A report, not a repair.** This reads; it never deletes, moves or rewrites. #22 stopped
-    `session_lock` producing these, and clearing one on sight would be the same mistake pointing the
-    other way: unlinking a `.lock` a concurrent process is holding is legal on POSIX and silently
-    breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted
-    archive.
-
-    Second of three since #80, not the other half of two: an entry whose examination *raised* is
-    neither a session nor established to be one of these, and is the third part instead. Folding it
-    into the second would hide it from `session list` for want of a `session.json` nobody could look
-    for, which is that part's own defect class.
-
-    It lives in Core beside `list_session_slugs` because that function owns the store layout and the
-    answers come out of one predicate. Core reading a directory is not a boundary crossing:
-    invariant 7 forbids importing a provider and touching argv, the streams, the environment and
-    process exit — not IO, which this module is made of.
-
-    The describe step is here rather than in `_scan_session_root` so that `list_session_slugs` — on
-    every one of its call paths, `session list` included — keeps paying nothing for it: a stray
-    directory holding ten thousand files is one `iterdir` this function makes and that one does not.
-    The third part carries no describe step at all: whatever we would ask it, we have just failed to
-    ask it once."""
-    slugs, others, unexaminable = _scan_session_root()
-    return slugs, [_describe_non_session(p) for p in others], unexaminable
+    """Ambient-default wrapper (#272) -- see `Store.scan_session_root`."""
+    return _default_store().scan_session_root()
 
 
 def list_unexaminable_entries() -> list[UnexaminableEntry]:
-    """Names under the session root whose examination raised — the partition's third answer (#80).
-
-    Neither `list_session_slugs` nor `scan_session_root`'s second part returns one, and that is the
-    point: calling it a session claims what the failed probe did not establish, and calling it a
-    non-session hides it from `session list`, which is #67's defect one function along. It reaches a
-    surface as a fact of its own — a degraded row on `session list`, its own line under `doctor`'s
-    sessions check.
-
-    **A report, not a repair**, on the same terms `scan_session_root` states for the second part:
-    Requivo reads a workspace and does not chmod anything in it. What is here is a name and the
-    reason the probe failed.
-
-    A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
-    on its own, and two scans are two instants."""
-    return scan_session_root()[2]
+    """Ambient-default wrapper (#272) -- see `Store.list_unexaminable_entries`."""
+    return _default_store().list_unexaminable_entries()
 
 
 def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
-    """Partition `lock_root()` three ways, for `doctor`'s lock-residue check (#180): the slugs a
-    `<slug>.lock` file names, the entries that are neither that nor a recognised
-    `<slug>.discovering` guard file (#209, #391), and the entries whose examination raised. The
-    session-root sibling of `_scan_session_root`, one root over.
-
-    **Two regular-file shapes are what this store writes here, and both are recognised.**
-    `lock_path` joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always,
-    and the reserved-device-name refusal only when nothing already occupies the matching *session*
-    name (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
-    against `session_root()`, not this root). `services.discovery._discovery_guard_path` writes the
-    second shape, `<slug>.discovering` -- deliberately never unlinked (#209), on the identical
-    POSIX reasoning that leaves a deleted session's `.lock` file behind, so it outlives every
-    discovery it ever served.
-
-    **This function was written the release before the second shape shipped, and #209 never came
-    back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
-    lock file Requivo recognises" about a file this store's own code had just written, on the very
-    first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
-    regular file, not a symlink, with a stem either writer could have been given (`_is_lock_stem`,
-    shape alone since #409) -- is recognised now and excluded from `unexpected`. Anything else
-    under this root — a stray file with a different name, a directory, a symlink at a `.lock` or
-    `.discovering` name, a stem neither writer could have been given — is not a shape either writer
-    ever produces, and is still reported exactly as before.
-    Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
-    symlink's target would read another file into a report about this workspace.
-
-    **The stem question is `_is_lock_stem`'s, not `validate_slug`'s, and it is shape alone** (#401,
-    corrected by #409). It was `is_slug` for a release, which is `validate_slug`'s unconditional
-    creation-time refusal, and reported a reserved-name session's own lock and guard files as
-    residue nobody recognises. It was then the read-time rule (`_slug_shape` plus
-    `_refuse_new_reserved_slug` against `session_root()`) for a release, which fixed that and broke
-    the opposite case: a lock file's classification changed when the session it was written for was
-    later deleted, because that rule reads the *session* root, a resource this function's own answer
-    must not depend on (see the paragraph below). `_is_lock_stem` carries the full argument now.
-
-    **What a matching slug means is left to the caller, deliberately.** This function answers only
-    *is there a `<slug>.lock` file*, never *is `slug` still a session* — that needs the session
-    root's own listing, a second read a moment apart, and conflating the two here would make this
-    function's own answer depend on an argument it does not take. `doctor._lock_health` is where the
-    two lists meet.
-
-    Three outcomes on each entry, because the same predicate that decides *session or not* in
-    `_scan_session_root` can fail here too: `p.is_symlink()` / `p.is_file()` raise on the errnos
-    `Path.exists()` does not swallow (EACCES chief among them), and a name that failed that probe is
-    neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
-    reasoning `_scan_session_root` gives for its own third bucket (#80).
-
-    **That bucket had a second source from #401 to #409, and it is gone by design.** `_is_lock_stem`
-    used to stat `session_root() / stem` through `_probe` for a reserved stem, which could raise on
-    EACCES -- so an entry could reach `unexaminable` with the file-type probe above it having
-    answered perfectly well. #409 removed that stat entirely (`_is_lock_stem` is shape alone now),
-    so this bucket's only source is the file-type probe immediately above it in the loop. Pinned by
-    `test_a_reserved_lock_stem_no_longer_probes_the_session_root`, which replaced the test that used
-    to pin the removed source.
-
-    A root that does not exist is an empty lock directory and returns nothing, matching
-    `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same
-    claim and is left to raise, for the caller to report as `readable: False` rather than as a clean
-    scan of nothing — the whole-root-versus-per-entry distinction `_scan_session_root`'s docstring
-    already makes."""
-    root = lock_root()
-    if not root.exists():
-        return [], [], []
-    lock_slugs: list[str] = []
-    unexpected: list[str] = []
-    unexaminable: list[UnexaminableEntry] = []
-    for p in sorted(root.iterdir(), key=lambda p: p.name):
-        lock_slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
-        # `_discovery_guard_path` (services/discovery.py, #209) writes this second shape and never
-        # unlinks it -- recognised and excluded from `unexpected`, not folded into `lock_slugs`:
-        # it is not a `<slug>.lock` file and answers a different question (#391).
-        guard_slug = p.name[: -len(".discovering")] if p.name.endswith(".discovering") else None
-        try:
-            is_ordinary_file = p.is_file() and not p.is_symlink()
-            # `_is_lock_stem`, not `is_slug` (#401), and shape alone -- not a read of the session
-            # root (#409). This is a classification, not a creation: it asks whether a writer
-            # *here* could have produced this file, which is a fact about the file's own name and
-            # nothing else. Asked the creation-time question, a reserved-name session's own lock and
-            # guard files read as residue nobody recognises (#391's defect one predicate over).
-            # Asked the read-time question against the *session* root instead, the answer for a
-            # fixed file flipped when that unrelated directory was later deleted (#409).
-            if is_ordinary_file and lock_slug and _is_lock_stem(lock_slug):
-                lock_slugs.append(lock_slug)
-                continue
-            if is_ordinary_file and guard_slug and _is_lock_stem(guard_slug):
-                continue
-        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
-            unexaminable.append(UnexaminableEntry(p.name, str(e)))
-            continue
-        unexpected.append(p.name)
-    return lock_slugs, unexpected, unexaminable
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.scan_lock_root`, which this delegates to."""
+    return _default_store().scan_lock_root()
 
 
 def migrate_legacy(slug: str) -> SessionMeta:
-    """Copy a legacy `out/<slug>/` session into the canonical store, **preserving the originals**.
-
-    Called explicitly (`requivo session migrate`), never on a read. The existing model becomes
-    revision 1; provenance is recovered from the old session.json where present; known artifact files
-    are copied into artifacts/ and recorded at revision 1. The legacy directory is left untouched.
-
-    **The claim on the slug is `create_session`'s rename**, not an existence check. This function
-    *creates* a session, so it makes its claim the same way the only other creator does, and invariant
-    11 applies to it verbatim: a preceding check is passed by two concurrent callers at once. It used
-    to check only that the legacy *model* existed, so pointed at a slug a live session already
-    occupied it rewrote session.json at revision 0 and then wrote the legacy model over
-    revisions/0001-model.json — and revisions/ is the only durable copy, so revision 1 was destroyed
-    with no copy anywhere. Now the rename loses and `SessionExistsError` is raised before anything is
-    written; the caller decides whether that is a skip or a failure.
-
-    Everything after the claim runs under one `session_lock` (invariant 9), so the metadata patch, the
-    revision and the artifact writes are a single unit rather than three separately-locked ones, and
-    `expected_revision=0` holds the session to the state the claim left it in."""
-    from requivo.core.dependencies import ARTIFACT_FILES  # local import avoids a load-time cycle
-
-    src = legacy_dir(slug)
-    if not (src / "model.json").exists():
-        raise SessionNotFoundError(f"no legacy session '{slug}' under {output_root()}",
-                                   details={"slug": slug})
-    request = ""
-    for name in ("request.md", "request.txt"):
-        if (src / name).exists():
-            request = (src / name).read_text(encoding="utf-8")
-            break
-    old: dict = {}
-    if (src / "session.json").exists():
-        try:
-            old = json.loads((src / "session.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            old = {}
-    # Parse the legacy model *before* claiming the slug: a malformed out/ model should fail without
-    # leaving an empty session behind holding a name nothing can now use.
-    #
-    # Through `_read_model` like the other three, and it is the fourth door rather than an extra:
-    # #204 named `load_model` and `load_revision_model`, and this site reads a model exactly the same
-    # way. Wrapping three of four would be the defect the helper exists to prevent, one file later.
-    # `slug=` is deliberately not passed: the legacy `out/<slug>/` layout has no `revisions/`, so the
-    # recovery remedy would be a sentence about a directory that is not there. The path names the
-    # session by itself.
-    model = _read_model(src / "model.json")
-
-    if request:
-        req_hash = content_hash(request)
-    else:
-        # Fall back to the legacy session.json's hash, normalising a bare hex digest to "sha256:…".
-        legacy_hash = str(old.get("request_sha256", ""))
-        req_hash = legacy_hash if legacy_hash.startswith("sha256:") or not legacy_hash else "sha256:" + legacy_hash
-
-    # The claim. Raises SessionExistsError if a canonical session already occupies the slug.
-    create_session(slug, request, provider=old.get("provider"), model_name=old.get("model_name"),
-                   context_cards=old.get("context_cards"))
-
-    with session_lock(slug):
-        # The three fields `create_session` cannot know, because they belong to the *legacy* session:
-        # its original creation date, the request hash a migration may have to recover from the old
-        # metadata when no request file survived, and an id derived from the slug so re-reading a
-        # migrated session finds the identity a previous migration of it would have given.
-        meta = read_meta(slug)
-        meta.session_id = uuid.uuid5(uuid.NAMESPACE_URL, f"requivo:legacy:{slug}").hex
-        meta.created_at = old.get("created_at", meta.created_at)
-        meta.request_hash = req_hash
-        write_meta(slug, meta)
-
-        rev, _ = save_revision(slug, model, expected_revision=0)  # existing model → revision 1
-
-        filename_to_type = {fn: t for t, fn in ARTIFACT_FILES.items() if fn}
-        for fn, atype in filename_to_type.items():
-            legacy_file = src / fn
-            if legacy_file.exists():
-                content = legacy_file.read_text(encoding="utf-8")
-                save_session_artifact(slug, atype, fn, content, source_revision=rev)
-        return read_meta(slug)
+    """Ambient-default wrapper (#272) -- resolves the workspace root fresh on every call. Full
+    contract on `Store.migrate_legacy`, which this delegates to."""
+    return _default_store().migrate_legacy(slug)

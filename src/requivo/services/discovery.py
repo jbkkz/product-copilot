@@ -32,7 +32,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Generic, Literal, TypeVar, overload
+from typing import Any, Callable, Generic, Literal, TypeVar, cast, overload
 
 from requivo.core.contracts import PRD, AcceptanceCriteria, Brief, EngineOutput, Epic, ReleaseNotes
 from requivo.core.dependencies import ARTIFACT_FILENAMES
@@ -45,14 +45,14 @@ from requivo.core.errors import (
 )
 from requivo.core.persistence import (
     ArtifactStatus,
+    Store,
     _refuse_new_reserved_slug,
     _slug_shape,
     artifact_path,
-    ensure_store_dir,
     is_contained,
 )
 from requivo.core.validation import require_input_within_bounds
-from requivo.paths import lock_root, session_root
+from requivo.paths import workspace_root
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
@@ -201,16 +201,21 @@ def absorb_reasoning(out: EngineOutput, brief) -> None:
     out.opportunities = brief.opportunities
 
 
-def _discovery_guard_path(slug: str) -> Path:
+def _discovery_guard_path(slug: str, store: Store) -> Path:
     """The in-flight first-discovery guard for `slug`: `<workspace>/.requivo/locks/<slug>.discovering`.
 
-    A sibling of `core.persistence.lock_path`, deliberately a *different* file (#209). That lock
-    covers a compound write and is released **before** a provider call starts — a call runs seconds
-    to minutes and cannot hold a write lock open that long, by that lock's own docstring — which is
-    exactly the window two concurrent first-discovery requests can both walk into: both read revision
-    0, both pass `_require_revision_zero`, and both are free to pay for a provider call before either
-    has written anything. This file exists to serialise *that* window, without touching the write
-    lock at all.
+    A sibling of `core.persistence.Store.lock_path`, deliberately a *different* file (#209). That
+    lock covers a compound write and is released **before** a provider call starts — a call runs
+    seconds to minutes and cannot hold a write lock open that long, by that lock's own docstring —
+    which is exactly the window two concurrent first-discovery requests can both walk into: both read
+    revision 0, both pass `_require_revision_zero`, and both are free to pay for a provider call
+    before either has written anything. This file exists to serialise *that* window, without touching
+    the write lock at all.
+
+    **`store` names which workspace this guard addresses** (#272's scope amendment) — it used to read
+    `lock_root()`/`session_root()` ambiently, which is exactly the leak this issue closes; the caller
+    resolves it from its own repository (`DiscoveryService._store_for_repo`), so a discovery guard for
+    an explicitly-rooted session no longer silently reads a different root than the one it is guarding.
 
     Validated exactly as `lock_path` validates its own -- the shape unconditionally, the reserved
     Windows device name only when nothing already occupies the slug (#372's creation/read split).
@@ -224,7 +229,7 @@ def _discovery_guard_path(slug: str) -> Path:
     could reach, and that `run_discovery` alone refused: the guard meant to serialise a paid call
     turned into the one thing standing between that session and being worked on at all. Pinned by
     `test_a_reserved_slug_the_sweep_one_commit_later_missed_reaches_the_discovery_guard`."""
-    root = lock_root()
+    root = store.lock_root()
     slug = _slug_shape(slug)
     # Checked against the *session* root, never against `root` above -- `lock_path` carries the long
     # form of why, and it is the same argument here: a `<slug>.discovering` file is not a session, and
@@ -232,7 +237,7 @@ def _discovery_guard_path(slug: str) -> Path:
     # this name. On a first discovery of a genuinely new reserved slug nothing does, so the refusal
     # still fires -- but that case is unreachable anyway, since `run_discovery` needs a session that
     # `create_session` (which does refuse) already made.
-    _refuse_new_reserved_slug(slug, session_root() / slug)
+    _refuse_new_reserved_slug(slug, store.session_root() / slug)
     p = root / (slug + ".discovering")
     if not is_contained(p, root):
         raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
@@ -241,7 +246,7 @@ def _discovery_guard_path(slug: str) -> Path:
 
 
 @contextmanager
-def _discovery_guard(slug: str) -> Iterator[None]:
+def _discovery_guard(slug: str, store: Store) -> Iterator[None]:
     """Refuse a second, concurrent first-discovery on `slug` before it can pay for anything (#209).
 
     Held for exactly the span a paid provider call plus its one write can take — acquired right
@@ -265,9 +270,13 @@ def _discovery_guard(slug: str) -> Iterator[None]:
     around itself, and the plain non-reentrant shape is what keeps "a losing caller makes zero
     provider calls" a fact about the lock file rather than about a depth counter a nested call could
     quietly increment past.
+
+    **`store` is the same one `DiscoveryService._store_for_repo()` resolved (#272)**, so two
+    `DiscoveryService`s over two explicitly-rooted repositories serialise independently rather than
+    contending on one ambient guard file neither of them may even be addressing.
     """
-    p = _discovery_guard_path(slug)
-    ensure_store_dir(p.parent)
+    p = _discovery_guard_path(slug, store)
+    store.ensure_store_dir(p.parent)
     try:
         fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as e:
@@ -360,6 +369,21 @@ class DiscoveryService:
         # sent the sessions to Postgres and the artifacts to the local filesystem, and every call
         # succeeded. One repository per service, chosen once, is the only shape that cannot split.
         self.artifacts = artifacts or ArtifactService(self.sessions.repo)
+
+    def _store_for_repo(self) -> Store:
+        """The `core.persistence.Store` backing `self.sessions.repo`, for the two ambient reads that
+        live outside any repository method: the first-discovery guard (`_discovery_guard`,
+        `_discovery_guard_path`) and the reserved-slug probe inside it (#272's scope amendment).
+
+        `SessionRepository` is deliberately backing-neutral and carries no `store()` of its own in its
+        protocol — a Postgres backing has no filesystem root to hand back — so this reaches for one by
+        duck typing rather than by widening the protocol, and falls back to the ambient default when
+        there is none to reach for. That fallback is not a compromise unique to this method: it is the
+        exact behaviour every caller of these two functions had *unconditionally*, before #272, since
+        neither read a repository at all. A backing with a `store()` (today, only `FileSessionRepository`)
+        gets addressed correctly; anything else gets what it already had."""
+        get_store = getattr(self.sessions.repo, "store", None)
+        return cast(Store, get_store()) if callable(get_store) else Store(workspace_root())
 
     def _need_provider(self):
         """The reasoning provider, built on first use so a key is only required for provider actions.
@@ -458,7 +482,7 @@ class DiscoveryService:
         closes that window the same way `_require_revision_zero` above closes the wide-open one."""
         provider = self._need_provider()
         meta = self.claim_session(request, cards=cards, slug=slug)
-        with _discovery_guard(meta.slug):
+        with _discovery_guard(meta.slug, self._store_for_repo()):
             _require_revision_zero(meta.slug, self.sessions.repo.read_meta(meta.slug).current_revision)
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
@@ -536,7 +560,7 @@ class DiscoveryService:
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_revision_zero(slug, snap.revision)
-        with _discovery_guard(slug):
+        with _discovery_guard(slug, self._store_for_repo()):
             # Fresh, not the snapshot above -- see the guard note in this method's own docstring.
             snap = self.sessions.snapshot(slug)
             _require_revision_zero(slug, snap.revision)

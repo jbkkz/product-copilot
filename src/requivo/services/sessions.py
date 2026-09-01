@@ -12,6 +12,7 @@ import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from requivo.core import persistence as store
 from requivo.core.analysis import model_status, readiness_blockers
@@ -26,9 +27,10 @@ from requivo.core.dependencies import (
     propagate,
 )
 from requivo.core.errors import SessionExistsError, SessionNotFoundError
-from requivo.core.persistence import SessionMeta
+from requivo.core.persistence import SessionMeta, Store
 from requivo.core.selectors import display_token
 from requivo.core.validation import require_input_within_bounds, validate_proposal
+from requivo.paths import workspace_root
 from requivo.services.repository import SessionRepository, default_repository
 
 
@@ -290,13 +292,20 @@ class SessionService:
         """True if a usable session exists (the repository decides what backs it)."""
         return self.repo.exists(slug)
 
-    @staticmethod
-    def no_session(ref: str, *, what: str = "session",
+    def no_session(self, ref: str, *, what: str = "session",
                    details: dict | None = None) -> SessionNotFoundError:
         """The refusal for "there is no such session" — the surface's route to it (#243).
 
-        The sentence itself is `store.no_session_message`, because it names the sessions root and
-        that is the store's fact to state. What this method exists for is the *seam*: `cli.py` and
+        The sentence itself names the sessions root, so it is the store's fact to state — read off
+        *this service's own repository*, not the process ambient default (#272's cosmetic fourth).
+        Before this an explicitly-rooted `SessionService` still reported the ambient workspace's root
+        in this one message, which is exactly the kind of silent disagreement #272 exists to close:
+        every other read on this service went to the right store, and only the error text about
+        *why a session could not be found there* named a different one. Instance method now, not
+        `@staticmethod`, for that reason alone — every caller already writes `svc.no_session(...)`
+        on an instance, so nothing at any call site changes.
+
+        What this method exists for beyond that is the *seam*: `cli.py` and
         `deterministic/sessions.py` raise this at six sites, and reaching into `core.persistence`
         for it would put a copy concern in the allowlist of justified **filesystem** concerns —
         which is the one thing that list must not start meaning (#76). A message is not a path, even
@@ -309,8 +318,22 @@ class SessionService:
         rewording of the message must not be able to move it. Defaulting it here rather than letting
         each site build one is what keeps the other five identical.
         """
-        return SessionNotFoundError(store.no_session_message(ref, what=what),
+        message = self._store_for_error_text().no_session_message(ref, what=what)
+        return SessionNotFoundError(message,
                                     details=details if details is not None else {"slug": ref})
+
+    def _store_for_error_text(self) -> Store:
+        """The `core.persistence.Store` this service's own repository addresses, for the one place
+        outside any repository method that reads the workspace root: `no_session`'s error text
+        (#272's cosmetic fourth). Duck-typed against `self.repo.store()` rather than added to the
+        `SessionRepository` protocol, for the identical reason `DiscoveryService._store_for_repo`
+        gives — a Postgres backing has no filesystem root to hand back, and the fallback below is
+        exactly what this call had *unconditionally* before #272, since it read the ambient default
+        regardless of what `self.repo` addressed."""
+        get_store = getattr(self.repo, "store", None)
+        if callable(get_store):
+            return cast(Store, get_store())
+        return Store(workspace_root())
 
     def _ensure_canonical(self, slug: str) -> None:
         """Before any mutation, make sure the session is in the mutation-backed store — for a file

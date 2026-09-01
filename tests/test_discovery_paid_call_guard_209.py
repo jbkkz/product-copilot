@@ -58,7 +58,7 @@ def test_a_concurrent_first_discovery_is_refused_before_any_provider_call():
     sessions = SessionService()
     slug = sessions.create_session("a leave approval system").slug
 
-    guard_path = _discovery_guard_path(slug)
+    guard_path = _discovery_guard_path(slug, store.Store(store.workspace_root()))
     ensure_store_dir(guard_path.parent)
     holder_fd = os.open(guard_path, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(holder_fd, fcntl.LOCK_EX)
@@ -150,7 +150,7 @@ def test_start_is_guarded_the_same_way_as_run_discovery():
     meta = disco.claim_session("a leave approval system", cards=None, slug=None)
     assert meta.slug == slug or meta.slug.startswith(slug)
 
-    guard_path = _discovery_guard_path(meta.slug)
+    guard_path = _discovery_guard_path(meta.slug, store.Store(store.workspace_root()))
     ensure_store_dir(guard_path.parent)
     holder_fd = os.open(guard_path, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(holder_fd, fcntl.LOCK_EX)
@@ -205,7 +205,8 @@ def test_a_reserved_slug_the_sweep_one_commit_later_missed_reaches_the_discovery
     assert store.canonical_dir("con") == d
     assert store.lock_path("con").name == "con.lock"
 
-    assert _discovery_guard_path("con") == store.lock_root() / "con.discovering"
+    assert (_discovery_guard_path("con", store.Store(store.workspace_root()))
+            == store.lock_root() / "con.discovering")
 
     sessions = SessionService()
     provider = _CountingProvider()
@@ -216,4 +217,4 @@ def test_a_reserved_slug_the_sweep_one_commit_later_missed_reaches_the_discovery
     # Must-not-fire control, in the same fixture: a reserved name nothing occupies is still refused,
     # so this cannot pass by dropping #221's creation refusal instead of narrowing it.
     with pytest.raises(InvalidSlugError):
-        _discovery_guard_path("nul")
+        _discovery_guard_path("nul", store.Store(store.workspace_root()))
