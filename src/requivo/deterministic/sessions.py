@@ -59,7 +59,7 @@ from requivo.core.integrity import (
     newest_readable_revision,
     readable_revision,
 )
-from requivo.core.persistence import ensure_store_dir
+from requivo.core.persistence import UnexaminableEntry, ensure_store_dir
 from requivo.core.selectors import display_token
 from requivo.deterministic._shared import _NO_DETAIL, EXIT_DEGRADED, _read_source, _resolve_cards, print_json
 from requivo.deterministic.doctor import _REPAIR_HINT, _RESTORABLE_CARD_CODES, _RESTORE_HINT, _card_health
@@ -358,6 +358,49 @@ def _legacy_request_text(legacy_dir: Path) -> str:
     return ""
 
 
+def _scan_legacy_root(root: Path) -> tuple[list[str], list[UnexaminableEntry]]:
+    """Partition the legacy `out/` root into legacy sessions and entries that could not be
+    examined -- the scan `_cmd_session_migrate` reads its per-slug rows from, one directory over
+    from `core.persistence._scan_session_root`'s identical partition of the *canonical* root.
+
+    **Three outcomes, not two, for the same reason (#411).** `(p / "model.json").exists()` is
+    what decides whether a name under the legacy root is a legacy session, and `Path.exists()`
+    re-raises everything outside `pathlib._IGNORED_ERRNOS` -- `EACCES` chief among them. That
+    escaped this comprehension uncaught and aborted the whole `session migrate` pass with a raw
+    `PermissionError`, before any of the per-slug guards `#371` hardened the loop body with were
+    ever reached: invariant 15's "a guard above the rows is only as good as the scan that
+    produced them", one layer below where `#371` had already applied it once.
+
+    A directory the probe could not examine belongs in neither of the other two buckets: silently
+    excluded it would never reach `_cmd_session_migrate`'s per-slug loop at all -- the invisible
+    entry `#67`'s own class, one module over -- and counted as a legacy session it would claim
+    the one thing the failed probe did not establish. `UnexaminableEntry` (`core/persistence.py`)
+    is reused rather than re-declared: same shape, same "we could not tell" semantics, already a
+    public name `services/repository.py` imports outside its home module.
+
+    A root that does not exist has nothing to migrate and returns two empty lists, on the same
+    terms `_scan_session_root` states for the canonical root."""
+    if not root.exists():
+        return [], []
+    slugs: list[str] = []
+    unreadable: list[UnexaminableEntry] = []
+    for p in sorted(root.iterdir(), key=lambda p: p.name):
+        try:
+            is_legacy = (p / "model.json").exists()
+        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing.
+            # `Exception` rather than `OSError`, mirroring `_scan_session_root`'s own reasoning:
+            # the ways a probe of a name off a directory listing can fail are open-ended -- EACCES
+            # here, and a name `iterdir` returned with surrogate escapes (a non-UTF-8 filename on
+            # Linux) makes every path operation on `p` a candidate too. `BaseException` is not
+            # caught: a `KeyboardInterrupt` is not an unexaminable directory.
+            unexaminable_entry = UnexaminableEntry(p.name, str(e))
+            unreadable.append(unexaminable_entry)
+            continue
+        if is_legacy:
+            slugs.append(p.name)
+    return slugs, unreadable
+
+
 def _cmd_session_migrate(a, client) -> None:
     """The bulk migration of every legacy out/<slug>/ session into the canonical store. Since 0.9.8
     this is the *only* thing that reads that layout — there is no automatic migrate-on-first-write.
@@ -412,10 +455,23 @@ def _cmd_session_migrate(a, client) -> None:
     `RequivoError`, so an undecodable legacy `request.md` escaped this guard exactly the way an
     unparseable `model.json` used to: a raw traceback, no receipt printed at all, and a healthy
     session sorted after the bad one in the same sweep neither migrated nor reported. Both reads are
-    inside the same `try` now, widened to `(RequivoError, OSError, UnicodeDecodeError)`."""
+    inside the same `try` now, widened to `(RequivoError, OSError, UnicodeDecodeError)`.
+
+    **The scan that PRODUCES `slugs` needed the identical isolation, one level below every guard
+    above** (#411). `(p / "model.json").exists()` sat outside every per-slug `try` this docstring
+    already describes -- `Path.exists()` re-raises `EACCES`, so one legacy directory the process
+    could not stat into aborted the whole pass before the loop below was ever reached, with no
+    receipt printed at all. `_scan_legacy_root` is the fix: the identical three-outcome partition
+    `core.persistence._scan_session_root` already applies to the *canonical* root, one directory
+    over. An entry it could not examine is reported under its own `unreadable` key -- never
+    silently dropped, and never counted as a slug to migrate -- and folds into `EXIT_DEGRADED`
+    alongside `interrupted`/`errors`, the same "the answer is incomplete" bucket those two already
+    use, rather than a code of its own: this command already reports several distinct degraded
+    reasons through separate named fields under one exit code, and a fourth reason is not a
+    reason to split the code."""
     from requivo.paths import output_root
     root = output_root()
-    slugs = sorted(p.name for p in root.iterdir() if (p / "model.json").exists()) if root.exists() else []
+    slugs, unreadable = _scan_legacy_root(root)
     migrated, skipped, interrupted, errors = [], [], [], []
     repo = SessionService().repo
     for slug in slugs:
@@ -466,10 +522,11 @@ def _cmd_session_migrate(a, client) -> None:
             errors.append({"slug": slug, "error": str(e)})
             continue
         migrated.append(slug)
-    degraded = bool(errors or interrupted)
+    degraded = bool(errors or interrupted or unreadable)
     if a.json:
         print_json({"migrated": migrated, "skipped_already_present": skipped,
-                     "interrupted": interrupted, "errors": errors, "source": str(root)})
+                     "interrupted": interrupted, "errors": errors,
+                     "unreadable": [e.to_dict() for e in unreadable], "source": str(root)})
     else:
         print(f"Legacy sessions under {root}:")
         print(f"  migrated: {', '.join(migrated) or '(none)'}")
@@ -485,6 +542,13 @@ def _cmd_session_migrate(a, client) -> None:
                 # structured error's message text, which can itself quote file content — a corrupt
                 # legacy `model.json` is exactly the case that reaches this line (#40, #70, invariant 14).
                 print(f"    {display_token(e['slug'])}: {display_token(e['error'])}")
+        if unreadable:
+            # Neither field is a slug: this entry was never established to be a legacy session at
+            # all, only a name the scan could not stat into (#411) -- untrusted the same way, and
+            # through the same escape, for the same reason (invariant 14).
+            print("  could not examine (skipped, not counted as a session):")
+            for e in unreadable:
+                print(f"    {display_token(e.name)}: {display_token(e.error)}")
         print("  Legacy files were preserved (read-only).")
     # Raised after the receipt is printed, never instead of it, for the same reason `session list`
     # raises after its rows: nothing on stdout is withheld, and a script that reads the exit code

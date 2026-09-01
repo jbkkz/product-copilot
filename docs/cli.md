@@ -423,17 +423,24 @@ It copies rather than moves — the originals stay where they are — and the co
 revision 1, with its artifacts recorded against it. A session still only in `out/` is reported as
 missing with that command named in the error, rather than silently working at half capability.
 
-**The receipt has four rows, not two, since #262.** A legacy session whose `model.json` will not
-parse no longer aborts the whole pass — it is named under `errors` with its own message, and every
-other legacy session still migrates. And a canonical session already occupying a legacy slug is
-split into two different facts rather than one: `skipped_already_present` means the migration is
-genuinely done (the session is at revision 1 or later); `interrupted` means a previous run claimed
-the slug and crashed before the model was copied in, so the session sits empty at revision 0 and the
-legacy data was never migrated. The remedy for `interrupted` is in the message itself — delete
-`.requivo/sessions/<slug>` and re-run. The command exits `4` (the same code `session list` and
-`session verify` use for "the work was done and part of the answer was unreachable") whenever
-`errors` or `interrupted` is non-empty, so a script reading only the exit code still learns the run
-was not a clean success.
+**The receipt has five rows, not two, since #262 and #411.** A legacy session whose `model.json`
+will not parse no longer aborts the whole pass — it is named under `errors` with its own message,
+and every other legacy session still migrates. And a canonical session already occupying a legacy
+slug is split into two different facts rather than one: `skipped_already_present` means the
+migration is genuinely done (the session is at revision 1 or later); `interrupted` means a previous
+run claimed the slug and crashed before the model was copied in, so the session sits empty at
+revision 0 and the legacy data was never migrated. The remedy for `interrupted` is in the message
+itself — delete `.requivo/sessions/<slug>` and re-run.
+
+`unreadable` is the fifth row (#411): a legacy directory the process could not even stat into (a
+permission bit denying it, most commonly) is reported by name, with the OS error, rather than
+aborting the scan that decides what to migrate in the first place — the identical isolation #262
+gave the loop *body*, one level up, in the scan that *produces* the loop's rows. It is never counted
+as a session and never silently dropped.
+
+The command exits `4` (the same code `session list` and `session verify` use for "the work was done
+and part of the answer was unreachable") whenever `errors`, `interrupted` or `unreadable` is
+non-empty, so a script reading only the exit code still learns the run was not a clean success.
 
 ## Design notes
 

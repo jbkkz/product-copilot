@@ -205,3 +205,107 @@ def test_status_and_impact_still_open_a_model_json_path_directly(workspace):
     with redirect_stdout(buf):
         app(["impact", str(loose)], client=None)
     assert "DEPENDENCY MAP" in buf.getvalue()
+
+# ── the directory branch, one over from the model.json/session.json branch (#414) ─────────────
+
+
+def test_resolve_slug_refuses_a_directory_that_is_not_a_session(tmp_path):
+    """#414. `resolve_slug`'s directory branch used to mine ANY directory's own name --
+    `p.exists() and p.is_dir()`, with nothing checking whether a session actually lives behind
+    it. An arbitrary directory reference must be refused naming the path as given, never a slug
+    carved from a segment of it, on the same terms #402 already holds for the model.json/
+    session.json branch."""
+    d = tmp_path / "elsewhere" / "loose"
+    d.mkdir(parents=True)
+    (d / "unrelated.txt").write_text("nothing session-shaped in here")
+    with pytest.raises(SessionNotFoundError) as exc:
+        SessionService().resolve_slug(str(d))
+    assert exc.value.details["ref"] == str(d)
+
+
+def test_resolve_slug_still_mines_a_real_session_directory(tmp_path):
+    """Must-fire control: a directory that really is a session (it carries its own session.json
+    or model.json) must still resolve by its own name -- the fix must not refuse everything."""
+    d = tmp_path / "leave-approval"
+    d.mkdir()
+    (d / "session.json").write_text("{}", encoding="utf-8")
+    assert SessionService().resolve_slug(str(d)) == "leave-approval"
+
+
+def test_resolve_slug_still_mines_a_real_legacy_session_directory(tmp_path):
+    """Must-fire control, the legacy-shaped sibling: a directory carrying its own model.json (the
+    legacy marker, not the canonical session.json) is exactly as real a session and must still
+    resolve by its own name."""
+    d = tmp_path / "legacy-slug"
+    d.mkdir()
+    (d / "model.json").write_text("{}", encoding="utf-8")
+    assert SessionService().resolve_slug(str(d)) == "legacy-slug"
+
+
+def test_a_directory_reference_does_not_silently_use_an_unrelated_real_session(workspace, capsys):
+    """The worse half, matching #402's own pattern one branch over. A session named `loose`
+    really exists in the canonical store; the directory the user gave is a genuinely different,
+    unrelated directory that merely shares that final path segment and holds nothing
+    session-shaped. This must never resolve to the real `loose` session -- paired with the
+    must-fire positive control below, which proves `loose` stays reachable by its own slug, so
+    this is not merely a harness that refuses everything."""
+    store.create_session("loose", "an unrelated real session")
+    ref_dir = workspace / "elsewhere" / "loose"
+    ref_dir.mkdir(parents=True)
+    (ref_dir / "unrelated.txt").write_text("not a session")
+
+    with pytest.raises(SystemExit) as exc:
+        app(["session", "show", str(ref_dir)], client=None)
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "no session named loose" not in err.lower(), (
+        f"`requivo session show` reported on the unrelated real session instead of the given "
+        f"directory: {err!r}")
+    assert str(ref_dir) in err
+
+
+def test_the_real_session_stays_reachable_by_its_own_slug_past_the_directory_guard(
+        workspace, capsys):
+    """Must-fire control for the pair above: resolution by slug still succeeds after the
+    directory-branch fix, so the negative result above is not an artifact of a harness that
+    refuses everything. `session show` on a real, existing slug does not raise -- it prints the
+    receipt and returns -- so the control is that it runs clean rather than that it exits."""
+    store.create_session("loose", "a real session, referenced by its own slug")
+    app(["session", "show", "loose"], client=None)
+    out = capsys.readouterr().out
+    assert "no session named" not in out.lower(), (
+        f"`requivo session show loose` failed to resolve its own real session: {out!r}")
+    assert "loose" in out
+
+
+@pytest.fixture
+def _unreadable_session_directory(tmp_path, request):
+    """A directory `resolve_slug`'s directory-branch marker probe cannot see into, on the same
+    terms as `_unreadable_model_json` above and `test_unexaminable_entries.py`'s `blocked`
+    fixture: `chmod 000` denies the `x` bit, so a stat on a marker file inside it raises
+    `PermissionError`, not `False`."""
+    d = tmp_path / "noaccess-dir"
+    d.mkdir()
+    request.addfinalizer(lambda: d.chmod(0o755))
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that "
+                    "resolve_slug converts a PermissionError probing a directory's own marker "
+                    "file into a clean SessionNotFoundError rather than an uncaught traceback.")
+    d.chmod(0o000)
+    try:
+        (d / "session.json").exists()
+    except PermissionError:
+        return d
+    pytest.skip("chmod 000 did not deny the session.json probe on this run (running as root?). "
+                "UNTESTED HERE: the could-not-tell arm of resolve_slug's directory branch.")
+
+
+def test_an_unreadable_session_directory_refuses_cleanly_instead_of_crashing(
+        _unreadable_session_directory):
+    """The must-fire half: without an `except OSError` guard around the marker probe this raises
+    a bare `PermissionError` that escapes `cli.py`'s `app()` as an unhandled traceback."""
+    ref = str(_unreadable_session_directory)
+    with pytest.raises(SessionNotFoundError) as exc:
+        SessionService().resolve_slug(ref)
+    assert exc.value.details["ref"] == ref
+

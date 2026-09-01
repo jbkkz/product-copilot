@@ -995,6 +995,15 @@ _SURFACE_STORAGE_ALLOWLIST = {
         "reasoning as the `deterministic/sessions.py` entry above -- a repository with no filesystem "
         "has no debug root to create."
     ),
+    ("deterministic/sessions.py", "UnexaminableEntry"): (
+        "a plain dataclass (name, error), not a call -- the identical shape as the `EngineError` "
+        "entry above: importing a type orchestrates nothing. It is the vocabulary this store already "
+        "speaks for 'could not examine' (`SessionRepository.list_unexaminable` already returns it "
+        "across the repository seam for the canonical root), reused rather than redeclared for the "
+        "*legacy* `out/` root's own scan (#411) -- which has no repository method at all, the same "
+        "argument the `migrate_legacy` entry above makes: a backing with no filesystem has no "
+        "legacy layout to enumerate, unreadable entries included."
+    ),
 }
 
 

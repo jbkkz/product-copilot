@@ -173,7 +173,16 @@ class SessionService:
         the same wrong-cause failure is closed at its root: a `model.json`/`session.json` reference
         is only mined for its parent directory's name when the file is actually there. A reference to
         a file that was never written falls through unchanged, so the caller's `exists()` check fails
-        naming the path itself, never a slug carved out of a segment of it."""
+        naming the path itself, never a slug carved out of a segment of it.
+
+        **The directory branch itself carried the identical defect and had no such guard** (#414):
+        `p.exists() and p.is_dir()` mined ANY directory's own name, whether or not a session lived
+        behind it -- so a directory that merely shared its final path segment with an unrelated real
+        session silently resolved to that session, one branch over from the bug #402 fixed above. It
+        now mines a directory's name only when the directory carries its own session marker
+        (`session.json` or `model.json`), the directory-shaped analogue of "the file is actually
+        there"; a directory with neither is refused naming the path exactly as given, not a slug
+        carved from it."""
         ref = str(reference)
         p = Path(ref)
         if not accept_path:
@@ -216,7 +225,32 @@ class SessionService:
                 ) from e
             return p.parent.name if is_real_file else ref
         if p.exists() and p.is_dir():
-            return p.name
+            # **The same wrong-cause class #402 closed for the model.json/session.json branch,
+            # one branch over** (#414). This used to mine ANY directory's own name, unconditional
+            # on whether a session actually lived behind it -- so a path merely sharing its final
+            # segment with an unrelated real session silently resolved to that session, and a
+            # failure on a path that resolved to nothing named a slug the user never wrote. On
+            # the same terms as the file branch above ("only mined when the file is actually
+            # there"), a directory is only mined for its own name when it carries a session's own
+            # marker -- canonical `session.json` or legacy `model.json`. The probe re-raises the
+            # same way `is_file()` does above (`Path.exists()` has two returns and three outcomes)
+            # and gets the identical third state rather than an uncaught traceback.
+            try:
+                looks_like_a_session = (p / "session.json").exists() or (p / "model.json").exists()
+            except OSError as e:
+                raise SessionNotFoundError(
+                    f"could not tell whether {display_token(ref)} is a session directory: {e}",
+                    details={"ref": ref},
+                ) from e
+            if looks_like_a_session:
+                return p.name
+            raise SessionNotFoundError(
+                f"{display_token(ref)} does not look like a session directory -- it has no "
+                "session.json or model.json of its own, so it is not something this command "
+                "can resolve a slug from. Pass the session's slug instead (see `requivo "
+                "session list`).",
+                details={"ref": ref},
+            )
         return ref  # a bare slug
 
     @staticmethod

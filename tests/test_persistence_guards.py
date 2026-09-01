@@ -264,6 +264,47 @@ def test_a_canonical_session_that_cannot_be_read_is_reported_not_crashed(workspa
     assert _problem("zzz-last", 1) == "LAST"
 
 
+def test_the_bulk_migrate_command_degrades_an_unreadable_legacy_directory_rather_than_crashing(
+        workspace, capsys, request):
+    """#411. The scan that PRODUCES the per-slug rows -- `root.iterdir()` filtered on
+    `(p / "model.json").exists()` -- sits outside every per-slug guard #371 hardened, and
+    `Path.exists()` re-raises EACCES. One legacy directory the process cannot stat into used to
+    abort the whole pass with a raw `PermissionError` before any receipt was printed at all --
+    invariant 15's own generalisation, one layer below where #371 already closed it once.
+
+    Must-fire control: a healthy legacy session sorted on each side of the blocked one still
+    migrates, so a fix that lost coverage of the loop body would not pass this test by accident."""
+    from requivo.deterministic.sessions import _cmd_session_migrate
+
+    _legacy("aaa-first", "FIRST")
+    d = store.output_root() / "mmm-blocked"
+    d.mkdir(parents=True, exist_ok=True)
+    request.addfinalizer(lambda: d.chmod(0o755))
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not deny traversal on Windows. UNTESTED HERE: that the "
+                    "legacy-root scan reports an unexaminable entry as a fact rather than as an "
+                    "exception. Every other platform runs it.")
+    d.chmod(0o000)
+    try:
+        (d / "model.json").exists()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("chmod 000 did not deny the model.json probe on this run (running as root?). "
+                    "UNTESTED HERE: the could-not-examine arm of the legacy-root scan.")
+    _legacy("zzz-last", "LAST")
+
+    with pytest.raises(SystemExit) as ei:
+        _cmd_session_migrate(type("Args", (), {"json": True})(), None)
+    assert ei.value.code == EXIT_DEGRADED
+    out = json.loads(capsys.readouterr().out)
+    assert sorted(out["migrated"]) == ["aaa-first", "zzz-last"]
+    assert [e["name"] for e in out["unreadable"]] == ["mmm-blocked"]
+    assert out["unreadable"][0]["error"]
+    assert _problem("aaa-first", 1) == "FIRST"
+    assert _problem("zzz-last", 1) == "LAST"
+
+
 def test_an_unrelated_revision_zero_session_at_a_legacy_slug_is_not_called_interrupted(
         workspace, capsys):
     """Found in review of #262 itself. `current_revision == 0` alone is not evidence of a crashed

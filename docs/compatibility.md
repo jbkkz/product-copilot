@@ -474,6 +474,15 @@ so both are noted here and in the changelog rather than only in the latter.
   (`EXIT_DEGRADED`, the same code `session list` and `session verify` already use) when either of the
   two new lists is non-empty, where it was always `0` before.
 
+- **`session migrate --json` gained `unreadable`** (#411). Additive, on the same terms as `errors`
+  above: a legacy directory the process could not stat into (a permission bit denying it, the
+  reproduced case) used to escape the scan that builds the migration list as an uncaught
+  `PermissionError` — no JSON printed, no receipt, an undefined exit code rather than a documented
+  one. It is now named under `unreadable`, with the OS error, and every other legacy session in the
+  sweep still migrates. The exit code is `4` under the same rule the two lists above already use: a
+  crash was never a documented `0`, so converting it into a receipt is additive rather than a
+  condition moving off a promised code.
+
 ### HTTP statuses in Requivo Web
 
 The Web maps each code to a status, and **every code has an explicit mapping** — the table used to
@@ -961,6 +970,26 @@ The first row is the one this page's own rule calls breaking: an invocation that
 `changelog.d/402.fixed.md` rather than argued down on the grounds that the old behaviour was itself
 the defect — the same reasoning #360 above already rejects for the identical shape. `status` and
 `impact` are unaffected; they never went through `resolve_slug` for a path and keep the wider help.
+
+### `resolve_slug`'s directory branch closes the identical gap, one branch over (#414)
+
+Every `deterministic/` verb (`accept_path=True`, the default) can still be handed a directory rather
+than a slug. `resolve_slug` used to mine *any* such directory for its own name, whether or not a
+session actually lived behind it — the same wrong-cause shape #402 closed for the `model.json`/
+`session.json` branch above, and reachable at all only because that fix left path acceptance on for
+this caller class.
+
+| Invocation | Was | Now |
+|---|---|---|
+| `requivo session show <dir>` where `<dir>` genuinely is a session's own directory | 0 — resolved via its own name | 0 — unchanged, `<dir>` carries its own `session.json`/`model.json` |
+| `requivo session show <dir>` where `<dir>` is an unrelated directory whose final segment happens to name a real session | 0 — silently resolved to and reported on the unrelated real session | **1** — refused, naming the given path |
+| `requivo session show <dir>` where `<dir>` is an unrelated directory naming no session at all | 1 — `no session named <dir's name>` | **1** — refused, naming the given path instead of a slug carved from it |
+
+The second row is what this page's own rule calls breaking, for the same reason the analogous row in
+#402's table is: an invocation that used to succeed — silently, and against the wrong session — now
+fails. Declared that way in `changelog.d/414.fixed.md` rather than argued down on the grounds that
+silently operating on the wrong session was itself the defect, which #360 and #402 above both already
+reject for the identical shape.
 
 ### The web error banner's `code` — **not stable**
 
