@@ -129,8 +129,9 @@ requivo discover examples/case1_leave.md
 Discovery claims the session under `.requivo/sessions/<slug>/` before the first paid call, and nothing
 you pay for is discarded after that: stopping the loop early — or a provider failure part-way through
 it — saves the turns that had already run, and tells you the `requivo answer <slug> "…"` that picks up
-where you left off. Every verb
-takes the session **slug** (or a `model.json` path); regenerate any artifact without redoing discovery:
+where you left off. Every verb takes the session **slug** (`status` and `impact` also accept a path to
+a saved `model.json`, since they read it directly rather than writing back into a session); regenerate
+any artifact without redoing discovery:
 
 ```bash
 requivo prd    <slug>                      # also: stories · estimate · criteria · release · brief

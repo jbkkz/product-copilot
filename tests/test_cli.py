@@ -158,7 +158,7 @@ def test_the_demo_names_the_key_requirement_beside_the_command_that_needs_one():
 
 def test_pc_brief_uses_injected_client():
     with _model_in_out("clitest-brief") as p:
-        text = _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
+        text = _run_app(["brief", p.parent.name], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
         assert "DECISION BRIEF" in text
 
 
@@ -301,7 +301,7 @@ def test_pc_brief_persists_reasoning_into_model():
             }],
             "opportunities": [{"text": "reuse engine", "leverage": "high", "modules": ["Invoicing"]}],
         })
-        _run_app(["brief", str(p)], client=FakeClient(brief_json))
+        _run_app(["brief", p.parent.name], client=FakeClient(brief_json))
         reloaded = load_model(p)  # the saved model now carries the reasoning
         assert reloaded.challenges[0].headline == "Archive vs delete"
         assert reloaded.decisions[0].decision == "draft-first"
@@ -310,7 +310,7 @@ def test_pc_brief_persists_reasoning_into_model():
 
 def test_pc_stories_renders():
     with _model_in_out("clitest-stories") as p:
-        text = _run_app(["stories", str(p)], client=FakeClient(json.dumps({"stories": [{"id": "S1", "title": "T"}]})))
+        text = _run_app(["stories", p.parent.name], client=FakeClient(json.dumps({"stories": [{"id": "S1", "title": "T"}]})))
         assert "=== USER STORIES ===" in text and "[S1] T" in text
 
 
@@ -324,7 +324,7 @@ def _estimate_client() -> FakeClient:
 
 def test_pc_estimate_renders():
     with _model_in_out("clitest-estimate") as p:
-        assert "=== ESTIMATE" in _run_app(["estimate", str(p)], client=_estimate_client())
+        assert "=== ESTIMATE" in _run_app(["estimate", p.parent.name], client=_estimate_client())
 
 
 def test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot(monkeypatch):
@@ -352,7 +352,7 @@ def test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot(monkeypa
     monkeypatch.setattr(SessionService, "snapshot", counting)
     fake = _estimate_client()
     with _model_in_out("clitest-estimate-snapshot") as p:
-        _run_app(["estimate", str(p)], client=fake)
+        _run_app(["estimate", p.parent.name], client=fake)
 
     assert len(fake.calls) == 2, "both provider calls have to happen or the count below proves nothing"
     assert taken == ["clitest-estimate-snapshot"], (
@@ -366,7 +366,7 @@ def test_pc_brief_writes_the_artifact_like_every_other_surface():
     # artifact, the CLI saved nothing. A generation now produces the same document wherever it was
     # asked for — same file, same provenance, same staleness tracking.
     with _model_in_out("clitest-brief-artifact") as p:
-        _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
+        _run_app(["brief", p.parent.name], client=FakeClient(json.dumps({"complexity": "low", "solution": "S"})))
         assert (p.parent / "artifacts" / "solution-assessment.md").exists()
         listed = ArtifactService().list(p.parent.name)["brief"]
         assert listed["stale"] is False and listed["revision"] >= 1
@@ -376,7 +376,7 @@ def test_pc_generators_record_which_prompt_reasoned(tmp_path):
     # A revision log that cannot say what produced it cannot reproduce it. Behaviour is tuned by
     # editing prompts and context cards, so the prompt hash is half the provenance.
     with _model_in_out("clitest-provenance") as p:
-        _run_app(["brief", str(p)], client=FakeClient(json.dumps({"complexity": "low"})))
+        _run_app(["brief", p.parent.name], client=FakeClient(json.dumps({"complexity": "low"})))
         rec = store.read_meta(p.parent.name).revisions[-1]
         assert rec.surface == "cli-brief" and rec.provider == "anthropic"
         assert rec.prompt_version and rec.prompt_version.startswith("sha256:")
@@ -394,19 +394,19 @@ _EPIC = {"title": "X", "issues": [{"id": "I-1", "title": "Build the request form
 
 def test_pc_prd_writes_artifact():
     with _model_in_out("clitest-prd") as p:
-        _run_app(["prd", str(p)], client=FakeClient(json.dumps({"title": "X", "problem": "P"})))
+        _run_app(["prd", p.parent.name], client=FakeClient(json.dumps({"title": "X", "problem": "P"})))
         assert (p.parent / "artifacts" / "prd.md").read_text(encoding="utf-8").startswith("# X")
 
 
 def test_pc_criteria_writes_artifact():
     with _model_in_out("clitest-criteria") as p:
-        _run_app(["criteria", str(p)], client=FakeClient(json.dumps(_CRITERIA)))
+        _run_app(["criteria", p.parent.name], client=FakeClient(json.dumps(_CRITERIA)))
         assert (p.parent / "artifacts" / "acceptance-criteria.md").exists()
 
 
 def test_pc_epic_writes_all_views():
     with _model_in_out("clitest-epic") as p:
-        _run_app(["epic", str(p), "--export-json", "--github", "--gitlab"],
+        _run_app(["epic", p.parent.name, "--export-json", "--github", "--gitlab"],
                  client=FakeClient(json.dumps(_EPIC)))
         for name in ("epic.md", "epic.json", "epic.github.json", "epic.gitlab.json"):
             assert (p.parent / "artifacts" / name).exists()
@@ -414,7 +414,7 @@ def test_pc_epic_writes_all_views():
 
 def test_pc_release_stamps_version():
     with _model_in_out("clitest-release") as p:
-        _run_app(["release", str(p), "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
+        _run_app(["release", p.parent.name, "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
         assert "v1.0" in (p.parent / "artifacts" / "release-notes.md").read_text(encoding="utf-8")
 
 
@@ -607,7 +607,7 @@ def test_pc_answer_refines_the_model():
             "summary": {"objective": "A leave approval system"},
         })
         fake = FakeClient(turn2)
-        _run_app(["answer", str(p), "The approver is HR, and the circuit is per-client."], client=fake)
+        _run_app(["answer", p.parent.name, "The approver is HR, and the circuit is per-client."], client=fake)
         # the answers + the prior model reached the engine turn
         sent = fake.calls[0]["messages"]
         assert "The approver is HR" in sent[-1]["content"]

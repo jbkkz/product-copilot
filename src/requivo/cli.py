@@ -491,7 +491,9 @@ def _cmd_answer(a, client) -> None:
     # refined model through the validated path (diff → revision → stale-flag).
     disco = DiscoveryService(client=client)
     svc = disco.sessions
-    slug = svc.resolve_slug(a.session)
+    # `accept_path=False`: this verb writes a revision back into a session and never opens a file
+    # it is handed, so a model.json path was never a meaningful input (#402).
+    slug = svc.resolve_slug(a.session, accept_path=False)
     if not svc.exists(slug):
         raise svc.no_session(slug)
     result = disco.answer(slug, a.answers, surface="cli-answer")
@@ -707,9 +709,14 @@ def _cmd_impact(a, client) -> None:
 
 def _generator_service(a, client) -> tuple[str, DiscoveryService]:
     """Shared preamble: (slug, service). Fails early if the session does not exist, so a typo'd slug
-    never reaches the provider and gets billed for it."""
+    never reaches the provider and gets billed for it.
+
+    `accept_path=False`: every one of these seven verbs writes an artifact back into a session
+    (`ArtifactService.save` refuses anything that is not `has_meta(slug)`), and none of them opens
+    a file it is handed -- so a model.json path was never a meaningful input, and mining one for a
+    slug used to report on, or silently operate on, a session the user never named (#402)."""
     svc = SessionService()
-    slug = svc.resolve_slug(a.session)
+    slug = svc.resolve_slug(a.session, accept_path=False)
     if not svc.exists(slug):
         raise svc.no_session(slug)
     return slug, DiscoveryService(client=client, sessions=svc)
@@ -948,7 +955,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # verbs are registered above the plumbing now, and they need it. Pinned by
     # `test_the_plumbing_verbs_come_after_the_journey_verbs`.
 
-    def model_cmd(name: str, help_: str, func, extra=None):
+    # Two verbs (`status`, `impact`) genuinely open a path they are handed -- `_resolve_ref` reads
+    # the file's own bytes directly, no session lookup involved. The other eight resolve a *slug*
+    # and read/write the store's own copy, so a path was never a meaningful input for them and their
+    # help must not claim otherwise (#402); `_generator_service`/`_cmd_answer` pass
+    # `resolve_slug(..., accept_path=False)` to refuse one outright, naming what was given.
+    _SESSION_HELP_WITH_PATH = "a session slug, or a path to a saved model.json"
+    _SESSION_HELP_SLUG_ONLY = "a session slug"
+
+    def model_cmd(name: str, help_: str, func, extra=None, *, accepts_path: bool = False):
         sp = sub.add_parser(name, help=help_)
         # `session`, not `model` (#248). The two authoring eras spelled one concept two ways: every
         # verb under `deterministic/` says `session`, and this helper said `model` -- so the usage
@@ -957,7 +972,8 @@ def _build_parser() -> argparse.ArgumentParser:
         # is passed by position, so no invocation changed. Pinned by
         # `test_every_session_reference_positional_is_spelled_session` and
         # `test_the_missing_argument_error_names_a_session_not_a_model`.
-        sp.add_argument("session", help="a session slug, or a path to a saved model.json")
+        session_help = _SESSION_HELP_WITH_PATH if accepts_path else _SESSION_HELP_SLUG_ONLY
+        sp.add_argument("session", help=session_help)
         if extra:
             extra(sp)
         sp.set_defaults(func=func)
@@ -986,10 +1002,12 @@ def _build_parser() -> argparse.ArgumentParser:
     model_cmd("answer", "fold the client's answers in and report what moved (API)",
               _cmd_answer, lambda sp: sp.add_argument("answers", help="the client's answers, as free text"))
     model_cmd("status", "show the understanding, open questions and readiness", _cmd_status,
-              lambda sp: sp.add_argument("--json", action="store_true", help="emit a machine status snapshot"))
+              lambda sp: sp.add_argument("--json", action="store_true", help="emit a machine status snapshot"),
+              accepts_path=True)
     model_cmd("impact", "show what a change to given topics would reach; no topics = full map",
               _cmd_impact, lambda sp: sp.add_argument("slots", nargs="*",
-              help="slot ids or label words (e.g. permissions workflow); omit for the full map"))
+              help="slot ids or label words (e.g. permissions workflow); omit for the full map"),
+              accepts_path=True)
     model_cmd("brief", "generate the decision brief — what to review before estimating (API)", _cmd_brief)
     model_cmd("prd", "generate the PRD (API)", _cmd_prd)
     model_cmd("stories", "derive user stories (API)", _cmd_stories)
