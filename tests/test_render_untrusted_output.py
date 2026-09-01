@@ -47,11 +47,13 @@ from requivo.core.contracts import (
     Stories,
 )
 from requivo.core.dependencies import propagate
+from requivo.core.persistence import RevisionRecord
 from requivo.render.terminal import (
     render_brief,
     render_dependency_map,
     render_estimate,
     render_impact,
+    render_session_cost,
     render_stories,
     render_turn,
 )
@@ -182,6 +184,39 @@ def test_a_challenge_cannot_forge_a_line_of_the_decision_brief():
         assert "FORGED AT COLUMN ZERO" in text, field
 
 
+def test_a_persisted_usage_priced_as_of_cannot_forge_a_line_of_the_session_cost_view():
+    """`render_session_cost`'s `usage_priced_as_of` is not model prose -- it is a persisted
+    `RevisionRecord` field, read back off `session.json` on every `requivo status`. Invariant 14
+    frames `context_cards` this same way: untrusted every time it is read back, regardless of what
+    wrote it, and `session import` is the documented channel through which someone else's archive
+    -- and its `usage_priced_as_of` -- arrives (#388).
+
+    Two revisions in one fixture, not one: a clean one whose date must actually appear (the
+    must-fire half -- without it, the assertions below would pass against a harness that rendered
+    the "no price on file" branch and never touched `usage_priced_as_of` at all), and a forged one
+    whose date must not open a line of its own at column 0."""
+    clean = RevisionRecord(
+        revision=1, created_at="2026-01-01T00:00:00Z",
+        usage_input_tokens=1000, usage_output_tokens=200,
+        usage_cache_read_tokens=0, usage_cache_write_tokens=0,
+        usage_rate_per_mtok=(2.0, 10.0), usage_priced_as_of="2026-01-01",
+    )
+    forged = RevisionRecord(
+        revision=2, created_at="2026-01-02T00:00:00Z", previous_revision=1,
+        usage_input_tokens=500, usage_output_tokens=100,
+        usage_cache_read_tokens=0, usage_cache_write_tokens=0,
+        usage_rate_per_mtok=(2.0, 10.0), usage_priced_as_of=FORGED,
+    )
+    text = _render(render_session_cost, [clean, forged])
+    assert not _forged_lines(text), text
+    assert _raw_controls(text) == ""
+    # Must fire, both halves: the clean revision's date proves the "rates as of" stamp actually
+    # rendered, and the forged text still showing up (inside the neutralized token, never at
+    # column 0) proves it was processed rather than silently dropped.
+    assert "2026-01-01" in text
+    assert "FORGED AT COLUMN ZERO" in text
+
+
 # The renderer names the forged sweep below actually calls. A module-level constant rather than a
 # local variable, so `test_the_forged_sweep_covers_every_prose_renderer_in_the_module` can compare
 # against it without re-deriving the dict -- see that test for why this is checked rather than just
@@ -189,6 +224,10 @@ def test_a_challenge_cannot_forge_a_line_of_the_decision_brief():
 _SWEPT_RENDERERS = {
     "render_turn", "render_brief", "render_stories", "render_estimate",
     "render_dependency_map", "render_impact",
+    # render_session_cost is swept separately, below -- its untrusted field is a persisted
+    # RevisionRecord.usage_priced_as_of, not model prose, so it does not fit the model/brief/
+    # stories/estimate fixture shape the big sweep below is built from (#388).
+    "render_session_cost",
 }
 
 # `render_*` functions in `render/terminal.py` that render no model-authored prose, named with a
@@ -198,10 +237,16 @@ _NON_PROSE_RENDERERS = {
     "render_understanding": "labels are schema slot ids (via slot_label), not model-authored prose",
     "render_readiness": "a fixed verdict string plus schema slot id labels",
     "render_next_command": "a fixed command template plus a slug and an artifact type, no model text",
-    "render_usage": "the API usage ledger -- tokens, cost, latency -- never model prose",
     "render_stale": "artifact filenames from ARTIFACT_FILENAMES and schema slot labels, no model text",
-    "render_session_cost": "token counts, a cost estimate and pricing.py's own rate-table dates -- "
-                           "the per-session sibling of render_usage, never model prose",
+    # render_usage's `as_of` comes off the in-process UsageLedger this run's own provider calls
+    # built (usage.py's `priced_as_of`, stamped by the provider that made the call) -- it is never
+    # written to session.json and never read back off disk, so nothing between the API reply and
+    # this renderer is a channel for someone else's input. That is what makes it safe and is why it
+    # is exempt rather than swept, unlike its disk-sourced sibling render_session_cost, whose
+    # RevisionRecord.usage_priced_as_of is exactly that channel -- session.json, read back on every
+    # `requivo status`, forgeable through `session import` (#388).
+    "render_usage": "the in-process usage ledger this run itself built -- never persisted, never "
+                     "read back off disk, so it carries nothing another process could have forged",
 }
 
 
