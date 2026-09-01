@@ -1567,17 +1567,28 @@ def list_unexaminable_entries() -> list[UnexaminableEntry]:
 
 def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     """Partition `lock_root()` three ways, for `doctor`'s lock-residue check (#180): the slugs a
-    `<slug>.lock` file names, the entries that are not a lock file `session_lock` could have
-    produced, and the entries whose examination raised. The session-root sibling of
-    `_scan_session_root`, one root over.
+    `<slug>.lock` file names, the entries that are neither that nor a recognised
+    `<slug>.discovering` guard file (#209, #391), and the entries whose examination raised. The
+    session-root sibling of `_scan_session_root`, one root over.
 
-    **A `<slug>.lock` regular file is the only thing this store ever writes here.** `lock_path`
-    joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always, and the
-    reserved-device-name refusal only when nothing already occupies the matching *session* name
-    (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
-    against `session_root()`, not this root) -- so anything else under this root — a stray file with
-    a different name, a directory, a symlink at a `.lock` name — did not come from `session_lock`
-    and is reported as `unexpected` rather than folded into the lock count.
+    **Two regular-file shapes are what this store writes here, and both are recognised.**
+    `lock_path` joins `lock_root()` with a validated `<slug>.lock` -- pattern and length always,
+    and the reserved-device-name refusal only when nothing already occupies the matching *session*
+    name (`_refuse_new_reserved_slug`, #372; see `lock_path`'s own docstring for why that check is
+    against `session_root()`, not this root). `services.discovery._discovery_guard_path` writes the
+    second shape, `<slug>.discovering` -- deliberately never unlinked (#209), on the identical
+    POSIX reasoning that leaves a deleted session's `.lock` file behind, so it outlives every
+    discovery it ever served.
+
+    **This function was written the release before the second shape shipped, and #209 never came
+    back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
+    lock file Requivo recognises" about a file this store's own code had just written, on the very
+    first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
+    regular file, not a symlink, whose stem is a valid slug -- is recognised now and excluded from
+    `unexpected`. Anything else under this root — a stray file with a different name, a directory,
+    a symlink at a `.lock` or `.discovering` name, a `.discovering`-suffixed name whose stem is not
+    a valid slug — is not a shape either writer ever produces, and is still reported exactly as
+    before.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
 
@@ -1610,11 +1621,17 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
         except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
             unexaminable.append(UnexaminableEntry(p.name, str(e)))
             continue
-        slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
-        if is_ordinary_file and slug and is_slug(slug):
-            lock_slugs.append(slug)
-        else:
-            unexpected.append(p.name)
+        lock_slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
+        if is_ordinary_file and lock_slug and is_slug(lock_slug):
+            lock_slugs.append(lock_slug)
+            continue
+        # `_discovery_guard_path` (services/discovery.py, #209) writes this second shape and never
+        # unlinks it -- recognised and excluded from `unexpected`, not folded into `lock_slugs`:
+        # it is not a `<slug>.lock` file and answers a different question (#391).
+        guard_slug = p.name[: -len(".discovering")] if p.name.endswith(".discovering") else None
+        if is_ordinary_file and guard_slug and is_slug(guard_slug):
+            continue
+        unexpected.append(p.name)
     return lock_slugs, unexpected, unexaminable
 
 
