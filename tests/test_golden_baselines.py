@@ -5,9 +5,10 @@ describes -- or say, in code, exactly why not (#275).
 reads the baseline and compares it to a *fresh* capture. Neither ever compares the baseline to the
 request set it was supposedly captured from, so a baseline can silently drift out of step with
 `requests.md` and nothing goes red -- the harness just answers a different question than it
-reports, with no warning. That state is live on `main` right now: `training-budget`'s answer sheet
-was deepened from ~2 layers per slot to up to 10 (#193), and the baseline was never re-captured
-(#194).
+reports, with no warning. That happened once, on `main`: `training-budget`'s answer sheet was
+deepened from ~2 layers per slot to up to 10 (#193) and the baseline went uncaptured for a while
+(#194), until the full seven-baseline re-capture in #405 brought every committed baseline,
+including this one, back into agreement with `requests.md`.
 
 This is a pure offline file comparison -- no discovery call, no client, no network -- over the two
 files already on disk (`requests.md`, `<slug>.runs.json`).
@@ -17,9 +18,10 @@ Three genuinely different situations, not one collapsed "mismatch" verdict:
   - no committed baseline at all for a request in `requests.md` -- LEGITIMATE. Nobody has paid for
     the capture yet; this is not a failure.
   - a committed baseline whose stored `request`/`answers` disagree with what `requests.md` now
-    says for that slug -- DRIFT. The state `training-budget` is in. Goes red naming the slug and
-    which field(s) disagree, unless the slug is a declared exception in `_DECLARED_DRIFT` naming the
-    issue that owns the (paid) re-capture.
+    says for that slug -- DRIFT. Goes red naming the slug and which field(s) disagree, unless the
+    slug is a declared exception in `_DECLARED_DRIFT` naming the issue that owns the (paid)
+    re-capture -- the state `training-budget` was in until #405's re-capture retired it; see the
+    comment above `_DECLARED_DRIFT` below.
   - a committed baseline for a slug `requests.md` no longer names at all -- ORPHANED. Dead weight:
     neither `golden_run.py` nor `golden_diff.py` reads it any more, since both key off
     `requests.md`.

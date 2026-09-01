@@ -98,7 +98,8 @@ def resolve_slots(tokens: list[str]) -> tuple[list[str], list[str]]:
     A token that matches nothing is *reported*, not dropped — that is what the second element is for,
     and the caller prints it. A token that is **empty** is refused outright, before any matching runs,
     because the substring arm makes it match everything: `"" in label` is true for every label, so
-    `requivo impact <model> ""` (an unset shell variable, usually) or a caller splitting a
+    `requivo impact <model> ""` (an unset shell variable, usually — the positional is named
+    `session` since #248) or a caller splitting a
     comma-separated value on a trailing comma resolved to the *entire* schema with an empty unmatched
     list. An impact report claiming the whole model changed, carrying no complaint about its input,
     reads as a precise answer to a specific question rather than as a failure. The refusal is

@@ -98,12 +98,8 @@ The harness's own logic is unit-tested in `tests/test_golden_lib.py`, its captur
 `tests/test_golden_capture.py`, and what it prints — the per-lens states and the union verdict — in
 `tests/test_golden_readout.py` (no API calls in any of them).
 
-## Known stale baseline (2026-08-31)
-
-`fixtures/golden/training-budget.runs.json` is stale: its committed answer sheet predates #193's
-deepening of `training-budget`'s interactive layers in `requests.md` (2–3 layers per slot in the
-baseline, up to 10 in the current request set). `tests/test_golden_baselines.py` checks every
-committed baseline against `requests.md` and would refuse this one outright, so it is named as a
-declared exception there (`_DECLARED_DRIFT["training-budget"] = "#194"`) until the 15-call
-re-capture (K × `GOLDEN_TURNS`) lands. Read `golden_diff.py training-budget --questions` after that
-capture, and remove the exception in the same change.
+`tests/test_golden_baselines.py` checks every committed baseline against `requests.md` and refuses
+one that has drifted out of step, unless the slug is a declared exception in that file's
+`_DECLARED_DRIFT` naming the issue that owns the (paid) re-capture. That dict is empty as of the
+seven-baseline re-capture in #405 — every committed baseline currently agrees with `requests.md` —
+and stays in the file as the mechanism for the next asset edit that outruns its re-capture.
