@@ -102,7 +102,8 @@ _ENGINE_REPLY = json.dumps(
 @contextmanager
 def _model_in_out(slug):
     """A canonical .requivo/sessions/<slug>/ session with a model the subcommands can load and mutate.
-    Yields the path to model.json (the subcommands accept a slug OR a model.json path)."""
+    Yields the path to model.json. `status` and `impact` accept that path directly; every other
+    verb writes back into a session and takes the slug instead (`p.parent.name`) -- see #402."""
     store.create_session(slug, f"request for {slug}")
     store.save_revision(slug, out({"problem": slot(80, "explicit", "high")}))
     p = store.canonical_dir(slug) / "model.json"

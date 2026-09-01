@@ -409,16 +409,60 @@ def test_the_missing_argument_error_names_a_session_not_a_model():
     assert "required: model" not in err, err
 
 
-def test_the_session_positional_still_documents_the_saved_model_json_path():
-    """The rename moved the name, not the accepted value set: these verbs still resolve a path to a
-    saved `model.json` through `SessionService.resolve_slug`, so the help has to keep saying so."""
+# `status` and `impact` genuinely open a path they are handed -- `cli.py`'s `_resolve_ref` reads the
+# file's own bytes directly, no session lookup involved. The other eight resolve a *slug* and
+# read/write the store's own copy (`ArtifactService.save` refuses anything that is not
+# `has_meta(slug)`), so a model.json path was never a meaningful input for them (#402).
+PATH_ACCEPTING_JOURNEY_VERBS = ("status", "impact")
+
+
+def test_only_status_and_impact_document_the_saved_model_json_path():
+    """The rename moved the name, not the accepted value set -- for the two verbs that actually have
+    one. `resolve_slug`'s wrong-cause failure (#402) was closed by making the other eight refuse a
+    path outright rather than mine a slug out of it, so their help must not go on claiming a path
+    works: a help string is a promise the parser has to keep, not a decoration."""
     helps = {verb: action.help for verb, action in _walk_actions(_build_parser())
              if not action.option_strings and action.dest == "session"}
 
     assert len(helps) >= 15, f"the parser walk looks blind: {sorted(helps)}"
-    for verb in SESSION_TAKING_JOURNEY_VERBS:
+    for verb in PATH_ACCEPTING_JOURNEY_VERBS:
         assert "model.json" in (helps.get(verb) or ""), (
             f"`requivo {verb}` stopped documenting the saved model.json path: {helps.get(verb)!r}")
+
+
+def test_the_eight_write_verbs_document_a_bare_slug_only():
+    """The other half of the same guard, and the one that would have caught #402 outright: a help
+    string that still says "or a path to a saved model.json" for a verb that cannot accept one is
+    exactly the drift this issue was filed over."""
+    helps = {verb: action.help for verb, action in _walk_actions(_build_parser())
+             if not action.option_strings and action.dest == "session"}
+
+    write_verbs = [v for v in SESSION_TAKING_JOURNEY_VERBS if v not in PATH_ACCEPTING_JOURNEY_VERBS]
+    assert len(write_verbs) == 8, f"expected eight write verbs, found {write_verbs}"
+    for verb in write_verbs:
+        help_ = helps.get(verb) or ""
+        assert help_ == "a session slug", (
+            f"`requivo {verb}` documents {help_!r} -- it cannot open a model.json path, so its help "
+            "must not offer one")
+
+
+def test_docs_cli_md_names_the_same_two_path_accepting_verbs_as_the_parser():
+    """The other half of #402's fourth acceptance criterion: not only must the help be internally
+    consistent (the two tests above), the page a reader actually opens has to say the same thing.
+    `docs/cli.md`'s opening paragraph already named the narrower truth before the parser did --
+    read here rather than hand-copied, so a verb moved between the two sets on either side shows up
+    as a real disagreement instead of two hand-maintained lists that happen to agree today."""
+    page = Path(__file__).resolve().parents[1] / "docs" / "cli.md"
+    text = page.read_text(encoding="utf-8")
+
+    marker = "also accept a path to a saved"
+    line = next((ln for ln in text.splitlines() if marker in ln), None)
+    assert line is not None, "docs/cli.md no longer says which verbs accept a model.json path"
+
+    documented = tuple(re.findall(r"`([a-z]+)`", line.split(marker)[0]))
+    assert documented == PATH_ACCEPTING_JOURNEY_VERBS, (
+        f"docs/cli.md names {documented} as path-accepting; the parser says "
+        f"{PATH_ACCEPTING_JOURNEY_VERBS}")
 
 
 # ── a global flag is global wherever it is written (#249) ────────────────────

@@ -370,7 +370,7 @@ def test_pc_answer_warns_when_a_turn_makes_a_generated_artifact_stale():
                                           "impact": "high", "value": "draft → issued → paid → archived"}),
             "questions": [], "summary": {"objective": "Document lifecycle"},
         })
-        text = _run_app(["answer", str(p), "It also has an archived state."],
+        text = _run_app(["answer", slug, "It also has an archived state."],
                         client=FakeClient(turn2))
         assert "STALE" in text and "prd.md" in text
         assert "Workflow" in text  # the changed slot is named in the warning

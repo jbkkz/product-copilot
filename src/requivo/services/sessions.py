@@ -9,6 +9,7 @@ compute readiness. It returns a structured `UpdateResult` so any caller can rend
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -147,13 +148,49 @@ class SessionService:
         self.repo: SessionRepository = repo or default_repository()
 
     # ── resolution ────────────────────────────────────────────────────────────
-    def resolve_slug(self, reference: str | Path) -> str:
+    def resolve_slug(self, reference: str | Path, *, accept_path: bool = True) -> str:
         """Turn a user reference into a slug. Accepts a bare slug, a path to a session directory, or a
-        path to a model.json — under either the canonical `.requivo/sessions/` or legacy `out/` root."""
+        path to a model.json — under either the canonical `.requivo/sessions/` or legacy `out/` root.
+
+        `accept_path=False` refuses anything path-shaped outright, naming the reference exactly as
+        given (#402). The eight generator verbs (`answer`, `brief`, `prd`, `stories`, `estimate`,
+        `criteria`, `epic`, `release`) pass it: they resolve a *slug* and then read and write the
+        store's own copy of the session -- `ArtifactService.save` refuses anything that is not
+        `has_meta(slug)` -- so they never truly "open" a file they are handed the way `status` and
+        `impact` do, and a path was never a meaningful input for them. Before this, a stray or
+        fabricated path was mined for its parent directory's name regardless, and reported on --
+        or, worse, silently resolved against -- whatever session happens to carry that name, which
+        is the wrong-cause class this refuses instead of producing.
+
+        "Path-shaped" is decided from the string alone -- a separator, or a `model.json`/`session.json`
+        basename -- never from whether something happens to exist on disk at that name (invariant 17):
+        a bare slug that coincidentally collides with an unrelated directory in the caller's cwd must
+        still resolve as the slug it was typed as, not be refused as a path because of filesystem noise
+        nothing about the command line suggested.
+
+        When paths are still accepted (every `deterministic/` verb, and the directory branch below),
+        the same wrong-cause failure is closed at its root: a `model.json`/`session.json` reference
+        is only mined for its parent directory's name when the file is actually there. A reference to
+        a file that was never written falls through unchanged, so the caller's `exists()` check fails
+        naming the path itself, never a slug carved out of a segment of it."""
         ref = str(reference)
         p = Path(ref)
-        if p.name == "model.json" or p.name == "session.json":
-            return p.parent.name
+        if not accept_path:
+            looks_like_a_path = (
+                p.name in ("model.json", "session.json")
+                or os.sep in ref or (os.altsep and os.altsep in ref)
+            )
+            if looks_like_a_path:
+                raise SessionNotFoundError(
+                    f"{ref!r} looks like a path, but this command takes a session slug -- it "
+                    "resolves and writes back into a session, not the file itself, so a path is "
+                    "not enough to tell it which one. Pass the session's slug (see `requivo "
+                    f"session list`), or inspect the file directly with `requivo status {ref}`.",
+                    details={"ref": ref},
+                )
+            return ref
+        if p.name in ("model.json", "session.json"):
+            return p.parent.name if p.is_file() else ref
         if p.exists() and p.is_dir():
             return p.name
         return ref  # a bare slug
