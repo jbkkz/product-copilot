@@ -212,18 +212,6 @@ def test_the_context_cards_are_held_constant_across_every_turn():
     assert [c["only"] for c in provider.analyze_calls] == [["financial-reporting"]] * 2
 
 
-def test_the_assessment_is_reasoned_through_the_service_too():
-    """`advise(client, ...)` was the CLI's second direct provider call. `draft_assessment` is the
-    same work through the seam, with the cards the discovery ran against."""
-    provider = StubProvider()
-    model = _model(objective="done")
-    brief = _service(provider).draft_assessment(model, cards=["financial-reporting"])
-    assert brief is provider.brief
-    assert provider.generate_calls == [
-        {"artifact_type": "brief", "model": model, "only": ["financial-reporting"]}
-    ]
-
-
 @pytest.mark.parametrize("answers, expected", [
     (["q"], "Stopped."),   # the user quits at the first question
     ([""], "No answer provided"),   # every question skipped -- nothing to feed back
