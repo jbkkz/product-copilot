@@ -94,7 +94,7 @@ _ENGINE_REPLY = json.dumps(
 )
 
 
-# ── The `pc` subcommand CLI ───────────────────────────────────────────────────
+# ── The `requivo` subcommand CLI ──────────────────────────────────────────────
 # The modern surface is a thin layer over the same core; app() takes an injected
 # client so API-backed verbs run offline against a FakeClient.
 

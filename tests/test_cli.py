@@ -638,7 +638,7 @@ def test_old_package_name_is_gone():
 
 
 def test_cli_help_exits_cleanly():
-    # `requivo --help` (and `pc --help`, same entry point) prints usage and exits 0 via argparse.
+    # `requivo --help` prints usage and exits 0 via argparse.
     with pytest.raises(SystemExit) as ei:
         app(["--help"])
     assert ei.value.code == 0
