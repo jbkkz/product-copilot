@@ -38,9 +38,10 @@ class UnstatedSourceRevisionError(InvalidSessionError):
     `_stale_since` already gives for the sibling case where the history cannot be read.
 
     **The code is its own since #57.** `invalid_session` names the session rather than the omission,
-    and it was inherited only because a new code needs a row in `web/app.py::_STATUS_BY_CODE`, which
+    and it was inherited only because a new code needs a row in `requivo/http.py::STATUS_BY_CODE`
+    (`web/app.py::_STATUS_BY_CODE` at the time -- moved by #422), which
     `test_every_error_code_has_an_explicit_http_status` requires of every code in the vocabulary — and
-    the file it lives in was held by another lane in the round #6 landed. The precision
+    the file it lived in was held by another lane in the round #6 landed. The precision
     sat in the *type* meanwhile, which a caller reading a serialized envelope cannot see: the one
     handle it had could not tell *you left a flag off* from *this session is broken*. The subclassing
     stays, so `except InvalidSessionError` still catches both arms.

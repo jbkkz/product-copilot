@@ -19,12 +19,22 @@ guard below already uses for `SURFACE_TREES`. `render/` joined with #167, and th
 the reason this sentence is worth keeping accurate: for a release it read "scoped to `cli.py`" and
 was correct, while `render/terminal.py` imported `PRICING_AS_OF` and `UsageLedger` from
 `providers.anthropic` and no test in this file could see it. `web/` joined with #183, on the same
-argument: `web/config.py` probes for the SDK by name and `web/app.py` imports `EngineError`, both
-legitimate per #167, and both were unguarded until this scan set caught up with the storage guard's.
+argument: `web/config.py` probes for the SDK by name and `web/app.py` imported `EngineError`
+(moved to `http.py` by #422, below), both legitimate per #167, and both were unguarded until this
+scan set caught up with the storage guard's.
 `deterministic/` joined at the same time even though it reaches no provider today -- the narrower
 reading ("only the layers a violation has already been found in") is exactly the reasoning that let
 `render/` go unguarded through an entire hardening effort; a layer with zero current imports is the
 cheapest one to scan and the one a narrower rule would leave out again next time.
+
+`http.py` joined by name, not by tree, with #422. It is the RequivoError-code-to-HTTP-status
+classification, moved out of `web/app.py` into a framework-free top-level module so a second HTTP
+surface can import it with no `[web]` extra installed -- and by this guard's own "touches argv,
+stdout or HTTP" test for what counts as a surface, it is not one: no argv, no stdout, and, despite
+the name, no HTTP transport either. It still imports `EngineError` from `requivo.providers.errors`,
+which is exactly the reach this guard exists to watch, so it is scanned as an individually named
+subject (like `cli.py`) rather than left out on the theory that its directory puts it out of scope.
+See `provider_subjects()` and its `_SURFACE_PROVIDER_ALLOWLIST` entry for the fuller argument.
 
 The **storage** half of the same defect -- a surface reaching past `SessionRepository` to
 `core.persistence` -- is #76, and it is guarded now, over cli.py, `deterministic/` and `web/`. It
@@ -562,6 +572,7 @@ def test_the_process_guard_allows_what_core_legitimately_does(tmp_path):
 
 CLI = REPO_ROOT / "src" / "requivo" / "cli.py"
 CLI_PACKAGE = "requivo"
+HTTP = REPO_ROOT / "src" / "requivo" / "http.py"
 RENDER = REPO_ROOT / "src" / "requivo" / "render"
 RENDER_PACKAGE = "requivo.render"
 
@@ -617,10 +628,19 @@ _SURFACE_PROVIDER_ALLOWLIST = {
         "`test_an_allowlist_reason_claiming_no_client_is_built_is_true_of_the_function_it_names` in "
         "tests/test_provider.py checks that this entry no longer makes the claim it just made."
     ),
-    ("web/app.py", "EngineError"): (
-        "an exception type, not a call, same as the cli.py entry above -- caught at the HTTP "
-        "boundary and turned into an error response. Importing a class the app never calls "
-        "orchestrates nothing."
+    ("http.py", "EngineError"): (
+        "an exception type, not a call, same as the cli.py entry above -- read by an isinstance "
+        "check that turns it into a status code, never invoked. #422 moved this import (and the "
+        "classification table it feeds) out of `web/app.py`, where an equivalent entry with the "
+        "same reasoning lived until this move; `http.py` is not one of `render/`, `web/` or "
+        "`deterministic/` (it touches none of argv, stdout or HTTP transport -- it is a pure "
+        "function over an exception, framework-free by design), so it is scanned as an individually "
+        "named subject here, the same way `cli.py` is, rather than picked up by walking a tree. The "
+        "alternative -- leaving it unscanned, on the theory that a neutral top-level module like "
+        "`usage.py` or `paths.py` needs no entry here -- does not hold: those two import nothing "
+        "from `providers/` at all, so there is nothing for this guard to watch; `http.py` does, "
+        "which is exactly the shape #167's own lesson warns is easy to leave uncovered. Scanning it "
+        "costs one subject and one entry against a real, not a hypothetical, provider import."
     ),
     ("web/routes/sessions.py", "EngineError"): (
         "an exception type, not a call, and caught for a *routing* decision the HTTP boundary above "
@@ -688,9 +708,20 @@ def provider_subjects() -> list[tuple[Path, str, str]]:
     walks its trees: a module added next year must arrive inside the scan set rather than beside
     it. Both helpers refuse an absent or empty subject, so a renamed package is 'could not look'
     here too (#10).
+
+    `http.py` joined the same way as `cli.py` -- named individually, not by tree -- since #422. It is
+    not itself a surface (`render/`, `web/`, `deterministic/` are the trees below because each
+    touches argv, stdout or HTTP; `http.py` touches none of those, framework-free by construction)
+    but it is the one place outside those trees that legitimately reaches into `requivo.providers`
+    for a name (`EngineError`, read by isinstance and never called), and the allowlist entry for it
+    carries the reason. See that entry in `_SURFACE_PROVIDER_ALLOWLIST` for the fuller argument for
+    scanning a module this guard's own definition of "surface" would otherwise exclude.
     """
     src = REPO_ROOT / "src" / "requivo"
-    subjects = [(subject_module(CLI), CLI_PACKAGE, "cli.py")]
+    subjects = [
+        (subject_module(CLI), CLI_PACKAGE, "cli.py"),
+        (subject_module(HTTP), CLI_PACKAGE, "http.py"),
+    ]
     for root, package in PROVIDER_TREES:
         subjects.extend((p, pkg, p.relative_to(src).as_posix()) for p, pkg in scan(root, package))
     return subjects
@@ -799,6 +830,7 @@ def test_the_provider_guard_names_what_it_scanned():
     (web/, deterministic/) found unguarded."""
     labels = sorted(label for _, _, label in provider_subjects())
     assert "cli.py" in labels
+    assert "http.py" in labels, "the provider guard did not scan http.py; it scanned " + str(labels)
     for expected in ("render/terminal.py", "web/config.py", "deterministic/sessions.py"):
         assert expected in labels, f"the provider guard did not scan {expected}; it scanned {labels}"
 

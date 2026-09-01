@@ -17,6 +17,7 @@ from requivo.core.errors import (
     SessionNotFoundError,
 )
 from requivo.core.persistence import validate_slug
+from requivo.http import http_status_for
 from requivo.providers.errors import EngineError
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
@@ -245,17 +246,17 @@ def _unreadable_session(request: Request, slug: str, exc: BaseException):
     **The status does not move.** Whatever the exception would have been reported as, it still is:
     409 for a session written by a newer Requivo, 500 for a store that could not answer. A page
     that explains a failure does not turn it into a success, and `session_page`'s status is part of
-    a public surface. `_status_for` is imported inside the function because `app.py` imports this
-    module — the cycle is real, and by the time a request is served `app` is fully imported. Pinned
+    a public surface. `http_status_for` used to be `app.py`'s own `_status_for`, imported inside the
+    function because `app.py` imports this module — the cycle was real, and by the time a request was
+    served `app` was fully imported. #422 moved the classification to `requivo.http`, which this
+    module has no cycle with, so the import now sits at module level like every other one here. Pinned
     by `test_opening_an_unreadable_session_answers_with_the_status_it_always_did`.
 
     Logged as well as rendered. The page is written for the reader; the operator needs the same
     fact in the terminal they started the server in, which is where the app's own 5xx arm already
     puts one.
     """
-    from requivo.web.app import _status_for  # noqa: PLC0415 - see the docstring: app imports this
-
-    status = _status_for(exc) if isinstance(exc, RequivoError) else 500
+    status = http_status_for(exc) if isinstance(exc, RequivoError) else 500
     code = exc.code if isinstance(exc, RequivoError) else "session_unreadable"
     # **The traceback rides the non-`RequivoError` arm and only that arm**, because the catch above
     # is deliberately open and therefore also catches what nobody anticipated. A `RequivoError` is a
