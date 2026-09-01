@@ -43,9 +43,16 @@ from requivo.core.errors import (
     SessionLockedError,
     SessionUnreadableError,
 )
-from requivo.core.persistence import ArtifactStatus, artifact_path, ensure_store_dir, is_contained, validate_slug
+from requivo.core.persistence import (
+    ArtifactStatus,
+    _refuse_new_reserved_slug,
+    _slug_shape,
+    artifact_path,
+    ensure_store_dir,
+    is_contained,
+)
 from requivo.core.validation import require_input_within_bounds
-from requivo.paths import lock_root
+from requivo.paths import lock_root, session_root
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
@@ -206,10 +213,28 @@ def _discovery_guard_path(slug: str) -> Path:
     has written anything. This file exists to serialise *that* window, without touching the write
     lock at all.
 
-    Validated exactly as `lock_path` validates its own: the slug reaches here from the service layer
-    and, under invariant 14, an external consumer may call this layer directly."""
+    Validated exactly as `lock_path` validates its own -- the shape unconditionally, the reserved
+    Windows device name only when nothing already occupies the slug (#372's creation/read split).
+    The slug reaches here from the service layer and, under invariant 14, an external consumer may
+    call this layer directly.
+
+    **This function was written one commit before that split and was missed by it** (#390). `e03aa47`
+    added it calling `validate_slug`; `3fa1423`, the very next commit, swept `_child_of` and
+    `lock_path` onto the conditional form -- and a sweep cannot see a sibling that did not exist when
+    it was written. The cost was a session already on disk under a reserved name that every read verb
+    could reach, and that `run_discovery` alone refused: the guard meant to serialise a paid call
+    turned into the one thing standing between that session and being worked on at all. Pinned by
+    `test_a_reserved_slug_the_sweep_one_commit_later_missed_reaches_the_discovery_guard`."""
     root = lock_root()
-    p = root / (validate_slug(slug) + ".discovering")
+    slug = _slug_shape(slug)
+    # Checked against the *session* root, never against `root` above -- `lock_path` carries the long
+    # form of why, and it is the same argument here: a `<slug>.discovering` file is not a session, and
+    # what decides whether #221's creation refusal still applies is whether a session already claims
+    # this name. On a first discovery of a genuinely new reserved slug nothing does, so the refusal
+    # still fires -- but that case is unreachable anyway, since `run_discovery` needs a session that
+    # `create_session` (which does refuse) already made.
+    _refuse_new_reserved_slug(slug, session_root() / slug)
+    p = root / (slug + ".discovering")
     if not is_contained(p, root):
         raise InvalidSlugError(f"slug {slug!r} does not resolve to a lock file inside {root}",
                                details={"slug": slug})
@@ -483,24 +508,6 @@ class DiscoveryService:
             require_input_within_bounds(answers, field="answers")
         return self._need_provider().analyze(
             request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
-
-    def draft_assessment(self, model: EngineOutput, *, cards: list[str] | None = None):
-        """The solution assessment for a model that is not a session yet.
-
-        **No surface calls this any more, and the reason is worth knowing before reaching for it**
-        (#202). It was the last provider call of the CLI's interactive discovery, made *before* the
-        one write, so an `EngineError` here discarded all eight drafted turns. That branch now
-        persists the converged model first and produces the brief through `generate(slug, "brief")`,
-        which is what every other surface already did. Kept because reasoning an assessment for a
-        model that is not a session is a coherent operation and the contract is public, but a caller
-        that has a session should use `generate`: it absorbs, revisions and saves, and this does none
-        of those.
-
-        Distinct from `generate(slug, "brief")`, which reads a persisted session, applies the absorbed
-        reasoning as a revision and saves a document. There is no session here to read or write, so
-        this reasons and returns; the write is one call later and goes through the same validated path
-        as every other surface's."""
-        return self._need_provider().generate("brief", model, only=cards)
 
     def run_discovery(self, slug: str, *, surface: str = "discover") -> UpdateResult:
         """Run the first discovery turn on an already-created session (the 'create session only' path
