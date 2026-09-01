@@ -253,7 +253,7 @@ def converse(disco: DiscoveryService, request: str, only: list[str] | None = Non
     return Drafted(out, stopped=False)
 
 
-# ── Subcommand CLI (`pc`) ─────────────────────────────────────────────────────
+# ── Subcommand CLI (`requivo`) ────────────────────────────────────────────────
 # The modern surface. A thin layer over the same core: each handler parses, calls
 # the services, renders, writes — no business logic here.
 # `app()` takes an optional client so tests can inject a stub; only verbs that hit
@@ -491,7 +491,7 @@ def _cmd_answer(a, client) -> None:
     # refined model through the validated path (diff → revision → stale-flag).
     disco = DiscoveryService(client=client)
     svc = disco.sessions
-    slug = svc.resolve_slug(a.model)
+    slug = svc.resolve_slug(a.session)
     if not svc.exists(slug):
         raise svc.no_session(slug)
     result = disco.answer(slug, a.answers, surface="cli-answer")
@@ -564,7 +564,7 @@ def _status_payload(ref: str) -> tuple[EngineOutput, dict]:
 
 
 def _cmd_status(a, client) -> None:
-    out, payload = _status_payload(a.model)
+    out, payload = _status_payload(a.session)
     if getattr(a, "json", False):
         # `--json` deliberately gets no pointer (#246): a machine consumer picks its own next step,
         # and a line printed beside the payload would break every caller that pipes this into `jq`.
@@ -680,7 +680,7 @@ def _cmd_demo(a, client) -> None:
 def _cmd_impact(a, client) -> None:
     """Offline query over the dependency DAG — no API call. With slots, show their blast
     radius; without, map every slot's downstream."""
-    out, _ = _resolve_ref(a.model)
+    out, _ = _resolve_ref(a.session)
     if not a.slots:
         render_dependency_map(out)
         return
@@ -709,7 +709,7 @@ def _generator_service(a, client) -> tuple[str, DiscoveryService]:
     """Shared preamble: (slug, service). Fails early if the session does not exist, so a typo'd slug
     never reaches the provider and gets billed for it."""
     svc = SessionService()
-    slug = svc.resolve_slug(a.model)
+    slug = svc.resolve_slug(a.session)
     if not svc.exists(slug):
         raise svc.no_session(slug)
     return slug, DiscoveryService(client=client, sessions=svc)
@@ -950,7 +950,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     def model_cmd(name: str, help_: str, func, extra=None):
         sp = sub.add_parser(name, help=help_)
-        sp.add_argument("model", help="a session slug, or a path to a saved model.json")
+        # `session`, not `model` (#248). The two authoring eras spelled one concept two ways: every
+        # verb under `deterministic/` says `session`, and this helper said `model` -- so the usage
+        # error a person actually meets read "the following arguments are required: model" about a
+        # session slug, beside a `model` verb group of its own. A dest is internal and a positional
+        # is passed by position, so no invocation changed. Pinned by
+        # `test_every_session_reference_positional_is_spelled_session` and
+        # `test_the_missing_argument_error_names_a_session_not_a_model`.
+        sp.add_argument("session", help="a session slug, or a path to a saved model.json")
         if extra:
             extra(sp)
         sp.set_defaults(func=func)
@@ -1096,7 +1103,7 @@ def _accept_workspace_after_the_command(parser: argparse.ArgumentParser) -> None
 
 
 def app(argv: list[str] | None = None, client=None) -> None:
-    """Entry point for the `requivo` command (and its `pc` alias, and `python -m requivo`)."""
+    """Entry point for the `requivo` command (and `python -m requivo`)."""
     # First, before anything can print: make stdout and stderr unable to kill this process on a
     # character they cannot encode (#29). Not at import time — importing `requivo` must not
     # reconfigure the streams of a program that merely imported it.

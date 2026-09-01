@@ -298,8 +298,8 @@ bug that looked like correct behaviour.
     **That stopped new ones and found none of the ones already on disk**, which nothing could see:
     `list_session_slugs` filters on `session.json`, and `doctor` and `session verify` both reason
     over the slugs it returns, so the only symptom was the next `create_session` on that name losing
-    its rename and landing under `<slug>-<hash>` with nothing saying why. `list_non_session_entries`
-    is the other half of that one predicate, beside `list_session_slugs`; `scan_session_root` answers
+    its rename and landing under `<slug>-<hash>` with nothing saying why. `scan_session_root`'s
+    second part is the other half of that one predicate, beside `list_session_slugs`; it answers
     both from **one** listing, for the caller that asks both, because two scans are two instants and a
     `session.json` landing between them puts a name in neither answer. `doctor` reports it — a
     **report, not a repair**, describing what is there and never concluding what it is, because a
@@ -579,7 +579,7 @@ stand in for, and it is the gap this repository has actually been missing.
 
 A parallel drift, in the store rather than in the test suite: the report-only diagnostics in
 `core/persistence.py` and `deterministic/doctor.py` —
-`NonSessionEntry`/`UnexaminableEntry`/`_describe_non_session`/`scan_session_root`/`list_*` (~290
+`NonSessionEntry`/`UnexaminableEntry`/`_describe_non_session`/`scan_session_root`/`list_*` (~260
 lines) and the lock-residue scan (`scan_lock_root`, `_lock_health`, ~110 lines together) — have grown
 faster than the states they report actually occur. Each addition is well built and each mints public
 `--json` surface that `docs/compatibility.md` then makes expensive to remove, so the tier only ever

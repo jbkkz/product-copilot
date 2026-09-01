@@ -962,12 +962,23 @@ _SURFACE_STORAGE_ALLOWLIST = {
     ("deterministic/artifacts.py", "artifact_path"): (
         "prints where `artifact save` put the file. See the cli.py entry."
     ),
-    ("web/dependencies.py", "validate_slug"): (
+    ("web/dependencies.py", "_slug_shape"): (
         "refuses a slug-shaped path segment at the HTTP boundary, before it reaches any service. A "
-        "name rule, applied to a request, with no session in hand yet."
+        "name rule, applied to a request, with no session in hand yet. The shape half of what used "
+        "to be one `validate_slug` call (#396) -- see the entry below it for why the split."
+    ),
+    ("web/dependencies.py", "_refuse_new_reserved_slug"): (
+        "the other half, and the reason `safe_slug` no longer calls `validate_slug`: every `{slug}` "
+        "route addresses a session that must already exist, so the reserved-device-name refusal is "
+        "conditional here (#372's read-time form) rather than unconditional. A private name because "
+        "core owns the creation/read split and a public wrapper would be a second statement of it; "
+        "no repository method can answer it, since it is a question about a *name* before any "
+        "session is in hand -- the same argument the shape half above makes (#396)."
     ),
     ("web/routes/sessions.py", "validate_slug"): (
-        "same rule at the route that takes a slug from a form field. See web/dependencies.py."
+        "the creation-time half, at the route that takes a slug from a form field. Deliberately "
+        "*not* the conditional pair the dependency above uses: `POST /sessions` can bring a slug "
+        "into existence, so it gets the unconditional refusal #221 specifies."
     ),
     ("providers/anthropic/completion.py", "_atomic_write"): (
         "writes the final malformed reply the JSON retry loop gave up on into `.requivo/debug/`, so "

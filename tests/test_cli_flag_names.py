@@ -351,6 +351,76 @@ def test_documented_cli_commands_exist():
     assert not missing, f"documented CLI commands missing from the parser: {sorted(missing)}"
 
 
+# ── one name for a session reference, across both authoring eras (#248) ──────
+#
+# `cli.py`'s journey verbs declared the positional as `model` while all ten verbs under
+# `deterministic/` declared the identical concept as `session`. So `requivo status` with no argument
+# answered "the following arguments are required: model" about a thing the user supplies as a
+# session slug -- engine vocabulary, and doubly confusing beside the `model` verb group, where
+# `requivo model <model>` was the rendered usage. A dest is internal and a positional is passed by
+# position, so unifying the two eras changed no invocation.
+
+SESSION_TAKING_JOURNEY_VERBS = (
+    "answer", "status", "impact", "brief", "prd", "stories", "estimate", "criteria", "epic",
+    "release",
+)
+
+
+def _positionals(parser):
+    """verb path -> its positional dests in declaration order, read off the built parser.
+
+    Off the parser and not off a grep of the source, for `test_every_json_verb_is_inside_the_promise`'s
+    reason one field along: a grep validates the reader's regex, and what is being asserted is what
+    the command actually binds.
+    """
+    found = {}
+    for verb, action in _walk_actions(parser):
+        if action.option_strings:
+            continue
+        found.setdefault(verb, []).append(action.dest)
+    return found
+
+
+def test_every_session_reference_positional_is_spelled_session():
+    """The rename, asserted as a property of the whole parser rather than of the ten verbs that
+    moved -- so a verb added later that copies the era this closed fails here, under its own name."""
+    positionals = _positionals(_build_parser())
+
+    # must fire: the walk really found the surface. Without this both assertions below pass on an
+    # empty dict, which is exactly what a walk aimed at the wrong attribute would produce.
+    assert len(positionals) >= 20, f"the parser walk looks blind: {positionals}"
+
+    for verb in SESSION_TAKING_JOURNEY_VERBS:
+        assert positionals.get(verb, [])[:1] == ["session"], (
+            f"`requivo {verb}` takes a session reference; its first positional is "
+            f"{positionals.get(verb)}")
+
+    offenders = {v: d for v, d in positionals.items() if "model" in d}
+    assert offenders == {}, f"a positional still calls a session reference `model`: {offenders}"
+
+
+def test_the_missing_argument_error_names_a_session_not_a_model():
+    """The user-visible half, and the sentence the issue was filed on. The parser test above would
+    stay green if `dest` moved and `metavar` did not, and the metavar is what a person reads."""
+    code, out, err = _run_capturing(["status"], client=None)
+
+    assert code == 2, f"expected argparse's usage error, got {code}: {err!r}"
+    assert "required: session" in err, err
+    assert "required: model" not in err, err
+
+
+def test_the_session_positional_still_documents_the_saved_model_json_path():
+    """The rename moved the name, not the accepted value set: these verbs still resolve a path to a
+    saved `model.json` through `SessionService.resolve_slug`, so the help has to keep saying so."""
+    helps = {verb: action.help for verb, action in _walk_actions(_build_parser())
+             if not action.option_strings and action.dest == "session"}
+
+    assert len(helps) >= 15, f"the parser walk looks blind: {sorted(helps)}"
+    for verb in SESSION_TAKING_JOURNEY_VERBS:
+        assert "model.json" in (helps.get(verb) or ""), (
+            f"`requivo {verb}` stopped documenting the saved model.json path: {helps.get(verb)!r}")
+
+
 # ── a global flag is global wherever it is written (#249) ────────────────────
 #
 # `--workspace` was declared on the root parser alone, so `requivo status <slug> --workspace DIR`
@@ -387,7 +457,7 @@ def test_workspace_parses_identically_before_and_after_the_command():
     before = _build_parser().parse_args(["--workspace", "/w", "status", "m.json"])
     after = _build_parser().parse_args(["status", "m.json", "--workspace", "/w"])
     assert before.workspace == after.workspace == "/w"
-    assert before.model == after.model == "m.json"
+    assert before.session == after.session == "m.json"
     # Two levels down, where the flag has to be on the *leaf* parser to be reachable at all.
     assert _build_parser().parse_args(["session", "list", "--workspace", "/w"]).workspace == "/w"
 
