@@ -143,7 +143,18 @@ class SessionRepository(Protocol):
 
 class FileSessionRepository:
     """The default backing: the `.requivo/sessions/<slug>/` layout. A thin adapter over
-    `core.persistence` — it holds no state, so it is safe to construct per call."""
+    `core.persistence` — it holds no state, so it is safe to construct per call.
+
+    That sentence is true and, on its own, misleading: every method below delegates to a
+    module-level `core.persistence` function, and those resolve the workspace root ambiently
+    (`paths.workspace_root()`, reading `REQUIVO_WORKSPACE`/cwd) on each call rather than reading
+    it off `self`. So two instances of this class are indistinguishable — neither carries a
+    root of its own — and the protocol's "backing-neutral, addressable by construction" promise
+    does not hold for this backing today: `DiscoveryService`'s "one repository per service,
+    chosen once" comment (`services/discovery.py`) is unenforceable here, because there is no
+    per-instance identity for it to enforce. This is deliberately deferred to #272, which threads
+    an explicit root through the store; do not construct two of these expecting them to address
+    different workspaces."""
 
     @staticmethod
     def _missing(slug: str) -> SessionNotFoundError:
