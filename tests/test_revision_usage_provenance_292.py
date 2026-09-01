@@ -146,6 +146,74 @@ def test_render_session_cost_sums_priced_revisions():
     assert revisions[-1].usage_input_tokens == 1000
 
 
+def test_render_session_cost_reads_its_arithmetic_from_usage_py_and_nowhere_else(capsys):
+    """#389: `render_session_cost` used to re-implement `UsageLedger.cost_usd()` locally -- the
+    same 0.1x cache-read and 1.25x cache-write multipliers, copied rather than called -- while
+    `usage.py`'s own module docstring says cost is "arithmetic here and nowhere else". A mutation
+    control proved the copy was unguarded: changing the cache-read multiplier in
+    `render_session_cost` alone, leaving `usage.py` untouched, produced zero added failures across
+    the full suite (`1 failed, 1392 passed` before and after -- the one failure a pre-existing,
+    unrelated artifact of running outside a git checkout).
+
+    This is the guard that closes that gap. It exercises every rate tier at once -- plain input,
+    a cache read, a cache write, output -- and asserts the exact printed dollar figure, computed
+    independently here, so a multiplier drifting in only one of the two places shows up as a wrong
+    number rather than as a missing test. Round token counts (1,000,000 each) keep the arithmetic
+    exact rather than merely close, so `.3f` rounding cannot paper over a divergence."""
+    from requivo.core.persistence import RevisionRecord
+    from requivo.render.terminal import render_session_cost
+
+    revisions = [RevisionRecord(
+        revision=1, created_at="2026-01-01T00:00:00Z",
+        usage_input_tokens=1_000_000, usage_output_tokens=1_000_000,
+        usage_cache_read_tokens=1_000_000, usage_cache_write_tokens=1_000_000,
+        usage_rate_per_mtok=(2.0, 10.0), usage_priced_as_of="2026-01-01",
+    )]
+
+    render_session_cost(revisions)
+
+    # (1_000_000 * 2.0)              input, full price
+    # + (1_000_000 * 2.0 * 0.1)      cache read,  ~0.1x the input rate
+    # + (1_000_000 * 2.0 * 1.25)     cache write, ~1.25x the input rate
+    # + (1_000_000 * 10.0)           output, full price
+    # = 14,700,000 / 1_000_000 == 14.700
+    assert "~$14.700" in capsys.readouterr().out
+
+
+def test_render_session_cost_does_not_stamp_a_dangling_separator_for_an_empty_priced_as_of(capsys):
+    """Found in review (#388/#389): the old code built its `as_of` list with a *truthy* filter --
+    `if r.usage_priced_as_of and ...` -- which silently dropped an empty-string date. Routing the
+    same field through `UsageLedger.priced_as_of` (#389's fix) filters on `is not None` instead,
+    which is the right rule for `usage.py`'s own contract (`None` means "unpriced", not "priced with
+    an empty date") but is a different rule than the one this renderer used to apply -- so a revision
+    whose `usage_priced_as_of` is `""` (never written by any real provider path, but not excluded by
+    `RevisionRecord`'s schema either, and reachable through `session import`) used to be silently
+    skipped and now leaves a dangling `" · "` with nothing after it: `rates as of 2026-01-01 · `.
+    Normalizing an empty string to `None` on the way into the scratch `CallRecord` restores the old
+    renderer's behaviour without reintroducing local arithmetic."""
+    from requivo.core.persistence import RevisionRecord
+    from requivo.render.terminal import render_session_cost
+
+    dated = RevisionRecord(
+        revision=1, created_at="2026-01-01T00:00:00Z",
+        usage_input_tokens=1000, usage_output_tokens=200,
+        usage_cache_read_tokens=0, usage_cache_write_tokens=0,
+        usage_rate_per_mtok=(2.0, 10.0), usage_priced_as_of="2026-01-01",
+    )
+    undated = RevisionRecord(
+        revision=2, created_at="2026-01-02T00:00:00Z", previous_revision=1,
+        usage_input_tokens=500, usage_output_tokens=100,
+        usage_cache_read_tokens=0, usage_cache_write_tokens=0,
+        usage_rate_per_mtok=(2.0, 10.0), usage_priced_as_of="",
+    )
+
+    render_session_cost([dated, undated])
+
+    text = capsys.readouterr().out
+    assert "rates as of 2026-01-01" in text
+    assert "· " not in text and " ·" not in text, text
+
+
 def test_requivo_status_prints_the_cumulative_cost_line():
     """The CLI end -- `requivo status` shows the line once a revision carries usage."""
     from contextlib import redirect_stdout
