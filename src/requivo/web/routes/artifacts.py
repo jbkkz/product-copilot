@@ -74,9 +74,16 @@ def view_artifact(
     with autoescape off; that is not a shortcut but the only way to apply markup at all, and it is
     why the escaping is the renderer's job rather than Jinja's here.
     """
+    # `artifacts.show()` calls `ArtifactService._filename` first, which raises
+    # `UnknownArtifactTypeError` (400) for any type not in `ARTIFACT_FILENAMES` -- so an
+    # `artifact_type` that reaches the `if download:` branch below is already a real key.
     content = artifacts.show(slug, artifact_type)  # SessionNotFoundError → 404 if absent
     if download:
-        filename = ARTIFACT_FILENAMES.get(artifact_type, f"{artifact_type}.md")
+        # No invented-filename fallback (#270): `.get(artifact_type, f"{artifact_type}.md")` used to
+        # guess a name for a type nothing ever produced, against the repo's own refuse-don't-guess
+        # rule (invariant 3) -- and the guess could never actually be reached, since the line above
+        # already refuses anything `ARTIFACT_FILENAMES` does not know. Plain indexing says so.
+        filename = ARTIFACT_FILENAMES[artifact_type]
         return PlainTextResponse(content, media_type="text/markdown", headers={
             "Content-Disposition": f'attachment; filename="{filename}"'})
     return templates.TemplateResponse(request, "artifacts/detail.html", {

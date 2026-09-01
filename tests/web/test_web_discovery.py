@@ -156,6 +156,23 @@ def test_generate_brief_and_prd_and_view(client, with_provider):
     assert dl.headers["content-disposition"].endswith('filename="prd.md"')
 
 
+def test_downloading_an_unknown_artifact_type_refuses_rather_than_inventing_a_filename(client, with_provider):
+    """#270. The route used to fall back to `f"{artifact_type}.md"` for a type `ARTIFACT_FILENAMES`
+    does not know, against the repo's own refuse-don't-guess rule (invariant 3) -- and the fallback
+    could never actually fire, because `artifacts.show()` (called one line above it) already raises
+    `UnknownArtifactTypeError` for exactly this input. This is the must-fire half: an unknown type
+    must produce the existing structured refusal (400) rather than a 200 with a guessed filename.
+    `test_generate_brief_and_prd_and_view` above is the must-not-fire control -- a known type still
+    gets the real filename."""
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT))
+    client.post("/sessions", data={"request_text": "x", "slug": "leave-approval", "provider": "anthropic"})
+
+    resp = client.get("/sessions/leave-approval/artifacts/bogus?download=1")
+
+    assert resp.status_code == 400
+    assert "bogus" in resp.text
+
+
 def test_a_saved_artifact_reads_as_a_document_not_as_source(client, with_provider):
     """The money screen, rendered (#235).
 

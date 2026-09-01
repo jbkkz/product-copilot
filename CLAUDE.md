@@ -716,12 +716,35 @@ change between two versions (value/confidence/impact — completeness alone is n
 Each generator is the same shape — **prompt + contract + generator fn + writer** — and every interface
 reaches them through `DiscoveryService.generate()`, which owns the revision lock, the provenance and
 the artifact write. `stories` and `estimate` are deliberately terminal-only analyses with no file
-(`DiscoveryService.reason()`). Adding a generator: prompt asset + contract + a function in
-`providers/anthropic/generators.py` (registered in `_GENERATORS` and `_OP_PROMPTS`, which stay one
-table each) + a writer in
-`render/markdown.py` (registered in `_WRITERS`, which lives in `services/discovery.py`) + a
-subcommand in `cli.py`. Any generator whose text is
-user-facing carries the **Voice** rule: no slot ids, percentages or confidence labels in prose.
+(`DiscoveryService.reason()`).
+
+**Adding a generator touches every registration point below, or a type lands in some tables and not
+others** — the exact drift #270 found: a type present in `ARTIFACT_FILENAMES`/`_GENERATORS`/`_WRITERS`
+but missing from `_ARTIFACT_SLOTS_RAW` was never flagged stale, because `services/artifacts.py`'s
+`_stale_since` reads both of its checks off that one map, which is invariant 1's exact failure shape.
+This checklist used to name only three of the eight registration points and place one of them in the
+wrong file; `tests/test_dependencies.py`'s key-agreement test
+(`test_the_real_artifact_registries_agree_on_their_key_sets`) now fails when a new type reaches some
+of the tables below and not the rest, so a future omission is caught rather than only documented:
+
+- a prompt asset + contract
+- a function in `providers/anthropic/generators.py`, registered in `_GENERATORS` and `_OP_PROMPTS`
+  (which stay one table each)
+- a writer *function* in `render/markdown.py` — the writer *registration table*, `_WRITERS`, lives in
+  `services/discovery.py`, not in `render/markdown.py`
+- an entry in `core/dependencies.py`'s `_ARTIFACT_SLOTS_RAW` (which slots the artifact consumes — the
+  one the staleness graph actually reads at save time, so a type missing here is never flagged stale
+  regardless of what else knows about it) and, if the type is saveable, `ARTIFACT_FILENAMES` (its
+  filename) **and** `ARTIFACT_FILES` — found missing from this checklist and from the guard's own
+  first cut, in review of this same change: `services/sessions.py`'s `_resolve_stale`, which runs on
+  *every* apply rather than only at save time, iterates `for t in ARTIFACT_FILES` to decide which
+  already-saved artifacts to eagerly re-flag, so a type present everywhere else and absent from this
+  one table is never auto-flagged stale by that path even though the save-time path still catches it
+- a label in `web/viewmodels/labels.py`'s `ARTIFACT_LABELS`, so the Web has something to call it
+- a subcommand in `cli.py`
+
+Any generator whose text is user-facing carries the **Voice** rule: no slot ids, percentages or
+confidence labels in prose.
 
 `brief_markdown` is deliberately half deterministic. Its *What is confirmed* and *Important
 assumptions* sections are projections of the model (`_stated()` reads each topic's evidence), not
@@ -746,6 +769,11 @@ python scripts/golden_run.py [<slug>…] [--brief]   # re-capture the K-run base
 python scripts/golden_diff.py [<slug>…]            # what moved, above the noise floor
 python scripts/golden_diff.py <slug> --questions   # the questions & challenges themselves, old vs new
 ```
+
+A bare `golden_run.py` (no slug, no flag) captures every single-pass request and skips every
+interactive one by default, naming each skip and the exact command to capture it alone -- see
+Cost, below, for why. Name the slug explicitly, or pass `--all`, to capture an interactive request
+as part of a run anyway (#276).
 
 **Two shapes of request.** Most are **single-pass** — one discovery call, K times. A request carrying
 `answer.<slot>:` lines in `requests.md` is **interactive**: it drives `DiscoveryService.draft_turn`,
@@ -806,7 +834,9 @@ baseline if the change was intended. Why it is built this way (`scripts/golden_l
 Cost: K calls per **single-pass** request, doubled under `--brief`. An interactive
 request is K × `GOLDEN_TURNS` on its own (15 at the defaults), so capture it alone rather than as part
 of a full-set run — the bare invocation skips interactive requests for that reason. Re-capture the
-targeted request first, the full set only before committing a baseline.
+targeted request first, the full set only before committing a baseline. -- a bare `golden_run.py`
+enforces this by skipping interactive requests rather than only recommending it in prose (#276);
+`--all` or an explicit slug opts back in.
 
 **No total for the set is written down, here or in the script.** It used to be — *"a full six-request
 cycle is 18"*, in this file and in `golden_run.py`'s docstring, arithmetically right on the day both

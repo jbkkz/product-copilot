@@ -116,10 +116,22 @@ dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx>=0.25.0,<1",
 # a config that complains about itself. Pyright reads `[tool.pyright]` natively and prefers a
 # `pyrightconfig.json` when one exists, so there must not be one.
 
-# Scoped, and the scope is the decision: these are the two layers the rest of the repo rests on.
-# Widen to `providers/` and `web/` once these have *stayed* clean — not before, because a check that
-# is red on arrival is a check people learn to scroll past.
-include = ["src/requivo/core", "src/requivo/services"]
+# Widened from `core/` + `services/` to the whole package (#271): the condition this section used to
+# set for widening -- "once these have stayed clean" -- was met. `providers/`, `web/`, `deterministic/`,
+# `cli.py`, `usage.py`, `streams.py` and `paths.py` were measured clean (`.venv/bin/pyright
+# --outputjson` over each, 0 errors) once `services/discovery.py`'s `Generated.artifact: object` field
+# was given a real type (`Generated[T]`, resolved per artifact type by `@overload`s on
+# `DiscoveryService.generate`, keyed on the `Literal` string every call site already passes) and two
+# narrower SDK-optionality gaps in `providers/anthropic/{client,completion}.py` were fixed.
+#
+# `render/` is excluded below rather than folded in: it carries real, pre-existing errors of its own
+# -- `render/html.py`:89 and :146, five `pyright --outputjson` diagnostics from two distinct `None`-
+# narrowing gaps (`re.Match.lastgroup` and `re.Match | None` used without a check) -- that this
+# issue's own Scope section does not name and that #271's acceptance criteria explicitly does not ask
+# this change to fix ("no runtime files besides the three named change behavior"). Reported
+# separately rather than fixed here so the diff stays the size the issue scoped.
+include = ["src/requivo"]
+exclude = ["src/requivo/render"]
 
 # The floor `requires-python` declares, not the interpreter the leg happens to run. A checker at 3.12
 # accepts what the oldest supported interpreter refuses, which is the same shape of unverified claim
