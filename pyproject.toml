@@ -158,7 +158,7 @@ venvPath = "."
 venv = ".venv"
 
 [project.urls]
-Homepage = "https://github.com/jbkkz/requivo"
+Homepage = "https://requivo.com"
 Repository = "https://github.com/jbkkz/requivo"
 Changelog = "https://github.com/jbkkz/requivo/blob/main/CHANGELOG.md"
 

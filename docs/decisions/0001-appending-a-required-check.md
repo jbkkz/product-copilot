@@ -6,7 +6,9 @@
 
 `main` is protected and requires a list of status checks by their exact names. The list grows: it was
 9, then 13 when the four platform legs landed (#55), then 14 with `Plugin manifests (validate
---strict)`, and two more are pending at the time of writing (`Dependency floor`, `Types (pyright)`).
+--strict)`, and the two that were pending at the time of writing (`Dependency floor`, `Types (pyright)`) were
+appended on 2026-09-01 by the readiness audit, using exactly the POST this record specifies —
+measured 14 → 16 contexts by read-back.
 
 Adding a leg to `.github/workflows/ci.yml` does **not** add it to that list. The two are separate,
 and the second is an API call a maintainer makes by hand.

@@ -819,13 +819,14 @@ practice.
 ### Requivo Web's HTTP routes — **paths stable, bodies not**
 
 This page already contemplates a client scripting `POST /sessions` and branching on its status, so the
-paths are relied on by its own worked example. There are ten, and the whole set is small enough to
-name rather than gesture at:
+paths are relied on by its own worked example. The whole set is small enough to name rather than
+gesture at:
 
 | Route | Method |
 |---|---|
 | `/` , `/sessions/new` | GET |
 | `/sessions` | POST |
+| `/sessions/example` | POST |
 | `/sessions/{slug}` | GET |
 | `/sessions/{slug}/export` | GET |
 | `/sessions/{slug}/discover` , `/sessions/{slug}/answers` | POST |

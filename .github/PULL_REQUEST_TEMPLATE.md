@@ -23,6 +23,7 @@ Keep unrelated reformatting out of the diff.
 
 - [ ] `pytest tests/ -q` passes (no network / no API key needed)
 - [ ] `ruff check src tests scripts` passes
+- [ ] `.venv/bin/pyright` passes (same invocation as CI)
 - [ ] The wheel still builds (`python -m build --wheel`) — if package layout or assets changed
 - [ ] Docs updated (README / CLAUDE.md / relevant doc) if behaviour or a command changed
 - [ ] If a **prompt or context card** changed: measured through the golden harness, and an intended

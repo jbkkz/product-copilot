@@ -29,7 +29,8 @@ the official project or is endorsed or supported by it.
 ## Official identity
 
 The following are considered part of the official project's identity: the **Requivo** name, its logo
-and visual identity (if/when published), and its official domains and accounts (if/when reserved).
+and visual identity (if/when published), the `requivo.com` domain, the `requivo` package name on
+PyPI, and the `jbkkz/requivo` GitHub repository.
 Using the code under Apache-2.0 does not transfer these.
 
 ## Questions
