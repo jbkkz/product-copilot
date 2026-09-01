@@ -939,6 +939,29 @@ codes, but onto 0, so it is compatible under the rule stated above, not merely t
 despite what the rule says. #360 above narrows; #249 widens; #382 is where that asymmetry was made
 mechanical rather than left to be rediscovered the next time a release carries one of each.
 
+### The eight write verbs no longer accept a `model.json` path — a behaviour change (#402)
+
+These eight verbs shared their positional's help with `status`/`impact`: "a session slug, or a path
+to a saved model.json". Only `status`/`impact` ever meant it — they read the file's own bytes
+directly. The other eight resolve a *slug* and then read/write the store's own copy of the session,
+so a `model.json` path was mined for its parent directory's name (`SessionService.resolve_slug`)
+rather than opened, and the mining ran whether or not the file existed — a fabricated path was
+reported on under a slug the user never typed, or, worse, silently matched an unrelated real session
+sharing that mined name.
+
+The fix is the same shape as #360 above: a condition moves off exit 0.
+
+| Invocation | Was | Now |
+|---|---|---|
+| `requivo brief <real-session>/model.json` (the session's own model.json, an existing slug's path) | 0 — resolved via the mined slug | **1** — refused, naming the path |
+| `requivo brief <anything>/model.json` where no session shares the mined slug | 1 — `no session named <mined-slug>` | **1** — refused, naming the given path instead of the mined slug |
+
+The first row is the one this page's own rule calls breaking: an invocation that used to succeed
+(reading a real session by an alternate spelling of its slug) now fails. Declared that way in
+`changelog.d/402.fixed.md` rather than argued down on the grounds that the old behaviour was itself
+the defect — the same reasoning #360 above already rejects for the identical shape. `status` and
+`impact` are unaffected; they never went through `resolve_slug` for a path and keep the wider help.
+
 ### The web error banner's `code` — **not stable**
 
 Requivo Web renders a `(code: …)` line on a refusal. Four of those values —

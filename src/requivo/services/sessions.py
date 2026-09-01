@@ -27,6 +27,7 @@ from requivo.core.dependencies import (
 )
 from requivo.core.errors import SessionExistsError, SessionNotFoundError
 from requivo.core.persistence import SessionMeta
+from requivo.core.selectors import display_token
 from requivo.core.validation import require_input_within_bounds, validate_proposal
 from requivo.services.repository import SessionRepository, default_repository
 
@@ -181,16 +182,39 @@ class SessionService:
                 or os.sep in ref or (os.altsep and os.altsep in ref)
             )
             if looks_like_a_path:
+                # `ref` is untrusted user input reaching a message that gets printed verbatim
+                # (`cli.py`'s `app()` writes a `RequivoError` straight to stderr) -- every mention
+                # goes through `display_token` (invariant 14, #40; the same call `no_session_message`
+                # makes on this identical field), not only the first as it read before. A raw second
+                # occurrence would leave a control character or an ANSI escape in `ref` free to forge
+                # a line the refusal never wrote. `display_token` returns the value unchanged when it
+                # is already one safe line, so an ordinary path still reads exactly as typed; only an
+                # unsafe one is escaped, the same tradeoff `no_session_message` already makes.
+                safe_ref = display_token(ref)
                 raise SessionNotFoundError(
-                    f"{ref!r} looks like a path, but this command takes a session slug -- it "
+                    f"{safe_ref} looks like a path, but this command takes a session slug -- it "
                     "resolves and writes back into a session, not the file itself, so a path is "
                     "not enough to tell it which one. Pass the session's slug (see `requivo "
-                    f"session list`), or inspect the file directly with `requivo status {ref}`.",
+                    f"session list`), or inspect the file directly with `requivo status {safe_ref}`.",
                     details={"ref": ref},
                 )
             return ref
         if p.name in ("model.json", "session.json"):
-            return p.parent.name if p.is_file() else ref
+            # `Path.is_file()` swallows ENOENT/ENOTDIR into `False`, which is what "mine only a
+            # real file" needs -- but it re-raises everything else, including `PermissionError` on
+            # a directory this process cannot traverse into. `core/persistence.py`'s `_probe` exists
+            # for exactly this shape (`Path.exists()` has two returns and three outcomes) and this
+            # is the same probe one field over, so it gets the same third state rather than an
+            # uncaught traceback escaping a verb that promises every clean failure surfaces without
+            # one (#402, found in review).
+            try:
+                is_real_file = p.is_file()
+            except OSError as e:
+                raise SessionNotFoundError(
+                    f"could not tell whether {display_token(ref)} is a saved model.json: {e}",
+                    details={"ref": ref},
+                ) from e
+            return p.parent.name if is_real_file else ref
         if p.exists() and p.is_dir():
             return p.name
         return ref  # a bare slug
