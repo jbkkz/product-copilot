@@ -102,7 +102,7 @@ report on). `status --json` is defined from revision 1 onward.
 The gate node of every flow. Always present: `slug`, `readiness` (`{ready, blocking_slots}`),
 `understanding`, `questions`, `summary`, `remaining_gaps`. Present when the reference is a canonical
 session (which an automation's always is): `revision`, `context_cards`, `artifacts` — the latter a
-map `type → {revision, filename, updated_at, stale}`.
+map `type → {revision, filename, stale}` (`updated_at` lives on `artifact list --json`, not here).
 
 Three fields do all the routing work:
 

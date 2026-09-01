@@ -119,7 +119,7 @@ Curated to what a newcomer should not mistake for ordinary:
 5. **The security posture of the web surface** — four-layer cross-site guard as middleware,
    strict same-origin CSP, zero cookies, structural HTML escaping, LLM output treated as
    attacker-influenced on every render path (one residual CLI gap: #430).
-6. **Hermetic speed** — 1,475 tests in ~45 s, zero network (structural since #419/PR #420), with
+6. **Hermetic speed** — the whole offline suite in ~45 s, zero network (structural since #419/PR #420), with
    concurrency tests that contend on real file descriptors and skips that name what goes untested
    and which CI leg covers it.
 7. **Supply-chain discipline** — OIDC trusted publishing with SHA-pinned actions and live PEP 740

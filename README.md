@@ -26,7 +26,7 @@ B2B products.
 uvx --from requivo requivo demo
 ```
 
-Ten seconds, offline — or [watch the 60-second demo video][demo-video] instead. A messy client
+Ten seconds, offline — or [watch the short demo video][demo-video] instead. A messy client
 email, the questions Requivo raised against it, the decision
 brief it wrote, and then the part that is not reasoned at all: change one answer, and it reports what
 that invalidates, computed from the dependency graph. No Anthropic key, no network, no extras — the
