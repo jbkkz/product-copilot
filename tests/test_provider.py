@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 import anthropic
 import httpx
 import pytest
+from _credentials import _clear_credential_env, _no_credentials
 from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, _run_app, full_slots, out, slot
 
 from requivo.core.contracts import PRD, Brief, EngineOutput, Stories, Story
@@ -192,49 +193,10 @@ def test_complete_wraps_api_errors_as_a_clean_engine_error():
 # ── #201: refusing before the SDK can traceback ──────────────────────────────
 
 
-# Every environment variable the SDK resolves a credential from, not just the two Requivo used to
-# check. Since #334 the guard asks the SDK rather than reading a list, so a test that clears only
-# `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` is not describing a credential-free install on a
-# machine whose developer has a profile on disk -- it is describing whatever that machine happens to
-# have, and it would go green or red for reasons no diff explains.
-_CREDENTIAL_ENV = (
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE",
-    "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
-    "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
-)
-
-
-def _clear_credential_env(monkeypatch):
-    """Unset every credential variable, and leave the SDK's own discovery running.
-
-    For the tests that are *about* discovery: they set one source up and assert the guard sees what
-    the SDK resolved. Neutralising the chain there would assert against the stub instead of against
-    the SDK, which is the one thing those tests exist to check.
-    """
-    for var in _CREDENTIAL_ENV:
-        monkeypatch.delenv(var, raising=False)
-
-
-def _no_credentials(monkeypatch):
-    """An install with no credential from *any* source the SDK reads, on any developer's machine.
-
-    The environment half is the tuple above. The on-disk half -- the active profile under the SDK's
-    config directory -- cannot be cleared by unsetting anything, so the SDK's own discovery entry
-    point is neutralised instead.
-
-    **`ANTHROPIC_CONFIG_DIR` is not the lever it looks like**, and that is worth the line it costs:
-    pointing it at an empty or absent directory does not mean "find no profiles here", it makes the
-    SDK *raise* `Config file not found ... (profile 'default')` out of the constructor -- and it does
-    so even when federation environment variables are set, which would otherwise have resolved. A
-    helper built on it turns every credential-free test into a test about a misconfigured config
-    directory, which is a different thing that happens to also fail.
-
-    `raising=False` because `default_credentials` does not exist on the older majors in
-    `anthropic>=0.42.0,<2`: there is no discovery chain there to neutralise, and its absence is the
-    same isolated state rather than an error.
-    """
-    _clear_credential_env(monkeypatch)
-    monkeypatch.setattr("anthropic._client.default_credentials", lambda **kw: None, raising=False)
+# The credential tuple and the two "no credential" helpers lived here through #334/#365; they
+# moved to `tests/_credentials.py` when #419 made them load-bearing for the whole suite (the
+# autouse net in `tests/conftest.py` reads the same tuple). The tests below keep exercising the
+# SDK's real discovery chain through the imported helpers, exactly as before.
 
 
 def test_a_missing_api_key_refuses_before_the_sdk_can_traceback(monkeypatch):

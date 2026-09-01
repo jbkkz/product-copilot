@@ -38,7 +38,9 @@ def workspace(tmp_path, monkeypatch):
 
 def _fails(argv, capsys) -> str:
     with pytest.raises(SystemExit) as exc:
-        app(argv, client=None)   # client=None -> an accidental API call would blow up
+        # client=None is the default-construction path, not a poison pill (#419); the conftest
+        # net is what guarantees an accidental provider reach refuses cleanly on every machine.
+        app(argv, client=None)
     assert exc.value.code == 1
     return capsys.readouterr().err
 

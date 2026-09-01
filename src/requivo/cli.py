@@ -57,9 +57,6 @@ from requivo.services.sessions import SessionService
 from requivo.streams import configure_streams, safe_write
 from requivo.usage import track_usage
 
-load_dotenv()
-
-
 MAX_TURNS = 8
 
 # A command whose *work* succeeded and whose *report* could not be encoded. Distinct from 1 (a clean,
@@ -1126,6 +1123,11 @@ def app(argv: list[str] | None = None, client=None) -> None:
     # character they cannot encode (#29). Not at import time — importing `requivo` must not
     # reconfigure the streams of a program that merely imported it.
     configure_streams()
+    # `.env` is read here, per run, not at module import — the same principle one comment up, for
+    # the environment instead of the streams: importing `requivo.cli` must not mutate the process
+    # that imported it. At import time it handed every pytest worker the developer's real key, and
+    # the suite paid for a live call (#419, `test_importing_the_cli_leaves_the_environment_alone`).
+    load_dotenv()
     args = _build_parser().parse_args(argv)
     # A global --workspace redirects where sessions are read/written, for the duration of this run.
     if getattr(args, "workspace", None):
