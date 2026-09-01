@@ -839,9 +839,69 @@ def is_slug(name: str) -> bool:
     pattern **and** the length, and a second statement of that drifts: `slug_shaped` was written
     against the pattern alone and marked an 81-character kebab-case directory as a name a session
     would silently lose, when `canonical_dir` refuses such a name outright and loudly. One rule, one
-    place, found by review."""
+    place, found by review.
+
+    **One rule, one place -- for the *creation* question, which is now not the only one** (#401).
+    #372 split the reserved-device-name half of validity into an unconditional creation-time
+    refusal and a conditional read-time one, so "is this a valid slug" stopped being a single
+    question that a name alone can answer: the read-time form needs the path it is asked about.
+    This function keeps the creation-time question, because that is what its one caller asks --
+    `NonSessionEntry.slug_shaped` decides whether a `create_session` can be *asked for* the name.
+    A caller *classifying* something already on disk wants `_is_lock_stem` or its own equivalent
+    instead; `scan_lock_root` asked this one for a release and reported a reserved-name session's
+    own lock and guard files as residue nobody recognises. Pinned by
+    `test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue`."""
     try:
         validate_slug(name)
+    except InvalidSlugError:
+        return False
+    return True
+
+
+def _is_lock_stem(stem: str) -> bool:
+    """Whether a `<stem>.lock` or `<stem>.discovering` under `lock_root()` is one this store could
+    have written -- the **stem** half of what `lock_path` and
+    `services.discovery._discovery_guard_path` each validate before joining their own suffix.
+
+    Two calls, and they are the two both writers make on the bare stem: `_slug_shape`, then
+    `_refuse_new_reserved_slug` against `session_root() / stem`. Core may not import services, and
+    does not need to -- `_discovery_guard_path`'s own docstring says its stem rule is `lock_path`'s,
+    and this is that rule.
+
+    **Deliberately *not* `lock_path(stem)` in a `try`, which is what this was first written as**
+    (found in review of #401, before it shipped). That reads as the tidier "one rule, one place",
+    and it imports a third check that is about a *path* rather than about a stem: `lock_path` ends
+    with `is_contained(root / (stem + ".lock"), root)`. Asked the `.discovering` question it
+    therefore answered about a **different file**, so an unrelated symlink at `<stem>.lock` --
+    itself already reported, and pointing anywhere outside the root -- flipped a real
+    `<stem>.discovering` file this store wrote into `unexpected`. That is invariant 17's shape one
+    layer down: a verdict about one entry decided by a sibling entry's state. Pinned by
+    `test_a_symlink_at_the_lock_name_does_not_sink_the_guard_file_beside_it`.
+
+    Containment is not missing from this predicate, it is inapplicable: `scan_lock_root`'s entries
+    come out of `iterdir(root)` and are children of it by construction, `_slug_shape` makes a
+    separator or a dot segment unrepresentable in a stem, and a symlink at the entry *itself* is
+    already excluded before this is called.
+
+    **Not `is_slug`, and the difference is #372's whole point** (#401). `is_slug` is
+    `validate_slug`, whose reserved-device-name refusal is unconditional because it guards
+    *creation*. `scan_lock_root` is *classifying* a file already on disk, and for a session that
+    already occupies a reserved name both this store's writers happily produce these files -- so
+    asking the creation-time question there reported them as residue nobody recognises, which is
+    #391's defect one predicate over. A shape-only predicate would be the opposite error: it would
+    recognise `nul.lock` in a workspace with no `nul` session, a file no writer here could have
+    produced. Pinned from both sides by
+    `test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue` and
+    `test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_still_unexpected`.
+
+    `InvalidSlugError` alone is caught. `_refuse_new_reserved_slug` probes the session root through
+    `_probe`, which raises `SessionUnreadableError` rather than guessing when it cannot stat -- that
+    is a could-not-look, not a not-a-lock-file, and it is left to propagate into `scan_lock_root`'s
+    own `unexaminable` bucket. Pinned by
+    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`."""
+    try:
+        _slug_shape(stem)
+        _refuse_new_reserved_slug(stem, session_root() / stem)
     except InvalidSlugError:
         return False
     return True
@@ -1604,13 +1664,20 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     back to teach it** (#391): every `.discovering` file read as `unexpected`, reported as "not a
     lock file Requivo recognises" about a file this store's own code had just written, on the very
     first ordinary discovery a workspace ever ran. A well-formed instance of *either* shape -- a
-    regular file, not a symlink, whose stem is a valid slug -- is recognised now and excluded from
-    `unexpected`. Anything else under this root — a stray file with a different name, a directory,
-    a symlink at a `.lock` or `.discovering` name, a `.discovering`-suffixed name whose stem is not
-    a valid slug — is not a shape either writer ever produces, and is still reported exactly as
-    before.
+    regular file, not a symlink, whose stem is one `lock_path` accepts (`_is_lock_stem`) -- is
+    recognised now and excluded from `unexpected`. Anything else under this root — a stray file
+    with a different name, a directory, a symlink at a `.lock` or `.discovering` name, a stem
+    neither writer could have been given — is not a shape either writer ever produces, and is still
+    reported exactly as before.
     Not followed if it is a symlink, on the same terms as `_describe_non_session`: reporting a
     symlink's target would read another file into a report about this workspace.
+
+    **The stem question is `lock_path`'s, not `validate_slug`'s** (#401). It was `is_slug` for a
+    release, which is `validate_slug`, which refuses a reserved Windows device name
+    *unconditionally* because it guards creation. Both writers here apply #372's conditional form
+    instead, so a session already on disk at such a name had the two files this store wrote for it
+    classified as residue nobody recognises -- the #391 sentence above, resurrected one predicate
+    over. `_is_lock_stem` carries the argument and the two tests that pin it from both sides.
 
     **What a matching slug means is left to the caller, deliberately.** This function answers only
     *is there a `<slug>.lock` file*, never *is `slug` still a session* — that needs the session
@@ -1624,6 +1691,13 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
     reasoning `_scan_session_root` gives for its own third bucket (#80).
 
+    **That bucket has a second source since #401, and it is a different root.** `_is_lock_stem`
+    stats `session_root() / stem` through `_probe` for a reserved stem, which raises rather than
+    guessing on EACCES -- so an entry can reach `unexaminable` with the file-type probe above it
+    having answered perfectly well. The reasoning is the same one and the cause is not, which is why
+    it is named here rather than left to be inferred from the loop body. Pinned by
+    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`.
+
     A root that does not exist is an empty lock directory and returns nothing, matching
     `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same
     claim and is left to raise, for the caller to report as `readable: False` rather than as a clean
@@ -1636,20 +1710,32 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     unexpected: list[str] = []
     unexaminable: list[UnexaminableEntry] = []
     for p in sorted(root.iterdir(), key=lambda p: p.name):
-        try:
-            is_ordinary_file = p.is_file() and not p.is_symlink()
-        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
-            unexaminable.append(UnexaminableEntry(p.name, str(e)))
-            continue
         lock_slug = p.name[: -len(".lock")] if p.name.endswith(".lock") else None
-        if is_ordinary_file and lock_slug and is_slug(lock_slug):
-            lock_slugs.append(lock_slug)
-            continue
         # `_discovery_guard_path` (services/discovery.py, #209) writes this second shape and never
         # unlinks it -- recognised and excluded from `unexpected`, not folded into `lock_slugs`:
         # it is not a `<slug>.lock` file and answers a different question (#391).
         guard_slug = p.name[: -len(".discovering")] if p.name.endswith(".discovering") else None
-        if is_ordinary_file and guard_slug and is_slug(guard_slug):
+        try:
+            is_ordinary_file = p.is_file() and not p.is_symlink()
+            # `_is_lock_stem`, not `is_slug` (#401). This is a classification, not a creation: it
+            # asks whether a writer *here* could have produced this file, and both writers apply
+            # #372's conditional reserved-name rule rather than `validate_slug`'s unconditional
+            # one. Asked the creation-time question instead, a reserved-name session already on
+            # disk had its own `.lock` and `.discovering` files reported as "not a lock file
+            # Requivo recognises" -- #391's defect one predicate over.
+            #
+            # Inside this `try` rather than beside it, because it can fail the same way the probe
+            # above it can: `_refuse_new_reserved_slug` stats the session root through `_probe`,
+            # which raises rather than guessing on EACCES. That is the third outcome again, and it
+            # belongs in `unexaminable` for this entry -- not escaping to make `_lock_health` claim
+            # the whole root was unreadable, which is invariant 15's shape one layer down.
+            if is_ordinary_file and lock_slug and _is_lock_stem(lock_slug):
+                lock_slugs.append(lock_slug)
+                continue
+            if is_ordinary_file and guard_slug and _is_lock_stem(guard_slug):
+                continue
+        except Exception as e:  # noqa: BLE001 - the third outcome, not a failure of the listing
+            unexaminable.append(UnexaminableEntry(p.name, str(e)))
             continue
         unexpected.append(p.name)
     return lock_slugs, unexpected, unexaminable

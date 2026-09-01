@@ -962,6 +962,173 @@ def test_a_symlink_at_a_discovery_guard_name_is_reported_and_not_followed(worksp
     assert r["unexpected"] == ["sneaky.discovering"]
 
 
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs a directory literally named "
+                     "'con' already on disk, which Windows itself refuses to create at the OS level "
+                     "regardless of anything Requivo's own code does (see core/persistence.py's "
+                     "comment above _RESERVED_DEVICE_NAMES). REASONED, NOT OBSERVED on an actual "
+                     "Windows machine; it follows from the documented behaviour #221 already relies "
+                     "on for the reserved-name refusal itself. UNTESTED ON WINDOWS: the whole of "
+                     "#401, both this test and its sibling below -- and unreachable there, which is "
+                     "not the same claim and is why it is written out rather than assumed. See that "
+                     "sibling's own reason for the second half of the mechanism.")
+def test_a_reserved_name_sessions_own_lock_and_guard_files_are_not_reported_as_residue(workspace):
+    """#401, the third instance of #372's sweep gap and #391's defect one predicate over.
+
+    `scan_lock_root` classified a lock-root entry with `is_slug`, which is `validate_slug` -- the
+    unconditional, creation-time refusal. So for a session already on disk at a reserved Windows
+    device name, both files this store's own code wrote for it read as `unexpected`: "not a lock
+    file Requivo recognises... a name here did not come from `session_lock`". The wording is what a
+    user reads, so this drives `doctor` rather than `scan_lock_root` alone.
+
+    **Three must-not-fire controls share this fixture**, because a fix that simply stopped
+    classifying would pass a test that only asserted the two `con` files are gone. A stray file and
+    a malformed stem must still be reported, and `nul.lock` -- a reserved stem with **no** session
+    on disk -- must still be reported too, which is what makes this a conditional widening rather
+    than a shape-only one."""
+    d = store.session_root() / "con"
+    (d / "revisions").mkdir(parents=True)
+    (d / "artifacts").mkdir()
+    (d / "request.md").write_text("A request captured before #221 shipped.", encoding="utf-8")
+    (d / "session.json").write_text(json.dumps({
+        "session_id": "deadbeef", "slug": "con", "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z", "provider": None, "model_name": None,
+        "context_cards": None, "current_revision": 0, "format_version": 1,
+        "revisions": [], "artifact_status": {}}), encoding="utf-8")
+
+    lr = store.lock_root()
+    lr.mkdir(parents=True, exist_ok=True)
+    (lr / "con.lock").write_text("", encoding="utf-8")          # what `session_lock` writes
+    (lr / "con.discovering").write_text("", encoding="utf-8")   # what `_discovery_guard` writes
+    (lr / "not-a-lock.txt").write_text("stray", encoding="utf-8")   # control: nothing wrote this
+    (lr / "Bad Stem.lock").write_text("", encoding="utf-8")     # control: malformed stem
+    (lr / "nul.lock").write_text("", encoding="utf-8")          # control: reserved, no session
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 1, "the reserved-name session's own `.lock` file is a lock file"
+    assert r["unmatched"] == [], "and it names a session that currently exists"
+    assert r["unexpected"] == ["Bad Stem.lock", "not-a-lock.txt", "nul.lock"], (
+        "the two files this release's own code wrote for `con` must stop being reported as "
+        "residue, and nothing else may stop being reported with them"
+    )
+
+    text = _run(["doctor"])
+    assert "con.lock" not in text and "con.discovering" not in text
+    assert "not a lock file Requivo recognises" in text  # said about the controls, and only them
+    assert "not-a-lock.txt" in text and "nul.lock" in text
+
+
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs files literally named 'nul.lock' "
+                     "and 'nul.discovering' on disk, and Windows resolves a reserved device name "
+                     "taken before the first dot -- `lock_path`'s own comment states that rule for "
+                     "`con.lock`, and `_reserved_stem` enforces it -- so both writes would open the "
+                     "NUL device, succeed, and leave nothing for `iterdir` to find. REASONED, NOT "
+                     "OBSERVED on an actual Windows machine; it follows from the same documented "
+                     "behaviour #221 relies on. UNTESTED ON WINDOWS: that a lock file for a "
+                     "reserved stem with no session behind it is still reported. It is also "
+                     "unreachable there -- the file cannot exist, and neither can the session the "
+                     "sibling test above needs -- so #401 changes nothing on that platform.")
+def test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_still_unexpected(workspace):
+    """The conditional half of #401, and the reason the predicate is not simply `_slug_shape`.
+
+    #372's split turns on whether a session already occupies the name. Nothing occupies `nul` here,
+    so `lock_path('nul')` refuses it and no writer in this store could have produced these files --
+    they stay reported, exactly as before.
+
+    **This passes against the pre-#401 code too, by design, and that is not a defect in it**
+    (raised in review, and kept). It is a *control*, not a regression test: `is_slug` already
+    refused a reserved stem unconditionally, so the old classifier got this case right for the
+    wrong reason. What it constrains is the next diff -- someone reading the fix as "stop asking
+    the reserved-name question here" would make the predicate `_slug_shape` alone, which is the
+    natural wrong turn, and this is the only test that goes red for it. Delete it and the widening
+    has nothing holding its far edge."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "nul.lock").write_text("", encoding="utf-8")
+    (store.lock_root() / "nul.discovering").write_text("", encoding="utf-8")
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 0
+    assert r["unexpected"] == ["nul.discovering", "nul.lock"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="os.symlink needs elevated privileges on Windows by "
+                    "default, and the fixture also needs a file literally named 'a.lock', which is "
+                    "fine there -- the symlink is the blocker, not the name. UNTESTED ON WINDOWS: "
+                    "that a stray symlink beside a guard file does not change how the guard file "
+                    "itself is classified.")
+def test_a_symlink_at_the_lock_name_does_not_sink_the_guard_file_beside_it(workspace):
+    """A verdict about one entry must not be decided by a sibling entry's state (#401, found in
+    review before the fix shipped).
+
+    `_is_lock_stem` was first written as `lock_path(stem)` in a `try` -- the tidier "one rule, one
+    place", and wrong, because `lock_path`'s third check is about a *path*: it ends with
+    `is_contained(root / (stem + '.lock'), root)`. Asked the `.discovering` question it answered
+    about a different file, so this fixture -- a real guard file, and an unrelated symlink at the
+    `.lock` name pointing outside the root -- reported `a.discovering` as residue nobody
+    recognises. That is invariant 17's shape one layer down, and it is the very symptom #401
+    exists to remove, reproduced by the fix for it.
+
+    `a.lock` itself is still reported: it is a symlink, which no writer here produces. `b.discovering`
+    is the must-fire pair -- an identical guard file with no sibling at all, which must be recognised
+    in the same scan, so this cannot pass by classifying nothing."""
+    store.lock_root().mkdir(parents=True)
+    outside = workspace / "elsewhere.txt"
+    outside.write_text("not a lock", encoding="utf-8")
+    (store.lock_root() / "a.discovering").write_text("", encoding="utf-8")
+    (store.lock_root() / "a.lock").symlink_to(outside)
+    (store.lock_root() / "b.discovering").write_text("", encoding="utf-8")
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["unexpected"] == ["a.lock"], (
+        "only the symlink is a shape no writer here produces; both guard files are ordinary files "
+        "`_discovery_guard` really writes"
+    )
+    assert r["total"] == 0  # a `.discovering` file is not a lock, and the symlink is not one either
+
+
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs a file literally named 'con.lock' "
+                    "on disk, and Windows resolves a reserved device name taken before the first "
+                    "dot, so the write would open the CON device and leave nothing for `iterdir` "
+                    "to find (`lock_path`'s own comment states that rule). REASONED, NOT OBSERVED "
+                    "on an actual Windows machine. UNTESTED ON WINDOWS: that a session root the "
+                    "process cannot stat into degrades one lock entry rather than the whole scan -- "
+                    "and unreachable there, since only a reserved stem reaches the probe at all.")
+def test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable(workspace,
+                                                                                monkeypatch):
+    """#401 gave `unexaminable` a second source, in a different root, and a third state nobody can
+    reach is a third state nobody maintains.
+
+    `_is_lock_stem` stats `session_root() / stem` through `_probe` for a reserved stem.
+    `_probe` raises `SessionUnreadableError` rather than guessing on EACCES -- deliberately, by its
+    own docstring -- and that call now sits inside `scan_lock_root`'s per-entry `try`. So the entry
+    degrades and the scan continues. Outside that `try` it would escape to `_lock_health`, which
+    would report the whole lock root as unreadable: a claim broader than what failed, invariant 15's
+    shape one layer down.
+
+    `ok.lock` is the must-fire half in the same fixture -- a non-reserved stem never reaches the
+    probe, so it must still classify cleanly while its neighbour degrades. A test with only the
+    failing entry would pass against a scan that gave up entirely."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "con.lock").write_text("", encoding="utf-8")
+    (store.lock_root() / "ok.lock").write_text("", encoding="utf-8")
+
+    real_probe = store._probe
+
+    def _unstattable(marker, slug):
+        if slug == "con":
+            raise store.SessionUnreadableError(
+                f"could not determine whether session {slug!r} exists: Permission denied")
+        return real_probe(marker, slug)
+
+    monkeypatch.setattr(store, "_probe", _unstattable)
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["readable"] is True, "one entry we could not decide about is not an unreadable root"
+    assert r["total"] == 1 and r["unmatched"] == ["ok"]
+    assert [e["name"] for e in r["unexaminable"]] == ["con.lock"]
+    assert "Permission denied" in r["unexaminable"][0]["error"]
+    assert r["unexpected"] == [], "could-not-look is not could-not-recognise"
+
+
 def test_the_lock_root_being_unlistable_is_not_reported_as_no_residue(workspace):
     """The same third state every other check in this report has: could-not-look must not render
     like looked-and-found-nothing."""
