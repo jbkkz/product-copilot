@@ -55,12 +55,12 @@ already paid the price of its absence.
 - Sessions have no delete (#238); `estimate` is a terminal-only analysis with no artifact type — it
   is absent even from `ARTIFACT_FILENAMES`, so it cannot be persisted by any path.
 
-**The standing cost that makes this concrete.** `requivo-cloud` — the hosted product, in its own
-private repo — consumes `requivo` as a PyPI dependency pinned `>=1.2.0,<2.0.0` and, in its one
-integration module, imports `run`, `answer_turn`, `generate_prd`, `advise` and `new_client` straight
-out of `requivo.providers.anthropic`, reaching past the `ReasoningProvider` protocol and past
-`DiscoveryService` entirely. To address a per-tenant workspace it swaps `REQUIVO_WORKSPACE` in
-`os.environ` under a process-global lock — one engine call at a time, its own comment naming Gap A.
+**The standing cost that makes this concrete.** The hosted product — in its own private repo —
+consumes `requivo` as a PyPI dependency and was built before any facade existed to stand on. It
+shows the expected shape: an integration module that re-orchestrates reason-then-apply against
+provider internals, reaching past the `ReasoningProvider` protocol and past `DiscoveryService`
+entirely; a conservative pin that starves against this repo's major cadence; and per-workspace
+addressing by `os.environ` mutation under a process-global lock — one engine call at a time.
 Every hardening the services have grown since that scaffold — the pre-payment conflict refusal
 (#205), the concurrent-first-discovery guard (#209), usage provenance on revisions (#292), the
 brief's two-fact conflict answers (#208) — is absent there, because it re-orchestrated the seam
@@ -142,7 +142,7 @@ that; it documents it:
 - **Streaming and jobs are deferred, with triggers, not vibes.** An SSE variant of the paid POSTs
   becomes possible when #256 moves the provider itself to streaming — the API cannot stream what
   its provider does not. A jobs resource (202 + polling) is warranted when a deployment needs paid
-  calls to survive worker restarts or horizontal scaling — concretely, when requivo-cloud consumes
+  calls to survive worker restarts or horizontal scaling — concretely, when the hosted product consumes
   this API in production, or when measured p95 wall-clock exceeds what the fronting gateway will
   hold open. A local single-user API gains only moving parts from jobs, and the recovery semantics
   above already cover the disconnect case.
@@ -209,7 +209,7 @@ rule), taken on only where it pays.
    the server refuses to start unless `REQUIVO_API_TOKEN` is set — the same deliberate-act shape as
    `REQUIVO_WEB_ALLOWED_HOSTS`. `Authorization: Bearer`, constant-time compare, every route. One
    token, no users, no roles: this is "my other machine may call this", not identity.
-3. **Cloud identity: never in this repo.** Accounts, orgs, quotas, billing are requivo-cloud's
+3. **Cloud identity: never in this repo.** Accounts, orgs, quotas, billing are the hosted product's
    private concern, standing on the API (or on the services directly) behind its own identity
    layer. The open-core boundary is already decided; this record just restates which side of it
    auth lives on.
@@ -253,8 +253,8 @@ semantics if it lands after:
 
 1. **#272 — the workspace becomes constructor state.** Until then, an API process serves whatever
    workspace its process environment names, per call. Freezing first would bake "slug uniqueness is
-   scoped by an environment variable" into a public contract, and would leave requivo-cloud's
-   env-swap-under-a-lock as the only multi-workspace story. (#272's own trigger — the start of real
+   scoped by an environment variable" into a public contract, and would leave
+   environment-swap-under-a-lock as the only multi-workspace story. (#272's own trigger — the start of real
    cloud work against this repo — is arguably met by this record; that call belongs to its issue,
    not here.)
 2. **The estimate-artifact decision (#426).** `estimate` is terminal-only today — absent even from
@@ -278,7 +278,7 @@ own existing verdict (paths stable, bodies not).
 ### 7. Where the factory lives
 
 **In this repo, as `create_api()` under an `[api]` extra — recommended over proving it in
-requivo-cloud first.** The weighing, since both were on the table:
+the hosted repo first.** The weighing, since both were on the table:
 
 *For cloud-first:* the effort lands where the deadline is; multi-tenant needs (Postgres, identity,
 quotas) might reshape the resource model; nothing public is minted before it is proven — and this
@@ -286,7 +286,8 @@ repo has a real, measured aversion to minting surface that `docs/compatibility.m
 expensive to remove (the frozen diagnostics tier is that lesson in writing).
 
 *Against it, decisively:* cloud-first **is already running as an experiment, and the result is in.**
-The scaffold bypassed the services, imported five provider internals, pinned `<2.0.0`, and
+The scaffold bypassed the services, re-orchestrated against provider internals, pinned
+conservatively, and
 serializes every engine call behind a process-global environment swap — not because its authors
 were careless but because no HTTP-ready facade existed to stand on. Proving the API there means
 growing the second orchestration further, in a private repo whose lessons the open one cannot see,
@@ -323,9 +324,9 @@ Nothing in this repo has broken yet — this record exists so the API is a decis
 preconditions rather than a roadmap line that either never lands or lands frozen too early. Two
 costs are already real, and they are what funds doing it now:
 
-- **The second orchestration exists.** requivo-cloud's integration module re-implements the
+- **The second orchestration exists.** The hosted scaffold's integration module re-implements the
   reason-then-apply seam against provider internals, without the pre-payment gates, the discovery
-  guard, or usage provenance, one global lock wide, pinned two majors back. Every week it grows is
+  guard, or usage provenance, one global lock wide, pinned behind. Every week it grows is
   extraction work added later — and it is the precise failure the architecture section of CLAUDE.md
   describes from both ends (#77's CLI loop, #167's render import), happening in the one consumer
   the boundary tests cannot see.
@@ -340,7 +341,7 @@ alone; the way to keep the API's ledger short is to not open it until the known 
 
 ## Alternatives rejected
 
-- **Prove it in requivo-cloud first, extract later.** Rejected above (section 7): the experiment
+- **Prove it in the hosted repo first, extract later.** Rejected above (section 7): the experiment
   has effectively run, and its result is the bypass this record keeps citing. Extraction-later
   pays for the facade twice and locks the learning in the private repo.
 - **Defer entirely with a trigger, the `decision: deferring-the-neutral-provider-layer` shape.**

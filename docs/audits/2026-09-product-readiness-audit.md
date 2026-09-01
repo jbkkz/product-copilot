@@ -41,9 +41,9 @@ construction — keyless, and hash-blind to user messages.
 
 1. **The platform gap is real and priced.** There is no HTTP write surface for a machine: the web
    is CSRF-locked by design, so the entire automation contract is the CLI. Meanwhile the one
-   external consumer that could not wait — the private hosted scaffold — bypassed the services,
-   imported provider internals, pinned two majors back, and serializes every engine call behind a
-   process-wide environment swap. That is the second orchestration this architecture exists to
+   external consumer that could not wait — the private hosted scaffold — predates the facade and
+   shows the expected failure shape: a second orchestration past the services, addressing the
+   workspace by process-environment mutation under a lock. That is the second orchestration this architecture exists to
    forbid, already alive. The answer is designed, not just diagnosed: `decision:
    the-http-api-facade` (build as #425), with the error-table relocation (#422) and the declared
    Python seam + `py.typed` (#423) as its first two bricks.
