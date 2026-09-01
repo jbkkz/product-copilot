@@ -934,6 +934,23 @@ def test_a_symlink_at_a_lock_name_is_reported_and_not_followed(workspace):
     assert r["unexpected"] == ["sneaky.lock"]
 
 
+def test_a_symlink_at_a_discovery_guard_name_is_reported_and_not_followed(workspace):
+    """The `.discovering` sibling of the test above: `is_ordinary_file` (`p.is_file() and not
+    p.is_symlink()`) is computed once and shared by both suffix branches (#391), so a symlink at a
+    `.discovering` name must fail the same way a symlink at a `.lock` name already does -- reported,
+    never followed, never recognised as a guard file `_discovery_guard` could have produced."""
+    if os.name == "nt":
+        pytest.skip("os.symlink needs elevated privileges on Windows by default")
+    store.lock_root().mkdir(parents=True)
+    target = workspace / "elsewhere.txt"
+    target.write_text("not a guard file\n", encoding="utf-8")
+    (store.lock_root() / "sneaky.discovering").symlink_to(target)
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["total"] == 0
+    assert r["unexpected"] == ["sneaky.discovering"]
+
+
 def test_the_lock_root_being_unlistable_is_not_reported_as_no_residue(workspace):
     """The same third state every other check in this report has: could-not-look must not render
     like looked-and-found-nothing."""
