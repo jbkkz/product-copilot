@@ -120,8 +120,8 @@ requivo/
   usage.py         the provider-neutral API-spend ledger — records carry the rate they were billed at
   http.py          RequivoError code → HTTP status classification (#422); framework-free like
                    paths.py/streams.py/usage.py above, so it is importable with no extra installed —
-                   web/app.py imports STATUS_BY_CODE/UNCLASSIFIED_STATUS/http_status_for from it and
-                   keeps thin private aliases at its own call sites
+                   web/app.py imports only http_status_for (as its one remaining private alias,
+                   _status_for); STATUS_BY_CODE/UNCLASSIFIED_STATUS live here and nowhere else
   providers/       the only LLM callers
     base.py          ReasoningProvider protocol   errors.py  EngineError (no SDK, no vendor)
     anthropic/       the one implementation, split by cohesion (#74)

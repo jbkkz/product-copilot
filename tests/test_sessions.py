@@ -922,7 +922,7 @@ def test_nothing_raises_the_malformed_session_family_base():
             offenders[str(p.relative_to(root))] = hits
     assert not offenders, (
         "these sites raise the family base instead of an arm that names the fact; give the condition "
-        f"its own subclass and a row in web/app.py::_STATUS_BY_CODE: {offenders}")
+        f"its own subclass and a row in requivo/http.py::STATUS_BY_CODE: {offenders}")
 
 
 def test_every_arm_of_the_family_names_a_distinct_fact():
