@@ -368,12 +368,6 @@ class InvalidFilenameError(RequivoError):
     code = "invalid_filename"
 
 
-class StaleArtifactError(RequivoError):
-    """An artifact was produced from a revision the model has since moved past."""
-
-    code = "stale_artifact"
-
-
 class RevisionConflictError(RequivoError):
     """A write expected the session at one revision, but it has already moved on — two updates raced
     from the same base. The caller must reload the current model and re-apply. Harmless for a single

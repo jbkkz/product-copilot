@@ -233,7 +233,7 @@ def test_every_error_code_has_an_explicit_http_status():
      "the upstream model would not hold the contract after every retry — same family as a transport "
      "failure, which is already 502"),
     ("session_exists", 409,
-     "a conflict with the current state of the store, like revision_conflict and stale_artifact"),
+     "a conflict with the current state of the store, like revision_conflict"),
     ("session_locked", 503,
      "nothing raced to a conclusion; the write never started and retrying it unchanged is correct"),
     ("empty_selector_token", 400, "a stray comma in what the caller typed"),

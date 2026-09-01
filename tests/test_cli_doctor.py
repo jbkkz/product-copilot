@@ -650,14 +650,20 @@ def test_session_list_does_not_call_one_of_these_a_session(workspace):
 
 
 def test_the_parts_of_the_session_root_are_one_partition(workspace):
-    """`list_session_slugs`, `list_non_session_entries` and `list_unexaminable_entries` come out of
-    one predicate, and are only worth having as a set while nothing can fall between them — a name
-    in none of them is precisely the state #67 is about.
+    """The three parts of the session root come out of one predicate, and are only worth having as a
+    set while nothing can fall between them — a name in none of them is precisely the state #67 is
+    about.
 
     Three parts rather than two since #80: the predicate can *fail*, and an entry it could not
     decide about belongs in neither of the other two. The third is empty in this fixture and
     asserted as empty for that reason — it is populated in `tests/test_unexaminable_entries.py`,
     which needs a platform skip this test does not.
+
+    Read through `scan_session_root` since #300, which is what `doctor` itself calls and, since the
+    production-dead `list_non_session_entries` was deleted, the only way to the second part at all.
+    That also makes the partition claim stronger than it was: taking the three from one listing is
+    the shape the assertions below are actually about, where three separate scans were three
+    instants and could have agreed by luck.
 
     Staging directories are in none of the three on purpose: they are `create_session` in flight
     rather than something left behind, and reporting one is a race the reader cannot act on."""
@@ -665,10 +671,15 @@ def test_the_parts_of_the_session_root_are_one_partition(workspace):
     _lock_ghost()
     (store.session_root() / ".real.new-1-abcdef12").mkdir()
 
-    slugs = set(store.list_session_slugs())
-    others = {e.name for e in store.list_non_session_entries()}
-    blind = {e.name for e in store.list_unexaminable_entries()}
+    scanned_slugs, scanned_others, scanned_blind = store.scan_session_root()
+    slugs = set(scanned_slugs)
+    others = {e.name for e in scanned_others}
+    blind = {e.name for e in scanned_blind}
     on_disk = {p.name for p in store.session_root().iterdir()}
+
+    # must fire: the slugs half of the scan agrees with the dedicated reader, so the partition
+    # asserted below is over the same names every other call path sees.
+    assert slugs == set(store.list_session_slugs())
 
     assert slugs == {"real"} and others == {"leave-approval"}
     assert blind == set(), "nothing here is unexaminable; the populated case is its own module"

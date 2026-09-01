@@ -86,6 +86,13 @@ def _inline(text: str) -> str:
     """
     def tag(match: re.Match) -> str:
         name = match.lastgroup
+        # Every alternation branch of `_INLINE_MARKUP` is a *named* group, so exactly one of them
+        # participates in any match reaching here and `lastgroup` is never None. That fact lives in
+        # the pattern above, not here, which is what makes an assert worth its line: an edit adding
+        # an unnamed branch would otherwise turn this into a `KeyError` out of a renderer whose
+        # module promises that anything outside the dialect degrades to escaped text and never
+        # worse. Pinned by `test_every_inline_markup_branch_is_a_named_group_with_a_tag` (#393).
+        assert name is not None, f"an unnamed _INLINE_MARKUP branch matched {match.group(0)!r}"
         return f"<{_INLINE_TAGS[name]}>{match.group(name)}</{_INLINE_TAGS[name]}>"
 
     return _INLINE_MARKUP.sub(tag, escape(text, quote=True))
@@ -141,9 +148,20 @@ def _list_items(lines: list[str], ordered: bool) -> list[str]:
     out = [f"<{tag}>"]
     nested = False
     for line in lines:
-        match = _BULLET.match(line)
-        indent, text = (len(match.group(1)), match.group(2)) if match else (
-            0, _ORDERED.match(line).group(1))
+        bullet = _BULLET.match(line)
+        if bullet:
+            indent, text = len(bullet.group(1)), bullet.group(2)
+        else:
+            # `markdown_to_html` collects a line into `lines` only when `_BULLET` or `_ORDERED`
+            # matched it, so a line that is not a bullet is an ordered item. The invariant is the
+            # *caller's*, which is exactly why it is asserted rather than left implicit: this
+            # function cannot see it, and a second caller handing it arbitrary lines got
+            # `AttributeError: 'NoneType' object has no attribute 'group'`, naming neither the line
+            # nor the rule it broke. Pinned by
+            # `test_a_list_line_that_matches_neither_marker_is_refused_by_name` (#393).
+            item = _ORDERED.match(line)
+            assert item is not None, f"a list item matched neither marker: {line!r}"
+            indent, text = 0, item.group(1)
         if indent >= 2 and not nested:
             out.append(f"<{tag}>")
             nested = True

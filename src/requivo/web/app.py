@@ -99,7 +99,6 @@ _STATUS_BY_CODE = {
     "input_too_large": 413,
     # 409 — a conflict with the store's current state, not a malformed request
     "revision_conflict": 409,
-    "stale_artifact": 409,
     "session_exists": 409,
     # …and its neighbour, for the destination that holds no session at all. Not 500 beside
     # `import_move_failed`: the store is in a state that conflicts with the request, which is

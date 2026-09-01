@@ -138,8 +138,12 @@ def test_list_session_slugs_still_answers_only_what_is_known_to_be_a_session(blo
     """The contract that must not widen. `doctor`, `session verify` and every read path reason over
     these names, and an entry nobody could examine is not one of them."""
     assert store.list_session_slugs() == [HEALTHY]
-    assert [e.name for e in store.list_non_session_entries()] == []
     assert [e.name for e in store.list_unexaminable_entries()] == [BLOCKED]
+    # The second part has no reader of its own since #300 — `list_non_session_entries` was
+    # production-dead and this assertion was one of its two callers. Taken from
+    # `scan_session_root`, which is what `doctor` calls, so the claim is now about the partition
+    # the product actually reads rather than about a function only this test ran.
+    assert [e.name for e in store.scan_session_root()[1]] == []
 
 
 def test_the_repository_exposes_the_third_bucket(blocked):

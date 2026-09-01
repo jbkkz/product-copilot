@@ -1348,13 +1348,6 @@ def read_artifact_file(slug: str, filename: str) -> Optional[str]:
     return p.read_text(encoding="utf-8") if p.exists() else None
 
 
-def session_artifact_files(slug: str) -> set[str]:
-    """Filenames currently under artifacts/ — the on-disk set change-detection intersects with the
-    blast radius (only artifacts that were actually generated can go stale)."""
-    d = canonical_dir(slug) / "artifacts"
-    return {p.name for p in d.iterdir() if p.is_file()} if d.exists() else set()
-
-
 # How much of a non-session directory's contents is worth carrying into a report. A lock ghost holds
 # one entry; a half-extracted archive can hold thousands, and a diagnostic that prints all of them
 # stops being read at all. Five is enough to tell those two apart on sight, which is the whole job.
@@ -1530,15 +1523,40 @@ def _describe_non_session(p: Path) -> NonSessionEntry:
 
 
 def scan_session_root() -> tuple[list[str], list[NonSessionEntry], list[UnexaminableEntry]]:
-    """All three parts of the session root from **one** listing — for the caller that asks all of it.
+    """All three parts of the session root from **one** listing — and the only way to reach the
+    second one, since #300 (see below).
 
-    `list_session_slugs`, `list_non_session_entries` and `list_unexaminable_entries` each scan on
-    their own, which is right when only one question is being asked and wrong when more than one is.
-    `doctor` asks all three, and two scans are two instants: a `session.json` appearing between them
-    puts a name in *neither* answer, which is the invisible state #67 is about, reintroduced by the
-    report meant to close it; one disappearing puts it in both. Transient and diagnostic-only, and
-    still not something to leave in the one verb whose job is to say whether anything is wrong.
-    Found by review.
+    `list_session_slugs` and `list_unexaminable_entries` each scan on their own, which is right when
+    only one question is being asked and wrong when more than one is. `doctor` asks all three, and
+    two scans are two instants: a `session.json` appearing between them puts a name in *neither*
+    answer, which is the invisible state #67 is about, reintroduced by the report meant to close it;
+    one disappearing puts it in both. Transient and diagnostic-only, and still not something to
+    leave in the one verb whose job is to say whether anything is wrong. Found by review.
+
+    **The second part is what nothing could see before #67**, and the reason it is worth returning
+    at all is not in this module's output — it is at the next `create_session` on that name.
+    `list_session_slugs` skips such an entry for want of a `session.json`, so `doctor` and
+    `session verify` never reach one; `check_session` answers about a directory it is handed, which
+    nobody can hand it a name for. The rename that *is* the claim on a slug (invariant 11) then
+    loses to a directory that is already there, and `SessionService` falls through to its
+    `<slug>-<identity hash>` candidate — so the user gets a session under a name they did not ask
+    for, with nothing anywhere explaining why the one they asked for was unavailable.
+
+    **A report, not a repair.** This reads; it never deletes, moves or rewrites. #22 stopped
+    `session_lock` producing these, and clearing one on sight would be the same mistake pointing the
+    other way: unlinking a `.lock` a concurrent process is holding is legal on POSIX and silently
+    breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted
+    archive.
+
+    Second of three since #80, not the other half of two: an entry whose examination *raised* is
+    neither a session nor established to be one of these, and is the third part instead. Folding it
+    into the second would hide it from `session list` for want of a `session.json` nobody could look
+    for, which is that part's own defect class.
+
+    It lives in Core beside `list_session_slugs` because that function owns the store layout and the
+    answers come out of one predicate. Core reading a directory is not a boundary crossing:
+    invariant 7 forbids importing a provider and touching argv, the streams, the environment and
+    process exit — not IO, which this module is made of.
 
     The describe step is here rather than in `_scan_session_root` so that `list_session_slugs` — on
     every one of its call paths, `session list` included — keeps paying nothing for it: a stray
@@ -1552,13 +1570,15 @@ def scan_session_root() -> tuple[list[str], list[NonSessionEntry], list[Unexamin
 def list_unexaminable_entries() -> list[UnexaminableEntry]:
     """Names under the session root whose examination raised — the partition's third answer (#80).
 
-    Neither `list_session_slugs` nor `list_non_session_entries` returns one, and that is the point:
-    calling it a session claims what the failed probe did not establish, and calling it a non-session
-    hides it from `session list`, which is #67's defect one function along. It reaches a surface as a
-    fact of its own — a degraded row on `session list`, its own line under `doctor`'s sessions check.
+    Neither `list_session_slugs` nor `scan_session_root`'s second part returns one, and that is the
+    point: calling it a session claims what the failed probe did not establish, and calling it a
+    non-session hides it from `session list`, which is #67's defect one function along. It reaches a
+    surface as a fact of its own — a degraded row on `session list`, its own line under `doctor`'s
+    sessions check.
 
-    **A report, not a repair**, on `list_non_session_entries`' terms: Requivo reads a workspace and
-    does not chmod anything in it. What is here is a name and the reason the probe failed.
+    **A report, not a repair**, on the same terms `scan_session_root` states for the second part:
+    Requivo reads a workspace and does not chmod anything in it. What is here is a name and the
+    reason the probe failed.
 
     A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
     on its own, and two scans are two instants."""
@@ -1633,37 +1653,6 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
             continue
         unexpected.append(p.name)
     return lock_slugs, unexpected, unexaminable
-
-
-def list_non_session_entries() -> list[NonSessionEntry]:
-    """Everything else under the session root, described — `_scan_session_root`'s second part.
-
-    Second of three since #80, not the other half of two: an entry whose examination *raised* is
-    neither a session nor established to be one of these, and is returned by
-    `list_unexaminable_entries` instead. Putting it here would hide it from `session list` for want
-    of a `session.json` nobody could look for, which is this function's own defect class.
-
-    Nothing could see these before #67. `list_session_slugs` skips them for want of a `session.json`,
-    so `doctor` and `session verify` never reach one; and `check_session` answers about a directory it
-    is handed, which nobody can hand it a name for. The only symptom was at the next `create_session`
-    on that name: the rename that *is* the claim on a slug (invariant 11) loses to a directory that is
-    already there, and `SessionService` falls through to its `<slug>-<identity hash>` candidate — so
-    the user gets a session under a name they did not ask for, with nothing anywhere explaining why
-    the one they asked for was unavailable.
-
-    **A report, not a repair.** This reads; it never deletes, moves or rewrites. #22 stopped
-    `session_lock` producing these, and clearing one on sight would be the same mistake pointing the
-    other way: unlinking a `.lock` a concurrent process is holding is legal on POSIX and silently
-    breaks mutual exclusion, and nothing in the directory tells a ghost from a half-extracted archive.
-
-    It lives in Core beside `list_session_slugs` because that function owns the store layout and the
-    answers come out of one predicate. Core reading a directory is not a boundary crossing:
-    invariant 7 forbids importing a provider and touching argv, the streams, the environment and
-    process exit — not IO, which this module is made of.
-
-    A caller that wants the other parts too should take `scan_session_root()` instead: this one scans
-    on its own, and two scans are two instants."""
-    return scan_session_root()[1]
 
 
 def migrate_legacy(slug: str) -> SessionMeta:

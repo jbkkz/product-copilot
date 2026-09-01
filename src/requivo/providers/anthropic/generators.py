@@ -126,7 +126,7 @@ def derive_stories(client, out: EngineOutput, only: list[str] | None = None, *,
                    reuse_system: bool = False) -> Stories:
     """Pipeline stage: a filled model → implementable user stories."""
     system = build_prompt("stories.md", only)
-    user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Stories,
                      reuse_system=reuse_system)
 
@@ -141,7 +141,7 @@ def advise(client, out: EngineOutput, only: list[str] | None = None, *,
     `test_the_declared_exception_records_its_reason_at_the_call_site` in
     tests/test_vocabulary_boundary.py for the guard and the full reasoning."""
     system = build_prompt("brief.md", only)
-    user = "Completed requirements model to advise on:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to advise on:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Brief,
                      reuse_system=reuse_system)
 
@@ -150,7 +150,7 @@ def generate_prd(client, out: EngineOutput, only: list[str] | None = None, *,
                  reuse_system: bool = False) -> PRD:
     """Artifact generator: a model → a Product Requirements Document."""
     system = build_prompt("prd.md", only)
-    user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], PRD,
                      reuse_system=reuse_system)
 
@@ -159,7 +159,7 @@ def generate_criteria(client, out: EngineOutput, only: list[str] | None = None, 
                       reuse_system: bool = False) -> AcceptanceCriteria:
     """Artifact generator: a model → Given/When/Then acceptance criteria (the recette checklist)."""
     system = build_prompt("criteria.md", only)
-    user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria,
                      reuse_system=reuse_system)
 
@@ -168,7 +168,7 @@ def generate_epic(client, out: EngineOutput, only: list[str] | None = None, *,
                   reuse_system: bool = False) -> Epic:
     """Artifact generator: a model → a delivery epic (work breakdown into trackable issues)."""
     system = build_prompt("epic.md", only)
-    user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Epic,
                      reuse_system=reuse_system)
 
@@ -178,7 +178,7 @@ def generate_release(client, out: EngineOutput, version: str = "",
                      reuse_system: bool = False) -> ReleaseNotes:
     """Artifact generator: a model → client-facing release notes. The caller may stamp a version."""
     system = build_prompt("release.md", only)
-    user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json(indent=2)
+    user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json()
     notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes,
                       reuse_system=reuse_system)
     if version:
@@ -195,7 +195,7 @@ def estimate(client, out: EngineOutput, stories: Stories,
     system = build_prompt("estimate.md", only)
     user = (
         "User stories to estimate:\n"
-        + stories.model_dump_json(indent=2)
+        + stories.model_dump_json()
         + "\n\nUnresolved (soft) slots — widen the range for any story that depends on one:\n"
         + (", ".join(soft) if soft else "(none — the model is solid)")
     )

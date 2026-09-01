@@ -206,16 +206,17 @@ def session_detail(sessions: SessionService, slug: str) -> dict:
         # six, so this rarely hides more than one — it is about where the eye lands, not about volume.
         "questions": questions[:PRIORITY_QUESTIONS],
         "more_questions": questions[PRIORITY_QUESTIONS:],
-        "question_count": len(questions),
-        "summary": status.get("summary", {}),
         "understanding": understanding_view(status),
-        "remaining_gaps": status.get("remaining_gaps", []),
         "context_cards": status.get("context_cards"),
-        "artifacts": artifacts,
+        # `artifacts` and `generatable` stay *local*, and only the splits below are handed to a
+        # template (#300). The whole lists were in this dict too, read by nothing — and the two
+        # engine-shaped keys beside them, `summary` and `remaining_gaps`, were raw `status()` values
+        # that would have let the next template author reach past the vocabulary layer without
+        # noticing there was one. A dead key on the hottest view model is an invitation, not a
+        # spare.
         # The primary document is called out on its own; the rest live under "More documents".
         "primary_artifact": next((a for a in artifacts if a["type"] == PRIMARY_ARTIFACT), None),
         "other_artifacts": [a for a in artifacts if a["type"] != PRIMARY_ARTIFACT],
-        "generatable": generatable,
         "primary_generatable": next((g for g in generatable if g["type"] == PRIMARY_ARTIFACT), None),
         "more_generatable": [g for g in generatable if g["type"] != PRIMARY_ARTIFACT],
         # `mode="json"` so enums arrive as their value. A plain dump leaves `Leverage.high` in the

@@ -39,11 +39,6 @@ DRAFT_NOTE = "(blocking decisions remain — see Unknowns below)"
 # The label, marker and indent arguments are this module's own literals and are left alone.
 
 
-def _wrap(text: str, indent: str = "  ", width: int = 80) -> str:
-    return textwrap.fill(display_text(text), width=width, initial_indent=indent,
-                         subsequent_indent=indent)
-
-
 def _bullet(text: str, marker: str = "•", indent: str = "  ", width: int = 80) -> str:
     return textwrap.fill(
         display_text(text), width=width, initial_indent=f"{indent}{marker} ",
