@@ -33,7 +33,7 @@ import re
 
 import pytest
 
-from requivo.render.html import _BULLET, _INLINE_MARKUP, _INLINE_TAGS, _ORDERED, _list_items, markdown_to_html
+from requivo.render.html import _BULLET, _INLINE_MARKUP, _INLINE_TAGS, _ORDERED, _inline, _list_items, markdown_to_html
 
 # Anything a browser would run, fetch or lay out from bytes it did not choose.
 _LIVE_MARKUP = re.compile(r"<\s*(script|iframe|object|embed|style|img|svg)\b", re.I)
@@ -332,12 +332,31 @@ def test_every_inline_markup_branch_is_a_named_group_with_a_tag():
 
 def test_every_inline_marker_still_names_the_group_that_matched_it():
     """The runtime half of the claim above, on the dialect's own three markers plus the awkward
-    combinations. `lastgroup` naming a group is what makes the `_INLINE_TAGS` lookup total."""
+    combinations. `lastgroup` naming a group is what makes the `_INLINE_TAGS` lookup total.
+
+    **This drives `_inline` itself, not only the pattern**, and that was a review finding on the
+    change that added it: asserting over `_INLINE_MARKUP.finditer` alone never enters the callback
+    where `lastgroup` is actually read, so the test passed identically against the code before
+    #393 and was evidence about the regex rather than about the renderer. The guard on the
+    callback's own narrowing is the pyright leg, which `render/` is inside since #393; this test
+    is what makes the callback *run* on all three branches, so a `lastgroup` that stopped naming a
+    group would surface here as a tag rather than only as a type error."""
     text = "plain `code` and **bold** and _italic_ and `**not bold**` and a_b_c"
     matched = [m.lastgroup for m in _INLINE_MARKUP.finditer(text)]
     assert None not in matched, matched
     # must fire: the fixture really exercised all three branches rather than matching nothing.
     assert set(matched) == {"code", "bold", "italic"}, matched
+
+    rendered = _inline(text)
+    assert "<code>code</code>" in rendered, rendered
+    assert "<strong>bold</strong>" in rendered, rendered
+    assert "<em>italic</em>" in rendered, rendered
+    # The code-first ordering holds inside the span, and `a_b_c` keeps its underscores -- both are
+    # the callback having chosen a branch rather than fallen through.
+    assert "<code>**not bold**</code>" in rendered, rendered
+    assert "a_b_c" in rendered, rendered
+    # must fire: no tag anywhere carries a group that failed to name itself.
+    assert "<None>" not in rendered and "None>" not in rendered, rendered
 
 
 def test_a_list_line_that_matches_neither_marker_is_refused_by_name():

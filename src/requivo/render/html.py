@@ -91,7 +91,23 @@ def _inline(text: str) -> str:
         # the pattern above, not here, which is what makes an assert worth its line: an edit adding
         # an unnamed branch would otherwise turn this into a `KeyError` out of a renderer whose
         # module promises that anything outside the dialect degrades to escaped text and never
-        # worse. Pinned by `test_every_inline_markup_branch_is_a_named_group_with_a_tag` (#393).
+        # worse (#393).
+        #
+        # **Two different things hold this, and saying "pinned by" once would overstate one of
+        # them** -- found in review of this change, which is the whole reason it is spelled out.
+        # `test_every_inline_markup_branch_is_a_named_group_with_a_tag` pins the *invariant*: it
+        # compares the pattern's own `groups` against `groupindex`, so it goes red on the unnamed
+        # branch and would go red with or without this line. What holds *this line* is the pyright
+        # leg -- `render/` is inside `[tool.pyright]`'s `include` since #393, and deleting the
+        # assert puts the four `str | None` diagnostics back. Neither guard covers `python -O`,
+        # where an assert is compiled out; nothing here runs under it, and the pre-#393 baseline
+        # had no runtime check at all, so `-O` is that baseline rather than a regression.
+        #
+        # This and the one in `_list_items` are the **first two `assert`s in `src/requivo/`** —
+        # measured at the base commit, not assumed. Said out loud because it is a precedent rather
+        # than a local choice: #393 asked for a narrowing that *documents* the invariant it rests
+        # on, and an assert is the only option that survives an edit to the pattern, where a
+        # `# type: ignore` preserves nothing.
         assert name is not None, f"an unnamed _INLINE_MARKUP branch matched {match.group(0)!r}"
         return f"<{_INLINE_TAGS[name]}>{match.group(name)}</{_INLINE_TAGS[name]}>"
 
@@ -158,7 +174,11 @@ def _list_items(lines: list[str], ordered: bool) -> list[str]:
             # function cannot see it, and a second caller handing it arbitrary lines got
             # `AttributeError: 'NoneType' object has no attribute 'group'`, naming neither the line
             # nor the rule it broke. Pinned by
-            # `test_a_list_line_that_matches_neither_marker_is_refused_by_name` (#393).
+            # `test_a_list_line_that_matches_neither_marker_is_refused_by_name`, which calls this
+            # function directly and really does discriminate -- against the code before #393 it
+            # gets the `AttributeError` rather than the named refusal. Compiled out under
+            # `python -O` like any assert, which returns to the pre-#393 behaviour and does not go
+            # below it (#393).
             item = _ORDERED.match(line)
             assert item is not None, f"a list item matched neither marker: {line!r}"
             indent, text = 0, item.group(1)

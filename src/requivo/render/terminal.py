@@ -25,10 +25,13 @@ DRAFT_NOTE = "(blocking decisions remain — see Unknowns below)"
 # a challenge and write the line after it, at column 0, in Requivo's own voice. `display_text` is the
 # neutralizer, the prose sibling of the `display_token` every diagnostic verb already calls (#40).
 #
-# It is applied in two places and both are deliberate. **These three helpers escape their `text`
+# It is applied in two places and both are deliberate. **The two helpers below escape their `text`
 # argument**, because they are what most untrusted prose passes through and a call site cannot
-# forget them. **The bare f-strings below call it explicitly**, because there is no chokepoint that
-# covers them: `streams.py` cannot help (ESC encodes fine in UTF-8, so `backslashreplace` never
+# forget them. Three, until `_wrap` was deleted as dead in #300 — a count in prose, so it went stale
+# the moment one of the three went away, which is the whole of CLAUDE.md's argument against putting
+# a number in a sentence nothing can go red for.
+# **The bare f-strings below call it explicitly**, because there is no chokepoint that covers them:
+# `streams.py` cannot help (ESC encodes fine in UTF-8, so `backslashreplace` never
 # fires), and a module-wide `print` shim would escape this module's *own* newlines — the layout — as
 # readily as an injected one.
 #
