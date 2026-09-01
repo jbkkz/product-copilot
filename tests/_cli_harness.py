@@ -45,7 +45,10 @@ def _full_model(**overrides):
 def _run(argv):
     buf = io.StringIO()
     with redirect_stdout(buf):
-        app(argv, client=None)  # client=None → any accidental API use would blow up
+        # client=None is "build the default client", NOT a poison pill — with a credential it
+        # would call out and bill (#419). The autouse net in `tests/conftest.py` is what makes an
+        # accidental provider path refuse cleanly instead, on every machine and not only keyless CI.
+        app(argv, client=None)
     return buf.getvalue()
 
 
