@@ -260,6 +260,21 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   Nothing that was a genuine finding before — a stray file, a directory, a symlink, a malformed name
   — stopped being reported.
 
+- **`doctor --json`'s `locks.unexpected` no longer names the lock or guard file of a session already
+  on disk under a Windows reserved device name** (#401). Narrowing, on the same terms as the #391
+  entry above it: the key is unchanged and still an array of names, and the `locks` skeleton is
+  untouched. `scan_lock_root` classified each entry's stem with the *creation-time* slug rule, which
+  refuses `con`, `nul`, `lpt1` and their siblings unconditionally — while both writers of that
+  directory apply the conditional read-time rule #372 introduced, and happily write `con.lock` and
+  `con.discovering` for a session that already occupies the name. So this array named two files
+  Requivo's own code had written, under the wording "not a lock file Requivo recognises". A consumer
+  sees `locks.total` count one more lock, `locks.unexpected` name two fewer entries, and
+  `locks.unmatched` unchanged, on a workspace holding such a session — and no change at all on a
+  workspace that holds none, which is every workspace created on Windows, where the OS itself
+  refuses to make such a directory. A lock or guard file whose stem is a reserved name that **no**
+  session occupies is still reported, as is a stray file, a directory, a symlink or a malformed
+  stem.
+
 - **`session list --json` is an object, not an array** (#87). **Breaking**, and the one change on this
   page that a parser cannot survive: the payload was a bare array of rows and is now
   `{"sessions": [...], "degraded": <int>, "session_root": "<path>"}`. The rows are unchanged — the
