@@ -4,8 +4,8 @@ import textwrap
 
 from requivo.core.analysis import readiness_blockers, slot_label, state_of
 from requivo.core.contracts import Brief, Confidence, EngineOutput, EstimateDraft, Impact, Leverage, Stories
-from requivo.core.selectors import display_text
-from requivo.usage import UsageLedger
+from requivo.core.selectors import display_text, display_token
+from requivo.usage import CallRecord, UsageLedger
 
 STATE_ROWS = [
     ("confirmed", "✅ Confirmed"),
@@ -200,40 +200,62 @@ def render_session_cost(revisions: list) -> None:
     real spend with no visible sign anything was left out; the parenthetical on the header line is
     what keeps the number honest about what it does and does not cover. Stamping those calls' spend
     too is a real, reachable gap -- it needs `ArtifactStatus` to grow the same fields `RevisionRecord`
-    just did, which is its own change."""
+    just did, which is its own change.
+
+    **The cost arithmetic is not this function's own (#389).** It used to re-implement
+    `UsageLedger.cost_usd()` locally -- the same 0.1x cache-read and 1.25x cache-write multipliers,
+    copied rather than called -- which made `usage.py`'s own "cost is arithmetic here and nowhere
+    else" false the moment this renderer existed, silently: a mutation control that moved the
+    cache-read multiplier here alone, leaving `usage.py` untouched, added zero test failures. Each
+    priced revision is now wrapped in a `CallRecord` and handed to a scratch `UsageLedger`, so the
+    one implementation `usage.py` holds is the only one that ever runs --
+    `test_render_session_cost_reads_its_arithmetic_from_usage_py_and_nowhere_else` is the guard, and
+    it is a mutation control itself: it asserts the exact printed figure, so a multiplier drifting
+    back into a local copy here would print a wrong number rather than pass silently.
+
+    **`usage_priced_as_of` is untrusted, same as any other persisted string (#388).** Unlike
+    `render_usage`'s ledger-sourced `as_of` -- built from this run's own provider calls and never
+    written to disk -- this one is a `RevisionRecord` field read back off `session.json`, and
+    `session import` is the documented channel through which someone else's archive arrives
+    (invariant 14, one field along from `context_cards`). `display_token` is the same chokepoint
+    `deterministic/sessions.py` already routes every persisted string it prints through; it is a
+    no-op on an ordinary date and only escapes one that tries to write a line of its own."""
     priced_revisions = [r for r in revisions if r.usage_input_tokens is not None]
     if not priced_revisions:
         return
-    input_tokens = sum(r.usage_input_tokens or 0 for r in priced_revisions)
-    output_tokens = sum(r.usage_output_tokens or 0 for r in priced_revisions)
-    cache_read = sum(r.usage_cache_read_tokens or 0 for r in priced_revisions)
-    cache_write = sum(r.usage_cache_write_tokens or 0 for r in priced_revisions)
-    total = 0.0
-    fully_priced = True
-    as_of: list[str] = []
-    for r in priced_revisions:
-        if r.usage_rate_per_mtok is None:
-            fully_priced = False
-            continue
-        in_rate, out_rate = r.usage_rate_per_mtok
-        total += ((r.usage_input_tokens or 0) * in_rate
-                  + (r.usage_cache_read_tokens or 0) * in_rate * 0.1
-                  + (r.usage_cache_write_tokens or 0) * in_rate * 1.25
-                  + (r.usage_output_tokens or 0) * out_rate) / 1_000_000
-        if r.usage_priced_as_of and r.usage_priced_as_of not in as_of:
-            as_of.append(r.usage_priced_as_of)
-    processed = input_tokens + cache_read + cache_write
+    ledger = UsageLedger(calls=[
+        CallRecord(
+            model="",
+            input_tokens=r.usage_input_tokens or 0,
+            output_tokens=r.usage_output_tokens or 0,
+            cache_read_tokens=r.usage_cache_read_tokens or 0,
+            cache_write_tokens=r.usage_cache_write_tokens or 0,
+            rate_per_mtok=r.usage_rate_per_mtok,
+            # `or None` rather than passing the field through as-is: `UsageLedger.priced_as_of`
+            # filters on `is not None` (usage.py's own contract -- absent means unpriced, and an
+            # empty string is not a legitimate date under that contract either), while this
+            # renderer's join skips a falsy entry so an empty date never leaves a dangling
+            # separator ("rates as of 2026-01-01 · "). No real provider path ever stamps an empty
+            # string here, but a persisted RevisionRecord is untrusted regardless of what wrote it
+            # (invariant 14), so the normalization has to hold for one anyway (found in review).
+            priced_as_of=r.usage_priced_as_of or None,
+        )
+        for r in priced_revisions
+    ])
+    processed = ledger.input_tokens + ledger.cache_read_tokens + ledger.cache_write_tokens
     plural = "s" if len(priced_revisions) != 1 else ""
     print(f"\nSESSION COST  (cumulative, {len(priced_revisions)} revision{plural} -- excludes prd/"
          "criteria/epic/release generation, which is not a revision)")
-    cached = f"  ({cache_read:,} served from cache)" if cache_read else ""
+    cached = f"  ({ledger.cache_read_tokens:,} served from cache)" if ledger.cache_read_tokens else ""
     print(f"  {'Input':<11} {processed:,} tokens{cached}")
-    print(f"  {'Output':<11} {output_tokens:,} tokens")
-    if not fully_priced:
+    print(f"  {'Output':<11} {ledger.output_tokens:,} tokens")
+    cost = ledger.cost_usd()
+    if cost is None:
         print(f"  {'Est. cost':<11} n/a — some revisions have no price on file (tokens above are exact)")
         return
-    stamp = f", rates as of {' · '.join(as_of)}" if as_of else ""
-    print(f"  {'Est. cost':<11} ~${total:.3f}   (estimate{stamp})")
+    as_of = " · ".join(display_token(d) for d in ledger.priced_as_of)
+    stamp = f", rates as of {as_of}" if as_of else ""
+    print(f"  {'Est. cost':<11} ~${cost:.3f}   (estimate{stamp})")
 
 
 def render_brief(out: EngineOutput, brief: Brief) -> None:

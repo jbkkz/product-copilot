@@ -32,8 +32,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Generic, Literal, TypeVar, overload
 
-from requivo.core.contracts import EngineOutput
+from requivo.core.contracts import PRD, AcceptanceCriteria, Brief, EngineOutput, Epic, ReleaseNotes
 from requivo.core.dependencies import ARTIFACT_FILENAMES
 from requivo.core.errors import (
     ArtifactWriteFailedError,
@@ -62,7 +63,14 @@ except ImportError:  # pragma: no cover - POSIX
 # artifact type → the writer that turns its contract into the Markdown that gets saved. This is the
 # vocabulary of "things a generation produces a document for"; `stories` and `estimate` are absent on
 # purpose — they are terminal analyses that feed the estimate pipeline, not deliverables with a file.
-_WRITERS = {
+#
+# Typed `Callable[[Any], str]` rather than left to infer, deliberately (#271): each writer's own
+# signature is narrow (`prd_markdown(prd: PRD)`, `criteria_markdown(ac: AcceptanceCriteria)`, …), so
+# an untyped dict literal infers a *union* of those four narrow callables, and calling `writer(...)`
+# below then demands an argument assignable to all four contracts at once — which nothing is. `Any`
+# is the honest static type at this one dispatch point: which writer a given `artifact_type` string
+# resolves to is a runtime fact `_WRITERS` encodes, not one pyright can see through a dict lookup.
+_WRITERS: dict[str, Callable[[Any], str]] = {
     "prd": prd_markdown,
     "criteria": criteria_markdown,
     "epic": epic_markdown,
@@ -74,16 +82,30 @@ _WRITERS = {
 # everywhere by being registered here, rather than by each surface keeping its own list and drifting.
 GENERATABLE: tuple[str, ...] = ("brief", *_WRITERS)
 
+_A = TypeVar("_A")
+
 
 @dataclass
-class Generated:
+class Generated(Generic[_A]):
     """What one generation produced. `status` is the saved artifact's provenance; `artifact` is the
     typed contract behind it, so a caller can render its own view (the CLI's terminal layout, the epic
     exports) without paying for a second provider call; `model` is the model it was rendered from —
-    which for the assessment is the *post-absorption* model, not the one read at the start."""
+    which for the assessment is the *post-absorption* model, not the one read at the start.
+
+    **Generic, and the type parameter is resolved by `generate()`'s overloads, not by this class**
+    (#271). `artifact` used to be a bare `object`: correct about what the *implementation* can prove
+    (dispatch is by a runtime string, `provider.generate(artifact_type, …)`, so no single code path
+    can promise a single contract) and useless to every caller — every call site in `cli.py` that
+    reads `result.artifact` was an unchecked `object` use. A plain `Union` of the five
+    contracts `generate()` can produce was considered and rejected: it moves the same cast to every
+    call site instead of removing it, since `render_brief(gen.model, gen.artifact)` still needs
+    `gen.artifact` narrowed from the Union to `Brief` before it type-checks. `Literal`-keyed
+    `@overload`s on `generate()` let each call site's own string argument do that narrowing for
+    free — `disco.generate(slug, "prd")` resolves to `Generated[PRD]` at the call site, with no cast
+    anywhere the caller can see."""
 
     status: ArtifactStatus
-    artifact: object
+    artifact: _A
     model: EngineOutput
 
 
@@ -581,7 +603,36 @@ class DiscoveryService:
         return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
                                               **kwargs)
 
-    def generate(self, slug: str, artifact_type: str, *, surface: str = "generate", **kwargs) -> Generated:
+    # `generate()`'s public signature is these six overloads, not the implementation below (#271).
+    # Five are keyed by `Literal` on the artifact type it actually saves a document for -- the same
+    # five names `_WRITERS`/`GENERATABLE` minus `"brief"` plus `"brief"` itself -- so a call site
+    # written with a literal string, which is every call site in this codebase today, gets back
+    # exactly the contract that type produces with no cast anywhere the caller can see:
+    # `disco.generate(slug, "prd")` is `Generated[PRD]`. The sixth, plain-`str` overload is the
+    # fallback for a caller that only has a *variable* holding the type name at that point (a route
+    # parameter, e.g. `web/routes/artifacts.py`'s `generate_artifact`) — `Literal` matching cannot
+    # narrow a `str`, so that caller gets `Generated[object]` back, exactly what it had before this
+    # issue and exactly as much as a runtime-chosen type can honestly promise.
+    @overload
+    def generate(self, slug: str, artifact_type: Literal["brief"], *, surface: str = "generate",
+                **kwargs) -> Generated[Brief]: ...
+    @overload
+    def generate(self, slug: str, artifact_type: Literal["prd"], *, surface: str = "generate",
+                **kwargs) -> Generated[PRD]: ...
+    @overload
+    def generate(self, slug: str, artifact_type: Literal["criteria"], *, surface: str = "generate",
+                **kwargs) -> Generated[AcceptanceCriteria]: ...
+    @overload
+    def generate(self, slug: str, artifact_type: Literal["epic"], *, surface: str = "generate",
+                **kwargs) -> Generated[Epic]: ...
+    @overload
+    def generate(self, slug: str, artifact_type: Literal["release"], *, surface: str = "generate",
+                **kwargs) -> Generated[ReleaseNotes]: ...
+    @overload
+    def generate(self, slug: str, artifact_type: str, *, surface: str = "generate",
+                **kwargs) -> Generated[object]: ...
+
+    def generate(self, slug: str, artifact_type: str, *, surface: str = "generate", **kwargs):
         """Generate an artifact through the provider and save it against the session with its source
         revision. Every interface goes through here, so a given artifact is produced, saved and tracked
         identically whether it was asked for from the terminal, the browser, or Claude Code.
