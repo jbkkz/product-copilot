@@ -868,6 +868,57 @@ def test_an_entry_under_lock_root_that_is_not_a_lock_file_is_named_as_unexpected
     assert "not-a-lock.txt" in text and "sub" in text
 
 
+def test_an_ordinary_discover_leaves_no_lock_residue_doctor_flags(workspace):
+    """#391: `_discovery_guard` (`services/discovery.py`, #209) writes `<slug>.discovering` into
+    `lock_root()` and never unlinks it, correctly -- the same POSIX reasoning that leaves
+    `session_lock`'s own `.lock` file behind for a deleted session. Before this fix `scan_lock_root`
+    had never been taught the second shape, so that file read as `unexpected` -- "not a lock file
+    Requivo recognises" -- about a file this release's own code had just written. Asserts the state
+    (doctor stays green, the entry is not in `unexpected`), not the wording."""
+    from requivo.services.discovery import _discovery_guard_path
+
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    guard = _discovery_guard_path("s")
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    guard.touch()
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["unexpected"] == [], (
+        "a file this release's own code wrote must not read as unrecognised residue"
+    )
+
+    text = _run(["doctor"])
+    assert "✅" in _check_line(text, "locks")
+    assert "s.discovering" not in text
+
+
+def test_a_directory_shaped_like_a_discovery_guard_is_still_unexpected(workspace):
+    """The must-fire control paired with the test above: recognising `.discovering` files must not
+    become recognising anything ending in that suffix. `_discovery_guard` always opens a regular
+    file (`os.open(..., os.O_RDWR | os.O_CREAT, ...)`), never a directory, so a directory at that
+    name is not a shape it produces and stays reported."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "s.discovering").mkdir()
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["unexpected"] == ["s.discovering"]
+
+    text = _run(["doctor"])
+    assert "🟡" in _check_line(text, "locks")
+    assert "s.discovering" in text
+
+
+def test_a_malformed_discovering_stem_is_still_unexpected(workspace):
+    """A `.discovering`-suffixed name whose stem is not a valid slug is not a shape
+    `_discovery_guard_path` could ever produce -- it validates the slug before joining the suffix --
+    so it stays reported rather than silently swallowed by the new suffix check."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "Not Valid.discovering").write_text("", encoding="utf-8")
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["unexpected"] == ["Not Valid.discovering"]
+
+
 def test_a_symlink_at_a_lock_name_is_reported_and_not_followed(workspace):
     """The same symlink care `_scan_session_root`'s non-session partition carries (invariant 17): a
     symlink is named as one and its target is never read into this report."""

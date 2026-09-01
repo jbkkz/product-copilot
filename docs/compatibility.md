@@ -248,6 +248,18 @@ carrying it. Two changes in 0.10.0 were needed to make it true.
   than what had failed. A consumer branching on `sessions.readable` sees `true` where it used to see
   `false`, on a workspace where one entry is unexaminable and the root itself is fine.
 
+- **`doctor --json`'s `locks.unexpected` no longer names a `<slug>.discovering` file** (#391).
+  Narrowing, not a shape change: the key is unchanged and still an array of names, and the top-level
+  `locks` skeleton is untouched. `_discovery_guard` (`services/discovery.py`, #209) writes that file
+  into the same directory as `<slug>.lock` and never unlinks it — the identical POSIX reasoning
+  `session_lock` already uses to leave its own `.lock` file behind for a deleted session —
+  and `scan_lock_root` had simply never been taught the second shape, so it read every ordinary
+  discovery's own guard file as "not a lock file Requivo recognises". A consumer that flagged every
+  name in this array as unrecognised now sees one fewer false positive per session that has ever run
+  a first discovery; a consumer counting `len(unexpected)` sees a workspace-dependent decrease.
+  Nothing that was a genuine finding before — a stray file, a directory, a symlink, a malformed name
+  — stopped being reported.
+
 - **`session list --json` is an object, not an array** (#87). **Breaking**, and the one change on this
   page that a parser cannot survive: the payload was a bare array of rows and is now
   `{"sessions": [...], "degraded": <int>, "session_root": "<path>"}`. The rows are unchanged — the

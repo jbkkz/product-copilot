@@ -350,8 +350,10 @@ def _lock_health() -> dict:
       confirmed absent, and folding it into `unmatched` told the false story `sessions.unexaminable`
       exists to refuse about that exact name (found by review; see
       `test_a_lock_for_a_session_that_exists_but_is_unexaminable_is_not_claimed_as_unmatched`).
-    - `unexpected` — names under this root that are not a `<slug>.lock` file `session_lock` could
-      have produced, from `scan_lock_root`. Reported, not absorbed into `total`.
+    - `unexpected` — names under this root that `scan_lock_root` does not recognise as either a
+      `<slug>.lock` file `session_lock` could have produced or a `<slug>.discovering` guard file
+      `_discovery_guard_path` could have produced (#209, #391). Reported, not absorbed into `total`
+      -- a recognised `.discovering` file is not a lock and does not belong in that count either.
     - `unexaminable` — entries whose examination itself raised (#80's third bucket, one root over).
     """
     try:
