@@ -166,11 +166,11 @@ def test_the_family_base_is_not_raised_by_any_arm():
 
 
 def test_every_arm_code_is_still_a_403():
-    from requivo.web.app import _STATUS_BY_CODE
+    from requivo.http import STATUS_BY_CODE
 
     for code, _ in ARMS:
-        assert _STATUS_BY_CODE[code] == 403, code
-    assert _STATUS_BY_CODE["cross_site_request"] == 403
+        assert STATUS_BY_CODE[code] == 403, code
+    assert STATUS_BY_CODE["cross_site_request"] == 403
 
 
 @pytest.mark.parametrize("code, keys", ARMS)
