@@ -75,6 +75,17 @@ def _save_failed_reply(raw: str, contract: str) -> Path | None:
     cycle. `test_a_prune_failure_does_not_discard_an_already_saved_reply` pins it.
     """
     try:
+        # Ambient, deliberately (#272's scope amendment weighed this against threading a `Store`
+        # through the provider and chose ambient): a provider is constructed once per process/client
+        # and reused across whatever session it is asked to reason about next, so it has no single
+        # workspace of its own to carry as constructor state -- threading one through would mean
+        # re-constructing (or re-pointing) the provider per call, which is a wider change than a
+        # debug-only side channel justifies. `.requivo/debug/` is a human-read diagnostic aid, not
+        # part of any session's data, so addressing the *process's* ambient workspace rather than
+        # whichever session's explicitly-rooted repository triggered this call is an accepted,
+        # documented limitation rather than a silent one: on a process serving more than one
+        # workspace at once (the exact shape #272 exists to unblock), a failed reply's debug dump
+        # lands under the *ambient* root, which may not be the root the triggering session used.
         root = debug_root()
         ensure_store_dir(root)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")

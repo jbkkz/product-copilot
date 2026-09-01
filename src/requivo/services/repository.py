@@ -23,12 +23,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
+from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
-from requivo.core import persistence as store
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import SessionNotFoundError
-from requivo.core.persistence import ArtifactStatus, SessionMeta, UnexaminableEntry
+from requivo.core.persistence import ArtifactStatus, SessionMeta, Store, UnexaminableEntry
+from requivo.paths import workspace_root
 
 
 @runtime_checkable
@@ -143,24 +144,52 @@ class SessionRepository(Protocol):
 
 class FileSessionRepository:
     """The default backing: the `.requivo/sessions/<slug>/` layout. A thin adapter over
-    `core.persistence` — it holds no state, so it is safe to construct per call.
+    `core.persistence.Store` -- every method below resolves *which* `Store` to call through
+    `_resolve_store()`, and that is what makes this class genuinely addressable by construction
+    (#272), which it was not before: see `docs/cloud-boundary.md` (§3.1).
 
-    That sentence is true and, on its own, misleading: every method below delegates to a
-    module-level `core.persistence` function, and those resolve the workspace root ambiently
-    (`paths.workspace_root()`, reading `REQUIVO_WORKSPACE`/cwd) on each call rather than reading
-    it off `self`. So two instances of this class are indistinguishable — neither carries a
-    root of its own — and the protocol's "backing-neutral" promise (see the module docstring
-    above) does not extend to per-instance addressability on this backing: `DiscoveryService`'s
-    "one repository per service, chosen once" comment (`services/discovery.py`) is unenforceable
-    here, because there is no per-instance identity for it to enforce. This is deliberately
-    deferred to #272, which threads an explicit root through the store; do not construct two of
-    these expecting them to address different workspaces."""
+    **`root=None` (the default) is ambient, resolved fresh on every call -- not frozen at
+    construction.** This is the asymmetry the whole class turns on, so it is worth stating twice:
+    `_resolve_store()` builds a new `Store(paths.workspace_root())` each time it is asked, exactly
+    like every `core.persistence` module-level function already did before this class existed --
+    which is what keeps `cli.py`'s `--workspace` handling (`os.environ["REQUIVO_WORKSPACE"] = ...`,
+    mutated *after* argument parsing, before any repository is used) working unchanged: the next
+    call picks the mutation up, because nothing was cached at construction to go stale.
 
-    @staticmethod
-    def _missing(slug: str) -> SessionNotFoundError:
+    **An explicit `root`, given at construction, is fixed state instead.** `_resolve_store()` then
+    returns the *same* `Store` object on every call, so this instance addresses exactly the
+    workspace it was built with, immune to any later environment change -- including a concurrent
+    call elsewhere in the process mutating `REQUIVO_WORKSPACE` for a *different* repository's sake.
+    This is the property the class used to lack entirely: two instances constructed with two
+    explicit roots are now genuinely independent and addressable at once, which is what makes
+    `DiscoveryService`'s own "one repository per service, chosen once" comment (`services/
+    discovery.py`) an enforceable claim on this backing rather than an aspiration. Pinned by
+    `test_two_repositories_against_two_roots_are_independent_in_one_process`."""
+
+    def __init__(self, root: Optional[Path] = None) -> None:
+        self._store: Optional[Store] = Store(root) if root is not None else None
+
+    def _resolve_store(self) -> Store:
+        """See the class docstring for the ambient-vs-fixed distinction this exists to hold."""
+        return self._store if self._store is not None else Store(workspace_root())
+
+    def store(self) -> Store:
+        """The `Store` this repository addresses right now. Not part of the `SessionRepository`
+        protocol -- a Postgres backing has no filesystem root to expose -- so this is specific to
+        the file backing, the same way `FileSessionRepository`'s other filesystem-only surface
+        (`canonical_dir`, `artifact_path`, …) already is, per `tests/test_boundaries.py`'s own
+        allowlist reasoning for those. Exists so a caller that needs a *root*, not a session
+        operation, can address the same workspace this repository does instead of falling back to
+        a second, independent ambient read: `DiscoveryService`'s own discovery-guard path and
+        reserved-slug probe, and `SessionService.no_session`'s error text, all read the workspace
+        root outside any repository method and would otherwise silently disagree with an explicit
+        `root=` the moment one is given (#272's scope amendment)."""
+        return self._resolve_store()
+
+    def _missing(self, slug: str) -> SessionNotFoundError:
         """The one place "there is no such session" is phrased — including the case where there *is*
         one, in the retired `out/` layout, which is a different problem with a specific answer."""
-        if store.legacy_exists(slug):
+        if self._resolve_store().legacy_exists(slug):
             return SessionNotFoundError(
                 f"'{slug}' exists only in the retired out/ layout. Bring it into the session store "
                 "with `requivo session migrate`, which converts every out/ session in one pass and "
@@ -170,71 +199,77 @@ class FileSessionRepository:
 
     @contextmanager
     def lock(self, slug: str) -> Iterator[None]:
-        with store.session_lock(slug):
+        with self._resolve_store().session_lock(slug):
             yield
 
     def exists(self, slug: str) -> bool:
-        return store.session_exists(slug)
+        return self._resolve_store().session_exists(slug)
 
     def has_meta(self, slug: str) -> bool:
-        return store.session_exists(slug)
+        return self._resolve_store().session_exists(slug)
 
     def ensure_writable(self, slug: str) -> None:
-        if not store.session_exists(slug):
+        if not self._resolve_store().session_exists(slug):
             raise self._missing(slug)
 
     def create(self, slug: str, request: str, *, provider: Optional[str] = None,
                model_name: Optional[str] = None, context_cards: Optional[list[str]] = None) -> SessionMeta:
-        return store.create_session(slug, request, provider=provider, model_name=model_name,
-                                    context_cards=context_cards)
+        return self._resolve_store().create_session(slug, request, provider=provider,
+                                                     model_name=model_name, context_cards=context_cards)
 
     def read_meta(self, slug: str) -> SessionMeta:
-        return store.read_meta(slug)
+        return self._resolve_store().read_meta(slug)
 
     def write_meta(self, slug: str, meta: SessionMeta) -> None:
-        store.write_meta(slug, meta)
+        self._resolve_store().write_meta(slug, meta)
 
     def list_slugs(self) -> list[str]:
-        return store.list_session_slugs()
+        return self._resolve_store().list_session_slugs()
 
     def list_unexaminable(self) -> list[UnexaminableEntry]:
         # A second scan rather than one shared with `list_slugs`, deliberately. The two are two
         # instants and a session appearing between them can land in neither answer — the same race
         # `scan_session_root` exists to close for `doctor`. It is the lesser cost here: sharing one
-        # scan means holding the partition's three parts as state on a repository that is
-        # constructed per call and documented as holding none, and the answer would then be as old
-        # as the handle. `session list` reads both within microseconds of each other.
-        return store.list_unexaminable_entries()
+        # scan means holding the partition's three parts as state on this repository, and the
+        # answer would then be as old as the last call that happened to populate it, on a class
+        # whose whole point (#272) is that different calls can legitimately address different
+        # stores. `session list` reads both within microseconds of each other regardless.
+        return self._resolve_store().list_unexaminable_entries()
 
     def load_model(self, slug: str) -> EngineOutput:
-        if not store.session_exists(slug):
+        resolved = self._resolve_store()
+        if not resolved.session_exists(slug):
             raise self._missing(slug)
-        return store.load_session_model(slug)
+        return resolved.load_session_model(slug)
 
     def load_revision(self, slug: str, revision: int) -> EngineOutput:
-        return store.load_revision_model(slug, revision)
+        return self._resolve_store().load_revision_model(slug, revision)
 
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: Optional[int] = None,
                       provenance: Optional[dict] = None) -> tuple[int, SessionMeta]:
-        return store.save_revision(slug, model, expected_revision=expected_revision, provenance=provenance)
+        return self._resolve_store().save_revision(
+            slug, model, expected_revision=expected_revision, provenance=provenance)
 
     def request_text(self, slug: str) -> str:
-        return store.session_request(slug) if store.session_exists(slug) else ""
+        resolved = self._resolve_store()
+        return resolved.session_request(slug) if resolved.session_exists(slug) else ""
 
     def context_cards(self, slug: str) -> Optional[list[str]]:
-        return store.read_meta(slug).context_cards if store.session_exists(slug) else None
+        resolved = self._resolve_store()
+        return resolved.read_meta(slug).context_cards if resolved.session_exists(slug) else None
 
     def save_artifact(self, slug: str, artifact_type: str, filename: str, content: str, *,
                       source_revision: int, stale: bool = False) -> ArtifactStatus:
-        return store.save_session_artifact(slug, artifact_type, filename, content,
-                                           source_revision=source_revision, stale=stale)
+        return self._resolve_store().save_session_artifact(
+            slug, artifact_type, filename, content, source_revision=source_revision, stale=stale)
 
     def load_artifact(self, slug: str, filename: str) -> Optional[str]:
         # Delegated rather than re-joined here: this method built the artifacts/ path inline, which
         # is how the read side kept a traversal the write side had already closed at `artifact_path`.
-        return store.read_artifact_file(slug, filename)
+        return self._resolve_store().read_artifact_file(slug, filename)
 
 
 def default_repository() -> SessionRepository:
-    """The repository the CLI uses — a file backing under the caller's workspace."""
+    """The repository the CLI uses — a file backing under the caller's workspace, resolved
+    ambiently on every call (`root=None`) — see `FileSessionRepository`'s own docstring."""
     return FileSessionRepository()

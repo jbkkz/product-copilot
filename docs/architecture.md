@@ -32,7 +32,12 @@ The code is the `requivo` package under `src/`. The layers form a strict DAG:
   the single validated apply path (validate → diff → propagate → revision → stale-flag).
   `DiscoveryService` is the provider-backed orchestration (start / answer / generate, plus
   `claim_session` and the un-persisted `draft_turn` an interactive loop takes and repeats) the CLI and Web both call, so there is one pipeline, not two. Storage is injected as a `SessionRepository`
-  (`FileSessionRepository` today; Postgres-swappable for a future service).
+  (`FileSessionRepository` today; Postgres-swappable for a future service). The file backing's own
+  workspace root is constructor state, not ambient process environment (#272):
+  `FileSessionRepository(root=...)` addresses an explicit root, fixed for the instance's lifetime,
+  independently of any other instance in the same process — `root=None` (the default the CLI uses)
+  stays ambient, resolved fresh from `REQUIVO_WORKSPACE`/cwd on every call, so `--workspace` keeps
+  working exactly as before.
 - **`render/`** turns data into strings; **`cli.py` + `deterministic/`** are the only layers that
   touch argv/stdout/TTY. `deterministic/` is a package of one module per verb group (`doctor`,
   `sessions`, `model`, `artifacts`, over a `_shared`), composed into the single `register(sub)` the

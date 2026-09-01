@@ -590,16 +590,22 @@ def _paused_between_the_writes(monkeypatch, slug: str, at_the_gate, release):
     That gap is where the damage lands: revisions/NNNN-model.json and model.json are already on
     disk, `session.json` is about to be written through a freshly resolved `canonical_dir(slug)`,
     and the lock is held across the whole of it. Patching `write_meta` rather than sleeping keeps
-    the window deterministic on every leg instead of timing-dependent on the slow ones."""
-    real_write_meta = store.write_meta
+    the window deterministic on every leg instead of timing-dependent on the slow ones.
 
-    def paused(s, meta):
+    **Patched on the `Store` class, not the module function** (#272). `store.save_revision` is now
+    a thin ambient-default wrapper over `Store.save_revision`, which calls `self.write_meta(...)` —
+    a method lookup on the class, not the module-level `write_meta` name -- so patching the module
+    function no longer intercepts it. The class attribute is what every instance's `self.write_meta`
+    actually resolves to, ambient or explicit alike, which is what makes this the correct target now."""
+    real_write_meta = store.Store.write_meta
+
+    def paused(self, s, meta):
         if s == slug and not at_the_gate.is_set():
             at_the_gate.set()
             assert release.wait(20), "the test never released the paused writer"
-        return real_write_meta(s, meta)
+        return real_write_meta(self, s, meta)
 
-    monkeypatch.setattr(store, "write_meta", paused)
+    monkeypatch.setattr(store.Store, "write_meta", paused)
 
 
 def test_a_forced_import_serialises_against_a_concurrent_writer(workspace, tmp_path, monkeypatch):

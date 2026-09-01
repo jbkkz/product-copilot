@@ -927,7 +927,7 @@ def test_an_ordinary_discover_leaves_no_lock_residue_doctor_flags(workspace):
     from requivo.services.discovery import _discovery_guard_path
 
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
-    guard = _discovery_guard_path("s")
+    guard = _discovery_guard_path("s", store.Store(store.workspace_root()))
     guard.parent.mkdir(parents=True, exist_ok=True)
     guard.touch()
 
@@ -1264,11 +1264,16 @@ def test_lock_matching_is_not_claimed_when_the_session_list_itself_could_not_be_
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
     _take_lock("s")
 
-    def _unreadable():
+    def _unreadable(self):
         raise PermissionError("Permission denied")
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(det.store, "list_session_slugs", _unreadable)
+        # On the `Store` class, not the module function (#272): `_lock_health` reaches this through
+        # `SessionService().repo.list_slugs()` -> `FileSessionRepository.list_slugs()`, which calls
+        # `self._resolve_store().list_session_slugs()` -- a `Store` method lookup, not the
+        # module-level `list_session_slugs` name -- so patching the module function no longer
+        # intercepts it.
+        mp.setattr(det.store.Store, "list_session_slugs", _unreadable)
         r = _run_json(["doctor", "--json"])["locks"]
         text = _run(["doctor"])
 

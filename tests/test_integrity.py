@@ -761,16 +761,20 @@ def test_check_session_waits_for_a_concurrent_writer_instead_of_reporting_a_tear
     `test_a_forced_import_serialises_against_a_concurrent_writer` freezes to prove the analogous
     claim for `session import`."""
     svc = _healthy()
-    real_write_meta = store.write_meta
+    # Patched on the `Store` class, not the module function (#272): `store.save_revision` is now a
+    # thin ambient-default wrapper over `Store.save_revision`, which calls `self.write_meta(...)` --
+    # a class-method lookup, not the module-level `write_meta` name -- so patching the module
+    # function no longer intercepts it.
+    real_write_meta = store.Store.write_meta
     at_the_gate, release = threading.Event(), threading.Event()
 
-    def paused(slug, meta):
+    def paused(self, slug, meta):
         if slug == "s" and not at_the_gate.is_set():
             at_the_gate.set()
             assert release.wait(20), "the test never released the paused writer"
-        return real_write_meta(slug, meta)
+        return real_write_meta(self, slug, meta)
 
-    monkeypatch.setattr(store, "write_meta", paused)
+    monkeypatch.setattr(store.Store, "write_meta", paused)
 
     write_failures: list[BaseException] = []
 
