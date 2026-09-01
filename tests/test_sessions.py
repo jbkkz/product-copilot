@@ -581,6 +581,40 @@ def test_generation_refuses_a_session_that_has_no_model_yet(workspace, call):
     assert "discover" in str(e.value)                             # the refusal names the remedy
 
 
+def test_answer_refuses_a_session_that_has_no_model_yet(workspace):
+    """`answer()` is the one write verb `_require_a_model` did not cover (#421) — the mirror of
+    #152, one write verb over. At revision 0 `snap.model` is `None`, so the provider's `analyze()`
+    falls through to its own first-discovery branch: the answers the caller typed appear in no kwarg
+    of the call, the reply is applied as revision 1 with `cli-answer`/`web-answer` provenance, and the
+    write bypasses `run_discovery`'s own double-submission guard — a paid turn that both ignored what
+    it was given and recorded an answer turn that never happened.
+
+    Must-fire: without the gate this reaches the provider (`provider.calls == 1`) and raises nothing,
+    so this test is red on the pre-fix code rather than merely descriptive of it. The sibling control
+    — `answer` still working at revision >= 1 — is already covered by
+    `test_an_answers_turn_holds_the_revision_it_read` and
+    `test_an_answers_turn_that_says_nothing_about_reasoning_keeps_it`, both of which apply a model
+    before calling `answer`; duplicating that here would test nothing this file does not already
+    pin."""
+    from requivo.core.errors import RevisionConflictError
+    from requivo.services.discovery import DiscoveryService
+
+    SessionService().create_session("Something.", slug="s")     # created, never analysed
+    provider = _CountingProvider()
+
+    with pytest.raises(RevisionConflictError) as e:
+        DiscoveryService(provider).answer("s", "here are my answers")
+
+    assert e.value.details["actual"] == 0 and e.value.details["expected"] == 1
+    assert provider.calls == 0                                    # refused before reaching the provider
+    assert "discover" in str(e.value)                             # the refusal names the remedy
+    # The co-requisite half of #421: before this fix the remedy text itself suggested `requivo answer`
+    # "if a discovery is in progress" — i.e. it routed a reader straight back into the ungated path.
+    # Since #202 an interrupted discovery lands at revision 1, so `answer` is never the right verb at
+    # revision 0; naming it here would be self-contradictory the moment this very gate exists.
+    assert "requivo answer" not in str(e.value)
+
+
 def test_a_repeat_discovery_is_refused_before_the_provider_is_paid(workspace):
     """Same rule, the other entry point. `start()` used to reason first and discover the conflict
     afterwards, so an accidental re-run bought a discovery turn — and, when finalizing, an assessment

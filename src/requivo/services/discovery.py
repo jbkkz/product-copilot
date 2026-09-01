@@ -187,8 +187,7 @@ def _require_a_model(slug: str, snap: SessionSnapshot) -> EngineOutput:
     if snap.model is None:
         raise RevisionConflictError(
             f"session '{slug}' has no model yet (revision 0) — there is nothing to generate from. "
-            f'Run `requivo discover` on it, or `requivo answer {slug} "…"` if a discovery is in '
-            "progress.",
+            "Run `requivo discover` on it.",
             details={"slug": slug, "expected": 1, "actual": snap.revision})
     return snap.model
 
@@ -567,15 +566,25 @@ class DiscoveryService:
         The size cap on `answers` runs first, before any of the above: a caller past the Web's own
         friendly re-render (invariant 14) still needs the refusal, and it costs nothing to check
         before a snapshot read or a revision comparison that an oversized answer would waste (#255).
+
+        A session at revision 0 has no model to fold anything into — `_require_a_model` refuses it
+        before the provider is ever built (#421, the mirror of #152 one write verb over). Without the
+        gate `snap.model` is `None` and the provider's `analyze()` falls through to its own
+        first-discovery branch: the answers the caller typed appear in no kwarg of the call, the reply
+        is applied as revision 1 with `cli-answer`/`web-answer` provenance regardless, and the write
+        bypasses `run_discovery`'s own double-submission guard. Pinned by
+        `test_answer_refuses_a_session_that_has_no_model_yet` (zero provider calls); `answer` still
+        working at revision >= 1 is the existing control, `test_an_answers_turn_holds_the_revision_it_read`.
         """
         require_input_within_bounds(answers, field="answers")
         self.sessions.ensure_canonical(slug)
         snap = self.sessions.snapshot(slug)
         _require_no_conflict_yet(slug, expected_revision, snap)
+        model = _require_a_model(slug, snap)
         ledger = current_ledger()
         before = len(ledger.calls) if ledger is not None else 0
         out = self._need_provider().analyze(
-            snap.request, current_model=snap.model, answers=answers, only=snap.context_cards)
+            snap.request, current_model=model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(
             slug, out.model_dump_json(),
             expected_revision=expected_revision if expected_revision is not None else snap.revision,
