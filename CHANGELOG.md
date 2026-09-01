@@ -12,6 +12,476 @@ fragments in `changelog.d/` are the material to summarize from.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-01
+
+### Highlights
+
+- **Breaking** — `answer`, `brief`, `prd`, `stories`, `estimate`, `criteria`, `epic` and `release` now take a session slug only; a `model.json` path is refused by name instead of quietly resolving to a session you never typed.
+- **Breaking** — `DiscoveryService.draft_assessment` and six uncalled symbols are gone, and `requivo discover -` refuses a terminal or empty stdin instead of exiting 0.
+- New `requivo session restore <session>` copies a trusted revision over a torn `model.json` — the documented recovery path that previously did not exist.
+- Requivo Web opens without an API key: **Explore a worked example** turns the bundled sample into a real session you can read on a first run.
+- Sessions stored under a Windows reserved device name (`con`, `nul`, `com1`…) are reachable again from the CLI, from Requivo Web and from `doctor`, which no longer reports their own lock files as residue.
+- Session pages, model exports and artifact downloads answer `Cache-Control: no-store`, so a shared proxy or a borrowed browser cannot retain them.
+
+### Added
+
+- Added `requivo session restore <session> [--revision N]` — the documented recovery path for a torn or inconsistent session (#210). It copies a readable, *trusted* `revisions/NNNN-model.json` over `model.json`, under the session's write lock, without touching the revision log: no new revision, no bump to `current_revision`, no new file under `revisions/`. "Trusted" means it checks the file's content hash against the one `session.json`'s own revision log recorded for it — not merely that the file parses — the same check `session verify`'s `revision_hash_mismatch` finding already makes on the read side, so this repair tool never trusts what that diagnostic would refuse. Defaults to the newest revision this build can still read and trust, falling back to an older one when the last revision's own file is itself unreadable or tampered; that fallback is a **partial** repair and says so — `session verify` will keep reporting the session as inconsistent afterwards, correctly, because the last revision's content is genuinely unrecoverable. `--revision N` picks a revision explicitly and is refused, never silently substituted, when it does not exist, cannot be read, does not parse, or does not match its recorded hash. `session verify` now names the same recovery when it reports `invalid_model`, `model_is_not_the_last_revision` or `missing_model` — the three problems this verb can help with — printing the newest trusted revision and the exact command to run, or saying plainly when it could not check. `doctor` and `session verify` remain strictly read-only; `session restore` is the explicit, user-invoked repair beside them.
+- Compatibility: compatible - a new verb and new terminal output only; no existing `--json` payload, exit code or file format changes. `session restore` deliberately does not accept `--json`.
+
+- Requivo Web has a keyless activation path: **Explore a worked example** on the home page (#226). Web is the declared product experience, and a first run with no API key showed an empty page and a provider notice — the CLI got `requivo demo` because "a visitor shouldn't need a key, a clone, and a venv before feeling what the product does", and the primary surface never got the equivalent. One click now materialises the bundled sample — the same messy client email `requivo demo` replays — as a real session in your workspace, through the ordinary validated path (`SessionService.create_session` + `update_model`), so it has a revision, a frozen copy under `revisions/`, a readiness verdict computed by the same code as yours, and it opens in the CLI and in Claude Code. Nothing is called and nothing is reasoned: the payload already shipped in the wheel and is only read. The revision it writes records the surface that applied it and claims no provider and no model name, because none reasoned it (invariant 6). Three things the issue left open are decided here and argued in `web/example.py`: a second click returns you to the session you already have rather than minting a second or refusing; the button stays after you have sessions of your own, since showing it only on an empty workspace puts the example one real session out of reach; and the sample is an ordinary writable session, so its own page says in as many words that reading it costs no API key and that refining or generating does need one. It is labelled *Example* on its row and on its page, and that label is decided by the request the session carries rather than by the slug it landed under — a workspace already holding a session of that name would otherwise push the sample to a derived slug, losing the badge and handing it to the squatter.
+- Compatibility: compatible - purely additive. One new route (`POST /sessions/example`), one new module (`src/requivo/web/example.py`), one new caption. No session-format change, no `--json` payload change, no existing route's status or body altered, and nothing new is required of an install.
+
+- The request and answers fields in Requivo Web now show a live character count once you pass 80% of the 20,000-character ceiling, and say plainly that the submission will be refused once you are over it (#239). It **counts and warns and never clips**: it does not write to the field, does not add an HTML `maxlength`, and does not block a submit, so an over-long paste still reaches the server and still comes back refused with your text preserved. That is invariant 3 at the one place a reader meets it — a browser that trimmed the paste would leave an over-long request arriving at exactly the ceiling and passing the very check written to catch it (#8), which is why the affordance had to be this shape and `docs/web.md` asked for it in these words. The number shown is rendered from `web/config.py`, so the count and the server's refusal cannot drift. With JavaScript off nothing changes: no counter, and still no clipping.
+- Compatibility: compatible - a `data-limit` attribute added to two textareas and a counter element created client-side. No route, payload, session format or error code changes; the server-side ceilings and refusals are untouched, and no template gained a clipping attribute.
+
+- `CONTRIBUTING.md` now maps the guards that read your source and your prose, so a red one is a two-minute fix instead of a mystery (#289). Sixteen guard files police form rather than behaviour — an import, an encoding declaration, a version string, a comment that names a test, a heading a test parses — and a small pull request can trip several of them. The new table says what trips each one and where the fix goes, and calls out the two couplings that run in the direction no newcomer predicts: a test's *name* is load-bearing API for source prose, so renaming one breaks documentation until you grep for it; and `docs/compatibility.md` is parsed as data by three assertions across two test files, so editing a heading breaks the build in a file that looks like documentation. Two stale claims in the same file were corrected while there: the local check block omitted `pyright`, which is a required check, and the page said nothing in the test suite reads the maintainer-loop config when `tests/test_version_sites.py` cross-checks `.oss.json`'s `version_sites` in both directions.
+- Compatibility: compatible - documentation only. No code, no test, no CI leg and no published surface changed.
+
+- Per-call token usage is now stamped into revision provenance, so a session's cost is answerable after the fact (#292). Every provider-backed apply (`requivo discover`, `answer`, `brief`) now records the input/output/cache tokens its call(s) actually spent, plus the exact `(input, output)` USD-per-million-token rate they were billed at and the rate table's own date, into that revision's entry in `session.json`. `requivo status` sums every revision that carries this into a cumulative "SESSION COST" line, using the same three-state rendering `render_usage()` already uses for one run (exact tokens, a labelled estimate, or "no price on file") — silent, never `$0.00`, when nothing on the session carries it. A deterministic apply (a hand-authored `model apply`, a Claude Code turn, `session import`) and every revision written before this shipped carry none of these fields, by design.
+- Compatibility: compatible - purely additive fields on `RevisionRecord` (`usage_input_tokens`, `usage_output_tokens`, `usage_cache_read_tokens`, `usage_cache_write_tokens`, `usage_rate_per_mtok`, `usage_priced_as_of`); `format_version` stays 1, and a session written before this change round-trips unchanged (`docs/session-format.md` documents the new keys).
+
+### Changed
+
+- The ten session-taking verbs (`answer`, `status`, `impact`, `brief`, `prd`, `stories`,
+  `estimate`, `criteria`, `epic`, `release`) now call their positional `session` instead of
+  `model`, matching every verb under the deterministic surface. `requivo status` with no argument
+  said "the following arguments are required: model" about a thing the user supplies as a session
+  slug, which is engine vocabulary and reads especially badly beside the `model` verb group -- the
+  rendered usage was `requivo model <model>`. The accepted value set is unchanged: a slug, or a
+  path to a saved `model.json` (#248).
+- Compatibility: compatible - the name is an argparse `dest`/`metavar`, which is internal to the
+  parser, and these positionals are passed by position rather than by name. No invocation changes;
+  only the `--help` usage line and the missing-argument error read differently.
+
+- `[tool.pyright]`'s `include` widens from `core/` + `services/` to the whole package (#271), the
+  condition this project's own comment set for widening -- "once these have stayed clean" -- having
+  been met once `services/discovery.py`'s `GenerateResult.artifact: object` (renamed `Generated`
+  since the issue was filed) was given a real type. `Generated` is now generic
+  (`Generated[T]`), and `DiscoveryService.generate()` carries five `Literal`-keyed `@overload`s (one
+  per artifact type it actually saves a document for) plus a plain-`str` fallback for a caller that
+  only holds the type name in a variable -- so `disco.generate(slug, "prd")` resolves to
+  `Generated[PRD]` at the call site with no cast anywhere the caller can see, and every one of the
+  six `.artifact` reads in `cli.py` type-checks with zero edits to that file (nine `pyright`
+  diagnostics before the fix, not the eight the issue measured -- re-measured directly rather than
+  trusted; nine rather than six because `epic`, read once at line 782, is then passed to four
+  separate renderer/export calls, each its own diagnostic). Two narrower gaps in
+  `providers/anthropic/client.py` and `completion.py` (an SDK-optionality return annotation, and a
+  dict literal whose inferred value type couldn't hold a nested `cache_control` block) are also
+  fixed. `src/requivo/render/` is excluded from the widened scope rather than folded in: it carries
+  five pre-existing `pyright` diagnostics from two `None`-narrowing gaps this issue's own Scope
+  section does not name and its acceptance criteria does not ask this change to fix; filed
+  separately.
+- Compatibility: compatible - a type-checking and dev-tooling change only. No runtime behaviour, no
+  session format, no `--json` payload and no CLI surface changed; `pyright src/requivo` now exits 0,
+  which is the CI leg's own existing command (`.github/workflows/ci.yml` already runs bare
+  `.venv/bin/pyright`, so no workflow edit was needed to pick up the widened scope).
+
+- Two sentences that oversold the cost of writing a second reasoning provider now say what is actually true (#273). `services/discovery.py` and `docs/providers.md` both said "a second provider is a constructor argument". That is true of the *protocol* — `DiscoveryService` takes a `ReasoningProvider` and nothing else — and false of the *build cost*: roughly 400 of the 1,057 lines under `providers/anthropic` are provider-neutral orchestration (the per-operation message builders, the generator tables, `prompt_version()`, the JSON extraction and fence-stripping, the contract validation, the corrective-nudge retry loop and the parse-first truncation policy), so a second implementation re-implements or copies them. Both places now state the swap cost and the implementation cost separately. The extraction itself is deliberately deferred, with a written trigger, in a new decision record (`decision: deferring-the-neutral-provider-layer`) — the neutral layer was measured at ~350 lines two days earlier and at ~400 now, and that growth is the trigger's own evidence rather than a correction to it.
+- Compatibility: compatible - prose only. No code moved, no module was added or removed, no import path changed, and the `ReasoningProvider` protocol is untouched.
+
+- Documented the meta-guard budget and froze the persistence diagnostics tier (#287). CLAUDE.md's "Where a bug narrative lives" section now states that the meta-guard estate — prose/CI/script tests that guard the repo's own self-description or source form rather than exercising shipped runtime code — is at budget (measured 2026-08-29: 24% and 10% of the then-suite respectively), and that a new one needs the same two-real-instances-of-drift bar, named by issue number, that #288 already applies to a new source-scanning tier; folding into an existing meta-guard file is preferred over opening a new one. It names #169 (the product-validation protocol) as where the next testing investment goes, not another guard. A new top-level "The persistence diagnostics tier is frozen" section states, retroactively and as a decision rather than a deletion, that no new report-only diagnostic lands in `core/persistence.py`/`deterministic/doctor.py` without a reproduced field instance of the state it reports and a named user action — the shipped lock-residue check stays, and the tier stops there.
+- Compatibility: compatible - documentation only; no code, schema or `--json` change.
+
+- Consolidated the triplicated scan plumbing across this suite's source-scanning guard tiers into one shared `tests/_scan.py` (#288). `test_boundaries.py` and `test_encoding.py` each carried a nearly byte-for-byte duplicate `scan()`, `_parse()` and `_write_tree()`; `test_narrative_references.py` re-derived the same "an empty or missing scan root is an error, not a clean answer" refusal (#10) a third time, over a wider suffix set and multiple roots. All three now import the shared implementation; every existing test function, docstring and assertion in all three files is unchanged, and the empty-scan refusal is exercised from all three exactly as before. `test_narrative_references.py` had no positive control at all for its own refusal before this change -- `test_the_guard_refuses_a_scan_it_could_not_make` closes that gap, found while doing this consolidation rather than invented for it. CLAUDE.md's "Where a bug narrative lives" section gains one paragraph stating the bar for adding a *fourth* scanning-guard tier: the same two-real-instances-of-drift bar this repository already applies to automatic context-card relevance routing, not a plausible first instance. Deliberately out of scope: `test_version_sites.py` and `test_plugin_cli_drift.py` were left untouched, per the issue's own scope list, and no reason attached to a specific guard was moved away from the line it explains -- only the mechanical walk-and-refuse plumbing moved.
+- Compatibility: compatible - test-only; every guard's pass/fail behaviour is unchanged. `tests/_scan.py` is new, internal test infrastructure, not part of any public interface.
+
+- Every provider-bound serialization is compact (#300). Six of the seven generators plus the stories
+  JSON that `estimate` embeds were dumping the model with `model_dump_json(indent=2)` while
+  `answer_turn` on the same code path already sent it compact -- seven sites, one measured at
+  15,696 bytes against 14,110 on the demo model, so roughly 10% of those bytes were indentation
+  nobody reads. It is small per call and paid on every artifact of every session. The system prompt
+  is untouched, so `prompt_version()` -- which hashes that prompt and not the user message -- is
+  unchanged, and no revision's recorded provenance moves. The issue described eight sites; there are
+  seven, because `estimate` dumps the stories and not the model.
+
+- `render/` joins the pyright scope, and `[tool.pyright]`'s `include` now covers `src/requivo` with
+  nothing excluded (#393). It was the one directory of the shipped package left outside after #271,
+  held out by five diagnostics from two `None`-narrowing gaps in `render/html.py` that were *believed*
+  to be false positives -- and believed was the whole of it, on the one file the checker was not
+  reading. Both were verified rather than suppressed, and both were right: `_INLINE_MARKUP` has three
+  named alternation branches and no unnamed one, so `match.lastgroup` cannot be `None` for a match
+  reaching `_inline`'s callback; and `markdown_to_html` gathers a line into a list block only when
+  `_BULLET` or `_ORDERED` matched it, so the `_ORDERED` match in `_list_items` cannot be `None`.
+  Each is now an `assert` at the site that depends on it rather than a `# type: ignore`, because the
+  fact each rests on lives somewhere else in the file and an ignore would preserve neither -- an edit
+  adding an unnamed alternation branch used to falsify the first silently. Two tests go red when
+  either fact moves, one of them asserting the pattern's own group counts so it fires on a branch
+  nobody here has thought of yet. CI already runs a bare `.venv/bin/pyright`, so the widened scope is
+  what the leg checks with no workflow edit.
+- Compatibility: compatible - a type-checking change plus two asserts that state invariants already
+  true. No rendered output moves, and no session format, `--json` payload or CLI surface changes.
+
+### Removed
+
+- `DiscoveryService.draft_assessment` is removed (#300). It reasoned a decision brief for a model
+  that was not a session yet, and lost its last caller in #202, when the CLI's interactive discovery
+  stopped buying a brief before its one write and began persisting the converged model first and
+  generating through `generate(slug, "brief")` -- the path every other surface already took. It was
+  kept on the argument that the operation was coherent and the contract public; two majors on, the
+  only thing exercising it was its own test. A caller that has a session should use
+  `generate(slug, "brief")`, which absorbs the reasoning, cuts a revision and saves the document,
+  none of which the removed method did.
+- Six more symbols nothing called, and the dead surface around them, are gone too (#300):
+  `core/persistence.py`'s `session_artifact_files` and `list_non_session_entries`,
+  `core/analysis.py`'s `_is_deferred`, `render/terminal.py`'s `_wrap`, and `core/errors.py`'s
+  `StaleArtifactError` together with the `"stale_artifact": 409` row it had in `web/app.py`'s
+  error-to-status table. The first was worth more than its six lines: its docstring described "the
+  on-disk set change-detection intersects with" as if a caller existed, where the real staleness
+  resolution intersects `set(meta.artifact_status)` in `services/sessions.py` -- a dead function
+  making a false claim about the algorithm this project's first invariant is about.
+  `list_non_session_entries` was production-dead rather than unreferenced: `doctor` reads
+  `scan_session_root` directly, and the only two callers were tests, which now read the same
+  partition the product does. Its narrative -- what #67 was about, and why this is a report and
+  never a repair -- moved onto `scan_session_root`, which is where the second part now comes from.
+  `web/viewmodels/sessions.py`'s `session_detail` also stops assembling five keys no template reads
+  (`remaining_gaps`, `question_count`, `summary`, `artifacts`, `generatable`); two of them carried
+  raw engine-shaped `status()` values on the one view model most likely to be extended next, which
+  is an invitation past the vocabulary layer rather than a spare.
+- Compatibility: breaking - and it is the first bullet alone that earns the word. An external caller
+  holding a `DiscoveryService` and calling `draft_assessment` directly gets an `AttributeError`.
+  Graded breaking although `docs/compatibility.md` already classes `requivo.services` under *Python
+  internals -- importable and documented, but not a published API*: a removal is graded on what it
+  does to a caller, and the softer promise is a reason nobody should be surprised, not a reason to
+  grade it down. No surface, verb, route or interface in this repository called it, and there is no
+  deprecation window because it has had no production caller since 1.3.0 (PR #318, which fixed
+  #202) -- this is the major where retiring it is legitimate. The second bullet is compatible on its
+  own and is stated here rather than in a fragment of its own, because a fragment carries one
+  verdict and the stronger one governs: none of those six was reachable from outside the package.
+  `docs/compatibility.md` does publish the structured error envelope `{code, message, path?,
+  details?}`, so the error-code vocabulary is a public surface and `stale_artifact` was checked
+  against it rather than assumed -- nothing has ever raised `StaleArtifactError`, so no envelope
+  could carry that code and no `409` could come from that row; a consumer branching on it was
+  branching on something unreachable. The `session_detail` keys are internal to templates that
+  never read them, and no `--json` payload, session-format key or CLI surface changes.
+
+### Fixed
+
+- A paid decision brief is no longer discarded when its model apply loses a revision race (#208). `DiscoveryService.generate(slug, "brief")` pays for the assessment before applying it; if a concurrent write (a second tab, the CLI, a Claude Code turn) landed on the session meanwhile, the apply used to raise and the paid content vanished with it — not saved, not rendered, not mentioned. It is still saved now: the document is written against the revision it was actually reasoned from, honestly flagged stale, and the raised `revision_conflict` states both facts and the remedy (`requivo brief <slug>` will refresh both) rather than only the conflict. A parallel, rarer case is closed the same way: an `OSError` from an artifact write after any paid generation (a full disk, a permissions error) now surfaces as a structured `artifact_write_failed` error naming the target, not a bare traceback.
+- Compatibility: compatible - a new, additive error code (`artifact_write_failed`) and new optional `details` keys on `revision_conflict` (`artifact_saved`, `artifact_type`, `artifact_stale`); the message text on the brief-conflict path is longer, and `docs/compatibility.md` already says to assert on the code, never the message. No session format change, no removed or renamed field.
+
+- Paid web actions are now guarded server-side against cross-tab and refresh double-submission (#209). Two concurrent first-discovery calls on one session (a second browser tab, or a refresh-and-resubmit during the minutes-long call) both used to pass the revision-zero gate and both paid for a provider call, with only the loser's write refused afterwards by the optimistic lock. A new, non-blocking per-slug guard is now held for the span of the provider call plus its apply: the second caller is refused immediately, before it spends anything, with the same `session_locked` (503) response the store already uses for "the write never started; retrying it unchanged is correct". A crashed holder releases the guard the instant its process dies — no stale-lock cleanup is needed. Covers both first-discovery doors (`POST /sessions`, `POST /sessions/{slug}/discover`), since both route through the same service-layer entry points.
+- Compatibility: compatible - purely additive: a concurrent first-discovery request can now receive an existing, already-documented `session_locked`/503 response in a circumstance where it previously reached the provider; no code, `--json` key or session format changed.
+
+- A session nobody could read no longer leads the home page with the engine's own words, and the page its row sends you to now states them in full (#240). The degraded row is invariant 15's third state and it was right about what it did not know; what it printed was `str(e)` — an absolute path and a pydantic class name for a truncated `model.json`, `[Errno 21] Is a directory` for a `request.md` a crash left as a directory — on the one screen whose design rule is that engine vocabulary never leads. The row now carries one line in the product's own register and keeps the full text for the two places somebody acting on it is already standing: the session page and the server log. **Where the store had already written a sentence for a reader, that sentence stays.** A session from a newer Requivo says *session format v2 is newer than this Requivo understands (v1) — upgrade requivo*: one line, no path, no class name, and it carries the one thing a generic sentence cannot, which is what to do. Replacing it would have been a strict loss rather than a trade, and it is the over-correction this issue had to avoid; a positive control asking whether each break mode had anything to leak at all is what caught it, since no assertion about engine vocabulary can fail on a message that contains none. The row is otherwise deliberately no friendlier than before — the badge still reads *Could not be read*, still in the danger style, and the row still states no timestamp, question count or freshness verdict it did not read. Opening such a session used to raise: `home.html` has promised since #7 that the session screen is where the full error is stated and that this is the one place a reader can act on it, and the reader instead got a generic error page naming neither the session nor anything to run. There is a page for it now, naming the session, quoting the failure untruncated, and pointing at `requivo session verify` — the same remedy and the same wording the CLI already uses for this state. Its guard wraps only what the route *reads*: rendering happens outside it, so a bug in a template can no longer be reported as a corrupt session, and the existence probe is inside it, so a session whose directory cannot be stat-ed reaches the same page rather than the generic one.
+- Compatibility: compatible - the HTTP status of a session page is unchanged on every arm and is pinned by a new test: 409 for a session written by a newer Requivo, 500 for a store that could not answer, 404 for a session that is not there, 200 for one that reads. What changed is the body. The home row's view-model dict gains a `hint` key alongside the `error` key it already had; `error` still carries the untruncated text and is unchanged, and neither is a published payload — `session list --json`, which is, is untouched.
+
+- `--workspace` is now accepted after the command as well as before it (#249). It was declared on
+  the root parser alone, so the natural phrasing `requivo status <slug> --workspace DIR` died with
+  argparse's bare `unrecognized arguments: --workspace DIR` at exit 2 -- a message that names a flag
+  this CLI absolutely does know as unknown, and sends the reader hunting for a typo. The constraint
+  ("Place before the command") existed only in `--help` text, which the person who has just hit the
+  error is by definition not reading. It is now re-declared on every subparser at every depth,
+  including the nested `session`/`model`/`artifact` groups where it has to sit on the leaf parser to
+  be reachable at all, each copy with `default=argparse.SUPPRESS` so an absent per-verb flag still
+  leaves a global `requivo --workspace DIR <command>` exactly as it was -- the pattern `web` has
+  carried alone since it was written. The global flag's help drops the sentence stating the rule that
+  no longer exists. An unknown flag after the command is still refused at exit 2, unchanged.
+- Compatibility: compatible - widening only. Every invocation that worked before works identically,
+  and `requivo --workspace DIR <command>` is untouched; what changes is that an invocation which was
+  previously refused at exit 2 now succeeds. No condition moves off a documented exit code in the
+  narrowing direction, no `--json` payload, error code or session format changes, and the exit-code
+  table in `docs/compatibility.md` still means exactly what it says.
+
+- Fixed the one silent gap in the "adding a slot" workflow (#269): nothing previously caught a new schema slot that no specific artifact's staleness map (`core/dependencies.py`'s `_ARTIFACT_SLOTS_RAW`) consumed — such a slot would mark nothing stale for `prd`/`stories`/`estimate`/`criteria`/`epic`/`release` when it changed, only the assessment via `brief`'s `*` entry, invariant 1's own failure shape landing on the most routine change the schema will ever see. `tests/test_dependencies.py::test_every_required_slot_is_consumed_by_a_specific_artifact_or_is_exempted` now fails on a required slot in neither an artifact's set nor the named-and-reasoned `_SLOTS_WITH_NO_SPECIFIC_ARTIFACT` exemption list (`current_process` and `reporting` today, each with its own reason). CLAUDE.md's "Extending" section gains an "Adding a slot" checklist naming the three mandatory files, the six conditional ones, the golden re-capture consequence, and which parts are guarded versus checked by eye; `docs/requirements-model.md`'s "Dependencies and staleness" section states the coverage guarantee for a product-facing reader.
+- Compatibility: compatible - test and documentation only; no schema, contract or `--json` change.
+
+- The artifact-type vocabulary -- `_GENERATORS`/`_OP_PROMPTS` (`providers/anthropic/generators.py`),
+  `_WRITERS`/`GENERATABLE` (`services/discovery.py`), `_ARTIFACT_SLOTS_RAW`/`ARTIFACT_FILES`/
+  `ARTIFACT_FILENAMES`/`REASONING_CONSUMERS` (`core/dependencies.py`) and `ARTIFACT_LABELS`
+  (`web/viewmodels/labels.py`) -- had no test asserting these ~8 registries agree on their key sets
+  (#270). The dangerous drift was silent: a type present in `ARTIFACT_FILENAMES`/`_GENERATORS`/
+  `_WRITERS` but missing from `_ARTIFACT_SLOTS_RAW` is never flagged stale, because
+  `services/artifacts.py`'s `_stale_since` reads both `REASONING_CONSUMERS` and `propagate()` off
+  that one map alone -- invariant 1's own "a stale document reports itself as up to date" failure,
+  reachable from the single most routine change this vocabulary sees (adding a generator).
+  `tests/test_dependencies.py` now asserts every table against `_ARTIFACT_SLOTS_RAW` as the one named
+  canonical source, with a positive control (a deliberately broken fixture copy the same check must
+  reject) rather than only a passing test over the current tables. **`ARTIFACT_FILES` was itself
+  missing from the guard's first cut and from this fragment's own checklist, found in review of this
+  change**: `services/sessions.py`'s `_resolve_stale`, run eagerly on *every* apply rather than only
+  at save time, iterates `for t in ARTIFACT_FILES` -- a third table distinct from the
+  `_ARTIFACT_SLOTS_RAW`/`ARTIFACT_FILENAMES` pair the save-time path (`_stale_since`) reads, so a type
+  present everywhere else and absent only from `ARTIFACT_FILES` was never auto-flagged stale by that
+  path, which this change's first cut left uncovered -- now checked and pinned by its own positive
+  control. `CLAUDE.md`'s
+  "Adding a generator" checklist named only three of the eight registration points and misplaced one
+  of them (`_WRITERS` under `render/markdown.py` rather than `services/discovery.py`, where the table
+  actually lives); it now names all eight, including `ARTIFACT_FILES`, and points at the new guard.
+  `web/routes/artifacts.py`'s download route no longer invents a filename
+  (`f"{artifact_type}.md"`) for a type `ARTIFACT_FILENAMES` does not know -- a fallback that could
+  never actually fire, since the route already refuses an unknown type one line above it, against the
+  repo's own refuse-don't-guess rule (invariant 3).
+- Compatibility: compatible - a test-suite and documentation change, plus a dead fallback branch
+  removed from one route. No product code path, session format or `--json` payload changed; the
+  download route's observable behaviour for every type it has ever actually served is unchanged.
+
+- The README no longer dates itself against the release it ships in, and the docs index reaches the decision records (#290). `README.md`'s status line said "at **1.0**" while 1.2.0 was on PyPI, was corrected to "stable on the 1.x line", and was false again within hours of 2.0.0 — the same prose-dates-itself class the 1.0.0 release audit named. It now states what is stable (SemVer, and the published session format) without naming a release line, so no future version can falsify it. `docs/README.md` gained a **Decision records** entry pointing at `docs/decisions/`, which the index had never mentioned; `CLAUDE.md`'s docs list names it too. Separately, the hardcoded golden-harness total ("a full six-request cycle is 18") is gone from `CLAUDE.md` and `scripts/golden_run.py`: a new `planned_calls()` derives the API-call ceiling from the requests a given invocation actually parsed and selected, and `golden_run.py` prints that live figure before spending anything, so adding a request to `fixtures/golden/requests.md` can no longer leave two documents quietly under-counting what a capture costs.
+- Compatibility: compatible - documentation and a harness script only. `planned_calls()` is new and additive in `scripts/golden_run.py`, which is not shipped in the wheel; the number `main()` prints is unchanged for today's request set. No product code, no session format, no CLI surface, no `--json` payload.
+
+- `requivo web` now gives the `requivo.web` logger a formatted stderr handler, so the app's own records carry a timestamp, a level and the logger name instead of reaching Python's last-resort fallback as a bare message interleaved with uvicorn's lines (#291). The 500 page tells the reader to check the server logs, and until now a 5xx investigated an hour later could not be tied to a request time. `logging.lastResort` is also fixed at WARNING, which made the second half worse than unformatted: the `INFO` line `web/spend.py` writes to tell the operator what a paid call cost was dropped entirely, so "no handler" and "nothing was spent" printed identically. **What an importing host gets is unchanged**: the handler is attached by the `web` verb, which owns the process, and never at import or in `create_app()` — a service that mounts this FastAPI app keeps its own configuration of `requivo.web`, the root logger and uvicorn's loggers are untouched, and a logger somebody else has already configured is left exactly as they set it. Known limit: under `--reload` uvicorn spawns a worker process that re-imports the app and has not been through the entry point, so that development flag's own worker still logs unformatted.
+- Compatibility: compatible - a handler on one named logger, attached only by the `requivo web` entry point. No route, payload, session format or error code changes, and nothing is added at import time.
+
+- Fixed a vacuous lock-wait assertion in `test_export_excludes_the_lock_file_and_waits_for_the_writer` (#293). The test's `held.is_set()` check ran *after* `t.join(timeout=10)`, but `join()` blocks until the writer thread finishes regardless of whether `session export` ever waited for its lock -- and the writer always calls `held.set()` on its own way out -- so the assertion read True whether or not `session export` actually serialised against a concurrent writer. Confirmed directly: monkeypatching `session_lock` to a no-op left the original assertion order green. The read now happens the instant `session export` returns, before `t.join()`, which can only be True if the export's own read genuinely blocked on the writer's lock; verified red against the same no-op patch, then green again with the lock restored. The `time.sleep(0.05)` standing in for "the writer has the lock by now" is also gone, replaced by an `Event` the writer signals the instant it acquires the lock -- a scheduling guess with no positive control of its own, which a slow runner could let `session export` outrun without the test ever noticing it had measured nothing.
+- Compatibility: compatible - test-only; no production code changed.
+
+- Merged three near-duplicate surface utilities into their shared home (#301). `cli.py`'s `_is_file_arg` re-implemented the same three pathlib traps (blank string, a directory, an over-long name raising `OSError`) that `deterministic/_shared.py` already handled under a different name -- both now share `is_file_argument`, promoted to public and re-exported from `requivo.deterministic` alongside `read_user_text`. `cli.py`'s `status --json` and its own top-level error envelope called `json.dumps(..., indent=2)` directly instead of `_shared.py`'s `print_json`, which carries the #70 `ensure_ascii` contract against control-character forgery -- both now route through `print_json` (also promoted to public), so that contract has one enforcement point instead of one enforced site and one that happened to match it by using the same defaults. `framework/model_schema.json`'s `slots` list was parsed independently at four call sites across `core/contracts.py` (`schema_slot_ids`, `_schema_order`) and `core/analysis.py` (`slot_meta`, `_default_impacts`) -- all four now project from one new cached `schema_slots()` in `core/contracts.py`, so the file is read and parsed once rather than four times on a cold cache; each projection keeps its own shape and cache, since they slice the rows differently. No behaviour changed: same three traps, same JSON contract, same schema data, fewer copies of each.
+- The literal grep in the issue's own acceptance criteria ("model_schema.json opened by exactly one function in src") is not met by design: `core/context.py` and `deterministic/doctor.py` also open the file, but for its raw text -- prompt substitution and the `requivo schema` verb's literal output -- not the parsed slot list, and folding those into the parsed cache risks changing the prompt hash (invariant 2) or the verb's console output, both explicitly out of scope for this issue.
+- `docs/compatibility.md`'s not-stable section said `requivo.deterministic`'s `__all__` was three names; it is five now that `is_file_argument` and `print_json` joined it, so the count and the enumeration are corrected in the same change.
+- Compatibility: compatible - internal-only; `is_file_argument` and `print_json` were `_`-prefixed and unexported, `schema_slots` is new. No `--json` payload, session format or documented CLI behaviour changed.
+
+- #302: `core/analysis.py`'s `_label`, `_slot_meta`, `_readiness_blockers` and `_state_of` were underscore-private and imported across four other modules anyway (`core/dependencies.py`, `cli.py`, `render/terminal.py`, `render/markdown.py`) -- the privacy marker was false everywhere it mattered, and a rename inside the module would have broken all four with no deprecation surface. Renamed to `slot_label`, `slot_meta`, `readiness_blockers` and `state_of` and made genuinely public: each is core domain logic (schema projections, the readiness rule, the confidence-to-state classification) that more than one surface legitimately needs, so publishing the name is the honest fix rather than moving the logic into whichever caller happened to import it first. `slot_labels` (the list-form convenience) is unchanged. No behaviour changed -- mechanical rename, `grep -rn "analysis import _" src/requivo` now returns nothing.
+- Compatibility: compatible - internal rename only; these names were never documented as public API and carry no format or `--json` promise (docs/compatibility.md does not name them).
+
+- Requivo Web no longer tells a reader to install a provider they have already installed (#339). The
+  probe in `web/config.py` wrapped its whole import in a bare `except Exception` that answered
+  `sdk = False`, so any failure to import `requivo.providers.anthropic` -- a broken transitive
+  dependency, a partially installed package, an SDK major this Requivo cannot import, a syntax error
+  in an installed module -- rendered as "not installed", and the UI stated "Install the provider: pip
+  install 'requivo[anthropic]'" over a cause it had never established and never named. `ProviderStatus`
+  now carries three states per fact rather than two: `True` installed, `False` absent, and `None` for
+  the probe could not look, with the exception's type and message on a new `probe_error` field and in
+  the reason the page renders. Genuine absence is still `False` and still names the install -- that
+  case is the one where the import succeeds and `Anthropic` is None, which is a fact the probe really
+  did establish. The credential half now has its own arm rather than sharing the import's `except`, so
+  an import that succeeded no longer discards the SDK answer it had already obtained; `available`
+  reads `is True` on both, so an unestablished fact can never enable a paid action. A stale comment in
+  `web/routes/sessions.py` naming a `_analysis_failed` that has never existed is corrected to
+  `analysis_failed` in the same change, as the issue asked.
+- Compatibility: compatible - `ProviderStatus` is internal to the Web surface: not a documented Python
+  API, named nowhere in `docs/compatibility.md`'s stable-interface sections, reaching no `--json`
+  payload (`doctor --json`'s `provider_anthropic` rows come from `deterministic/doctor.py` and are
+  untouched), and crossing to the templates only as `available` and `reason`. `available` keeps
+  exactly its meaning in both previously-reachable states; only the message text changes, and the same
+  page already says to assert on codes rather than on messages. No exit code, error code or session
+  format changes.
+
+- `tests/test_boundaries.py`'s storage-boundary guard now scans `providers/` (#355). The guard's whole job is to require an allowlist entry for anything outside `services/` that reaches `core.persistence` directly, bypassing the injected `SessionRepository` seam -- and its scan set only ever covered `cli.py`, `deterministic/` and `web/`. `providers/anthropic/completion.py` already reached `core.persistence`'s private, underscore-prefixed `_atomic_write` and `ensure_store_dir` to preserve a malformed provider reply for a bug report (#283), with no allowlist entry and nothing watching for a second, less justified one to join it unnoticed. The import itself was already defensible (the alternative is a second atomic-write implementation, which invariant 16 exists to prevent); what was missing was the guard actually watching that directory. Both names now have their own `_SURFACE_STORAGE_ALLOWLIST` entries, keyed by `(file, name)` like every other one. No production behaviour changed -- the reach was already there and already correct; only the guard's blind spot closed.
+- Compatibility: compatible - test-only; no runtime code changed, and the guard's own pass/fail behaviour over the pre-existing import is unchanged (it now has a reason on file instead of none).
+
+- `CLAUDE.md`'s golden-harness section documented a bare `golden_run.py` as capturing every
+  interactive request, which stopped being true when #276/#356 shipped the opposite default (a bare
+  run now skips every interactive request, naming each skip and the command to capture it alone;
+  `--all` or an explicit slug opts back in) (#358). The section now says so, in both places the old
+  behaviour was stated: the walkthrough after the `bash` block, and the `Cost:` paragraph, which used
+  to present "capture it alone" as a recommendation the script did not enforce, when as of #276 it
+  does. The follow-up this issue also names -- pointing `framework/elicitation.md`'s hand-kept-vs-
+  guarded bullet at `decision: elicitation-schema-hand-kept` -- was already carried by an earlier
+  change (#383/c15fd8b) by the time this one landed; re-verified rather than duplicated. The edit
+  itself is the issue's own subject: #356's attempt was refused by the harness's permission
+  classifier on this exact file, on every route it tried, and the maintainer hit the identical
+  refusal afterwards -- retried here first, before anything else in this change, and it went through
+  cleanly, so whatever caused the refusal was environment-specific rather than a standing block on
+  this filename.
+- Compatibility: compatible - documentation only.
+
+- `requivo discover -` now reads the request from stdin, like every other verb that takes a document
+  (#360). `session init -`, `model apply <slug> -` and `artifact save --file -` all route through
+  `deterministic/_shared.py`, which special-cases a bare `-`; `discover` called `is_file_argument`
+  directly instead, and `is_file_argument("-")` is False -- correctly, `-` is not a file -- so the
+  argument fell through to the treat-as-literal-text branch and the engine was asked to discover a
+  product from the two-character request `-`. Quiet, plausible-looking, and billed: the obvious shape
+  for exactly the input this product exists to consume (`cat request.txt | requivo discover -`) spent
+  a paid call producing a session about nothing. `discover` now shares `read_source`, promoted to
+  public in `requivo.deterministic` for the same reason `is_file_argument` was in #301. A source that
+  turns out to be empty -- an empty pipe, an empty file -- reaches the same "discover needs a request"
+  refusal a blank literal argument already reached, before any provider call; `-` with a terminal on
+  stdin is refused rather than hung on, by the shared reader's own guard. A file path argument and a
+  literal request, including a one-character one that is not `-`, behave exactly as before.
+- Compatibility: breaking - three conditions move off exit 0. `requivo discover -` with a terminal on
+  stdin now exits 1 rather than discovering on the literal `-`; `discover -` with an empty pipe, and
+  `discover <path>` where the file is empty, now exit 2 rather than paying for a call on nothing; and
+  `discover -` from a non-empty pipe now discovers on the piped text rather than on `-`. Every one of
+  those old behaviours was the defect this fixes, and none was ever documented -- `docs/cli.md`'s
+  "Documents on stdin" section has always listed the other three verbs and never claimed `discover`
+  was one of them. But the rule at the foot of the exit-code section in `docs/compatibility.md` is
+  mechanical rather than a judgement about harm, and the direction here is the narrowing one: an
+  invocation that previously succeeded can now fail. That is the same shape as #255, which was
+  declared compatible on a harm argument and corrected to breaking before its tag, so it is declared
+  breaking here rather than argued down. Nothing else moves: no `--json` payload, no error code, no
+  session format, and a literal request and a non-empty file behave exactly as before.
+
+- `session migrate` no longer aborts the whole pass -- with no receipt printed at all -- when a
+  legacy session's `request.md` is not valid UTF-8 (#371). #262 wrapped `repo.read_meta(slug)` on the
+  occupied-slug branch in `except RequivoError`, but the two reads that decide `interrupted` vs.
+  `skipped` once that succeeds -- `repo.request_text(slug)` and the legacy directory's own
+  `request.md`/`request.txt` -- sat outside that guard: neither an `EACCES` `Path.exists()` re-raises
+  nor a `UnicodeDecodeError` is a `RequivoError`, so an undecodable legacy request escaped invariant
+  15's own per-slug isolation exactly the way an unparseable `model.json` used to before #262, taking
+  every other slug in the same sweep down with it. Both reads now sit inside the same `try`, widened
+  to `(RequivoError, OSError, UnicodeDecodeError)`, and the broken slug is reported under `errors`
+  like any other unreadable legacy session.
+- Compatibility: compatible - the previous behaviour on this input was an unhandled traceback with no
+  defined exit code or `--json` shape, never a documented one; nothing that read a stable contract is
+  affected, and every already-passing legacy session migrates exactly as before.
+
+- `status`, `session show`, `session verify`, `session export` and `session list` no longer refuse a
+  session already on disk under a Windows reserved device name (`con`, `nul`, `lpt1`, …) (#372). #221
+  refused
+  the name unconditionally through `validate_slug`, which every read path funnels through via
+  `canonical_dir`, so a session already on disk under such a name -- created before #221 shipped, or
+  on a platform that never refused it -- was unreachable by every verb, `session export` included, the
+  documented way to move it off the reserved name entirely. Creation stays exactly as strict:
+  `validate_slug` itself is unchanged and unconditional, and `canonical_dir` (which `create_session`
+  calls) still refuses a *new* reserved slug the moment nothing already occupies it -- only a name a
+  session already claims on disk earns the read-only exception, in `canonical_dir`/`legacy_dir`
+  (`core/persistence.py`'s `_child_of`) and in the read-consistency lock `session export` takes
+  (`lock_path`), both checked against whether a session already occupies the name rather than a
+  general relaxation of #221.
+- Compatibility: compatible - restores the behaviour `docs/compatibility.md`'s own #221 section
+  already promised ("an existing session already holding one of these names on disk is unaffected"):
+  the refusal this fixes was never the documented contract, only what 2.0.0 shipped for its own first
+  release. Creation is unweakened -- #221's portability guarantee for a *new* session still holds on
+  every platform.
+
+- `docs/compatibility.md` now documents #255's `input_too_large` refusal (#373). `session init`
+  moved from accepting a request of any size to refusing one over 20,000 characters at exit 1 in the
+  same release its sibling #250 got a matching `###` section for the identical shape of change --
+  #255 got none. The exit-code table's generic row now names "an oversized request" among its
+  examples, and a new `### session init and an oversized request` section states the refusal, its
+  `code` (`input_too_large`), and the 20,000-character ceiling (`MAX_INPUT_CHARS` in
+  `core/contracts.py`), matching how #250's own section reads.
+- Compatibility: compatible - documentation only; no code changed.
+
+- Two `tests/test_boundaries.py` allowlist entries justified themselves with "no client is built" for `credential_present()` and `credential_diagnosis()` -- true when written, and false since #334 moved both through `_resolve_client()`, which constructs a transient `Anthropic()` to read the SDK's own credential resolution (measured by spying on `Anthropic.__init__`: one construction per call). #364's earlier sweep of this same table corrected the two entries below these and left them stale (#374). Both reasons are corrected, along with a stale twin in `web/config.py`'s `provider_status()` docstring ("without importing a client"), and a new mechanical check -- `test_an_allowlist_reason_claiming_no_client_is_built_is_true_of_the_function_it_names` in `tests/test_provider.py` -- derives every allowlist entry still making this exact claim and spies on the function it names, so the next stale one is a failing test rather than prose nobody re-reads. No production behaviour changed; the guard's own pass/fail verdict over the pre-existing imports is unchanged.
+- Compatibility: compatible - test- and comment-only; no runtime code changed.
+
+- `docs/compatibility.md`'s CLI exit-code promise gains the direction it was missing (#382). It said
+  "moving a condition from one code to another is breaking," with no account of which way the move
+  went, and one release declared one move of each direction differently: #360 (exit 0 to 1/2) as
+  breaking, #249 (exit 2 to 0) as compatible. The section now states the rule it was already being
+  read by: moving a condition onto 0 is compatible, moving one onto a nonzero code or between two
+  nonzero codes is breaking. The paragraph at the foot of the #360 subsection that pointed at this
+  issue as open is replaced with the settled statement. Neither #360 nor #249's own declaration
+  changes under the new clause -- #360 still narrows and is still breaking, #249 still widens and is
+  still compatible -- so no other fragment in this release needed re-declaring.
+- Compatibility: compatible - documentation only; no code, `--json` payload, exit code or session
+  format changes.
+
+- The orphan check on decision records can fire again for the shape a record normally has, and a `decision:` reference split across a line wrap is now refused (#384). `tests/test_narrative_references.py` built its referrer set from `subjects()`, which includes `docs/decisions/` itself, so a record that quoted its own slug satisfied its own reachability check — and a record almost always does quote it, because explaining where its pointer belongs requires naming it. Measured: at `3245e7e`, `0002-elicitation-schema-hand-kept.md` was referenced from nowhere but itself and the guard was green. The records now come out of the referrer set entirely rather than only excluding self-reference, because excluding self alone still passes a cluster of records that cite each other and nothing outside, which is exactly the unreachable island the guard is named for; they stay *subjects*, so their own references are still resolved. The second half is a new `_WRAPPED_DECISION` detector: a slug broken across a line wrap is invisible to `_DECISION_REF` altogether — the closing backtick is on the far side of the newline — so the reference resolves to nothing and nothing said a word about it. A wrap between the prefix and the slug leaves the slug whole and greppable and is deliberately left alone.
+- Compatibility: compatible - a test-suite guard only. No product code, no session format, no CLI surface, no `--json` payload.
+
+- `requivo status` no longer prints a persisted `usage_priced_as_of` rate-table date raw (#388). `render_session_cost` read that field back off a revision's provenance in `session.json`, and `session import` is the documented channel through which someone else's archive -- and its `usage_priced_as_of` -- arrives; a value chosen by whoever authored an archive could reach column 0 of Requivo's own output, indistinguishable from a line the product wrote, with `session verify` and `doctor` both green throughout. It is now routed through `display_token`, the same chokepoint `deterministic/sessions.py` already uses for every persisted string it prints -- a no-op on an ordinary date, and a `repr()` on anything that tries to open a line of its own. `tests/test_render_untrusted_output.py`'s `_NON_PROSE_RENDERERS` exemption for `render_session_cost` is removed (it is swept now, with its own dedicated forged-input test), and `render_usage`'s neighbouring exemption is reworded to say *why* its ledger-sourced `as_of` is safe where this one was not: it is built from this run's own provider calls and never written to disk, so nothing between the API reply and the renderer is a channel for someone else's input.
+- Compatibility: compatible - this changes what `requivo status` prints only for a hostile-shaped input (a persisted `usage_priced_as_of` carrying a control character), which no legitimate provider-priced revision produces; an ordinary date renders byte-for-byte unchanged. No session-format field is added, removed or renamed, and no `--json` payload changes.
+
+- `render_session_cost` no longer re-implements `UsageLedger.cost_usd()` (#389). It carried its own copy of the cache-read (0.1x) and cache-write (1.25x) rate multipliers, which made `usage.py`'s own module docstring -- "Cost is arithmetic here and nowhere else" -- false the moment this renderer shipped, and no test asserted the printed dollar figure to catch the drift: a mutation control that moved the cache-read multiplier in `render_session_cost` alone, leaving `usage.py` untouched, produced zero added failures across the full suite. Each priced `RevisionRecord` is now wrapped in a `CallRecord` and summed through a scratch `UsageLedger`, so `usage.py` is the only place the arithmetic runs; a new test asserts the exact printed figure across every rate tier at once (input, cache read, cache write, output) and is itself a mutation control -- it fails if either multiplier moves again. Found in review: delegating to `UsageLedger.priced_as_of` changed the rule for an empty-string `usage_priced_as_of` from "silently skipped" to "printed as a real date", which could leave a dangling `" · "` on the cost line for a revision no real provider path produces but a persisted `session.json` could still carry -- normalized on the way in so the renderer's own behaviour for that shape is unchanged.
+- Compatibility: compatible - the printed figure is unchanged for every already-correct input, since the two implementations agreed on every multiplier; only a divergence between them (which could not previously happen without the guard now added) would have changed the number. No session-format field, `--json` payload, or exit code changes. `usage.py`'s module docstring makes no other claim than the one this restores.
+
+- A session already on disk under a Windows reserved device name (`con`, `nul`, `com1`...) can be
+  discovered again, not only read (#390). #372 made the reserved-name refusal conditional -- refused
+  at creation, tolerated for a name a session already occupies -- and swept `_child_of` and
+  `lock_path` onto the conditional form. `_discovery_guard_path`, the in-flight first-discovery
+  guard, had been added one commit earlier and was missed by that sweep, so it kept calling
+  `validate_slug` unconditionally: such a session listed, showed, exported and locked fine, and
+  `requivo discover` alone refused it with `invalid session slug 'con'`. It now validates exactly as
+  `lock_path` does -- the shape unconditionally, the reserved device name only when nothing already
+  occupies the slug.
+- Compatibility: compatible - a widening only, in one direction. No slug accepted before is
+  refused now, and the single case that changes is the one named above -- an existing on-disk
+  session at a reserved name reaching the discovery guard. Creating a *new* session at such a
+  name is still refused on every platform, unchanged since #221.
+
+- `doctor` no longer turns yellow after one ordinary `requivo discover`, and no longer prints two
+  statements the code contradicts about a file it just wrote (#391). `_discovery_guard` writes
+  `<slug>.discovering` into `lock_root()` and never unlinks it -- correctly, on the same POSIX
+  reasoning `session_lock` already relies on to leave its own `.lock` file behind for a deleted
+  session (#209) -- but `scan_lock_root` was written the release before that second file shape
+  shipped and had never been taught it, so it classified the guard file as `unexpected`: "not a lock
+  file Requivo recognises... a name here did not come from `session_lock`," about a file this
+  release's own code had just written. `scan_lock_root` now recognises a well-formed
+  `<slug>.discovering` file -- a regular file, not a symlink, whose stem is a valid slug -- the same
+  way it recognises `<slug>.lock`, and excludes it from `unexpected`. A stray file, a directory or a
+  symlink at either name, or a malformed stem, is still reported exactly as before.
+- Compatibility: compatible - `doctor --json`'s `locks.unexpected` array is unchanged in shape
+  (still an array of names, and the `locks` skeleton is untouched) but narrower in content: it no
+  longer names a `<slug>.discovering` file left behind by a first discovery. A consumer flagging
+  every entry as unrecognised sees one fewer false positive per session that has ever run a first
+  discovery; a consumer counting `len(unexpected)` sees a workspace-dependent decrease. See
+  `docs/compatibility.md`'s `--json` section for the declared entry.
+
+- Requivo Web can reach a session already on disk under a Windows reserved device name (#396). The
+  shared `{slug}` dependency behind every session route validated the path segment with the
+  unconditional, creation-time refusal, so one call put the whole surface out of reach for such a
+  session: the session page, the model download and the saved-artifact view all answered 400 for a
+  session `requivo session show` opens without complaint, as did discovery, answers and artifact
+  generation. All six routes now take the read-time form of the check (#372's split), on the
+  reasoning that each of them addresses a session that must already exist -- refining one is a read
+  of its name, not a request to make one.
+- The create form is deliberately unchanged: `POST /sessions` is the one route that can bring a slug
+  into existence, and it still refuses a reserved device name outright.
+- Compatibility: compatible - a widening only. No slug accepted before is refused now.
+
+- `doctor` no longer reports a reserved-name session's own lock and guard files as residue nobody
+  recognises (#401). `scan_lock_root` classified each entry under `.requivo/locks/` with the
+  *creation-time* slug rule, which refuses `con`, `nul`, `lpt1` and their siblings unconditionally.
+  Both writers of that directory apply the conditional read-time rule instead (#372), so for a
+  session already on disk under such a name they write `con.lock` and `con.discovering` and
+  `scan_lock_root` then called both "not a lock file Requivo recognises... a name here did not come
+  from `session_lock`" -- said about two files this release's own code had just written. That is
+  #391's defect one predicate over, and the third site #372's sweep missed after #390 and #396. The
+  stem question is now `lock_path`'s rather than `validate_slug`'s: a stem either writer could
+  actually have been given.
+- A lock or guard file whose stem is a reserved device name that **no** session occupies is still
+  reported, as is a stray file, a directory, a symlink at either name, and a malformed stem.
+  Tolerating is not trusting: the widening is conditional on a session existing, and on nothing
+  else.
+- Compatibility: compatible - `doctor --json`'s `locks.unexpected` is unchanged in shape (still an
+  array of names, and the `locks` skeleton is untouched) and narrower in content, on the same terms
+  as #391's narrowing of the same key. On a workspace holding such a session a consumer sees
+  `locks.total` count one more lock and `locks.unexpected` name two fewer entries; on every other
+  workspace, including every workspace created on Windows, nothing changes. See
+  `docs/compatibility.md`'s `--json` section for the declared entry.
+
+- `answer`, `brief`, `prd`, `stories`, `estimate`, `criteria`, `epic` and `release` no longer
+  advertise a `model.json` path they could not open (#402). Their shared help said "a session slug,
+  or a path to a saved model.json", inherited from `status`/`impact`, but `SessionService.resolve_slug`
+  only ever mined a slug out of such a path -- `p.parent.name`, whether or not the file existed --
+  and these eight verbs never open the file they are handed at all: they resolve a slug and read and
+  write the *store's* copy of the session (`ArtifactService.save` refuses anything that is not
+  `has_meta(slug)`). So a fabricated or stray path used to be reported on under a slug carved out of
+  its own parent directory -- a name the user never typed -- or, worse, silently resolved against
+  whatever session happened to carry that name.
+- These eight verbs now take a session slug only, and their `--help` says so. Passing a path is
+  refused outright, naming the path exactly as given, before any slug is mined from it. `status` and
+  `impact` are unchanged: they read a `model.json` path's own bytes directly and never resolve
+  through the store, so they were never exposed to this and keep the wider help.
+- `SessionService.resolve_slug` itself is fixed at the root for every other caller that still accepts
+  a path (every `deterministic/` verb): a `model.json`/`session.json` reference is now only mined for
+  its parent directory's name when the file actually exists. A reference to a file that was never
+  written is named as given, not carved into an unrelated slug.
+- Compatibility: breaking - a real, existing session's own `model.json` path, previously accepted by
+  `answer`/`brief`/`prd`/`stories`/`estimate`/`criteria`/`epic`/`release` as an alternate way to spell
+  its slug, is now refused; pass the slug instead (`requivo session list` shows it). `status` and
+  `impact` are unaffected. No other invocation changes.
+
+- `docs/providers.md`'s published input-token range now prices a whole provider call, not just its
+  system prompt (#404). `tests/test_cost_claims.py`'s `measured_input_tokens()` docstring said "This
+  is what a call actually sends" while measuring `build_prompt`'s system prompt alone -- a real call
+  sends that plus a user message, and for every generator (`brief`, `stories`, `estimate`, `prd`,
+  `criteria`, `epic`, `release`) and every discovery turn but the first, that user message is the
+  whole resolved model. The gap understated a generator call's input by something approaching 40%.
+  The corrected measurement adds a real resolved-model size on top of the system prompt for every
+  operation but the first discovery turn (which has no model yet to attach), split by whether the
+  assessment has absorbed its reasoning into the model yet -- `advise` (`brief`) and a refinement turn
+  see a smaller, unreasoned model; every other generator sees the model after `absorb_reasoning` has
+  copied `advise()`'s own decisions/challenges/opportunities onto it, which is materially larger. Both
+  are measured from every captured discovery reply in `fixtures/golden/`, including the interactive
+  captures' own per-turn `turns` (a deep refinement turn's model is the largest state a real call
+  sends, and was silently excluded from an earlier draft of this fix before self-review caught it).
+  The published "One provider call" row widens from 7,300-8,900 to 8,000-12,600 input tokens; every
+  dollar figure downstream of it in `docs/providers.md` moves with it, arithmetically, and the test
+  that recomputes both is what keeps them agreeing. The README's own `$0.03 to $0.06 per call` figure
+  is unchanged -- it already had enough rounding margin to still hold -- but its flat "under $1"
+  session claim did not survive the correction (the honest ceiling is now $1.01) and is now the
+  derived `$0.46 to $1.01` instead, the same way the per-call figure already was.
+- Compatibility: compatible - a documentation and test correction only. No session format, no
+  `--json` payload, no CLI surface and no runtime behaviour changed; the rate table
+  (`providers/anthropic/pricing.py`) is untouched.
+
+### Security
+
+- Requivo Web now answers `Cache-Control: no-store` on everything except the assets it ships, so a session page, an HTMX fragment, a model export or an artifact download is not written to the browser's disk cache (#218). Every one of those carries the reader's own client request or the model built from it, plus the cross-site request token — on a shared machine a disk copy outlives the "sessions stay on this machine" promise in spirit, and a cached page is also where the two stale states this app apologises for come from (an old `expected_revision` reaching a 409, an old token reaching a 403 after a restart). The rule is keyed on the path and fails closed rather than on the content type: `/static/…` and `/favicon.ico` stay cacheable and everything else is `no-store`, because a `text/html` rule would have left `/sessions/{slug}/export` (`application/json`) and the artifact download (`text/markdown`) — the two responses carrying the most of the reader's material — cacheable. Nothing is said about *how long* the bundled assets may be cached; an ETag or `max-age` strategy for them is a separate question.
+- Compatibility: compatible - one added response header on responses that previously carried none. No route, payload, session format or error code changes; static assets are untouched, and `setdefault` leaves any `Cache-Control` a route sets for itself.
+
 ## [2.0.0] - 2026-08-31
 
 ### Added
@@ -4362,7 +4832,8 @@ robustness holes that real input exposes were closed, and the regression lens an
   generators (PRD, user stories, estimate, acceptance criteria, delivery epic with GitHub/GitLab
   exports), and the MIT license.
 
-[Unreleased]: https://github.com/jbkkz/requivo/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/jbkkz/requivo/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/jbkkz/requivo/releases/tag/v3.0.0
 [2.0.0]: https://github.com/jbkkz/requivo/releases/tag/v2.0.0
 [1.3.0]: https://github.com/jbkkz/requivo/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jbkkz/requivo/releases/tag/v1.2.0
