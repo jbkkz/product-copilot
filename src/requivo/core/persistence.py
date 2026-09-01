@@ -859,17 +859,29 @@ def is_slug(name: str) -> bool:
 
 
 def _is_lock_stem(stem: str) -> bool:
-    """Whether `lock_root()` could hold a `<stem>.lock` or `<stem>.discovering` this store wrote --
-    the predicate form of `lock_path`, exactly as `is_slug` is the predicate form of
-    `validate_slug`.
+    """Whether a `<stem>.lock` or `<stem>.discovering` under `lock_root()` is one this store could
+    have written -- the **stem** half of what `lock_path` and
+    `services.discovery._discovery_guard_path` each validate before joining their own suffix.
 
-    Implemented by *calling* `lock_path` rather than by restating its three checks, for the same
-    reason `is_slug` calls `validate_slug`: a second statement of a rule drifts from the first. Both
-    writers of this root validate a stem identically -- `_slug_shape`, then
-    `_refuse_new_reserved_slug` against `session_root() / stem`, then `is_contained` -- so one call
-    answers for both shapes. (`services.discovery._discovery_guard_path` is the other writer; core
-    may not import services, and does not need to: the stem rule is the same one, and
-    `_discovery_guard_path`'s own docstring says so.)
+    Two calls, and they are the two both writers make on the bare stem: `_slug_shape`, then
+    `_refuse_new_reserved_slug` against `session_root() / stem`. Core may not import services, and
+    does not need to -- `_discovery_guard_path`'s own docstring says its stem rule is `lock_path`'s,
+    and this is that rule.
+
+    **Deliberately *not* `lock_path(stem)` in a `try`, which is what this was first written as**
+    (found in review of #401, before it shipped). That reads as the tidier "one rule, one place",
+    and it imports a third check that is about a *path* rather than about a stem: `lock_path` ends
+    with `is_contained(root / (stem + ".lock"), root)`. Asked the `.discovering` question it
+    therefore answered about a **different file**, so an unrelated symlink at `<stem>.lock` --
+    itself already reported, and pointing anywhere outside the root -- flipped a real
+    `<stem>.discovering` file this store wrote into `unexpected`. That is invariant 17's shape one
+    layer down: a verdict about one entry decided by a sibling entry's state. Pinned by
+    `test_a_symlink_at_the_lock_name_does_not_sink_the_guard_file_beside_it`.
+
+    Containment is not missing from this predicate, it is inapplicable: `scan_lock_root`'s entries
+    come out of `iterdir(root)` and are children of it by construction, `_slug_shape` makes a
+    separator or a dot segment unrepresentable in a stem, and a symlink at the entry *itself* is
+    already excluded before this is called.
 
     **Not `is_slug`, and the difference is #372's whole point** (#401). `is_slug` is
     `validate_slug`, whose reserved-device-name refusal is unconditional because it guards
@@ -885,9 +897,11 @@ def _is_lock_stem(stem: str) -> bool:
     `InvalidSlugError` alone is caught. `_refuse_new_reserved_slug` probes the session root through
     `_probe`, which raises `SessionUnreadableError` rather than guessing when it cannot stat -- that
     is a could-not-look, not a not-a-lock-file, and it is left to propagate into `scan_lock_root`'s
-    own `unexaminable` bucket."""
+    own `unexaminable` bucket. Pinned by
+    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`."""
     try:
-        lock_path(stem)
+        _slug_shape(stem)
+        _refuse_new_reserved_slug(stem, session_root() / stem)
     except InvalidSlugError:
         return False
     return True
@@ -1676,6 +1690,13 @@ def scan_lock_root() -> tuple[list[str], list[str], list[UnexaminableEntry]]:
     `Path.exists()` does not swallow (EACCES chief among them), and a name that failed that probe is
     neither a lock nor confirmed to be something else — it lands in `unexaminable`, on the same
     reasoning `_scan_session_root` gives for its own third bucket (#80).
+
+    **That bucket has a second source since #401, and it is a different root.** `_is_lock_stem`
+    stats `session_root() / stem` through `_probe` for a reserved stem, which raises rather than
+    guessing on EACCES -- so an entry can reach `unexaminable` with the file-type probe above it
+    having answered perfectly well. The reasoning is the same one and the cause is not, which is why
+    it is named here rather than left to be inferred from the loop body. Pinned by
+    `test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable`.
 
     A root that does not exist is an empty lock directory and returns nothing, matching
     `_scan_session_root`'s own empty-workspace answer. A root that cannot be *listed* is not the same

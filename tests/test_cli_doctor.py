@@ -1032,7 +1032,15 @@ def test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_still_unexpe
 
     #372's split turns on whether a session already occupies the name. Nothing occupies `nul` here,
     so `lock_path('nul')` refuses it and no writer in this store could have produced these files --
-    they stay reported, exactly as before."""
+    they stay reported, exactly as before.
+
+    **This passes against the pre-#401 code too, by design, and that is not a defect in it**
+    (raised in review, and kept). It is a *control*, not a regression test: `is_slug` already
+    refused a reserved stem unconditionally, so the old classifier got this case right for the
+    wrong reason. What it constrains is the next diff -- someone reading the fix as "stop asking
+    the reserved-name question here" would make the predicate `_slug_shape` alone, which is the
+    natural wrong turn, and this is the only test that goes red for it. Delete it and the widening
+    has nothing holding its far edge."""
     store.lock_root().mkdir(parents=True)
     (store.lock_root() / "nul.lock").write_text("", encoding="utf-8")
     (store.lock_root() / "nul.discovering").write_text("", encoding="utf-8")
@@ -1040,6 +1048,85 @@ def test_a_lock_file_for_a_reserved_name_with_no_session_on_disk_is_still_unexpe
     r = _run_json(["doctor", "--json"])["locks"]
     assert r["total"] == 0
     assert r["unexpected"] == ["nul.discovering", "nul.lock"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="os.symlink needs elevated privileges on Windows by "
+                    "default, and the fixture also needs a file literally named 'a.lock', which is "
+                    "fine there -- the symlink is the blocker, not the name. UNTESTED ON WINDOWS: "
+                    "that a stray symlink beside a guard file does not change how the guard file "
+                    "itself is classified.")
+def test_a_symlink_at_the_lock_name_does_not_sink_the_guard_file_beside_it(workspace):
+    """A verdict about one entry must not be decided by a sibling entry's state (#401, found in
+    review before the fix shipped).
+
+    `_is_lock_stem` was first written as `lock_path(stem)` in a `try` -- the tidier "one rule, one
+    place", and wrong, because `lock_path`'s third check is about a *path*: it ends with
+    `is_contained(root / (stem + '.lock'), root)`. Asked the `.discovering` question it answered
+    about a different file, so this fixture -- a real guard file, and an unrelated symlink at the
+    `.lock` name pointing outside the root -- reported `a.discovering` as residue nobody
+    recognises. That is invariant 17's shape one layer down, and it is the very symptom #401
+    exists to remove, reproduced by the fix for it.
+
+    `a.lock` itself is still reported: it is a symlink, which no writer here produces. `b.discovering`
+    is the must-fire pair -- an identical guard file with no sibling at all, which must be recognised
+    in the same scan, so this cannot pass by classifying nothing."""
+    store.lock_root().mkdir(parents=True)
+    outside = workspace / "elsewhere.txt"
+    outside.write_text("not a lock", encoding="utf-8")
+    (store.lock_root() / "a.discovering").write_text("", encoding="utf-8")
+    (store.lock_root() / "a.lock").symlink_to(outside)
+    (store.lock_root() / "b.discovering").write_text("", encoding="utf-8")
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["unexpected"] == ["a.lock"], (
+        "only the symlink is a shape no writer here produces; both guard files are ordinary files "
+        "`_discovery_guard` really writes"
+    )
+    assert r["total"] == 0  # a `.discovering` file is not a lock, and the symlink is not one either
+
+
+@pytest.mark.skipif(store.fcntl is None, reason="the fixture needs a file literally named 'con.lock' "
+                    "on disk, and Windows resolves a reserved device name taken before the first "
+                    "dot, so the write would open the CON device and leave nothing for `iterdir` "
+                    "to find (`lock_path`'s own comment states that rule). REASONED, NOT OBSERVED "
+                    "on an actual Windows machine. UNTESTED ON WINDOWS: that a session root the "
+                    "process cannot stat into degrades one lock entry rather than the whole scan -- "
+                    "and unreachable there, since only a reserved stem reaches the probe at all.")
+def test_a_session_root_that_cannot_be_probed_makes_one_lock_entry_unexaminable(workspace,
+                                                                                monkeypatch):
+    """#401 gave `unexaminable` a second source, in a different root, and a third state nobody can
+    reach is a third state nobody maintains.
+
+    `_is_lock_stem` stats `session_root() / stem` through `_probe` for a reserved stem.
+    `_probe` raises `SessionUnreadableError` rather than guessing on EACCES -- deliberately, by its
+    own docstring -- and that call now sits inside `scan_lock_root`'s per-entry `try`. So the entry
+    degrades and the scan continues. Outside that `try` it would escape to `_lock_health`, which
+    would report the whole lock root as unreadable: a claim broader than what failed, invariant 15's
+    shape one layer down.
+
+    `ok.lock` is the must-fire half in the same fixture -- a non-reserved stem never reaches the
+    probe, so it must still classify cleanly while its neighbour degrades. A test with only the
+    failing entry would pass against a scan that gave up entirely."""
+    store.lock_root().mkdir(parents=True)
+    (store.lock_root() / "con.lock").write_text("", encoding="utf-8")
+    (store.lock_root() / "ok.lock").write_text("", encoding="utf-8")
+
+    real_probe = store._probe
+
+    def _unstattable(marker, slug):
+        if slug == "con":
+            raise store.SessionUnreadableError(
+                f"could not determine whether session {slug!r} exists: Permission denied")
+        return real_probe(marker, slug)
+
+    monkeypatch.setattr(store, "_probe", _unstattable)
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r["readable"] is True, "one entry we could not decide about is not an unreadable root"
+    assert r["total"] == 1 and r["unmatched"] == ["ok"]
+    assert [e["name"] for e in r["unexaminable"]] == ["con.lock"]
+    assert "Permission denied" in r["unexaminable"][0]["error"]
+    assert r["unexpected"] == [], "could-not-look is not could-not-recognise"
 
 
 def test_the_lock_root_being_unlistable_is_not_reported_as_no_residue(workspace):
