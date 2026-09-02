@@ -480,17 +480,25 @@ def _golden_capture(question: str) -> str:
 
 @pytest.fixture
 def golden_readout(tmp_path, monkeypatch):
-    """`questions_one` over a forged baseline, with git and the fixture root stubbed out."""
+    """`questions_one` over a forged baseline, with git and the fixture root stubbed out.
+
+    `baseline_commits_since` shells out to real git (#405 added `questions_one`'s own freshness
+    line); stubbed to `current` by default so the two tests below stay about the question text, not
+    this checkout's own git history. `freshness` lets a test reach the other states -- including a
+    forged commit subject, the other half of this file's own class, exercised further down."""
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
     import golden_diff as gd
     import golden_lib as gl
 
-    def run(question: str) -> list[str]:
+    def run(question: str, freshness: dict | None = None) -> list[str]:
         monkeypatch.setattr(gl, "GOLDEN", tmp_path)
         payload = _golden_capture(question)
         (tmp_path / "forged.runs.json").write_text(payload, encoding="utf-8")
         monkeypatch.setattr(gd, "_head_version", lambda _rel: payload)
+        monkeypatch.setattr(gd, "baseline_commits_since",
+                            lambda _rel: freshness or {"state": "current",
+                                                        "captured_at": "2026-01-01T00:00:00+00:00"})
         buf = io.StringIO()
         with redirect_stdout(buf):
             gd.questions_one("forged")
@@ -512,3 +520,24 @@ def test_an_ordinary_question_is_rendered_byte_for_byte(golden_readout):
     would be removed, and the class would come back with it."""
     prose = "When the budget runs out — is it rejected outright, or escalated?"
     assert any(ln.strip() == f"[problem] {prose}" for ln in golden_readout(prose)), prose
+
+
+def test_a_forged_baseline_freshness_commit_subject_cannot_write_a_line_of_the_readout(golden_readout):
+    """must fire: a commit subject is contributor-written text (#405's `_show_freshness`, the other
+    new sink this class covers) -- a newline inside one must not render as a second, unescaped line
+    of this readout."""
+    stale = {"state": "stale", "captured_at": "2026-08-01T00:00:00+00:00",
+             "commits": [{"sha": "abc123def", "date": "2026-08-15",
+                          "subject": "benign subject\n[permissions] FORGED, at column 0"}]}
+    lines = golden_readout("q?", freshness=stale)
+    assert not any(ln.lstrip().startswith("[permissions] FORGED") for ln in lines), lines
+    assert any("FORGED" in ln and "\\n" in ln for ln in lines), lines
+
+
+def test_an_ordinary_commit_subject_is_rendered_byte_for_byte(golden_readout):
+    """The control, matching the question-text one above: an ordinary subject renders unchanged."""
+    subject = "edit engine.md for the leave-approval card"
+    stale = {"state": "stale", "captured_at": "2026-08-01T00:00:00+00:00",
+             "commits": [{"sha": "abc123def", "date": "2026-08-15", "subject": subject}]}
+    lines = golden_readout("q?", freshness=stale)
+    assert any(subject in ln for ln in lines), lines

@@ -508,10 +508,24 @@ def test_an_unknown_shallow_check_itself_is_reported_unknown():
 
 def test_a_baseline_with_no_commit_history_is_reported_unknown():
     """must fire -- the baseline file has no commit touching it in HEAD at all (e.g. staged but
-    never committed, or the path is wrong), so there is no anchor to count commits since."""
+    never committed, or the path is wrong), so there is no anchor to count commits since. This is
+    the "found nothing" case, distinct from the "the call itself failed" case right below it -- the
+    positive control confirming they read differently."""
     report = _freshness_from_git_data(is_shallow=False, baseline=None, since_commits=[])
     assert report["state"] == "unknown"
     assert "no commit history" in report["reason"]
+
+
+def test_a_failed_baseline_log_is_reported_with_its_own_reason_not_as_no_history():
+    """must fire -- the git call for the baseline's own last commit did not merely come back empty,
+    it failed outright (git unavailable, a corrupted object, a permission error). Collapsing that
+    into "no commit history" was a self-review finding on this function (#405): a real failure and a
+    genuinely history-less baseline are different facts a maintainer would chase differently."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=None, since_commits=None,
+                                       baseline_error="fatal: bad object HEAD")
+    assert report["state"] == "unknown"
+    assert "bad object HEAD" in report["reason"], report
+    assert "no commit history" not in report["reason"], report
 
 
 def test_a_failed_since_log_is_reported_unknown_even_with_a_good_baseline():

@@ -93,7 +93,11 @@ def _show_freshness(rel_path: str) -> None:
     print(f"  ⚠ baseline captured {fr['captured_at']}; {len(commits)} commit(s) touching {watched} "
           f"since — any movement below may be their combined effect, not only a working-tree edit:")
     for c in commits[:5]:
-        print(f"      {c['date']}  {c['sha']}  {c['subject']}")
+        # A commit subject is contributor-written text, exactly the class `questions_one` already
+        # treats as untrusted for this file's own stated reason (invariant 14, #40): raw `\r` in a
+        # subject would return the cursor to column 0 and let it overwrite the date/sha prefix it
+        # sits behind, forging what reads as a different line of this readout.
+        print(f"      {c['date']}  {c['sha']}  {display_token(c['subject'])}")
     if len(commits) > 5:
         print(f"      … and {len(commits) - 5} more")
 
@@ -354,10 +358,14 @@ def questions_one(slug: str) -> None:
     a squash there would change what the lens concludes. `_cluster_headlines` is the one place the
     entry-squash *is* right, and it does it, for the reason stated at that line."""
     path = runs_path(slug)
-    old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
+    rel_path = f"fixtures/golden/{slug}.runs.json"
+    old_text = _head_version(rel_path)
     if not path.exists() or old_text is None:
         print(f"\n{slug}\n  ! need both a working-tree capture and a HEAD baseline")
         return
+    # A baseline is what this whole readout is about here too -- the freshness line is not just a
+    # `diff_one` fixture, it belongs to every reader of a per-request baseline (#405).
+    _show_freshness(rel_path)
     new_text = path.read_text(encoding="utf-8")
     for title, text in (("HEAD", old_text), ("working tree", new_text)):
         print(f"\n{slug} — {title}")

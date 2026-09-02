@@ -698,10 +698,16 @@ def _git(args: list[str]) -> tuple[bool, str]:
     """Run one git command inside REPO. Never raises: git being unavailable, this being a shallow
     clone, or a path having no history in HEAD are all things a caller has to report, never crash on
     -- the same rule `turn_lens` already applies to its own "nothing to measure" case, one section up.
-    """
+
+    `encoding="utf-8"` explicitly (invariant 16): `text=True` alone decodes with the *locale's*
+    codec, not UTF-8, and git writes commit subjects as UTF-8 regardless of the locale this process
+    happens to run under -- the same mismatch invariant 16 names for a file this project writes and
+    reads. `UnicodeDecodeError` is caught alongside the process-launch failures so a non-UTF-8 byte
+    in a commit subject is a reported `unknown`, never a crash mid-readout."""
     try:
-        res = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        res = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True,
+                             encoding="utf-8", timeout=10)
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
         return False, str(exc)
     if res.returncode != 0:
         return False, res.stderr.strip() or "git exited non-zero with no stderr"
@@ -712,23 +718,33 @@ _SEP = "\x1f"  # unit separator: unlike "|" or ":" it never appears in a commit 
 
 
 def _freshness_from_git_data(is_shallow: bool | None, baseline: tuple[str, str] | None,
-                              since_commits: list[dict] | None) -> dict:
+                              since_commits: list[dict] | None,
+                              baseline_error: str | None = None) -> dict:
     """The pure core `baseline_commits_since` wraps: three states over already-fetched git data, so
     they can be exercised without a real repository (see `tests/test_golden_lib.py`).
 
-    `None` in a parameter stands for "that git call failed or found nothing to answer with" -- see
-    `baseline_commits_since` for what produces each one. `is_shallow=True` gets its own `unknown`
-    reason rather than folding into the git-failed case: the git calls all *succeed* on a shallow
-    clone, they just answer a truncated question -- the one input here that fails silently rather
-    than loudly, which is exactly the shape `golden_diff`'s own docstring already refuses for a byte
-    comparison ("a capture identical to HEAD reports not re-captured, never no change"). This is that
-    rule one layer up, for a commit *count* instead."""
+    `None` in `baseline`/`since_commits` stands for "that git call found nothing to answer with" --
+    see `baseline_commits_since` for what produces each one. `baseline_error` is a *different* shape
+    of `None`: the git call for the baseline's own commit did not merely come back empty, it failed
+    outright (git unavailable, corrupted object, permission error), and that has its own reason
+    rather than folding into "no commit history" -- a real failure and a genuinely history-less path
+    are different facts a maintainer would investigate differently, and collapsing them was reported
+    as a finding on this function's first review (self-review of #405, before the fold happened).
+
+    `is_shallow=True` gets its own `unknown` reason rather than folding into a git-failed case: the
+    git calls all *succeed* on a shallow clone, they just answer a truncated question -- the one
+    input here that fails silently rather than loudly, which is exactly the shape `golden_diff`'s own
+    docstring already refuses for a byte comparison ("a capture identical to HEAD reports not
+    re-captured, never no change"). This is that rule one layer up, for a commit *count* instead."""
     if is_shallow is None:
         return {"state": "unknown", "reason": "could not tell whether this is a shallow clone"}
     if is_shallow:
         return {"state": "unknown",
                 "reason": "shallow clone -- commit history is truncated, so a count of commits "
                           "since the baseline cannot be trusted"}
+    if baseline_error is not None:
+        return {"state": "unknown",
+                "reason": f"git log (last commit touching the baseline) failed: {baseline_error}"}
     if baseline is None:
         return {"state": "unknown", "reason": "no commit history for this baseline in HEAD"}
     if since_commits is None:
@@ -753,6 +769,9 @@ def baseline_commits_since(rel_path: str, watched: tuple[str, ...] = WATCHED_PAT
 
     ok, log_out = _git(["log", "-1", f"--format=%H{_SEP}%cI", "HEAD", "--", rel_path])
     baseline = None
+    # A `False` here is the git call itself failing, not the ordinary "no history yet" case below --
+    # kept apart so `_freshness_from_git_data` can give each its own reason.
+    baseline_error = None if ok else log_out
     if ok and log_out.strip():
         sha, _, captured_at = log_out.strip().partition(_SEP)
         baseline = (sha, captured_at)
@@ -774,5 +793,5 @@ def baseline_commits_since(rel_path: str, watched: tuple[str, ...] = WATCHED_PAT
                 date, _, subject = rest.partition(_SEP)
                 since_commits.append({"sha": sha[:9], "date": date[:10], "subject": subject})
 
-    return _freshness_from_git_data(is_shallow, baseline, since_commits)
+    return _freshness_from_git_data(is_shallow, baseline, since_commits, baseline_error)
 
