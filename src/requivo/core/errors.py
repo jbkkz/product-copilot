@@ -463,3 +463,40 @@ class ArtifactWriteFailedError(RequivoError):
     """
 
     code = "artifact_write_failed"
+
+
+class SpendCeilingReachedError(RequivoError):
+    """An injected `SpendPolicy` refused the next provider call: the operation's ledger already
+    shows spend at or above the ceiling (#427, `decision: the-http-api-facade`).
+
+    Filed from the 2026-09 readiness audit's security pass. Before this, nothing anywhere refused on
+    spend: `requivo.usage` recorded and never gated, and the only ceilings anywhere were the per-call
+    size bounds (`InputTooLargeError`). The exposure used to be bounded by the human at the keyboard
+    -- but a same-machine scripted client is a supported caller by `web/security.py`'s own design
+    (the CSRF token sits on every token-free GET page), so the moment any automated trigger reaches a
+    `DiscoveryService` operation, attacker-influenced content becomes unbounded paid calls with
+    nothing in the stack to refuse them.
+
+    Raised by `usage.SpendPolicy.check`, which `DiscoveryService` consults **immediately before
+    every provider call** -- the same chokepoint `_usage_since` already brackets, never after. A
+    call that already ran and was billed cannot be un-billed; the whole point is refusing the *next*
+    one before it is even constructed, so the ledger shows the refusal cost nothing.
+
+    Two distinct reasons share this one code, told apart by `details["reason"]`:
+
+    - `"ceiling_reached"` -- the ledger's own `cost_usd()` is a real number at or above the ceiling.
+    - `"unpriced_call"` -- a call already in the ledger has no rate on file, so `cost_usd()` returns
+      `None` and the true total is unknown rather than zero. Guessing it as zero would let an
+      unpriced call spend straight past a ceiling nobody could see -- invariant 6's provenance rule
+      ("don't add a provenance field you do not populate") applied to money: refuse rather than guess.
+
+    `details`: `{ceiling_usd, spent_usd, calls, reason}` -- `spent_usd` is `None` only in the
+    `unpriced_call` case, where there genuinely is no honest figure to report.
+
+    403, not 429 (see `http.py`'s `STATUS_BY_CODE`): the server understood the request and refuses
+    to authorize a costed action -- a budget does not reset with time, and this repo refuses a
+    status that is right in English and wrong in its RFC, the same test that chose 409 over 426 for
+    `unsupported_format_version`.
+    """
+
+    code = "spend_ceiling_reached"

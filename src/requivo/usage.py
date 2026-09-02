@@ -22,6 +22,11 @@ Three states, deliberately, because two of them are easy to confuse: a priced ca
 a call whose rate is known but whose *provenance* is not (`priced_as_of is None`). The renderer says
 something different for each; an estimate printed with no rate date reads exactly like one printed
 with a current date.
+
+**`SpendPolicy` (#427) is the one consumer of `cost_usd()` that is not a renderer.** It is an
+optional ceiling `DiscoveryService` may be injected with and consults immediately before every
+provider call — reusing `cost_usd()` rather than re-deriving a number from the records is what keeps
+the ceiling honest about the same unpriced-call case the renderer already refuses to guess at.
 """
 
 from __future__ import annotations
@@ -29,6 +34,8 @@ from __future__ import annotations
 import contextvars
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+
+from requivo.core.errors import SpendCeilingReachedError
 
 
 @dataclass
@@ -119,6 +126,55 @@ class UsageLedger:
                       + c.cache_write_tokens * in_rate * 1.25
                       + c.output_tokens * out_rate) / 1_000_000
         return total
+
+
+@dataclass
+class SpendPolicy:
+    """An optional ceiling on what one operation may spend, denominated in estimated USD (#427).
+
+    Injected into `DiscoveryService` (`spend_policy=`) and consulted immediately before every
+    provider call — the same chokepoint `_usage_since` already brackets. Nothing constructs one by
+    default: a `DiscoveryService` built with no `spend_policy` behaves exactly as it did before this
+    class existed, because there is nothing here to consult (pinned by
+    `test_default_no_policy_is_byte_identical_to_before_this_existed`).
+
+    **USD over tokens, deliberately.** A token ceiling would need one number per model — Sonnet and
+    Opus tokens do not cost the same — and would drift the moment a session's model choice changes or
+    a price table is updated. `cost_usd()` already turns a ledger into one comparable figure across
+    every model and every cache tier it touched; reusing it is the whole of this class, and it is
+    also why `spend_ceiling_reached` inherits `cost_usd()`'s own refusal to guess an unpriced call's
+    price rather than re-deriving one.
+    """
+
+    ceiling_usd: float
+
+    def check(self, ledger: UsageLedger | None) -> None:
+        """Raise `SpendCeilingReachedError` if `ledger`'s own estimate is at or past the ceiling.
+
+        `ledger` is whatever `current_ledger()` returned at the call site. `None` means no
+        `track_usage()` scope is open — there is no accounting to check the ceiling against, so the
+        call proceeds uncounted. That is the same reading `current_ledger()`'s own docstring gives
+        that state everywhere else ("nothing to report", never "spent nothing") — a caller reaching
+        `DiscoveryService` with no ledger open at all is not this ceiling's problem to solve; it
+        cannot enforce a budget it has no way to measure.
+        """
+        if ledger is None:
+            return
+        cost = ledger.cost_usd()
+        if cost is None:
+            raise SpendCeilingReachedError(
+                f"Spend ceiling of ${self.ceiling_usd:,.2f} cannot be verified: this operation's "
+                "ledger already holds a call with no rate on file, so its true cost is unknown "
+                "rather than zero. Refusing rather than letting an unpriced call spend past a "
+                "ceiling nobody can see.",
+                details={"ceiling_usd": self.ceiling_usd, "spent_usd": None,
+                         "calls": len(ledger.calls), "reason": "unpriced_call"})
+        if cost >= self.ceiling_usd:
+            raise SpendCeilingReachedError(
+                f"Spend ceiling of ${self.ceiling_usd:,.2f} reached (est. ${cost:,.2f} already "
+                f"spent over {len(ledger.calls)} call(s)); refusing before this call is made.",
+                details={"ceiling_usd": self.ceiling_usd, "spent_usd": cost,
+                         "calls": len(ledger.calls), "reason": "ceiling_reached"})
 
 
 # Session-scoped ledger. A ContextVar (not a module global) so it is isolated per call stack and
