@@ -330,12 +330,13 @@ def _lock_health() -> dict:
 
     `session_lock` only ever creates `<slug>.lock` for a slug that had a session directory *at that
     instant* (`session_lock` refuses before opening the file if there is none). So a lock file whose
-    slug currently names no session is candidate residue from a deleted one — the ordinary way a
-    session goes here, since there is no `session delete` verb (#180). It is never reported as
-    *orphan*: this scan and the session scan it is checked against run a moment apart, and a session
-    created or removed in that gap reads exactly the same way for a tick without being residue at
-    all — the same caution `scan_session_root` states for its own second bucket, applied to the root
-    #113 created.
+    slug currently names no session is candidate residue from a deleted one (#180) — `session delete`
+    (#238) unlinks its own lock file cleanly, so the ordinary way a session goes here now is a
+    directory removed by hand (`rm -rf`, bypassing that verb) or by an older Requivo with no delete
+    verb at all. It is never reported as *orphan*: this scan and the session scan it is checked
+    against run a moment apart, and a session created or removed in that gap reads exactly the same
+    way for a tick without being residue at all — the same caution `scan_session_root` states for its
+    own second bucket, applied to the root #113 created.
 
     Three questions, each with its own third state:
 

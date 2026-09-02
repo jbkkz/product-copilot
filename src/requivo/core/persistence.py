@@ -683,24 +683,43 @@ class Store:
         `test_a_writer_racing_an_in_flight_delete_is_refused_rather_than_writing_into_a_half_removed_directory`
         and `test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote` pin both halves.
 
-        **The lock file is unlinked *after* the lock is released, not while still held.** Unlinking a
-        file this same process still has open is legal on POSIX, but what a Windows handle opened by
-        `os.open` with no explicit share-delete flag does to a self-referential unlink mid-hold is not
-        something this store can verify without a Windows machine to observe it on -- so the safer
-        ordering is: finish the locked work and fully release first, then remove the now-inert file
-        as a second step. Nothing can race that second step in a way that matters: any caller reaching
-        this slug after the lock is released and the directory is gone gets a clean refusal from
-        `session_lock`'s own cheap existence check before it ever touches the lock file, so a leftover
-        (or a `PermissionError` unlinking it, on a platform this store cannot exercise) is harmless
-        best-effort residue rather than a correctness gap -- `create_session`'s rename is still the
-        only real claim on a slug (invariant 11), and a stale lock file never contests it.
+        **The lock file is unlinked *while the lock is still held*, not after releasing it -- found
+        in review, and the opposite of this method's first draft.** That draft unlinked after
+        `session_lock`'s own `finally` had already released and closed the fd, reasoning that nothing
+        could race the cleanup "in a way that matters" because a fresh caller would refuse on the
+        cheap existence check first. That reasoning missed the caller invariant 11 explicitly makes
+        legal: **the identical slug can be re-created the instant `session_exists` goes false**, which
+        happens the moment `rmtree` above returns -- still inside this very critical section, well
+        before either ordering releases the lock. A second actor's `create_session` for that slug is
+        lock-free by design (it is `create_session`'s own atomic rename that claims a slug, not this
+        lock), so it can succeed while this method is still running, and a third actor then taking
+        `session_lock` on the re-created slug opens `lock_path(slug)` fresh. If that open happens
+        *after* the unlink -- guaranteed once release-then-unlink puts a full lock teardown between
+        the two -- `os.open(..., O_CREAT)` finds no file and mints a **new inode**, distinct from the
+        one this method's own fd still names. That third actor then flocks the new inode
+        uncontended: two actors now each hold what they believe is *the* exclusive lock on `slug`, on
+        two different inodes that were never in contention -- silently broken mutual exclusion, the
+        exact failure `session_lock`'s own docstring names as the reason #22 rejected unlinking a
+        lock file "a concurrent process may be holding". Unlinking before release does not make the
+        window provably zero (a second actor could in principle still open the pre-unlink inode in
+        the instant between `rmtree` returning and this line), but it collapses the window from
+        "several function calls plus two syscalls" (the old ordering's release -- unlock, close, and
+        everything `session_lock`'s `finally` runs, before the unlink is even attempted) down to zero
+        Python bytecodes with no syscall in between, and self-referential unlinking is unconditionally
+        legal on POSIX (a directory entry is not the same object as the open file it names -- unlinking
+        never touches this method's own held flock). On Windows this can raise instead, since what a
+        handle `os.open` opened with no explicit share-delete flag permits for a same-process unlink
+        is not something this store can verify without a Windows machine to observe it on -- caught
+        by the same `except OSError` either way, and the outcome (a leftover, inert lock file) is
+        identical to the release-then-unlink draft's own accepted worst case.
+        `test_the_lock_file_is_gone_before_the_lock_is_released_not_after` pins the ordering directly.
         """
         with self.session_lock(slug):
             shutil.rmtree(self.canonical_dir(slug))
-        try:
-            self.lock_path(slug).unlink(missing_ok=True)
-        except OSError:
-            pass  # best-effort cleanup; see the docstring above
+            try:
+                self.lock_path(slug).unlink(missing_ok=True)
+            except OSError:
+                pass  # best-effort cleanup; see the docstring above
 
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                       provenance: dict | None = None) -> tuple[int, SessionMeta]:

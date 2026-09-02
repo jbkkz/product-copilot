@@ -1058,6 +1058,38 @@ def test_a_writer_racing_an_in_flight_delete_is_refused_rather_than_writing_into
     assert not store.canonical_dir("racer").exists()
 
 
+def test_the_lock_file_is_gone_before_the_lock_is_released_not_after(workspace, monkeypatch):
+    """Found in review: the first draft unlinked the lock file *after* `session_lock`'s own release,
+    which reopens the exact "unlinking a lock file a concurrent process may be holding" hazard
+    `session_lock`'s own docstring says #22 rejected as a repair -- because invariant 11 lets a
+    second actor `create_session` the identical slug the instant `session_exists` goes false, which
+    is the moment `rmtree` returns, still inside this method's own critical section. A `session_lock`
+    taken on that re-created slug *after* a release-then-unlink ordering would open a fresh inode at
+    the just-vacated path and flock it uncontended -- a second "exclusive" holder the first ordering's
+    own fd (still open on the old inode) never contends with. Unlinking while still holding the lock
+    does not need a live race to prove: it only needs the unlink to have already happened by the
+    moment `_release` runs, which this test observes directly rather than trying to win a footrace
+    against the store's own critical section."""
+    SessionService().create_session("A real request.", slug="ordered")
+    lock_path = store.lock_path("ordered")
+    real_release = store._release
+    observed: dict = {}
+
+    def observing_release(fd):
+        observed["lock_file_existed_at_release"] = lock_path.exists()
+        return real_release(fd)
+
+    monkeypatch.setattr(store, "_release", observing_release)
+
+    store.delete_session("ordered")
+
+    assert observed.get("lock_file_existed_at_release") is False, (
+        "the lock file must already be gone by the time the lock is released, not unlinked "
+        "afterwards -- see delete_session's own docstring for why the other ordering is unsafe")
+    assert not lock_path.exists()
+    assert not store.canonical_dir("ordered").exists()
+
+
 def test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote(workspace):
     """The paired must-succeed half of the race above: a writer already using the session when
     delete is asked for must not be interrupted mid-write, and delete must still succeed once the

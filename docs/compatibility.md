@@ -145,7 +145,7 @@ what drifts.
 
 The promise is additive, not a freeze: nothing here says an output may never gain a field. What it
 says is that a populated field will not quietly change meaning, and that a change of shape is
-announced. That is cheap to keep for fifteen outputs and was never the expensive half.
+announced. That is cheap to keep for sixteen outputs and was never the expensive half.
 
 **What "public" means for a payload, in one testable sentence: a payload's top-level key set, and
 the JSON types of those values, are the contract.** Removing a top-level key, renaming one, or
@@ -159,7 +159,7 @@ a promise about it.
 `test_every_public_json_payload_keeps_its_recorded_top_level_shape` is what stops that being a
 sentence, and it is a *second* guard rather than a widening of the first: the one above
 (`test_every_json_verb_is_inside_the_promise`) checks that this page names every verb, which is
-membership and says nothing about what a verb prints. The new one runs each of the fifteen against a
+membership and says nothing about what a verb prints. The new one runs each of the sixteen against a
 fixture workspace and compares the top level of what it printed with a recorded key-and-type table.
 The two failure directions are reported separately, because they are not the same event — a key that
 vanished or changed type is a break, and a key that appeared wants one line added to the record.
@@ -947,7 +947,7 @@ characters** — `MAX_INPUT_CHARS` in `core/contracts.py` — is refused with `{
 "input_too_large"}` at exit **1**, instead of creating the session.
 
 `git show v1.3.0:src/requivo/services/sessions.py` has no length check at all, so this moves
-`session init` — one of the fifteen public `--json` payloads declared above — from exit 0 to exit 1
+`session init` — one of the sixteen public `--json` payloads declared above — from exit 0 to exit 1
 on an input it used to accept. That is the same shape #250 documents just above: a condition moved
 from one code to another, which this page's own promise calls **breaking**. Unlike the concern
 `changelog.d/255.fixed.md` first weighed and set aside — a caller relying on a billed provider call
