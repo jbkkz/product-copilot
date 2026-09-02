@@ -147,11 +147,35 @@ def raw_client(app):
     return TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
 
 
+# The only two forms in this app that carry `hx-post` (#428): the answers form and the two
+# generate-document forms. `POST /sessions`, `POST /sessions/example` and
+# `POST /sessions/{slug}/discover` are plain full-page submits even with JavaScript on -- adding
+# `HX-Request` to every request (including every `GET`) made `client` claim every navigation was an
+# htmx fragment fetch, which is not what this app does and broke a plain 404 page's full-page
+# rendering. Scoped to `.post()` on these two paths instead, which is exactly what a JS-enabled
+# browser sends and nothing more.
+_HTMX_POST_PATHS = ("/answers", "/artifacts/")
+
+
 @pytest.fixture
 def client(raw_client):
     """The everyday client: same as `raw_client` plus the cross-site request token every rendered form
-    carries as a hidden field. Sent as a header here so tests can keep posting plain `data=` dicts."""
+    carries as a hidden field (sent as a header so tests can keep posting plain `data=` dicts), and
+    `HX-Request: true` on the two htmx-post forms (#428) -- modelling a browser with JavaScript
+    loaded, which is what the rest of this suite means by "the everyday client". The one place that
+    distinction matters is the no-JS fallback itself (`test_web_no_js_forms.py`), which drives
+    `raw_client` directly and sends neither header, exactly as a browser with JavaScript off would."""
     raw_client.headers[CSRF_HEADER] = csrf_token()
+    original_post = raw_client.post
+
+    def _post(url, *args, **kwargs):
+        if any(p in str(url) for p in _HTMX_POST_PATHS):
+            headers = dict(kwargs.get("headers") or {})
+            headers.setdefault("HX-Request", "true")
+            kwargs["headers"] = headers
+        return original_post(url, *args, **kwargs)
+
+    raw_client.post = _post
     return raw_client
 
 

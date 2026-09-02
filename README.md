@@ -47,9 +47,9 @@ Analysing a request of your own needs a key: set `ANTHROPIC_API_KEY` in your env
 file. Without one the interface still opens, reads existing sessions and tells you what is missing —
 and its home page offers **Explore a worked example**, which materialises the same messy client email
 `requivo demo` replays as a real, browsable session in your workspace. One click, no key, no network:
-the understanding, the open questions and the readiness verdict, read from the payload bundled with
-the install. Refining it or generating a document — the decision brief included — is the part that
-needs the key.
+the understanding, the open questions, the readiness verdict and the decision brief, all read from the
+payload bundled with the install. Refining it or generating any other document is the part that needs
+the key.
 
 **What it costs.** You pay Anthropic directly, on your own key: roughly **$0.03 to $0.06 per call**,
 and **$0.46 to $1.01** for a complete session — a full discovery plus every artifact — at current

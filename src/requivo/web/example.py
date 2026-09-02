@@ -32,6 +32,7 @@ import json
 
 from requivo.core.errors import RevisionConflictError
 from requivo.paths import DEMO
+from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService
 
 # The name the sample lands under when nothing else holds it. `create_session` may hand back a
@@ -89,6 +90,22 @@ def example_proposal() -> dict:
     return json.loads(_read("model.json"))
 
 
+def example_brief() -> str:
+    """The bundled decision brief (#429), as the markdown `ArtifactService.save` records.
+
+    Unlike `assets/demo/solution-assessment.md` -- a ```text-fenced terminal capture `requivo demo`
+    narrates, box-drawing layout and all -- this is the real `brief_markdown()` rendering: the same
+    shape a live generation saves, and the shape `markdown_to_html` renders cleanly. It was produced
+    once, offline, from the same real run's decisions/challenges/opportunities (`model.json` already
+    carries them -- `DiscoveryService.absorb_reasoning` copies a `Brief`'s reasoning onto the model
+    verbatim, so they are the same objects) and the scalar fields transcribed from
+    `solution-assessment.md`'s own text, then rendered through `brief_markdown()` itself rather than
+    typed out by hand -- so the file on disk is what that function actually produces, not a
+    paraphrase of it. Read as a file rather than reconstructed at seed time, for the same reason
+    `example_request()`/`example_proposal()` are: nothing here is regenerated per click."""
+    return _read("brief.md")
+
+
 def _normalised(text: str) -> str:
     """Whitespace-insensitive form, for comparing a request read back off disk against the packaged
     one. Line endings differ between the platforms this runs on, and a sample that stopped being
@@ -103,7 +120,7 @@ def is_example(request_text: str) -> bool:
     return bool(request_text) and _normalised(request_text) == _normalised(example_request())
 
 
-def seed_example(sessions: SessionService) -> str:
+def seed_example(sessions: SessionService, artifacts: ArtifactService | None = None) -> str:
     """Materialise the bundled example as a real local session. Returns the slug it landed under.
 
     **Clicking twice navigates rather than refusing.** `create_session` is idempotent on identity
@@ -131,7 +148,38 @@ def seed_example(sessions: SessionService) -> str:
 
     No existence check precedes the create: `create_session` is the atomic claim (invariant 11), and
     a check here would be the preceding-existence-check that invariant exists to refuse.
+
+    **The decision brief is seeded the same way, through the same call** (#429). README.md promises
+    the click delivers "the understanding, the open questions, the readiness verdict and the decision
+    brief" -- a bundled `model.json` alone only ever produced the first three; `artifacts/list.html`
+    showed "Nothing generated yet" and `GET .../artifacts/brief` 404d. `example_brief()` is bundled
+    the same way `example_proposal()` is, and saved through the same validated `ArtifactService.save`
+    path every other artifact goes through -- so it carries a revision-1 freshness the dependency
+    graph computed rather than an asserted one, exactly like the model seed's invariant-6 treatment
+    leaves `provider`/`model_name` absent rather than false.
+
+    Gated on `"brief" not in artifacts.list(...)` rather than on `meta.current_revision == 0`
+    alongside the model seed above: the two guards answer different questions. The model must never
+    be re-applied once the reader has refined it (that would mint a revision describing an event that
+    did not happen). The brief must never be re-seeded once *anything* -- the seed, or the reader's
+    own real generation with their own key -- has recorded one, seeded or real, so a click after a
+    real generation cannot silently discard it. Checking presence directly is what makes a re-seed
+    idempotent in the ordinary case (#429's acceptance criterion) without either question leaking
+    into the other's answer.
+
+    **The check and the save run under the same lock, and that is not incidental** (invariant 9: a
+    precondition is only a check when it is held across the write it authorises). `artifacts.list()`
+    is an unlocked read and `artifacts.save()` only locks around itself, so a plain
+    check-then-act left a window: a reader's own real generation (`POST
+    .../artifacts/brief`, which reaches `ArtifactService.save` too) completing inside that window
+    would have its content silently overwritten by this call's unconditional save — the exact thing
+    the paragraph above says must never happen. `sessions.repo.lock` is the same lock
+    `ArtifactService.save` takes internally (`services/artifacts.py`), and it is per-thread
+    re-entrant (invariant 9's own note), so holding it here across both the read and the write
+    serialises this whole gate against any other caller's `save` for this slug, including a real
+    generation, without deadlocking against the nested call this function makes into its own `save`.
     """
+    artifacts = artifacts if artifacts is not None else ArtifactService(repo=sessions.repo)
     meta = sessions.create_session(example_request(), slug=EXAMPLE_SLUG)
     if meta.current_revision == 0:
         try:
@@ -139,4 +187,7 @@ def seed_example(sessions: SessionService) -> str:
                                   provenance={"surface": EXAMPLE_SURFACE})
         except RevisionConflictError:
             pass  # a concurrent click seeded it first — see the docstring
+    with sessions.repo.lock(meta.slug):
+        if "brief" not in artifacts.list(meta.slug):
+            artifacts.save(meta.slug, "brief", example_brief(), source_revision=1)
     return meta.slug

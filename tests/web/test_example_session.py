@@ -220,3 +220,119 @@ def test_seeding_without_a_running_server_needs_only_the_service(client):
     let a second surface reuse it."""
     slug = seed_example(SessionService())
     assert SessionService().meta(slug).current_revision == 1
+
+
+# ── #429 -- the click delivers the decision brief too, not just the understanding ──────
+
+def test_one_click_also_seeds_the_decision_brief_no_key_needed(client):
+    """README.md's own promise: 'the understanding, the open questions, the readiness verdict and
+    the decision brief, all read from the payload bundled with the install.' Reaching the brief
+    route must not need a key or a call -- the autouse fixture above already refuses one."""
+    slug = _seed(client)
+    r = client.get(f"/sessions/{slug}/artifacts/brief")
+    assert r.status_code == 200, r.text[:400]
+    assert "Decision Brief" in r.text
+    assert "One word, two different problems" in r.text  # a real challenge, not a placeholder
+
+
+def test_the_seeded_brief_is_listed_as_up_to_date_on_the_session_page(client):
+    """"Nothing generated yet" still shows for the *other* documents (PRD, criteria, ...) -- only
+    the brief is seeded, matching the audit's own scope. The primary slot itself must show a real
+    artifact row rather than the "nothing to review yet" placeholder -- checked without assuming a
+    key is configured, since this whole path is meant to work without one."""
+    slug = _seed(client)
+    r = client.get(f"/sessions/{slug}")
+    assert "Decision brief" in r.text
+    assert "Up to date" in r.text
+    assert "The decision brief is what you take into a scope review" not in r.text
+
+
+def test_a_second_click_does_not_reseed_or_duplicate_the_brief(client, monkeypatch):
+    """Mirrors `test_a_second_click_returns_to_the_same_session_rather_than_making_another` for the
+    model: idempotent on identity, not a fresh write every time.
+
+    Asserted by counting `ArtifactService.save` calls rather than by comparing `.list()` before and
+    after (caught in review, #428): `ArtifactStatus.updated_at` truncates to whole seconds
+    (`core.persistence._now()`), so two saves of byte-identical content inside the same wall-clock
+    second are indistinguishable through `.list()` regardless of whether the idempotency gate exists
+    at all -- a comparison that would pass even with the gate deleted is not a test of the gate."""
+    from requivo.services.artifacts import ArtifactService
+
+    calls = []
+    real_save = ArtifactService.save
+
+    def _counting_save(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return real_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(ArtifactService, "save", _counting_save)
+
+    first = _seed(client)
+    second = _seed(client)
+    assert second == first
+    brief_calls = [c for c in calls if c[0][:2] == (first, "brief")]
+    assert len(brief_calls) == 1, (
+        f"expected exactly one ArtifactService.save('brief', ...) across two clicks, got "
+        f"{len(brief_calls)}")
+
+
+def test_a_readers_own_saved_brief_is_never_overwritten_by_a_later_click(client):
+    """A brief already recorded against this session -- generated for real, with the reader's own
+    key, however it got there -- must not be silently replaced by the bundled one on a later click
+    of the same button. Saved directly through the service rather than a real generation, so this
+    stays inside the module's no-provider guard above."""
+    from requivo.services.artifacts import ArtifactService
+
+    slug = _seed(client)
+    written = "# Decision Brief\n\nSomething the reader actually generated.\n"
+    ArtifactService().save(slug, "brief", written, source_revision=1)
+
+    r = client.post("/sessions/example", follow_redirects=False)
+    assert r.status_code == 303
+    assert ArtifactService().show(slug, "brief") == written
+
+
+def test_the_bundled_brief_is_read_rather_than_restated():
+    """Sibling of `test_the_bundled_payload_is_read_rather_than_restated`: the brief content ships
+    in the wheel, it is not assembled at seed time."""
+    from requivo.web.example import example_brief
+
+    brief = example_brief()
+    assert brief.startswith("# Decision Brief")
+    assert "One word, two different problems" in brief
+
+
+def test_seeding_the_brief_holds_the_lock_across_the_check_and_the_save():
+    """#428 review finding: a plain check-then-act (`artifacts.list()` then `artifacts.save()`,
+    with no lock spanning both) leaves a window in which a reader's own real generation could
+    complete between the check and this call's unconditional save and be silently overwritten --
+    contradicting `seed_example`'s own docstring, which says exactly that must never happen.
+
+    Proven against the same lock-depth bookkeeping `core.persistence.Store.session_lock` already
+    keeps for re-entrancy (`_held_locks`, keyed by root identity + slug), rather than by racing real
+    threads: the store's lock is a real OS-level file lock, which would make a thread-based
+    reproduction non-deterministic to assert against reliably in a unit test. This checks the
+    mechanism the fix actually relies on -- the check running *while the lock is already held* --
+    directly, rather than only its outward, much harder to isolate consequence."""
+    from requivo.core.persistence import _held_locks
+    from requivo.services.artifacts import ArtifactService
+    from requivo.services.sessions import SessionService
+
+    sessions = SessionService()
+    seen = {}
+    real_list = ArtifactService.list
+
+    def _spying_list(self, slug):
+        store = sessions.repo._resolve_store()
+        key = store._lock_key(slug)
+        seen["depth_during_list"] = getattr(_held_locks, "depths", {}).get(key, 0)
+        return real_list(self, slug)
+
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ArtifactService, "list", _spying_list)
+        seed_example(sessions)   # the first click -- the only one that reaches this gate
+
+    assert "depth_during_list" in seen, "ArtifactService.list was never called -- gate not reached"
+    assert seen["depth_during_list"] > 0, (
+        "artifacts.list() ran with the lock NOT held -- the check-then-act race is back")

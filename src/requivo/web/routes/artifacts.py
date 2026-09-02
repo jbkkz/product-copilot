@@ -8,7 +8,7 @@ CLI. Viewing and downloading read the saved content through the service; a route
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from requivo.render.html import markdown_to_html
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService, UnknownArtifactTypeError
@@ -40,13 +40,24 @@ def generate_artifact(
         raise UnknownArtifactTypeError(
             f"{artifact_type!r} is not a generated artifact; supported: {', '.join(GENERATABLE)}",
             details={"type": artifact_type})
+    is_htmx = request.headers.get("HX-Request") == "true"
     # A generation is the paid step a reader is most likely to repeat — a document that reads badly
     # invites another click — so it is the one whose cost was most worth stating and was stated
-    # nowhere (#253). The fragment it swaps in carries the footprint; `track_web_usage` also logs it,
-    # which is what covers the arm where the provider fails and this fragment is never rendered.
-    with track_web_usage(f"web-{artifact_type}") as spend:
+    # nowhere (#253). The fragment it swaps in carries the footprint on the htmx path; a no-JS submit
+    # (#428) is a bodyless redirect instead, so `carry_to=slug` stashes the same figure for the
+    # session page's next GET to pop (`spend.py`) — passed only on that path, or the fragment path's
+    # figure would sit stashed and unread, then surface again on some later, unrelated visit to the
+    # session (spend.py's stash is deliberately read-once per action, not per page load).
+    with track_web_usage(f"web-{artifact_type}", carry_to=None if is_htmx else slug) as spend:
         discovery.generate(slug, artifact_type, surface=f"web-{artifact_type}")
         usage = usage_view(spend)
+    if not is_htmx:
+        # A plain form submit (#428): the form now carries `method="post" action="…"` beside its
+        # `hx-post`, so a no-JS reader reaches this route as a real POST rather than the bare GET a
+        # form with neither attribute falls back to. No fragment to swap; the spend footprint rides
+        # the stash above, and the session page this redirects to shows the freshly generated
+        # document.
+        return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
     return templates.TemplateResponse(request, "artifacts/list.html", {
         "s": session_detail(sessions, slug), "provider": provider_status(),
         "usage": usage,

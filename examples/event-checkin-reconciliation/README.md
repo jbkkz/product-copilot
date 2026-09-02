@@ -11,11 +11,12 @@ actually sends on a Friday night.
 |---|---|---|
 | 1 | [`request.md`](request.md) | The raw input — a rambling, multi-part client email. |
 | 2 | [`model.json`](model.json) | The structured model the discovery built from it (the product). |
-| 3 | [`solution-assessment.md`](solution-assessment.md) | The deliverable — executive summary, **challenges**, design decisions, risks, opportunities, next steps. |
-| 4 | [`epic.md`](epic.md) | A delivery epic — the work broken into trackable issues with dependencies, from the *same* model. |
-| 5 | [`acceptance-criteria.md`](acceptance-criteria.md) | Given/When/Then recette checklist, from the *same* model. |
+| 3 | [`solution-assessment.md`](solution-assessment.md) | The deliverable — executive summary, **challenges**, design decisions, risks, opportunities, next steps — as the text-fenced terminal capture `requivo demo` replays. |
+| 4 | [`brief.md`](brief.md) | The same decision brief, as the clean Markdown `ArtifactService.save` actually records and Requivo Web renders — what its keyless "Explore a worked example" button seeds alongside the model, so the click delivers the brief too, with no key and no call (#429). |
+| 5 | [`epic.md`](epic.md) | A delivery epic — the work broken into trackable issues with dependencies, from the *same* model. |
+| 6 | [`acceptance-criteria.md`](acceptance-criteria.md) | Given/When/Then recette checklist, from the *same* model. |
 
-Steps 3 through 5 are all views of step 2 — the model is the product, everything else is a render of it.
+Steps 3 through 6 are all views of step 2 — the model is the product, everything else is a render of it.
 
 ## What to look at
 

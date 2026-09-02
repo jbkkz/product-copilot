@@ -98,14 +98,16 @@ is not on any of these screens; the translation is defined once in `web/viewmode
 ![The decision brief: what is confirmed, what is being assumed, the decisions on record and the premises worth contesting.](images/web-brief.webp)
 
 - **Explore a worked example** — one button under the request box, and the way to see a finished
-  analysis without a key. (It is not the only keyless thing here: with no provider configured the
-  main form still captures a request, and the button says *Save request* rather than *Analyse
-  request* to say so.) It materialises the bundled sample — the messy
+  analysis *and* its decision brief without a key (#429). (It is not the only keyless thing here:
+  with no provider configured the main form still captures a request, and the button says *Save
+  request* rather than *Analyse request* to say so.) It materialises the bundled sample — the messy
   client email `requivo demo` replays — as a real session in your workspace, through the same
-  `SessionService.create_session` + `update_model` path everything else uses. It is not a read-only
+  `SessionService.create_session` + `update_model` path everything else uses, and its decision brief
+  through the same `ArtifactService.save` path a real generation does. It is not a read-only
   exhibit and not a mock: it has a revision, a frozen copy under `revisions/`, a readiness verdict
   computed by the same code as yours, and it opens in the CLI and in Claude Code. Nothing is called
-  and nothing is reasoned; the payload ships in the wheel. The button stays after you have sessions
+  and nothing is reasoned; the payload ships in the wheel, brief included. Refining the session or
+  generating any *other* document does need a key. The button stays after you have sessions
   of your own — showing it only on an empty workspace would put the example one real session out of
   reach — and clicking it twice returns you to the session you already have rather than making a
   second. It is labelled *Example* on its own page and on its row, and that label is decided by the
