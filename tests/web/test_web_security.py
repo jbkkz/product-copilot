@@ -32,22 +32,56 @@ from tests.web.conftest import BRIEF_REPLY, HIGH_EXPLICIT, _make_session, engine
 # ── the headers every response carries ────────────────────────────────────────
 
 
-def test_security_headers_present(app, client):
-    @app.get("/_test_500")
-    def _test_500():
-        raise ValueError("Oops")
+@pytest.fixture
+def failing_route(app):
+    """A route that raises, so a test can reach the unhandled-500 path the way a bug would.
 
-    for path, expected_status in [("/", 200), ("/not-found", 404), ("/_test_500", 500)]:
-        r = client.get(path)
-        assert r.status_code == expected_status
-        h = r.headers
-        assert h["X-Content-Type-Options"] == "nosniff"
-        assert "Content-Security-Policy" in h and "default-src 'self'" in h["Content-Security-Policy"]
-        # Assert presence only. Which value is correct is argued and asserted by its consequence in
-        # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
-        # that the app states the policy rather than inheriting whatever the browser defaults to.
-        assert "Referrer-Policy" in h
-        assert h.get("Cache-Control") == "no-store"
+    The client fixtures pass `raise_server_exceptions=False`, so the exception goes through
+    `_unexpected` and comes back as the 500 response a browser would get, instead of being re-raised
+    into the test. Registered on the function-scoped `app`, so it exists for one test only.
+    """
+    @app.get("/_boom")
+    def _boom():
+        raise ValueError("a bug, not a refusal")
+    return "/_boom"
+
+
+@pytest.mark.parametrize("path,expected_status", [("/", 200), ("/not-found", 404)])
+def test_security_headers_present(client, path, expected_status):
+    r = client.get(path)
+    assert r.status_code == expected_status
+    h = r.headers
+    assert h["X-Content-Type-Options"] == "nosniff"
+    assert "Content-Security-Policy" in h and "default-src 'self'" in h["Content-Security-Policy"]
+    # Presence only. Which value is correct is not a spelling to pin here — it is a decision, and it is
+    # argued and asserted by its consequence in
+    # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
+    # that the app states the policy rather than inheriting whatever the browser defaults to.
+    assert "Referrer-Policy" in h
+    assert h["Cache-Control"] == "no-store"
+
+
+# The 500 page was the one response class this app served with none of the above (#340): `_unexpected`
+# is registered for `Exception`, which Starlette handles in `ServerErrorMiddleware`, outside the user
+# middleware stack, so `security_headers` never sees it. It was closed by stating the four headers a
+# second time inside the handler — which left the *next* header added to the middleware missing from
+# the 500 page, the same defect one header along (#462).
+#
+# So this asserts the composition rather than a list of names: whatever an ordinary page carries, the
+# 500 page carries too. A test enumerating headers is exactly as complete as the day it was written,
+# and this one is the reason there is a single `_apply_security_headers` to enumerate them in.
+#
+# `content-length` and `content-type` are in the compared set on purpose. They differ in *value*
+# between the two responses and not in presence, and the assertion is about presence — dropping them
+# would mean maintaining an exemption list, which is the enumeration this test exists to avoid.
+def test_the_500_page_carries_every_header_an_ordinary_page_carries(client, failing_route):
+    ordinary = client.get("/")
+    unhandled = client.get(failing_route)
+    assert ordinary.status_code == 200
+    assert unhandled.status_code == 500
+
+    missing = set(ordinary.headers) - set(unhandled.headers)
+    assert not missing, f"the 500 page is missing {sorted(missing)}"
 
 
 # ── the disk cache (#218) ─────────────────────────────────────────────────────
