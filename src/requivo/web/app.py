@@ -108,6 +108,34 @@ def _is_bundled_asset(path: str) -> bool:
     """Does this path name a file shipped inside the package rather than anything of the reader's?"""
     return path in _BUNDLED_ASSET_PATHS or path.startswith(_BUNDLED_ASSET_PREFIXES)
 
+
+def _apply_security_headers(response, path: str):
+    """State this app's header policy on one response — the single definition, read by both the
+    middleware and the unhandled-exception handler (#462).
+
+    Two callers because Starlette leaves no choice, and **one** definition because the alternative is
+    #340 re-armed. `_unexpected` is registered for `Exception`, which Starlette handles inside
+    `ServerErrorMiddleware` — *outside* the user middleware stack — so `security_headers` never sees
+    its response, and reordering middleware cannot reach it. #340 closed that by writing the four
+    headers out a second time in the handler, which fixed the four that existed and left the fifth
+    header anyone adds to the middleware silently missing from the 500 page: the original defect,
+    one header along. Pinned by
+    `test_the_500_page_carries_every_header_an_ordinary_page_carries`, which compares the two
+    responses' header sets rather than a list of names, so it fails on a header it was never told
+    about.
+
+    `setdefault`, not assignment, so a route that deliberately set its own value keeps it. The
+    bundled-asset exemption is applied here for both callers, which decides the one question the
+    duplicated version left open: a 500 raised while serving `/static/` is an error page, not the
+    asset, and is `no-store` like every other error page.
+    """
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", _REFERRER_POLICY)
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    if not _is_bundled_asset(path):
+        response.headers.setdefault("Cache-Control", _CACHE_CONTROL)
+    return response
+
 # Under `requivo web` this rides uvicorn's handler, so a traceback lands in the terminal the user
 # started the server in — the only place a local, single-user app has to put one.
 logger = logging.getLogger("requivo.web")
@@ -145,13 +173,7 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", _REFERRER_POLICY)
-        response.headers.setdefault("Content-Security-Policy", _CSP)
-        if not _is_bundled_asset(request.url.path):
-            response.headers.setdefault("Cache-Control", _CACHE_CONTROL)
-        return response
+        return _apply_security_headers(await call_next(request), request.url.path)
 
     @app.exception_handler(RequivoError)
     async def _requivo_error(request: Request, exc: RequivoError):
@@ -179,12 +201,12 @@ def create_app() -> FastAPI:
         # method and path are enough to locate it; the request body is deliberately not logged, since
         # it is the user's own product request.
         logger.exception("unhandled error serving %s %s", request.method, request.url.path)
-        response = _render_error(request, 500, "internal_error", "Something went wrong on the server.")
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = _REFERRER_POLICY
-        response.headers["Content-Security-Policy"] = _CSP
-        response.headers["Cache-Control"] = _CACHE_CONTROL
-        return response
+        # The policy is stated here as well as in the middleware because this handler runs outside
+        # the user middleware stack, so `security_headers` never sees this response (#340). One
+        # definition, two callers — the argument is on `_apply_security_headers` (#462).
+        return _apply_security_headers(
+            _render_error(request, 500, "internal_error", "Something went wrong on the server."),
+            request.url.path)
 
     app.include_router(health.router)
     app.include_router(home.router)

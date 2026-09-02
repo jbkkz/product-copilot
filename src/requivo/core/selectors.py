@@ -63,8 +63,9 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 # `display_document`'s own class (#430): the same range, minus tab (\x09) and newline (\x0a) -- the
 # two control characters a document's own layout legitimately uses. CR (\x0d) stays in the guarded
-# range on purpose: the read path normalises a raw CR to LF (universal newlines), so a CR reaching
-# this function is not layout, it is the thing #430's own repro used to prove the guard was missing.
+# range on purpose, and `display_document` folds a CRLF *pair* to LF before this regex ever sees it,
+# so what stays guarded is the lone CR that can only move a cursor (#460). Pinned by
+# `test_the_same_document_renders_identically_through_generation_and_read_back`.
 _DOCUMENT_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -97,9 +98,10 @@ def display_document(value: str) -> str:
     line of visible `\\n` escapes, which is a worse outcome than the injection it guards against.
 
     So this neutralizes the same class `display_token`/`display_text` neutralize -- everything that
-    can move a cursor or end a line on its own -- except the two characters a document legitimately
-    uses to lay itself out: `\\n` and `\\t`. A raw ESC, a raw CR, a raw form-feed and every other C0/C1
-    control character are still escaped, per character, exactly as `display_text` escapes them.
+    can move a cursor or end a line on its own -- except the characters a document legitimately
+    uses to lay itself out: `\\n`, `\\t`, and the `\\r\\n` that spells the first of those on Windows.
+    A raw ESC, a *lone* CR, a raw form-feed and every other C0/C1 control character are still
+    escaped, per character, exactly as `display_text` escapes them.
 
     This is `artifact show`'s own guard (#430). `artifact show` was not, in fact, the class's last
     unguarded member -- `prd`/`criteria`/`epic`/`release` printed their generator's markdown the same
@@ -110,9 +112,16 @@ def display_document(value: str) -> str:
     rests on) -- only the terminal print site calls this, at print time, so what changes is what
     reaches the operator's screen, never what is stored or downloaded.
 
+    **A CRLF pair is layout and is folded to LF here, so this function's five callers agree** (#460).
+    It used to hold CR guarded on the premise that "the read path normalises a raw CR to LF", which
+    was true of the one caller that reads a file back and false of the four #449 added, which hand a
+    generator's string straight in. A lone CR is still escaped: it can only move a cursor, which is
+    what #430 exists to stop. Pinned by
+    `test_the_same_document_renders_identically_through_generation_and_read_back`.
+
     Pure, like everything else here.
     """
-    return _DOCUMENT_CONTROL_CHARS.sub(lambda m: repr(m.group())[1:-1], value)
+    return _DOCUMENT_CONTROL_CHARS.sub(lambda m: repr(m.group())[1:-1], value.replace("\r\n", "\n"))
 
 
 def display_text(value: str) -> str:
