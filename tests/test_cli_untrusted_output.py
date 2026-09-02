@@ -681,7 +681,11 @@ def test_the_same_document_renders_identically_through_generation_and_read_back(
     assert "A second line." in document, document   # must fire: neutralised never means dropped
     # The saved file is untouched, as it is for every other guard in this module -- the CRLF the
     # provider sent is still on disk, and it is the *rendering* of it that the two paths agree on.
-    assert "\r\n" in path.read_text(encoding="utf-8", newline=""), "the disk copy must keep its CRLF"
+    # `.open(newline="")`, not `read_text(newline=...)`: that keyword is 3.13+ and this project
+    # supports 3.9. Universal newlines is exactly what has to be off here -- the assertion is about
+    # the bytes on disk, and the default translation would rewrite the CRLF being asserted about.
+    with path.open(encoding="utf-8", newline="") as fh:
+        assert "\r\n" in fh.read(), "the disk copy must keep its CRLF"
 
 
 def test_a_lone_cr_is_still_escaped_because_it_is_not_a_line_ending(workspace, tmp_path):
