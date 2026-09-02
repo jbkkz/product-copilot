@@ -79,6 +79,14 @@ anthropic = ["anthropic>=0.42.0,<2"]
 # A thin FastAPI + Jinja2 + HTMX layer over the same services as the CLI — no Node build, assets ship
 # in the wheel. Not required for the CLI or Claude Code. Add [anthropic] too for provider-backed actions.
 web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
+# The repository conformance suite (#424): `pip install 'requivo[testing]'` for a consumer building a
+# non-file SessionRepository (a Postgres backing, most concretely) who wants to subclass
+# `requivo.testing.repository_conformance.SessionRepositoryConformance` in their own pytest suite.
+# `requivo.testing` itself always ships in the wheel -- it is part of the declared seam -- but
+# *importing* it needs pytest, which the base install deliberately does not carry (nothing else in
+# the package needs a test framework at runtime). A consumer writing pytest tests already has pytest;
+# this extra exists so the floor this suite is built against is declared rather than assumed.
+testing = ["pytest>=8.0"]
 # `tomli` is `tomllib` backported, for `scripts/dependency_floor.py` on the 3.9/3.10 legs — the same
 # library under its pre-stdlib name, not a second TOML reader. `packaging` is what lets that script
 # compare `0.110` with the `0.110.0` pip actually installs as versions rather than as strings. Both
@@ -103,7 +111,9 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # reused, so it cannot drift from what actually builds the wheel. dev-only: `tests/test_sdist_
 # contents_431.py` calls `setuptools.build_meta.build_sdist()` in-process to prove `MANIFEST.in`
 # actually excludes `tests/` from what PyPI ships; nothing at runtime imports setuptools.
-dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx>=0.25.0,<1",
+# `testing` joined the self-reference above (#424) rather than restating `pytest>=8.0` as a fourth
+# direct pin here -- the same reasoning, one extra later.
+dev = ["requivo[anthropic,web,testing]", "ruff>=0.6", "httpx>=0.25.0,<1",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
        "pyright>=1.1.400,<2", "setuptools>=64"]
 

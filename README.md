@@ -153,7 +153,11 @@ The Core is provider-independent: no LLM, no network. More:
 declares a small, deliberately stable import surface — the services, the `SessionRepository` and
 `ReasoningProvider` protocols, the boundary contracts, the error vocabulary, `requivo.usage` — priced
 like every other promise on the [compatibility page][compatibility]. Pin exactly (`requivo==X.Y.Z`);
-everything not on that list, including `providers.anthropic` internals, can move in a minor.
+everything not on that list, including `providers.anthropic` internals, can move in a minor. Building
+a non-file `SessionRepository` (a Postgres backing, most concretely)? `pip install 'requivo[testing]'`
+and subclass `requivo.testing.repository_conformance.SessionRepositoryConformance` in your own pytest
+suite — the same behavioural proof `FileSessionRepository` and this repo's in-memory fake both run
+against, extracted so an external implementation can hold itself to it too.
 
 ---
 

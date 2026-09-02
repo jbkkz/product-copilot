@@ -201,6 +201,16 @@ def _orphan_slugs(declared: set[str], referrers: Iterable[Path]) -> list[str]:
     return sorted(declared - referenced)
 
 
+# `requivo.testing` (#424) is the one place under `src/` that legitimately *defines* test methods
+# rather than only citing them: `SessionRepositoryConformance` is a pytest mixin base class, shipped
+# in the wheel on purpose, whose `def test_...` methods are collected only through a `tests/`-side
+# subclass (`TestFileRepositoryConformance`, `TestInMemoryRepositoryConformance`) that never
+# re-states them. Scoped to this one package rather than widening the scan to all of `SRC` -- nothing
+# else under `src/` defines a test callable, and a narrower scan is less to reconsider the day
+# something under `src/` genuinely does start looking like a reference instead of a definition.
+TESTING_PACKAGE = SRC / "testing"
+
+
 def declared_test_names() -> set[str]:
     """Every test callable the suite defines, plus every test module's stem.
 
@@ -210,11 +220,13 @@ def declared_test_names() -> set[str]:
     teach the next person to delete the check instead of the reference.
     """
     names: set[str] = set()
-    for path in sorted(TESTS.rglob("*.py")):
-        names.add(path.stem)
-        for match in re.finditer(r"^\s*(?:async\s+)?def\s+(test_[A-Za-z0-9_]+)",
-                                 path.read_text(encoding="utf-8"), re.MULTILINE):
-            names.add(match.group(1))
+    roots = (TESTS, TESTING_PACKAGE) if TESTING_PACKAGE.is_dir() else (TESTS,)
+    for root in roots:
+        for path in sorted(root.rglob("*.py")):
+            names.add(path.stem)
+            for match in re.finditer(r"^\s*(?:async\s+)?def\s+(test_[A-Za-z0-9_]+)",
+                                     path.read_text(encoding="utf-8"), re.MULTILINE):
+                names.add(match.group(1))
     if not names:
         raise AssertionError(
             f"the narrative-reference guard found no tests under {TESTS} to resolve against — "
