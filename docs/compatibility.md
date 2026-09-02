@@ -1035,6 +1035,94 @@ invisible to the test that walks it. **They are presentational.** A caller scrip
 on the HTTP status, which is stable; the code on the banner is for a human reading the page and may
 change without notice.
 
+## The Python import surface — the declared seam (#423)
+
+Filed from the 2026-09 readiness audit (public-interfaces pass): "Python internals … not a published
+API," below, disclaimed the whole import surface while the one consumer that matters most —
+`requivo-cloud`, the first-party hosted deployment — already imported nine names across four modules,
+including six `providers.anthropic` generator functions decision record 0003 explicitly measured as
+unstable, and pinned `requivo>=1.2.0,<2.0.0` against a package that shipped three majors in the
+thirteen days after 1.0.0. The 3.0.0 removal of a services method was graded breaking in the changelog
+**despite** the disclaimer above — the surface was already being treated as semi-public in practice.
+This section is where that practice becomes a promise, for the names it names and no others.
+
+**The testable contract sentence:** moving, renaming, or changing the signature of any name below
+costs a major version and a line on this page, priced exactly like the CLI, the `--json` envelopes and
+[the other public surfaces](#the-other-public-surfaces-89) above. `tests/test_public_seam_423.py`
+pins that the names below still resolve; it does not and cannot pin that a future change to one is
+priced correctly — that is this page's job, same as everywhere else on it.
+
+**The declared seam:**
+
+- **The services** — `requivo.services.sessions.SessionService`, `requivo.services.discovery.
+  DiscoveryService`, `requivo.services.artifacts.ArtifactService` — the only apply, generate and
+  staleness implementations (CLAUDE.md's own rule), and their result types: `UpdateResult`,
+  `SessionEntry`, `SessionSnapshot`, `Readiness`, `RescopeResult` (`services/sessions.py`) and
+  `Generated` (`services/discovery.py`, the typed wrapper `generate()`'s overloads resolve).
+- **The two protocols** — `requivo.services.repository.SessionRepository` and
+  `requivo.providers.base.ReasoningProvider`. A hosted Postgres backing or a non-Anthropic reasoning
+  backend is built against these, never against `FileSessionRepository` or `AnthropicProvider`
+  internals.
+- **`requivo.services.repository.FileSessionRepository`**, as the shipped `SessionRepository`
+  implementation — its `__init__(root=...)` constructor (#272) and construction-only addressing are
+  stable — and `default_repository()`. Its filesystem-only extensions are **not** part of this seam:
+  `.store()`, and everything reached through `requivo.core.persistence.Store`, exist because this one
+  backing has a filesystem underneath the protocol and a Postgres backing has nothing analogous to
+  expose. (The #272 changelog entry flagged both `Store` and `FileSessionRepository.store()` as
+  "provisional until #423 declares the storage seam frozen" — this is that declaration, and it
+  freezes `FileSessionRepository` itself while leaving both of those out.)
+- **The boundary contracts** a consumer holds in its hands: `requivo.core.contracts.EngineOutput` and
+  `.ModelProposal` (what a proposal/apply exchanges — see ["What a proposal
+  means"](#what-a-proposal-means) above), `requivo.core.persistence.SessionMeta`, `.ArtifactStatus`,
+  `.RevisionRecord` and `.UnexaminableEntry` (what the protocol's own methods return), and the artifact
+  contracts a generation can produce: `requivo.core.contracts.Brief`, `.PRD`, `.AcceptanceCriteria`,
+  `.Epic`, `.ReleaseNotes`, `.Stories`, `.EstimateDraft`.
+- **The failure vocabulary.** `requivo.core.errors.RequivoError` and every subclass it defines, plus
+  `requivo.providers.errors.EngineError` and the three artifact-specific subclasses in
+  `requivo.services.artifacts` (`UnknownArtifactTypeError`, `UnstatedSourceRevisionError`,
+  `UnreadableSourceRevisionError`). The machine `code` on each was already promised
+  ([above](#the-json-outputs-are-public)); this adds the classes themselves as importable, catchable
+  names.
+- **`requivo.usage`** — `UsageLedger`, `CallRecord`, `track_usage`, `record_call`, `current_ledger`.
+  Provider-neutral by construction (#167) — a hosted caller reads a call's cost without importing
+  anything Anthropic-specific.
+
+**`py.typed`.** The wheel now ships a PEP 561 marker (one empty file:
+`src/requivo/py.typed`, declared in `[tool.setuptools.package-data]`) — the whole package was already
+pyright-clean with zero diagnostics (`[tool.pyright]`, above), so the marker is what lets a downstream
+`pyright`/`mypy` run resolve those types instead of treating every import as `Any`. Spot-checked for
+this change: a throwaway project depending on this checkout's wheel, importing
+`SessionService`/`DiscoveryService`/`SessionRepository`/`EngineOutput` and calling one method on each
+with a deliberately wrong argument type, reports the error under `pyright` where it silently passed
+before the marker existed.
+
+**Everything else stays internal**, unchanged from the rule below — most pointedly
+`requivo.providers.anthropic` (`client.py`/`completion.py`/`generators.py`/`pricing.py`/`provider.py`,
+including `AnthropicProvider` itself), which decision record 0003 already flagged as free to move and
+which this page does not now freeze. A consumer wanting Anthropic-backed reasoning implements
+`ReasoningProvider` itself, or accepts that importing `AnthropicProvider` is exactly the unstable bet
+this section exists to name rather than hide.
+
+**Recommended consumption pattern**, in one paragraph: pin exactly (`requivo==X.Y.Z`), never a range —
+three majors in thirteen days means a range ceiling reads as prudence and works as starvation, quietly
+starving a consumer behind an early cap (see `docs/cloud-boundary.md` §2 for the measurement). Bump the
+pin as a routine chore gated by two things: your own tests, and the repository conformance suite
+(`requivo.testing.repository_conformance`, #424) if your backing implements `SessionRepository` — a
+Postgres or other non-file implementation that passes it inherits the services' orchestration
+verbatim; one that does not has found its bug before production did.
+
+**Classifying the five surfaces this page's own rule (#89, closing sentence) called a bug for leaving
+silent:** `requivo.render`, `requivo.paths`, `requivo.streams`, `requivo.cli` and `requivo.web` are
+**not stable as Python import surfaces** — none of their names are part of the seam above. Each one's
+*behavioural* promise is already made elsewhere on this page under a different heading: the CLI's exit
+codes and `--json` payloads ([above](#the-other-public-surfaces-89)), Requivo Web's HTTP routes and
+statuses (same section), the environment variables `paths.py` reads (same section), and terminal
+output's "parse `--json`, never the rendered view" rule (`render`/`streams`, below). What is not
+promised is importing a function or class *from* any of these five modules and depending on its
+Python-level shape — that can move in a minor, the same as every `core.persistence`/`core.analysis`/
+`core.context`/`core.dependencies`/`core.validation`/`core.integrity`/`core.adapters`/`core.selectors`
+name not listed in the declared seam above.
+
 ## Deprecations
 
 | What | Status | Since | Removal | Instead |
@@ -1071,15 +1159,21 @@ migrate` still converts them, and it is now the only thing that reads that layou
 
 ## What is explicitly *not* stable
 
-- **Python internals.** `requivo.core`, `requivo.services`, `requivo.providers`,
-  `requivo.deterministic` and `requivo.usage` are importable and documented, but they are the
-  engine's own structure, not a published API. A refactor can move them, and it has twice: #73 moved
-  `requivo.deterministic`, and #74/#167 turned `requivo.providers.anthropic` into a package while
-  moving two names out of it — the usage ledger to `requivo.usage` and `EngineError` to
-  `requivo.providers.errors`, neither of which was ever Anthropic-specific. That is why they are
-  named here rather than left to silence. The error *code* those moves carry, `provider_unavailable`,
-  is unaffected: it is published in the `--json` envelope and is promised above, independently of
-  which module defines the class.
+- **Python internals, except the declared seam.** `requivo.core`, `requivo.services`,
+  `requivo.providers` and `requivo.deterministic` are importable and documented, but they are the
+  engine's own structure, not a published API, **with the exception of [the names §"The Python
+  import surface" above declares](#the-python-import-surface--the-declared-seam-423)** — a carve-out
+  added by #423, not a change to the rule: everything in these four module trees that is not on that
+  list is exactly as unstable as it always was. `requivo.usage` moved the other way in the same
+  change — it used to be named here too, and is now wholly part of the declared seam instead, because
+  nothing in it is Anthropic-specific or file-backing-specific (see below). A refactor can still move
+  an undeclared name, and it has twice: #73 moved `requivo.deterministic`, and #74/#167 turned
+  `requivo.providers.anthropic` into a package while moving two names out of it — the usage ledger to
+  `requivo.usage` (before #423, itself internal; now the declared seam) and `EngineError` to
+  `requivo.providers.errors` (declared, above), neither of which was ever Anthropic-specific. That is
+  why they are named here rather than left to silence. The error *code* those moves carry,
+  `provider_unavailable`, is unaffected: it is published in the `--json` envelope and is promised
+  above, independently of which module defines the class.
 
   `requivo.deterministic`'s `__all__` is internal plumbing for the offline verbs rather than an
   interface: every name in it is read from inside this repository and none is promised outside it.
