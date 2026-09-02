@@ -56,7 +56,7 @@ from requivo.paths import workspace_root
 from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
-from requivo.usage import current_ledger
+from requivo.usage import SpendPolicy, current_ledger
 
 try:  # POSIX
     import fcntl
@@ -359,9 +359,11 @@ class DiscoveryService:
     """
 
     def __init__(self, provider=None, *, client=None, sessions: SessionService | None = None,
-                 artifacts: ArtifactService | None = None, repo=None):
+                 artifacts: ArtifactService | None = None, repo=None,
+                 spend_policy: SpendPolicy | None = None):
         self._provider = provider
         self._client = client
+        self._spend_policy = spend_policy
         self.sessions = sessions or SessionService(repo)
         # The artifact service defaults to *this service's* storage, not to the process default. On a
         # file backing the two were indistinguishable — both resolve to the same workspace — which is
@@ -393,6 +395,17 @@ class DiscoveryService:
             from requivo.providers.anthropic import AnthropicProvider
             self._provider = AnthropicProvider(self._client)
         return self._provider
+
+    def _check_spend(self) -> None:
+        """Consult the injected `SpendPolicy`, if any, immediately before a provider call (#427).
+
+        Called at every `provider.analyze`/`provider.generate` call site in this class, never once
+        at a method's entry -- an operation that makes more than one call (`start(finalize=True)`,
+        `generate("brief")`) must have the second refused too, the moment the first alone reaches
+        the ceiling. No policy injected is a no-op: `self._spend_policy is None` is the default, and
+        a `DiscoveryService` built that way behaves exactly as it did before this existed."""
+        if self._spend_policy is not None:
+            self._spend_policy.check(current_ledger())
 
     def _provenance(self, op: str, *, cards: list[str] | None, surface: str,
                     usage: dict | None = None) -> dict:
@@ -486,7 +499,10 @@ class DiscoveryService:
             _require_revision_zero(meta.slug, self.sessions.repo.read_meta(meta.slug).current_revision)
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
+            self._check_spend()
             out = provider.analyze(request, only=cards)
+            if finalize:
+                self._check_spend()
             brief = provider.generate("brief", out, only=cards) if finalize else None
             return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
                                            surface=surface, usage=_usage_since(before))
@@ -529,6 +545,7 @@ class DiscoveryService:
         require_input_within_bounds(request, field="request")
         if answers is not None:
             require_input_within_bounds(answers, field="answers")
+        self._check_spend()
         return self._need_provider().analyze(
             request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
 
@@ -566,6 +583,7 @@ class DiscoveryService:
             _require_revision_zero(slug, snap.revision)
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
+            self._check_spend()
             out = self._need_provider().analyze(snap.request, only=snap.context_cards)
             return self.sessions.update_model(
                 slug, out.model_dump_json(), expected_revision=snap.revision,
@@ -607,6 +625,7 @@ class DiscoveryService:
         model = _require_a_model(slug, snap)
         ledger = current_ledger()
         before = len(ledger.calls) if ledger is not None else 0
+        self._check_spend()
         out = self._need_provider().analyze(
             snap.request, current_model=model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(
@@ -640,6 +659,7 @@ class DiscoveryService:
         a combined operation, and the snapshot carries its own slug so the two cannot disagree (#135).
         Pinned by `test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot`."""
         model = _require_a_model(snap.slug, snap)
+        self._check_spend()
         return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
                                               **kwargs)
 
@@ -702,6 +722,7 @@ class DiscoveryService:
         if artifact_type == "brief":
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
+            self._check_spend()
             brief = provider.generate("brief", out, only=cards)
             absorb_reasoning(out, brief)
             usage = _usage_since(before)
@@ -754,6 +775,7 @@ class DiscoveryService:
             writer = _WRITERS[artifact_type]
         except KeyError as e:
             raise ValueError(f"{artifact_type!r} has no saveable document — use `reason()`") from e
+        self._check_spend()
         artifact = provider.generate(artifact_type, out, only=cards, **kwargs)
         status = self._save_generated(slug, artifact_type, writer(artifact), source_revision)
         return Generated(status=status, artifact=artifact, model=out)

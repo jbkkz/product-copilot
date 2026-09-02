@@ -114,6 +114,12 @@ STATUS_BY_CODE = {
     "opaque_origin": 403,
     "origin_mismatch": 403,
     "missing_request_token": 403,
+    # 403 for the same reason as the cross-site family above -- the server understood the request
+    # and refuses to authorize it -- but a different family and raised from a different guard
+    # (`usage.SpendPolicy.check`, consulted by `DiscoveryService` before every provider call, not
+    # the web's request-origin checks). Not 429: a budget does not reset with time, so "retry later"
+    # is the wrong instruction to send (#427, `decision: the-http-api-facade`).
+    "spend_ceiling_reached": 403,
     "input_too_large": 413,
     # 409 — a conflict with the store's current state, not a malformed request
     "revision_conflict": 409,
