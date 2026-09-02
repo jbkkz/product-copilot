@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import threading
 import typing
 
 import pytest
@@ -1183,10 +1184,21 @@ def test_a_legacy_session_is_named_in_the_error_rather_than_migrated_behind_your
 # The point of the seam is a non-filesystem backing: the same SessionService orchestration must run on
 # backing, not just files. This in-memory repository stands in for that non-file backing — if the
 # service works against it with zero filesystem, the orchestration is genuinely storage-agnostic.
+#
+# The behavioural assertions that used to live in one bespoke test here now live in
+# `requivo.testing.repository_conformance.SessionRepositoryConformance` (#424) — importable and
+# runnable by an out-of-repo `SessionRepository` implementation, not just this module. What remains
+# here is the factory wiring (`make_repository`, below) plus the one test that is specific to *this*
+# repo's own services, `test_session_service_runs_unchanged_on_a_non_file_repository`: it exercises
+# `ArtifactService`'s dependency-graph staleness and provenance recording end to end, which is a claim
+# about `SessionService`/`ArtifactService` orchestration rather than about the storage seam's own
+# contract, so it does not belong in a suite an external backing is meant to run against itself.
 from requivo.core.errors import RevisionConflictError as _RevConflict  # noqa: E402
+from requivo.core.errors import SessionExistsError as _SessionExists  # noqa: E402
 from requivo.core.errors import SessionNotFoundError as _NotFound  # noqa: E402
 from requivo.core.persistence import ArtifactStatus, RevisionRecord, SessionMeta  # noqa: E402
-from requivo.services.repository import SessionRepository  # noqa: E402
+from requivo.services.repository import FileSessionRepository, SessionRepository  # noqa: E402
+from requivo.testing.repository_conformance import SessionRepositoryConformance  # noqa: E402
 
 
 class InMemorySessionRepository:
@@ -1200,13 +1212,31 @@ class InMemorySessionRepository:
         self._revs: dict = {}      # (slug, revision) → model, the history a file backing keeps on disk
         self._req: dict = {}
         self._art: dict = {}
+        self._locks: dict = {}                 # slug -> threading.RLock, created on first use
+        self._locks_guard = threading.Lock()    # protects _locks itself, not any session's data
+
+    def _lock_for(self, slug):
+        # threading.RLock is re-entrant *per thread* by construction -- the same primitive this
+        # backing needs for invariant 9's two halves at once (mutual exclusion across threads,
+        # re-entrancy within one). A bare `yield` here used to be the whole implementation, on the
+        # reasoning that a single dict mutation needs no lock -- true, and beside the point: the
+        # *caller* (SessionService) takes this lock around several such mutations and depends on
+        # nothing else interleaving with the whole sequence, which a no-op cannot provide. Found by
+        # `requivo.testing.repository_conformance.SessionRepositoryConformance` (#424), which this
+        # fake did not pass before this fix.
+        with self._locks_guard:
+            if slug not in self._locks:
+                self._locks[slug] = threading.RLock()
+            return self._locks[slug]
 
     @contextlib.contextmanager
     def lock(self, slug):
-        # A dict mutated from one thread needs no lock; a Postgres backing maps this to the row lock
-        # of the enclosing transaction. The seam exists so the service can bracket a compound update
-        # without knowing which of the two it is talking to.
-        yield
+        lk = self._lock_for(slug)
+        lk.acquire()
+        try:
+            yield
+        finally:
+            lk.release()
 
     def exists(self, slug): return slug in self._meta
     def has_meta(self, slug): return slug in self._meta
@@ -1216,6 +1246,13 @@ class InMemorySessionRepository:
             raise _NotFound(f"no session '{slug}'", details={"slug": slug})
 
     def create(self, slug, request, *, provider=None, model_name=None, context_cards=None):
+        # Invariant 11, at this backing's own layer: the claim is a dict-key collision check rather
+        # than a rename, but it owes the same answer -- a second create() on a slug already in the
+        # store must not silently overwrite it. Added for the conformance suite (#424); before it
+        # this method had no such check and lost the first session's identity on a collision, the
+        # exact bug invariant 11 documents for the file backing's pre-fix `has_meta`-then-create.
+        if slug in self._meta:
+            raise _SessionExists(f"session '{slug}' already exists", details={"slug": slug})
         meta = SessionMeta(session_id="mem-" + slug, slug=slug, created_at="t", updated_at="t",
                            provider=provider, model_name=model_name, context_cards=context_cards)
         self._meta[slug] = meta
@@ -1274,6 +1311,27 @@ class InMemorySessionRepository:
         return st
 
     def load_artifact(self, slug, filename): return self._art.get(slug, {}).get(filename)
+
+
+class TestInMemoryRepositoryConformance(SessionRepositoryConformance):
+    """The non-file backing above, proven against the shared suite -- the factory wiring #424's
+    acceptance criteria ask this module to shrink to."""
+
+    def make_repository(self):
+        return InMemorySessionRepository()
+
+
+class TestFileRepositoryConformance(SessionRepositoryConformance):
+    """The shipped file backing, against the same shared suite -- both implementations this repo
+    carries run identically against `SessionRepositoryConformance`, which is the point: a third
+    implementation (Postgres, out of this repo) has the same bar to clear."""
+
+    @pytest.fixture(autouse=True)
+    def _workspace(self, tmp_path):
+        self._root = tmp_path
+
+    def make_repository(self):
+        return FileSessionRepository(root=self._root)
 
 
 def test_session_service_runs_unchanged_on_a_non_file_repository():

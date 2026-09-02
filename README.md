@@ -149,6 +149,16 @@ no interface holds business logic of its own. The three differ in weight, not in
 The Core is provider-independent: no LLM, no network. More:
 [`docs/architecture.md`][architecture].
 
+**Building on Requivo as a library?** The package ships a [PEP 561 marker][py-typed] (`py.typed`) and
+declares a small, deliberately stable import surface — the services, the `SessionRepository` and
+`ReasoningProvider` protocols, the boundary contracts, the error vocabulary, `requivo.usage` — priced
+like every other promise on the [compatibility page][compatibility]. Pin exactly (`requivo==X.Y.Z`);
+everything not on that list, including `providers.anthropic` internals, can move in a minor. Building
+a non-file `SessionRepository` (a Postgres backing, most concretely)? `pip install 'requivo[testing]'`
+and subclass `requivo.testing.repository_conformance.SessionRepositoryConformance` in your own pytest
+suite — the same behavioural proof `FileSessionRepository` and this repo's in-memory fake both run
+against, extracted so an external implementation can hold itself to it too.
+
 ---
 
 ## Data and privacy
@@ -272,6 +282,7 @@ the code license — see [TRADEMARKS.md][trademarks].
 [security]: https://github.com/jbkkz/requivo/blob/main/SECURITY.md
 [docs-index]: https://github.com/jbkkz/requivo/blob/main/docs/README.md
 [compatibility]: https://github.com/jbkkz/requivo/blob/main/docs/compatibility.md
+[py-typed]: https://github.com/jbkkz/requivo/blob/main/docs/compatibility.md#the-python-import-surface--the-declared-seam-423
 [roadmap]: https://github.com/jbkkz/requivo/blob/main/docs/roadmap.md
 [discovery-feedback]: https://github.com/jbkkz/requivo/issues/new?template=discovery-feedback.md
 [contributing]: https://github.com/jbkkz/requivo/blob/main/CONTRIBUTING.md
