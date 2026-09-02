@@ -203,14 +203,21 @@ makes retiring the whole workspace directory an acceptable stand-in — acceptab
 *only* under that layout; on a shared per-tenant workspace it would be exactly the lock-skipping
 `rm -rf` the issue warns against.
 
-### 3.6 Optional model-id injection on the provider (#434)
+### 3.6 Optional model-id injection on the provider (#434) — landed
 
-The per-tenant *credential* needs no upstream change: `AnthropicProvider(client=…)` already accepts
-a constructed SDK client and `DiscoveryService(client=…)` threads it through. The model id is the
-missing half: `_complete()` resolves it from `REQUIVO_MODEL`/`MODEL` per call, so per-tenant or
-per-plan model selection today means process-env mutation. The change: an optional `model=` on `AnthropicProvider`, threaded into the completion
-calls, `model_name()` and provenance; default `None` keeps env resolution byte-identical.
-**Meanwhile:** one model per deployment, set in the environment — the current de facto state.
+The per-tenant *credential* needed no upstream change: `AnthropicProvider(client=…)` already accepted
+a constructed SDK client and `DiscoveryService(client=…)` threads it through. The model id was the
+missing half: `_complete()` resolved it from `REQUIVO_MODEL`/`MODEL` per call, so per-tenant or
+per-plan model selection meant process-env mutation, which races across concurrent calls in one
+process. `AnthropicProvider(client=…, model=…)` now takes an optional fixed model id, threaded into
+every completion call, `model_name()` and `provenance()`; the default (`model=None`) is the
+pre-existing `REQUIVO_MODEL`/`MODEL` env-chain resolution, byte-identical, with no env read at all on
+the explicit-id path. Two `AnthropicProvider` instances in one process, each constructed with its own
+id, now call, price and record independently — the shape a per-tenant or per-plan model deployment
+needs, and the deferred Fable A/B evaluation this issue names as a consumer. `DiscoveryService` itself
+is not wired to accept or forward a model id yet; a hosted consumer reaching for this constructs its
+own `AnthropicProvider(client=…, model=…)` and passes it to `DiscoveryService(provider=…)` until that
+wiring is a separate, deliberate change.
 
 ## 4. Identity and tenancy
 

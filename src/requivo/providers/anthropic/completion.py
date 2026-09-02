@@ -228,7 +228,7 @@ def _transport_message(e: Exception) -> str:
 
 
 def _complete(client, system: str, messages: list[dict], out_model, retries: int = 2,
-              validate=None, *, reuse_system: bool = True):
+              validate=None, *, reuse_system: bool = True, model: str | None = None):
     """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
     The nudge lives in a local copy so the caller's clean history is never polluted.
 
@@ -241,10 +241,17 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
     unknown: mistakenly caching costs 25% once, mistakenly not caching costs the full price of every
     repeat. Only a caller that *knows* it makes one call should say False.
 
+    `model` is the id to call and to bill against (#434) — an explicit id, threaded down from
+    `AnthropicProvider(model=...)`, or `None` to fall back to `current_model_name()`'s env-chain
+    resolution exactly as before. Resolved **once, here**, and never through `current_model_name()`
+    again on this call: an explicit id must make zero env reads, not merely agree with what the
+    environment happens to hold, so a caller pinning a model can share a process with another one
+    without either racing the other's `REQUIVO_MODEL`.
+
     Every exit records the spend first — see this module's docstring, and `_stop()` below."""
     attempt = messages
     last_err = None
-    model = current_model_name()
+    model = model if model is not None else current_model_name()
     rec = CallRecord(model=model, attempts=0)
     started = time.perf_counter()
 

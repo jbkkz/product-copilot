@@ -52,7 +52,8 @@ def _require_complete_model(out: ModelProposal) -> None:
 
 
 def run(client, messages: list[dict], retries: int = 2, only: list[str] | None = None,
-        carry_from: EngineOutput | None = None, *, reuse_system: bool = True) -> EngineOutput:
+        carry_from: EngineOutput | None = None, *, reuse_system: bool = True,
+        model: str | None = None) -> EngineOutput:
     """Engine turn: request/answers → filled model. `only` restricts which context cards inform the
     turn (defaults to all); keep it constant across a session's turns so the prompt cache holds.
 
@@ -73,12 +74,13 @@ def run(client, messages: list[dict], retries: int = 2, only: list[str] | None =
     costs full price on every repeat (`_complete`). The remaining direct callers of this function are
     `answer_turn` and `scripts/golden_run.py`; no interface reaches it."""
     proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
-                         validate=_require_complete_model, reuse_system=reuse_system)
+                         validate=_require_complete_model, reuse_system=reuse_system, model=model)
     return proposal.resolve(carry_from)
 
 
 def answer_turn(client, out: EngineOutput, request: str, answers: str,
-                only: list[str] | None = None, *, reuse_system: bool = False) -> EngineOutput:
+                only: list[str] | None = None, *, reuse_system: bool = False,
+                model: str | None = None) -> EngineOutput:
     """One stateless discovery turn: refine the model with new answers.
 
     The model IS the accumulated state, so a turn needs only the original request (for context),
@@ -105,7 +107,7 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
         {"role": "assistant", "content": out.model_dump_json()},
         {"role": "user", "content": "Client answers:\n" + answers},
     ]
-    return run(client, messages, only=only, carry_from=out, reuse_system=reuse_system)
+    return run(client, messages, only=only, carry_from=out, reuse_system=reuse_system, model=model)
 
 
 # ── Generators (model → artifact) ───────────────────────────────────────────────
@@ -123,16 +125,16 @@ def answer_turn(client, out: EngineOutput, request: str, answers: str,
 
 
 def derive_stories(client, out: EngineOutput, only: list[str] | None = None, *,
-                   reuse_system: bool = False) -> Stories:
+                   reuse_system: bool = False, model: str | None = None) -> Stories:
     """Pipeline stage: a filled model → implementable user stories."""
     system = build_prompt("stories.md", only)
     user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Stories,
-                     reuse_system=reuse_system)
+                     reuse_system=reuse_system, model=model)
 
 
 def advise(client, out: EngineOutput, only: list[str] | None = None, *,
-           reuse_system: bool = False) -> Brief:
+           reuse_system: bool = False, model: str | None = None) -> Brief:
     """Finalization stage: a completed model → design considerations, risks, opportunities.
 
     `brief.md` still says "solution assessment", not "Decision brief" — deliberately, not missed
@@ -143,44 +145,44 @@ def advise(client, out: EngineOutput, only: list[str] | None = None, *,
     system = build_prompt("brief.md", only)
     user = "Completed requirements model to advise on:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Brief,
-                     reuse_system=reuse_system)
+                     reuse_system=reuse_system, model=model)
 
 
 def generate_prd(client, out: EngineOutput, only: list[str] | None = None, *,
-                 reuse_system: bool = False) -> PRD:
+                 reuse_system: bool = False, model: str | None = None) -> PRD:
     """Artifact generator: a model → a Product Requirements Document."""
     system = build_prompt("prd.md", only)
     user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], PRD,
-                     reuse_system=reuse_system)
+                     reuse_system=reuse_system, model=model)
 
 
 def generate_criteria(client, out: EngineOutput, only: list[str] | None = None, *,
-                      reuse_system: bool = False) -> AcceptanceCriteria:
+                      reuse_system: bool = False, model: str | None = None) -> AcceptanceCriteria:
     """Artifact generator: a model → Given/When/Then acceptance criteria (the recette checklist)."""
     system = build_prompt("criteria.md", only)
     user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria,
-                     reuse_system=reuse_system)
+                     reuse_system=reuse_system, model=model)
 
 
 def generate_epic(client, out: EngineOutput, only: list[str] | None = None, *,
-                  reuse_system: bool = False) -> Epic:
+                  reuse_system: bool = False, model: str | None = None) -> Epic:
     """Artifact generator: a model → a delivery epic (work breakdown into trackable issues)."""
     system = build_prompt("epic.md", only)
     user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Epic,
-                     reuse_system=reuse_system)
+                     reuse_system=reuse_system, model=model)
 
 
 def generate_release(client, out: EngineOutput, version: str = "",
                      only: list[str] | None = None, *,
-                     reuse_system: bool = False) -> ReleaseNotes:
+                     reuse_system: bool = False, model: str | None = None) -> ReleaseNotes:
     """Artifact generator: a model → client-facing release notes. The caller may stamp a version."""
     system = build_prompt("release.md", only)
     user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json()
     notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes,
-                      reuse_system=reuse_system)
+                      reuse_system=reuse_system, model=model)
     if version:
         notes.version = version
     return notes
@@ -188,7 +190,7 @@ def generate_release(client, out: EngineOutput, version: str = "",
 
 def estimate(client, out: EngineOutput, stories: Stories,
              only: list[str] | None = None, *,
-             reuse_system: bool = False) -> tuple[EstimateDraft, list[str], str]:
+             reuse_system: bool = False, model: str | None = None) -> tuple[EstimateDraft, list[str], str]:
     """Pipeline stage: stories + the model's soft slots → a day-based estimate.
     Returns (draft, soft_slots, confidence) — the latter two are Python-authoritative."""
     soft = soft_slots(out)
@@ -200,7 +202,7 @@ def estimate(client, out: EngineOutput, stories: Stories,
         + (", ".join(soft) if soft else "(none — the model is solid)")
     )
     draft = _complete(client, system, [{"role": "user", "content": user}], EstimateDraft,
-                      reuse_system=reuse_system)
+                      reuse_system=reuse_system, model=model)
     return draft, soft, estimate_confidence(len(soft))
 
 
