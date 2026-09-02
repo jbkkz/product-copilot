@@ -637,6 +637,66 @@ def test_an_ordinary_generation_prints_its_document_byte_for_byte(verb, workspac
     assert "\\x" not in out, out
 
 
+# ── one document, two print paths, one rendering (#460) ──────────────────────────────────────────
+#
+# #449 put `display_document` on four generation print sites, and inherited a premise that had only
+# ever been true of the fifth. The guard held CR inside its escaped range because, in
+# `selectors.py`'s own words, "the read path normalises a raw CR to LF (universal newlines), so a CR
+# reaching this function is not layout". That is a fact about `_cmd_artifact_show`, which opens a
+# file. The four new callers hand the generator's string straight in with no file read between, so a
+# provider reply carrying CRLF -- and models do emit it in markdown -- printed a visible `\r` at the
+# end of every line under `requivo prd`, while `requivo artifact show --type prd` printed the
+# *identical saved file* clean.
+#
+# Nothing was corrupted: the disk copy was never in question and the direction was the safe one. What
+# it cost is a reader concluding the artifact is broken, on the verb that just produced it.
+#
+# The fix folds a CRLF pair to LF inside `display_document`, so the premise becomes true of all five
+# callers instead of being narrowed to one. A *lone* CR stays escaped, which is the half that
+# matters: `\r\n` moves to the next line exactly as `\n` does and is layout, while a bare `\r`
+# returns the cursor to column zero and is the cursor-control risk #430 exists to close. The test
+# below asserts both halves, and asserts the two paths against *each other* rather than against a
+# spelling -- a comparison that cannot pass by agreeing on the wrong answer twice, since only one of
+# the two paths was ever wrong.
+
+
+@pytest.mark.parametrize("verb", ["prd", "criteria", "epic", "release"])
+def test_the_same_document_renders_identically_through_generation_and_read_back(
+        verb, workspace, tmp_path):
+    """must fire -- #460. The generation verb and `artifact show` are two views of one file, so the
+    reader must not be able to tell which one they ran from the text on their screen."""
+    payload = dict(_GENERATION_PAYLOADS[verb])
+    payload["title"] = "Windows Title\r\nA second line."
+    generated, path = _generate(verb, payload, tmp_path)
+
+    # The generation print is everything above `_wrote`'s own receipt line, which `artifact show`
+    # does not emit. `_wrote` opens with its own newline, so splitting on "\nWrote " leaves exactly
+    # the `print(display_document(...))` output and the two sides are compared byte for byte.
+    document = generated.split("\nWrote ")[0]
+    slug = path.parent.parent.name   # `artifact_path` is `<slug>/artifacts/<filename>`
+    read_back = _run(["artifact", "show", slug, "--type", verb])
+
+    assert document == read_back, (document, read_back)
+    assert "\\r" not in document, document          # must not fire: a CRLF is layout, not a forgery
+    assert "A second line." in document, document   # must fire: neutralised never means dropped
+    # The saved file is untouched, as it is for every other guard in this module -- the CRLF the
+    # provider sent is still on disk, and it is the *rendering* of it that the two paths agree on.
+    assert "\r\n" in path.read_text(encoding="utf-8", newline=""), "the disk copy must keep its CRLF"
+
+
+def test_a_lone_cr_is_still_escaped_because_it_is_not_a_line_ending(workspace, tmp_path):
+    """must fire -- #460's other half. Folding CRLF must not be read as "CR is fine now": a bare CR
+    returns the cursor to column zero, which is exactly the forgery `display_document` exists to
+    stop, and is the one thing the fix must not have widened."""
+    payload = dict(_GENERATION_PAYLOADS["prd"])
+    payload["title"] = "Real Title\rFORGED AT COLUMN ZERO"
+    out, _ = _generate("prd", payload, tmp_path)
+
+    assert "\r" not in out.replace("\n", ""), out   # must not fire: no raw CR reaches stdout
+    assert "\\r" in out, out                         # must fire: neutralised, not dropped
+    assert "FORGED AT COLUMN ZERO" in out, out
+
+
 # ── the same class, one layer out: the golden harness (#137) ─────────────────────────────────────
 #
 # `scripts/golden_diff.py --questions` renders a golden baseline, and every string it prints there —
