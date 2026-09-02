@@ -101,11 +101,14 @@ def display_document(value: str) -> str:
     uses to lay itself out: `\\n` and `\\t`. A raw ESC, a raw CR, a raw form-feed and every other C0/C1
     control character are still escaped, per character, exactly as `display_text` escapes them.
 
-    This is `artifact show`'s own guard (#430), the last unguarded member of the #213 class: the
-    saved-file bytes on disk and the web download route are untouched on purpose (both are the
-    byte-identical promise `core/integrity.py`'s hashing rests on) -- only the terminal print site
-    calls this, at print time, so what changes is what reaches the operator's screen, never what is
-    stored or downloaded.
+    This is `artifact show`'s own guard (#430). `artifact show` was not, in fact, the class's last
+    unguarded member -- `prd`/`criteria`/`epic`/`release` printed their generator's markdown the same
+    way, unguarded, on every ordinary generation rather than only a later read-back; #449 is that
+    fix, at the same four print sites `_cmd_artifact_show`'s own docstring in
+    `deterministic/artifacts.py` names. The saved-file bytes on disk and the web download route stay
+    untouched on purpose here too (both are the byte-identical promise `core/integrity.py`'s hashing
+    rests on) -- only the terminal print site calls this, at print time, so what changes is what
+    reaches the operator's screen, never what is stored or downloaded.
 
     Pure, like everything else here.
     """

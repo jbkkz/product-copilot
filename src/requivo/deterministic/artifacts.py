@@ -78,12 +78,18 @@ def _cmd_artifact_list(a, client) -> None:
 
 def _cmd_artifact_show(a, client) -> None:
     svc = SessionService()
-    # Neutralize at print time only (#430, the last unguarded member of the #213 class): the string
-    # returned by `.show()` is exactly what is on disk and exactly what the web download route
-    # serves, and both stay byte-identical on purpose -- `core/integrity.py`'s hashing and the
-    # download promise rest on it. `display_document` is the guard, not `display_text`: the content
-    # is a full markdown document whose own newlines and tabs are its layout, and `display_text`
-    # would escape those too and destroy it.
+    # Neutralize at print time only (#430): the string returned by `.show()` is exactly what is on
+    # disk and exactly what the web download route serves, and both stay byte-identical on purpose --
+    # `core/integrity.py`'s hashing and the download promise rest on it. `display_document` is the
+    # guard, not `display_text`: the content is a full markdown document whose own newlines and tabs
+    # are its layout, and `display_text` would escape those too and destroy it.
+    #
+    # This was *not* the class's last unguarded member, despite what this comment used to say: `prd`,
+    # `criteria`, `epic` and `release` in `cli.py`'s `_cmd_prd`/`_cmd_criteria`/`_cmd_epic`/
+    # `_cmd_release` printed their generator's markdown the same unguarded way, on every ordinary
+    # generation rather than only a later read-back -- worse, in that it needs no saved artifact to
+    # reach at all. #449 is that fix, at the same four call sites, with the identical
+    # `display_document`-at-print-time-only shape this function established.
     print(display_document(ArtifactService().show(svc.resolve_slug(a.session), a.type)))
 
 

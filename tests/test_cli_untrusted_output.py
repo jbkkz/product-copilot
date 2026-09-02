@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -517,6 +518,122 @@ def test_artifact_show_leaves_an_ordinary_document_byte_for_byte(workspace, tmp_
     # `_cmd_artifact_show` is `print(content)`, which always appends its own trailing newline --
     # that is pre-existing behaviour this test pins rather than a property of the new guard.
     assert _run(["artifact", "show", "as2", "--type", "brief"]) == doc + "\n"
+
+
+# ── the same class, one layer earlier: every ordinary generation, not only a later read-back (#449) ─
+#
+# `prd`/`criteria`/`epic`/`release` each used to `print(xxx_markdown(result.artifact))` with no
+# neutralization at all -- the identical unguarded shape `_cmd_artifact_show` carried before #430,
+# reachable on the *first* ordinary generation rather than only a later `artifact show`. Worse in
+# reach: no saved artifact has to exist yet, so the hostile model reply reaches the operator's
+# terminal on the one paid call that produced it.
+#
+# `_StubProvider`/`_Reply` below are the same fake-SDK-client shape `test_sessions.py`'s
+# `_RacingClient`/`_Reply` already use -- a raw `.messages.create()` reply, so the real
+# `AnthropicProvider` -> `_complete()` -> Pydantic-contract-validation path runs completely unmodified
+# and only the network call is faked. That matters here specifically: a hand-built `PRD`/
+# `AcceptanceCriteria`/`Epic`/`ReleaseNotes` object would only prove `display_document` works, not
+# that the CLI's real generation path actually calls it.
+
+class _Reply:
+    def __init__(self, text: str):
+        self.content = [type("B", (), {"type": "text", "text": text})()]
+        self.stop_reason = "end_turn"
+
+
+class _StubProvider:
+    """A raw Anthropic-SDK-shaped client whose one reply is always `json_text`."""
+
+    def __init__(self, json_text: str):
+        self.messages = self
+        self._json_text = json_text
+
+    def create(self, **kwargs):
+        return _Reply(self._json_text)
+
+
+# A real embedded newline *and* a raw ESC, matching the issue's own reproduction -- the newline
+# proves the document's own layout survives, the ESC proves the guard actually ran.
+_FORGED_TITLE = "Real Title\nFORGED AT COLUMN ZERO\x1b[2Jmore prose"
+
+# One minimal, contract-valid payload per verb, each carrying `_FORGED_TITLE` in the one field every
+# writer below renders as a heading line (`prd_markdown`, `criteria_markdown`, `epic_markdown`,
+# `release_markdown` all open with `f"# {…}"`-shaped output off `.title`) -- so all four are exercised
+# through the identical assertion shape.
+_GENERATION_PAYLOADS = {
+    "prd": {"title": _FORGED_TITLE, "problem": "A problem statement."},
+    "criteria": {"title": _FORGED_TITLE,
+                "features": [{"name": "F1", "scenarios": [
+                    {"id": "S1", "title": "t", "when": "w", "then": ["result"]}]}]},
+    "epic": {"title": _FORGED_TITLE, "issues": [{"id": "I1", "title": "Issue one"}]},
+    "release": {"title": _FORGED_TITLE},
+}
+
+
+def _generate(verb: str, payload: dict, tmp_path: Path) -> tuple[str, Path]:
+    """Take a fresh session to revision 1, run `verb` against a stub provider whose one reply is
+    `payload`, and return (stdout, the artifact's own path on disk).
+
+    The path is read back off the `_wrote()` line in stdout itself ("Wrote … → <path>") rather than
+    re-derived from `artifact_path`, so this test cannot silently drift from whatever that chokepoint
+    actually returns."""
+    slug = f"gen-{verb}-{abs(hash(json.dumps(payload, sort_keys=True))) % 10_000}"
+    _run(["session", "init", "Something.", "--slug", slug])
+    proposal = tmp_path / f"{slug}-p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", slug, str(proposal)])
+
+    client = _StubProvider(json.dumps(payload))
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        app([verb, slug], client=client)
+    out = buf.getvalue()
+
+    m = re.search(r"Wrote .+ (\S+)$", out, re.MULTILINE)
+    assert m, f"no 'Wrote …' line in {verb} output: {out!r}"
+    return out, Path(m.group(1))
+
+
+@pytest.mark.parametrize("verb", ["prd", "criteria", "epic", "release"])
+def test_a_forged_generation_cannot_write_a_line_of_its_own_terminal_print(verb, workspace, tmp_path):
+    """must fire -- #449. The raw ESC byte must not reach stdout; the forgery must still be visible,
+    escaped rather than dropped; and the document's own real embedded newline (the one separating
+    "Real Title" from the forged line after it) must still read as a real line break, not be
+    collapsed into one long line of escapes -- `display_document`'s whole reason for existing over
+    `display_text` (#430)."""
+    out, _ = _generate(verb, _GENERATION_PAYLOADS[verb], tmp_path)
+    assert "\x1b[2J" not in out, out                     # must not fire: no raw ESC reaches stdout
+    assert "\\x1b" in out, out                            # must fire: neutralised, not dropped
+    # The document's own real newline held -- "Real Title" (each writer's own heading prefix in
+    # front of it varies -- "#", "# Epic: ") sits on its own line, never sharing one with the forged
+    # text that follows it in the same source string.
+    assert any(ln.endswith("Real Title") for ln in out.splitlines()), out
+    assert "FORGED AT COLUMN ZERO" in out, "neutralised must not mean dropped"
+
+
+@pytest.mark.parametrize("verb", ["prd", "criteria", "epic", "release"])
+def test_a_forged_generations_saved_file_stays_byte_identical(verb, workspace, tmp_path):
+    """The other half of #430's own promise, carried to an earlier print site: only the terminal
+    print changes. The file `_wrote` just reported writing still holds the artifact's raw, unescaped
+    markdown -- the byte-identical-on-disk guarantee `core/integrity.py`'s hashing and the web
+    download route rest on, restated here because #449 is the same guard reached one print site
+    earlier, not a new promise about what gets written."""
+    _, path = _generate(verb, _GENERATION_PAYLOADS[verb], tmp_path)
+    saved = path.read_text(encoding="utf-8")
+    assert "\x1b[2J" in saved, saved                      # must fire: the disk copy is untouched
+    assert "\\x1b" not in saved, saved                    # must not fire: no escaping crept onto disk
+
+
+@pytest.mark.parametrize("verb", ["prd", "criteria", "epic", "release"])
+def test_an_ordinary_generation_prints_its_document_byte_for_byte(verb, workspace, tmp_path):
+    """The control, matching `test_artifact_show_leaves_an_ordinary_document_byte_for_byte`: a
+    generation with no control character in it renders exactly as generated, so #449's guard is not
+    what quietly starts escaping ordinary Requivo output."""
+    payload = dict(_GENERATION_PAYLOADS[verb])
+    payload["title"] = "An entirely ordinary title"
+    out, _ = _generate(verb, payload, tmp_path)
+    assert "An entirely ordinary title" in out, out
+    assert "\\x" not in out, out
 
 
 # ── the same class, one layer out: the golden harness (#137) ─────────────────────────────────────

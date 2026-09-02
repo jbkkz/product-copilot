@@ -627,12 +627,14 @@ so a raw ESC is still neutralised while an ordinary document renders unchanged. 
 only: the saved file on disk and the web download route stay byte-identical, which is what
 `core/integrity.py`'s hashing rests on.
 
-**Not the whole class, said plainly rather than implied.** Review of #430 found the identical gap
-still open on four sibling verbs: `requivo prd`, `criteria`, `epic` and `release` print each
-generator's markdown straight to the terminal in `cli.py` (`_cmd_prd`/`_cmd_criteria`/`_cmd_epic`/
-`_cmd_release`), through none of `display_token`/`display_text`/`display_document`. Those are not
-fixed here — #430's own scope was `artifact show` — and the gap is tracked as a follow-up rather than
-silently left for the next reader to rediscover.
+**The whole class, closed one release later (#449).** Review of #430 found the identical gap open on
+four sibling verbs: `requivo prd`, `criteria`, `epic` and `release` printed each generator's markdown
+straight to the terminal in `cli.py` (`_cmd_prd`/`_cmd_criteria`/`_cmd_epic`/`_cmd_release`), through
+none of `display_token`/`display_text`/`display_document` — worse in reach than `artifact show`,
+since no saved artifact has to exist yet: the hostile reply reaches the terminal on the one paid call
+that produced it. All four now route their print through `display_document` too, the same
+print-time-only shape as `artifact show`: the file `_wrote` reports and the web download route stay
+byte-identical, only what reaches this terminal changes.
 
 `--json` is unaffected on all three verbs, and the reason is narrower than it looks. JSON's grammar
 forbids a literal control character below `U+0020` inside a string, so a newline is escaped

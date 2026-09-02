@@ -96,8 +96,17 @@ def _show_freshness(rel_path: str) -> None:
         # A commit subject is contributor-written text, exactly the class `questions_one` already
         # treats as untrusted for this file's own stated reason (invariant 14, #40): raw `\r` in a
         # subject would return the cursor to column 0 and let it overwrite the date/sha prefix it
-        # sits behind, forging what reads as a different line of this readout.
-        print(f"      {c['date']}  {c['sha']}  {display_token(c['subject'])}")
+        # sits behind. `baseline_commits_since` no longer lets a subject like that manufacture a
+        # *second* row (#456 -- the record boundary parsed there is a real `\n`, decoded from bytes
+        # rather than rewritten by `subprocess.run(text=True)`'s universal-newlines translation, and
+        # `str.split("\n")` rather than `str.splitlines()`). This guard is what stops that same `\r`
+        # from corrupting *this* row once it can no longer manufacture a new one -- `date` and `sha`
+        # go through it too, even though neither is presently attacker-reachable (`%cI`/`%H` are
+        # fixed git formats, never derived from commit text): a future field added to the same
+        # `--format` string inherits the guard for free rather than needing its own print site fixed
+        # later.
+        print(f"      {display_token(c['date'])}  {display_token(c['sha'])}  "
+              f"{display_token(c['subject'])}")
     if len(commits) > 5:
         print(f"      … and {len(commits) - 5} more")
 

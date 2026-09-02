@@ -681,3 +681,76 @@ def test_baseline_commits_since_orders_commits_oldest_first(tmp_path, monkeypatc
     assert subjects == ["watched commit 1", "watched commit 2", "watched commit 3"], subjects
 
 
+# `_HOSTILE_SUBJECTS` is #456's own reproduction: nine characters `str.splitlines()` treats as
+# ending a line, none of which `git log --format=%s` treats as ending a *record*. `_freshness_from_git_data`
+# above is fed a hand-built `since_commits` list and cannot exercise this -- the defect is upstream of
+# that function's own inputs, in the two real `git log` calls and the split between them. Only a
+# synthetic, real repository can drive the actual parse.
+#
+# `\r` is listed first and carries the extra weight: `subprocess.run(text=True)`'s own
+# universal-newlines translation silently rewrites a lone `\r` into `\n` *before* any application-level
+# split ever runs, so switching `.splitlines()` to `.split("\n")` alone -- the issue's own suggested
+# fix direction -- would not have closed the `\r` case it opens with. `_git`'s bytes-and-manual-decode
+# fix is what removes that rewrite; this test cannot tell the two fixes apart from each other, only
+# from the original defect, which is why `_git`'s own docstring carries the distinction in prose.
+_HOSTILE_SUBJECTS = [
+    "docs: tidy\rFORGED",       # CR -- the issue's own PoC, and the one universal-newlines hides
+    "docs: tidy\x0bFORGED",     # VT
+    "docs: tidy\x0cFORGED",     # FF
+    "docs: tidy\x1cFORGED",     # FS
+    "docs: tidy\x1dFORGED",     # GS
+    "docs: tidy\x1eFORGED",     # RS
+    "docs: tidy\x85FORGED",     # NEL
+    "docs: tidy FORGED",   # LINE SEPARATOR
+    "docs: tidy FORGED",   # PARAGRAPH SEPARATOR
+]
+
+
+def test_a_hostile_commit_subject_cannot_forge_a_second_commit_row(tmp_path, monkeypatch):
+    """must fire -- #456. Each of `_HOSTILE_SUBJECTS` used to become *two* rows in
+    `baseline_commits_since`'s own `commits` list, with the text past the boundary landing in the
+    forged row's `sha` field -- exactly what a caller (`golden_diff._show_freshness`) prints without
+    further validation. Drives the real two-call parse over a synthetic, full-history repo, the same
+    shape `test_baseline_commits_since_orders_commits_oldest_first` already uses above.
+
+    The must-not-fire control sits in the same fixture, in the same commit sequence: an entirely
+    ordinary subject, last in the list, must come back as its own single unmangled row -- so this
+    test does not merely show that *something* changed, it shows the boundary is drawn in the right
+    place for both the hostile and the ordinary case."""
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / "watched").mkdir()
+    (tmp_path / "watched" / "f.txt").write_text("start")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+
+    subjects = [*_HOSTILE_SUBJECTS, "an entirely ordinary subject"]
+    for i, subject in enumerate(subjects):
+        (tmp_path / "watched" / "f.txt").write_text(f"content-{i}")
+        run("add", ".")
+        run("commit", "-q", "-m", subject)
+
+    monkeypatch.setattr(golden_lib, "REPO", tmp_path)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt", watched=("watched",))
+    assert report["state"] == "stale", report
+    # One row per commit made -- never two, whatever the subject carried (the must-fire half).
+    assert len(report["commits"]) == len(subjects), report["commits"]
+    got_subjects = [c["subject"] for c in report["commits"]]
+    assert got_subjects == subjects, got_subjects
+    # No row's `sha` is ever the forged fragment split off a neighbour, and every row has a real
+    # 9-character git hash prefix -- the shape a forged row's empty/garbage `sha` cannot have.
+    for c in report["commits"]:
+        assert c["sha"] != "FORGED", report["commits"]
+        assert len(c["sha"]) == 9, report["commits"]
+    # The must-not-fire control: the ordinary subject, last in the sequence, is unmangled.
+    assert report["commits"][-1]["subject"] == "an entirely ordinary subject", report["commits"]
+
+
