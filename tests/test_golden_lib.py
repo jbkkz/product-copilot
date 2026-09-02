@@ -546,16 +546,89 @@ def test_watched_paths_cover_both_funding_instances():
     assert "src/requivo/providers/anthropic/generators.py" in WATCHED_PATHS
 
 
-def test_baseline_commits_since_reads_the_real_repo_and_finds_a_known_stale_baseline():
-    """Integration, not a fixture: `ba526f6` (#410's own instance) landed after `b4167b0` (the
-    #405/#406 re-capture) and touches `generators.py`, one of `WATCHED_PATHS`. Every committed golden
-    baseline was captured before `ba526f6`, so this must report `stale` and must name that commit --
-    proving the wrapper's plumbing (the two real `git log` calls, the field parsing) against this
-    repository's own history, not only the pure core above."""
-    report = baseline_commits_since("fixtures/golden/leave-approval.runs.json")
+def test_baseline_commits_since_finds_a_known_stale_baseline_in_a_synthetic_repo(tmp_path, monkeypatch):
+    """Integration, not a fixture -- but a synthetic repo, not the real one (#450).
+
+    This test used to read the REAL requivo repo's own history and assert `stale` against a commit
+    (`ba526f6`, #410's own instance) known to postdate the golden re-capture. That works on a full
+    clone and fails on a shallow one: `actions/checkout`'s default `fetch-depth: 1` truncates history,
+    so `baseline_commits_since` correctly reported `unknown` rather than guessing `stale` -- CI red on
+    every leg, on the exact assertion this docstring used to make. That is the third state doing its
+    job, not a regression: the defect was pinning an environment-dependent verdict in a test, this
+    repo's own recurring shape (a harness rendering an environment limit as a product verdict) landing
+    on the guard written to prevent exactly that.
+
+    A synthetic, full-history repo removes the dependency while still proving the wrapper's plumbing
+    -- the two real `git log` calls, the field parsing, the `--reverse` ordering -- rather than only
+    the pure core in `_freshness_from_git_data` above.
+    `test_baseline_commits_since_orders_commits_oldest_first` already uses this shape; this is the
+    same one, isolated to the `stale` case alone so a reader can tell the two apart at a glance."""
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / "watched").mkdir()
+    (tmp_path / "watched" / "f.txt").write_text("0")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    (tmp_path / "watched" / "f.txt").write_text("1")
+    run("add", ".")
+    run("commit", "-q", "-m", "watched-path commit after the baseline")
+
+    monkeypatch.setattr(golden_lib, "REPO", tmp_path)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt", watched=("watched",))
     assert report["state"] == "stale", report
-    assert any(c["sha"].startswith("ba526f6") or "dead code pack" in c["subject"]
-               for c in report["commits"]), report["commits"]
+    assert len(report["commits"]) == 1, report
+    assert report["commits"][0]["subject"] == "watched-path commit after the baseline", report
+
+
+def test_baseline_commits_since_reports_unknown_on_a_real_shallow_clone(tmp_path, monkeypatch):
+    """The `unknown`-on-shallow behaviour, pinned end-to-end against a REAL shallow clone rather
+    than only the pure-core `_freshness_from_git_data(is_shallow=True, ...)` case above.
+
+    #450 is why this exists as its own test: CI's shallow checkout demonstrated this path is correct
+    by accident, on a test that was not supposed to be testing it -- losing that proof while fixing
+    the test that accidentally depended on it would be the worse trade. A local `git clone --depth 1`
+    off a synthetic source repo reproduces the same shallow-history shape CI's checkout produces,
+    offline and independent of this checkout's own depth (so it is exercised whether the tree running
+    it is itself shallow or full)."""
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def run(*args, cwd=source):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (source / "fixtures").mkdir()
+    (source / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    (source / "fixtures" / "b.txt").write_text("changed")
+    run("add", ".")
+    run("commit", "-q", "-m", "a second commit, so the clone below has real history to truncate")
+
+    shallow = tmp_path / "shallow"
+    # --no-local: a same-machine `git clone` of a local path silently ignores `--depth` by
+    # default (git's local-clone optimization hardlinks the whole object store), so a shallow
+    # clone of a filesystem source needs this to actually be one -- verified by hand: a plain
+    # `git clone --depth 1 <local-path>` here reports `is-shallow-repository: false`.
+    subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", str(source), str(shallow)],
+                   check=True, capture_output=True)
+
+    monkeypatch.setattr(golden_lib, "REPO", shallow)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt")
+    assert report["state"] == "unknown", report
+    assert "shallow" in report["reason"], report
 
 
 def test_baseline_commits_since_reports_unknown_for_a_path_with_no_history():
