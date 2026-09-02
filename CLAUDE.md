@@ -850,6 +850,22 @@ actually parsed and selected, and `main()` prints it before the first call, so t
 budgets against is the live one. Pinned by
 `test_the_announced_call_count_moves_with_the_request_set`.
 
+**A committed baseline can silently predate a real change, and `golden_diff` now says so before any
+lens output.** `baseline_commits_since` (`golden_lib.py`) compares each baseline's own last commit in
+HEAD against commits since touching `WATCHED_PATHS` — the prompt/context/framework assets and
+`generators.py`'s on-wire user-message assembly. Funded by two reproduced instances (#405, #410):
+three asset commits landed between two committed baselines and went unnoticed for a month, and
+`ba526f6` dropped `indent=2` from the JSON `generators.py` sends as the user message for every
+`--brief` capture, with nothing in the tree able to see it — `prompt_version()` only hashes the
+system prompt, and `tests/test_golden_baselines.py` only compares `request`/`answers`. Three states,
+printed as the first line of every request's readout: `current`, `stale` (named, with the capture
+date and each commit since), and `unknown` (git unavailable, a shallow clone, or no commit history
+for the baseline) — `unknown` must never render as `current`, the same rule this file already states
+for a byte-identical capture, applied here to a commit count instead. The scope is deliberately
+narrower than everything that can move what a capture measures — `core/context.py`'s own assembly
+logic and `completion.py`'s retry/parsing are real gaps with no reproduced instance yet — and the
+printed line names exactly which paths it checked rather than reading as coverage it does not have.
+
 **Known limit (partially mitigated):** `load_context()` concatenates every card by default, so each new
 card dilutes its neighbours. Measured once, strongly: adding `financial-reporting` cost `doc-reapproval`
 its sharpest question (3/3 runs → 1/3, displaced by that card's audit-trail emphasis).

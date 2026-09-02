@@ -14,10 +14,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from golden_lib import (  # noqa: E402
+    WATCHED_PATHS,
     AnswerSheet,
     Turn,
     _cluster_headlines,
+    _freshness_from_git_data,
     answers_for_turn,
+    baseline_commits_since,
     brief_consensus,
     brief_movements,
     consensus,
@@ -448,3 +451,96 @@ def test_load_answers_reads_the_persisted_sheet():
 def test_load_answers_is_empty_for_a_single_pass_capture():
     text = json.dumps({"request": "r", "runs": [_model(problem=Impact.high).model_dump()]})
     assert load_answers(text) == {}
+
+# -- #405/#410: baseline freshness -- a committed baseline predating a real commit that changes what
+# a capture measures must be visible, without a control run, before any lens output is read ---------
+#
+# `_freshness_from_git_data` is the pure core `baseline_commits_since` wraps around three git calls
+# (is-shallow, last-commit-touching-the-baseline, commits-since-touching-`watched`). Exercising it
+# directly, over synthetic inputs, is what lets the three states below be proven without a real git
+# repository -- the brief's own instruction: "give it a fixture rather than a capture."
+
+def test_a_baseline_with_no_commits_since_touching_watched_paths_is_current():
+    """must not fire -- the positive control for the test below: nothing touched a watched path
+    since the baseline's own commit, so there is nothing to warn about."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report == {"state": "current", "captured_at": "2026-08-01T00:00:00+00:00", "commits": []}
+
+
+def test_a_commit_touching_a_watched_path_since_the_baseline_marks_it_stale():
+    """must fire -- the #405 shape itself: a watched-path commit landed after the baseline's own
+    commit and the baseline never re-captured against it."""
+    commits = [{"sha": "abc123def", "date": "2026-09-01", "subject": "edit a prompt"}]
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=commits)
+    assert report["state"] == "stale"
+    assert report["captured_at"] == "2026-08-01T00:00:00+00:00"
+    assert report["commits"] == commits
+
+
+def test_a_shallow_clone_is_reported_unknown_not_current():
+    """must fire -- a shallow clone's git calls all *succeed*, they just answer a truncated
+    question, so `since_commits` can come back `[]` for the wrong reason (history was never fetched,
+    not "nothing changed"). CLAUDE.md's own rule for a byte-identical capture -- never render a
+    check that could not look as the clean case -- applies here to a commit count."""
+    report = _freshness_from_git_data(is_shallow=True, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report["state"] == "unknown"
+    assert "shallow" in report["reason"]
+
+
+def test_an_unknown_shallow_check_itself_is_reported_unknown():
+    """must fire -- the `git rev-parse --is-shallow-repository` call itself failed (no git, not a
+    repository at all), which is a different reason from a positive shallow answer and has to say so
+    rather than assume a full clone."""
+    report = _freshness_from_git_data(is_shallow=None, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report["state"] == "unknown"
+    assert "shallow" in report["reason"]
+
+
+def test_a_baseline_with_no_commit_history_is_reported_unknown():
+    """must fire -- the baseline file has no commit touching it in HEAD at all (e.g. staged but
+    never committed, or the path is wrong), so there is no anchor to count commits since."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=None, since_commits=[])
+    assert report["state"] == "unknown"
+    assert "no commit history" in report["reason"]
+
+
+def test_a_failed_since_log_is_reported_unknown_even_with_a_good_baseline():
+    """must fire -- the baseline's own commit was found, but the second git log (commits since,
+    scoped to `watched`) failed; a `None` here must not be read as "zero commits"."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=None)
+    assert report["state"] == "unknown"
+    assert "git log" in report["reason"]
+
+
+def test_watched_paths_cover_both_funding_instances():
+    """`WATCHED_PATHS` is what #405 and #410 fund -- narrowing it silently (or widening it past what
+    is reproduced) is exactly the "reads as covering the whole mechanism" trap the brief names."""
+    assert "src/requivo/assets/prompts" in WATCHED_PATHS
+    assert "src/requivo/assets/context" in WATCHED_PATHS
+    assert "src/requivo/assets/framework" in WATCHED_PATHS
+    assert "src/requivo/providers/anthropic/generators.py" in WATCHED_PATHS
+
+
+def test_baseline_commits_since_reads_the_real_repo_and_finds_a_known_stale_baseline():
+    """Integration, not a fixture: `ba526f6` (#410's own instance) landed after `b4167b0` (the
+    #405/#406 re-capture) and touches `generators.py`, one of `WATCHED_PATHS`. Every committed golden
+    baseline was captured before `ba526f6`, so this must report `stale` and must name that commit --
+    proving the wrapper's plumbing (the two real `git log` calls, the field parsing) against this
+    repository's own history, not only the pure core above."""
+    report = baseline_commits_since("fixtures/golden/leave-approval.runs.json")
+    assert report["state"] == "stale", report
+    assert any(c["sha"].startswith("ba526f6") or "dead code pack" in c["subject"]
+               for c in report["commits"]), report["commits"]
+
+
+def test_baseline_commits_since_reports_unknown_for_a_path_with_no_history():
+    """must fire, the negative control for the integration test above: a path that was never
+    committed has no baseline commit to anchor on, so this is `unknown`, not `current`."""
+    report = baseline_commits_since("fixtures/golden/this-slug-does-not-exist.runs.json")
+    assert report["state"] == "unknown", report
+
