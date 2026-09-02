@@ -618,12 +618,22 @@ def test_baseline_commits_since_reports_unknown_on_a_real_shallow_clone(tmp_path
     run("commit", "-q", "-m", "a second commit, so the clone below has real history to truncate")
 
     shallow = tmp_path / "shallow"
-    # --no-local: a same-machine `git clone` of a local path silently ignores `--depth` by
-    # default (git's local-clone optimization hardlinks the whole object store), so a shallow
-    # clone of a filesystem source needs this to actually be one -- verified by hand: a plain
-    # `git clone --depth 1 <local-path>` here reports `is-shallow-repository: false`.
-    subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", str(source), str(shallow)],
-                   check=True, capture_output=True)
+    # Two belt-and-suspenders reasons this clones a `file://` URI rather than a bare path, not
+    # just one:
+    #  - a same-machine `git clone` of a bare local PATH silently ignores `--depth` by default
+    #    (git's local-clone optimization hardlinks the whole object store), so a shallow clone
+    #    of a filesystem source needs something to defeat that -- verified by hand: a plain
+    #    `git clone --depth 1 <local-path>` here reports `is-shallow-repository: false`.
+    #  - a bare Windows path (`D:\...`) handed to git's own clone argument is exactly the
+    #    "value reaches a subprocess argv where the callee's option parser decides what it
+    #    means" shape this repo's own cross-platform section warns about -- old git releases
+    #    disambiguated a drive letter from the scp-like `host:path` remote syntax by a few
+    #    characters of heuristic. `Path.as_uri()` sidesteps the ambiguity entirely rather than
+    #    trusting git's parser to keep drawing that line correctly forever, so `--no-local` is
+    #    kept only as documentation of intent -- a `file://` URI already forces the non-local
+    #    transport that makes `--depth` take effect, verified by hand alongside the case above.
+    subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", source.resolve().as_uri(),
+                   str(shallow)], check=True, capture_output=True)
 
     monkeypatch.setattr(golden_lib, "REPO", shallow)
     report = golden_lib.baseline_commits_since("fixtures/b.txt")
