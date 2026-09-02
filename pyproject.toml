@@ -133,11 +133,15 @@ testing = ["pytest>=8.0"]
 # dev-only: `tests/test_sdist_contents_431.py` and `tests/test_repository_conformance_424.py` call
 # `setuptools.build_meta.build_sdist()`/`build_wheel()` in-process to prove what `MANIFEST.in` and
 # the package-data config actually ship; nothing at runtime imports setuptools. Both tests also
-# degrade to a named skip (see their own `pytest.skip` calls) if the installed setuptools cannot even
-# import `pkg_resources` on the running interpreter -- this floor is what keeps that skip from firing
-# on any CI leg today, and the skip is what keeps a *future* incompatible combination (an interpreter
-# newer than any tested here, a consumer's own older pin) from turning into a bare traceback in
-# fixture setup instead of a legible, named gap.
+# degrade to a named skip (`_setuptools_build_backend_reason` in the sdist test file, reused by the
+# wheel one) if the installed setuptools is too old to import safely -- checked through
+# `importlib.metadata.version("setuptools")`, deliberately never `import setuptools` itself, because
+# a first version of this check (caught by a spawned reviewer, not by CI) read the version by
+# importing setuptools first, which is exactly the operation that crashes on 64.0.0-66.0.0 under
+# Python 3.12 -- so the guard never actually fired for the one range it existed to catch. This floor
+# is what keeps that skip from firing on any CI leg today; the skip itself is what keeps a *future*
+# incompatible combination (an interpreter newer than any tested here, a consumer's own older pin)
+# from turning into a bare traceback in fixture setup instead of a legible, named gap.
 #
 # `testing` joined the self-reference above (#424) rather than restating `pytest>=8.0` as a fourth
 # direct pin here -- the same reasoning, one extra later.

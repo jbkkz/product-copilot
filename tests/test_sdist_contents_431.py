@@ -22,6 +22,7 @@ was red against it.
 """
 from __future__ import annotations
 
+import importlib.metadata
 import sys
 import tarfile
 import tempfile
@@ -35,47 +36,71 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The floor this project's own `dev` extra declares for setuptools (pyproject.toml's own comment
 # there has the full story): below it, `import pkg_resources` itself crashes on Python 3.12 with
 # `AttributeError: module 'pkgutil' has no attribute 'ImpImporter'` -- bisected directly against
-# Python 3.12.13/3.12.14, not guessed. This is *also* checked at import time here (#453): the
-# Dependency floor CI leg installs the literal declared floor via `--resolution lowest-direct`, so a
-# future edit that lowers the pyproject.toml floor without updating this constant -- or a consumer
-# running this suite with their own older pin -- must not turn into a bare traceback in fixture
-# setup. Named and skipped instead, the same shape `tests/test_encoding.py`'s `_NO_LEVER_ON_39`
-# already uses for an interpreter-precondition gap.
-_MIN_SETUPTOOLS_FOR_SDIST = (66, 1, 0)
+# Python 3.12.13/3.12.14, not guessed.
+#
+# **This is checked at import time here too (#453), and the first version of this check (reviewer
+# finding) was itself broken by the exact failure it existed to catch.** It read the version via
+# `import setuptools; setuptools.__version__`, reached only after a `pytest.importorskip("setuptools",
+# ...)` that performs the identical import -- so on setuptools 64.0.0-66.0.0, the plain `import
+# setuptools` crashes with the same `AttributeError` before either the importorskip's own
+# `except ImportError` (which does not catch `AttributeError`) or the version comparison ever ran.
+# Verified directly: reinstalling setuptools==64.0.0 into a fresh Python 3.12 venv and rerunning this
+# file reproduced the identical raw traceback in fixture setup on every test, including the one whose
+# entire job was proving the guard fires.
+#
+# `importlib.metadata.version("setuptools")` is the fix: it reads the installed distribution's own
+# METADATA file, never importing the package's code, so it cannot trigger `pkg_resources`'s crash --
+# verified the same way, in the same broken venv: `importlib.metadata.version("setuptools")` returns
+# `"64.0.0"` cleanly where `import setuptools` raises. `_build_sdist` below reaches
+# `from setuptools.build_meta import build_sdist` only after this check has already confirmed the
+# version is new enough to import safely.
+_MIN_SETUPTOOLS_FOR_SDIST = "66.1.0"
 
 
-def _setuptools_too_old(min_version: tuple) -> str | None:
-    """None if the installed setuptools is new enough to build here; otherwise the skip reason.
+def _setuptools_build_backend_reason(min_version: str) -> str | None:
+    """None if the installed setuptools is present, parseable, and new enough to import and build
+    with here; otherwise the skip reason -- covering "not installed", "installed but its version
+    string does not parse", and "installed and too old" as three distinct, named cases.
 
-    Checked by VERSION NUMBER before ever calling into the build backend -- not by catching whatever
-    exception a too-old build happens to raise. A real defect in `MANIFEST.in` or the packaging
-    config must still fail loudly; only a build backend already known to be unable to run at all
-    should turn into a skip, and only for exactly that reason."""
-    import setuptools
+    Deliberately reads the version through `importlib.metadata`, never through `import setuptools`
+    -- see the module-level comment above for why that distinction is the whole fix. Comparison uses
+    `packaging.version.Version` (a `dev`-extra dependency already, for `scripts/dependency_floor.py`)
+    rather than manual tuple parsing, and fails CLOSED on an unparseable string: a version this check
+    cannot read is unvetted, and the entire point of the check is to keep an unvetted build backend
+    from ever being imported (a second reviewer finding on the version this function replaces, which
+    failed OPEN -- `return None`, meaning "proceed" -- on exactly the same case)."""
+    try:
+        installed_str = importlib.metadata.version("setuptools")
+    except importlib.metadata.PackageNotFoundError:
+        return "setuptools is not installed -- it is a dev-only addition for this test"
+
+    from packaging.version import InvalidVersion, Version
 
     try:
-        installed = tuple(int(p) for p in setuptools.__version__.split(".")[:3])
-    except ValueError:
-        return None  # an unparseable version string is not this check's problem to solve
-    if installed >= min_version:
+        installed = Version(installed_str)
+    except InvalidVersion:
+        return (
+            f"setuptools reports a version string ({installed_str!r}) this check cannot parse -- "
+            f"treated as unvetted rather than assumed safe to import and build with"
+        )
+    if installed >= Version(min_version):
         return None
     return (
-        f"setuptools {setuptools.__version__} is older than {'.'.join(map(str, min_version))}, the "
-        f"floor pyproject.toml documents as the first release that can `import pkg_resources` at all "
-        f"on this interpreter (Python {sys.version_info.major}.{sys.version_info.minor}). "
-        f"UNTESTED HERE: the sdist's actual member list. Every other CI leg installs the newest "
-        f"satisfying setuptools and does cover it; so does a real release build."
+        f"setuptools {installed_str} is older than {min_version}, the floor pyproject.toml documents "
+        f"as the first release that can even `import pkg_resources` on this interpreter (Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}) without crashing. UNTESTED HERE: the "
+        f"sdist's actual member list. Every other CI leg installs the newest satisfying setuptools "
+        f"and does cover it; so does a real release build."
     )
 
 
 def _build_sdist(dest: Path) -> Path:
     """Build a real sdist in-process, exactly as `python -m build --sdist --no-isolation` would --
-    no subprocess, no isolated venv, no network. Skips (not fails) when `setuptools` is not
-    installed, since it is a `dev`-extra addition made for this test alone and not a runtime
-    dependency of the package itself -- and skips the same way when it is installed but too old to
-    run at all on this interpreter (see `_setuptools_too_old` above)."""
-    pytest.importorskip("setuptools", reason="setuptools is a dev-only addition for this test")
-    too_old = _setuptools_too_old(_MIN_SETUPTOOLS_FOR_SDIST)
+    no subprocess, no isolated venv, no network. Skips (not fails) when `setuptools` is missing, its
+    version string is unparseable, or it is too old to import at all on this interpreter -- see
+    `_setuptools_build_backend_reason` above, checked BEFORE the first `import setuptools` this
+    function performs (via `setuptools.build_meta`, below)."""
+    too_old = _setuptools_build_backend_reason(_MIN_SETUPTOOLS_FOR_SDIST)
     if too_old:
         pytest.skip(too_old)
     import contextlib
@@ -124,37 +149,71 @@ def test_manifest_in_declares_the_prune():
     assert "prune tests" in text, "MANIFEST.in no longer excludes tests/ -- #431 regressed"
 
 
-# -- the version-floor skip itself (#453): must fire below the floor, must not fire above it ------
+# -- the version-floor skip itself (#453): must fire below the floor, must not fire above it,
+# must never import the broken package to find out, and must fail closed on nonsense -----------
 
 
-def test_setuptools_too_old_fires_below_the_floor(monkeypatch):
-    import setuptools
-
-    monkeypatch.setattr(setuptools, "__version__", "64.0.0")
-    reason = _setuptools_too_old((66, 1, 0))
+def test_the_check_fires_below_the_floor(monkeypatch):
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "64.0.0")
+    reason = _setuptools_build_backend_reason("66.1.0")
     assert reason is not None
     assert "64.0.0" in reason
     assert "UNTESTED HERE" in reason
 
 
-def test_setuptools_too_old_does_not_fire_at_or_above_the_floor(monkeypatch):
+def test_the_check_does_not_fire_at_or_above_the_floor(monkeypatch):
     """The must-not-fire half, paired with the test above -- a version check that always returns a
     reason would pass the first test for the wrong one."""
-    import setuptools
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "66.1.0")
+    assert _setuptools_build_backend_reason("66.1.0") is None
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "84.0.0")
+    assert _setuptools_build_backend_reason("66.1.0") is None
 
-    monkeypatch.setattr(setuptools, "__version__", "66.1.0")
-    assert _setuptools_too_old((66, 1, 0)) is None
-    monkeypatch.setattr(setuptools, "__version__", "84.0.0")
-    assert _setuptools_too_old((66, 1, 0)) is None
+
+def test_the_check_fails_closed_on_an_unparseable_version(monkeypatch):
+    """Reviewer finding: the version this check replaced failed OPEN on an unparseable string
+    (returned None, meaning 'proceed to build'). This one must return a reason instead -- an
+    unparseable version is unvetted, not presumed safe."""
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "not-a-version")
+    reason = _setuptools_build_backend_reason("66.1.0")
+    assert reason is not None
+    assert "not-a-version" in reason
+
+
+def test_the_check_fires_when_setuptools_is_not_installed_at_all(monkeypatch):
+    def _raise(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _raise)
+    reason = _setuptools_build_backend_reason("66.1.0")
+    assert reason is not None
+    assert "not installed" in reason
+
+
+def test_the_check_never_imports_setuptools_itself_to_read_the_version(monkeypatch):
+    """The reviewer's central finding: the version this check replaced read `setuptools.__version__`
+    -- which needs `import setuptools` first -- and that import is exactly what crashes on the
+    range (setuptools 64.0.0-66.0.0 under Python 3.12) it was supposed to detect, before the check's
+    own comparison ever ran. This test cannot install a genuinely broken setuptools into the process
+    already running it (something else already imported a working one), so it proves the same fact
+    the way that matters: poison `sys.modules["setuptools"]` so any `import setuptools` anywhere in
+    this call raises `ImportError` immediately, then confirm the check still reaches a correct
+    verdict -- which is only possible if it never tried to import setuptools at all."""
+    monkeypatch.setitem(sys.modules, "setuptools", None)  # any `import setuptools` now raises
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "64.0.0")
+    reason = _setuptools_build_backend_reason("66.1.0")  # must not raise ImportError
+    assert reason is not None
+    assert "64.0.0" in reason
 
 
 def test_the_skip_path_actually_skips_rather_than_crashing(monkeypatch):
-    """Not just that `_setuptools_too_old` returns a string -- that `_build_sdist` itself turns that
-    string into a real `pytest.skip`, end to end, without ever reaching the `setuptools.build_meta`
-    import that would crash on a genuinely too-old interpreter combination."""
-    import setuptools
-
-    monkeypatch.setattr(setuptools, "__version__", "1.0.0")
+    """Not just that the check returns a string -- that `_build_sdist` itself turns that string into
+    a real `pytest.skip`, end to end, before its own `from setuptools.build_meta import build_sdist`
+    line, which is where a genuinely broken setuptools would otherwise crash. Poisons `setuptools`
+    the same way as the test above, so a regression that moved the check to *after* that import
+    would fail here with a raw `ImportError` instead of the expected `Skipped`."""
+    monkeypatch.setitem(sys.modules, "setuptools", None)
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.0.0")
     with pytest.raises(pytest.skip.Exception) as ei:
         _build_sdist(REPO_ROOT)  # dest is never used -- the skip fires before any build call
     assert "1.0.0" in str(ei.value)
