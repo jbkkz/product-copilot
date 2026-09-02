@@ -38,6 +38,12 @@ This is a mitigation, not a guarantee: LLM prompt-injection defences are imperfe
 Requivo on requests from a source you would not trust to read your prompts, and review
 generated artifacts before acting on them.
 
+Artifacts saved to `.requivo/sessions/<slug>/artifacts/` are unsanitized markdown: they are the
+model's own reply, written to disk as-is, so that the file, the integrity hash and the web download
+all stay byte-identical to what was generated. `requivo artifact show` neutralizes control
+characters (a raw escape sequence, for instance) before printing to your terminal; opening the file
+directly with `cat` or another tool that does not do the same is at the reader's own risk.
+
 ## Reporting a vulnerability
 
 Please **do not** open a public issue for a security problem.
