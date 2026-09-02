@@ -32,15 +32,22 @@ from tests.web.conftest import BRIEF_REPLY, HIGH_EXPLICIT, _make_session, engine
 # ── the headers every response carries ────────────────────────────────────────
 
 
-def test_security_headers_present(client):
-    h = client.get("/").headers
-    assert h["X-Content-Type-Options"] == "nosniff"
-    assert "Content-Security-Policy" in h and "default-src 'self'" in h["Content-Security-Policy"]
-    # Presence only. Which value is correct is not a spelling to pin here — it is a decision, and it is
-    # argued and asserted by its consequence in
-    # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
-    # that the app states the policy rather than inheriting whatever the browser defaults to.
-    assert "Referrer-Policy" in h
+def test_security_headers_present(app, client):
+    @app.get("/_test_500")
+    def _test_500():
+        raise ValueError("Oops")
+
+    for path, expected_status in [("/", 200), ("/not-found", 404), ("/_test_500", 500)]:
+        r = client.get(path)
+        assert r.status_code == expected_status
+        h = r.headers
+        assert h["X-Content-Type-Options"] == "nosniff"
+        assert "Content-Security-Policy" in h and "default-src 'self'" in h["Content-Security-Policy"]
+        # Assert presence only. Which value is correct is argued and asserted by its consequence in
+        # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
+        # that the app states the policy rather than inheriting whatever the browser defaults to.
+        assert "Referrer-Policy" in h
+        assert h.get("Cache-Control") == "no-store"
 
 
 # ── the disk cache (#218) ─────────────────────────────────────────────────────
