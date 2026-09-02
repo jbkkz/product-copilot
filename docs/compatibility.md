@@ -1086,15 +1086,19 @@ priced correctly — that is this page's job, same as everywhere else on it.
 - **`requivo.usage`** — `UsageLedger`, `CallRecord`, `track_usage`, `record_call`, `current_ledger`.
   Provider-neutral by construction (#167) — a hosted caller reads a call's cost without importing
   anything Anthropic-specific.
-- **`requivo.testing.repository_conformance.SessionRepositoryConformance`** (#424) — the factory-
-  parametrised pytest suite behind CLAUDE.md's claim that "a Postgres repository reuses [the
-  orchestration] verbatim". Requires `pip install 'requivo[testing]'` (pytest is not a base-install
-  dependency); `FileSessionRepository` and this repo's own in-memory test fake both run against it
-  in-tree (`tests/test_sessions.py`), and an out-of-repo implementation subclasses it directly —
-  proven by building the wheel and running the suite from a directory outside this repository
-  entirely, with no access to `tests/conftest.py` or any other repo-internal fixture. Its own
-  correctness rules apply to it exactly as to every other seam name: it never reaches into
-  `core.persistence` internals, and moving or renaming it costs a major the same as any name above.
+- **`requivo.testing`** (#424) — `SessionRepositoryConformance` and `full_model`, both re-exported
+  from the package's own `__init__.py` rather than only reachable via the submodule path.
+  `SessionRepositoryConformance` is the factory-parametrised pytest suite behind CLAUDE.md's claim
+  that "a Postgres repository reuses [the orchestration] verbatim". Requires
+  `pip install 'requivo[testing]'` (pytest is not a base-install dependency); `FileSessionRepository`
+  and this repo's own in-memory test fake both run against it in-tree (`tests/test_sessions.py`), and
+  an out-of-repo implementation subclasses it directly — proven by building the wheel and running the
+  suite from a directory outside this repository entirely, with no access to `tests/conftest.py` or
+  any other repo-internal fixture. `full_model()` is the schema-complete model builder the suite's own
+  test methods build against, exported alongside it because a subclass that extends or overrides a
+  test method needs the identical fixture rather than a private duplicate of it. Both names' own
+  correctness rules apply exactly as to every other seam name above: neither reaches into
+  `core.persistence` internals, and moving or renaming either costs a major the same as any name here.
 
 **`py.typed`.** The wheel now ships a PEP 561 marker (one empty file:
 `src/requivo/py.typed`, declared in `[tool.setuptools.package-data]`) — the whole package was already

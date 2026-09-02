@@ -39,6 +39,25 @@ def test_the_suite_is_importable_and_not_collected_as_a_test_on_its_own():
         SessionRepositoryConformance().make_repository()
 
 
+def test_full_model_is_re_exported_and_documented():
+    """A reviewer finding (#424): `full_model` was importable from the submodule and used by the
+    suite's own test methods, but the package's `__init__.py` re-exported only the base class and
+    neither `docs/compatibility.md` nor this file's own SEAM-shaped guards mentioned it -- an
+    out-of-repo subclass following the submodule's own docstring advice ("so an out-of-repo subclass
+    of this suite can call it too") was relying on a name nothing pinned. Fixed alongside this test:
+    `requivo.testing.__init__`'s `__all__` and import now both name it."""
+    from requivo.testing import SessionRepositoryConformance, full_model
+    from requivo.testing.repository_conformance import full_model as direct
+
+    assert full_model is direct
+    model = full_model()
+    assert model.summary.objective
+    assert SessionRepositoryConformance  # both names exercised in one test, deliberately
+
+    text = (REPO_ROOT / "docs" / "compatibility.md").read_text(encoding="utf-8")
+    assert "full_model" in text, "full_model is exported but not named in the declared seam"
+
+
 def test_both_shipped_implementations_are_wired_to_the_suite():
     # Bare module name, not `tests.test_sessions` -- there is no `tests/__init__.py`, so pytest's own
     # rootdir import mode puts `tests/` directly on `sys.path` (the same reason `_fakes` is imported
