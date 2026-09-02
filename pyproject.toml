@@ -99,9 +99,13 @@ web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multip
 # HTTPX 0.25 adds transport socket_options, used by supported Anthropic SDKs.
 # 0.23.1 imports on Python 3.13 but fails client construction with SDK 0.49.
 # This is a tested dev-only floor, not a new runtime dependency (#312).
+# `setuptools>=64` matches the `[build-system]` floor above -- not a second pin, the same one
+# reused, so it cannot drift from what actually builds the wheel. dev-only: `tests/test_sdist_
+# contents_431.py` calls `setuptools.build_meta.build_sdist()` in-process to prove `MANIFEST.in`
+# actually excludes `tests/` from what PyPI ships; nothing at runtime imports setuptools.
 dev = ["requivo[anthropic,web]", "pytest>=8.0", "ruff>=0.6", "httpx>=0.25.0,<1",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
-       "pyright>=1.1.400,<2"]
+       "pyright>=1.1.400,<2", "setuptools>=64"]
 
 [tool.pyright]
 # #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
@@ -176,6 +180,12 @@ requivo = "requivo.cli:app"
 # metadata version; whether that trade-off still binds is #337, deliberately not settled here.
 license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 
+# The sdist deliberately ships no tests/ (#431): MANIFEST.in `prune`s it rather than shipping a
+# half-collectable copy (the default sdist file-finder pulled in tests/*.py without the underscore
+# helpers, conftest.py, tests/web/, scripts/ or fixtures/ those tests need to even collect — verified
+# against the actual PyPI 3.0.0 artifact). The wheel-install CI job and the publish gates are what
+# verify a built artifact; a distro packager runs the wheel, not a re-assembled copy of this suite.
+# See docs/compatibility.md and tests/test_sdist_contents_431.py.
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["requivo*"]

@@ -1123,6 +1123,28 @@ Python-level shape — that can move in a minor, the same as every `core.persist
 `core.context`/`core.dependencies`/`core.validation`/`core.integrity`/`core.adapters`/`core.selectors`
 name not listed in the declared seam above.
 
+## What the sdist and wheel contain (#431)
+
+The wheel is the installable artifact and is what every promise on this page is verified against —
+the wheel-install CI job and the publish gates build and smoke-test it on every release. The sdist
+(`requivo-X.Y.Z.tar.gz`) is a second, separate artifact: source form, for a distro packager (Debian,
+conda-forge) or anyone building from source rather than installing a wheel.
+
+**The sdist ships no `tests/` directory, deliberately** (`MANIFEST.in`: `prune tests`). Before this
+decision the default sdist file-finder pulled `tests/*.py` in anyway — 66 files, verified against the
+actual PyPI 3.0.0 artifact — without the underscore helpers those files import
+(`_fakes.py`, `_cli_harness.py`, `_scan.py`, `_credentials.py`, `conftest.py`), without `tests/web/`,
+without the root `conftest.py`, without `scripts/` or `fixtures/golden` several guard tests read. The
+result was collectable by nothing: `pytest --co` against the extraction died at
+`ModuleNotFoundError: No module named '_fakes'`. Shipping the rest too (helpers, harnesses, fixtures,
+scripts) was considered and rejected — it roughly triples the sdist to serve a consumer this suite's
+self-scanning guards were never written for, since their subject is this repository's own tree, not
+an installed package. **A distro packager verifying the built artifact should run the wheel** (the CI
+leg and the publish gates already do this on every release), not attempt to re-run this suite from an
+extracted sdist. `tests/test_sdist_contents_431.py` builds a real sdist in-process and pins that
+`tests/` is absent from it; that test — not this paragraph — is what a future change to `MANIFEST.in`
+has to keep green.
+
 ## Deprecations
 
 | What | Status | Since | Removal | Instead |

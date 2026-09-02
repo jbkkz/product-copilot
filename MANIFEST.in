@@ -1,0 +1,19 @@
+# #431: exclude tests/ from the sdist entirely rather than ship a half-collectable copy.
+#
+# The default sdist file-finder pulled in every tests/*.py it could see (66 files, confirmed
+# against the actual PyPI 3.0.0 artifact) without the underscore helpers those files import
+# (_fakes.py, _cli_harness.py, _scan.py, _credentials.py, conftest.py), without tests/web/, without
+# the root conftest.py, without scripts/ or fixtures/ -- so `pytest --co` against the extracted
+# sdist died at collection with `ModuleNotFoundError: No module named '_fakes'`, and even past
+# that most of the self-scanning guard tests read workflows/, plugin dirs and fixtures/golden the
+# sdist never carried at all. Half-shipped was the one wrong answer.
+#
+# The alternative (ship a complete, independently-runnable copy of tests/ + helpers + conftest +
+# scripts + fixtures) was rejected: it triples the sdist to serve a consumer the self-scanning
+# guards were never written for -- their subject is this repository, not the installed package.
+# Distro packagers verify the built artifact through the wheel-install CI leg and the publish
+# gates instead; see docs/compatibility.md for where that promise is written down.
+#
+# tests/test_sdist_contents_431.py builds a real sdist in-process and asserts this line's effect
+# directly -- if this file stops excluding tests/, that test goes red.
+prune tests
