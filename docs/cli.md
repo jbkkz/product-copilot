@@ -618,14 +618,21 @@ is escaped alongside it. Found by sweeping the class rather than the instance: e
 value in one of the two verbs that render it leaves the rule meaning *wherever somebody looked*.
 
 `artifact show` prints the artifact's own *body* — a saved markdown document, not metadata — and
-was the last unguarded member of this class (#430): a hostile client request that steers the model
-into an artifact carrying a raw ESC sequence printed it verbatim. Reusing the one-line rule above
-would be wrong here, not merely redundant, because a document's own newlines and tabs are its
-layout: escaping them would turn an honest multi-paragraph brief into one long line of visible `\n`
-escapes. `display_document` is the document-shaped sibling — the same C0/C1/DEL class, minus `\n`
-and `\t` — so a raw ESC is still neutralised while an ordinary document renders unchanged. It runs at
-print time only: the saved file on disk and the web download route stay byte-identical, which is
-what `core/integrity.py`'s hashing rests on.
+closes one more member of this class (#430): a hostile client request that steers the model into an
+artifact carrying a raw ESC sequence printed it verbatim. Reusing the one-line rule above would be
+wrong here, not merely redundant, because a document's own newlines and tabs are its layout: escaping
+them would turn an honest multi-paragraph brief into one long line of visible `\n` escapes.
+`display_document` is the document-shaped sibling — the same C0/C1/DEL class, minus `\n` and `\t` —
+so a raw ESC is still neutralised while an ordinary document renders unchanged. It runs at print time
+only: the saved file on disk and the web download route stay byte-identical, which is what
+`core/integrity.py`'s hashing rests on.
+
+**Not the whole class, said plainly rather than implied.** Review of #430 found the identical gap
+still open on four sibling verbs: `requivo prd`, `criteria`, `epic` and `release` print each
+generator's markdown straight to the terminal in `cli.py` (`_cmd_prd`/`_cmd_criteria`/`_cmd_epic`/
+`_cmd_release`), through none of `display_token`/`display_text`/`display_document`. Those are not
+fixed here — #430's own scope was `artifact show` — and the gap is tracked as a follow-up rather than
+silently left for the next reader to rediscover.
 
 `--json` is unaffected on all three verbs, and the reason is narrower than it looks. JSON's grammar
 forbids a literal control character below `U+0020` inside a string, so a newline is escaped
