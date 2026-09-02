@@ -18,6 +18,7 @@
     "README.md"
   ],
   "labels": {
+    "filed_by_loop": "filed-by-loop",
     "priority": [
       "priority-blocker",
       "priority-high",
