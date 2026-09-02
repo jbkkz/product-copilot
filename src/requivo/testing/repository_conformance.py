@@ -32,6 +32,9 @@ A repository that passes this suite has proven it honours the semantics the serv
 - **An unknown top-level key on the persisted model survives a save/load round trip** (invariants
   8/10) -- a field a *newer* Requivo wrote and this one does not recognise must not be silently
   dropped by the backing's own (de)serialisation.
+- **`delete` genuinely releases the slug** (invariant 11, #238) -- a session `delete()` removed must
+  no longer `exists()` or appear in `list_slugs()`, and re-`create()`-ing the identical slug must
+  succeed rather than colliding with residue the deleted session left behind.
 
 What this suite deliberately does **not** assert: anything about *where* or *how* a backing stores
 data (a Postgres row layout, a file's exact path) -- only the protocol-level behaviour the services
@@ -195,3 +198,23 @@ class SessionRepositoryConformance:
         repo.save_revision("s", model, expected_revision=0)
         loaded = repo.load_model("s")
         assert getattr(loaded, "a_field_from_a_newer_requivo", None) == "kept"
+
+    # -- #238: delete is on the protocol, not only the file backing ---------------------------------
+
+    def test_delete_removes_the_session_from_the_backing(self, repo: SessionRepository):
+        """The behavioural bar every backing owes (#238's own scope amendment: `delete` belongs on
+        the protocol, not only on `FileSessionRepository`, because a Postgres backing needs the
+        identical operation and there is otherwise no method to implement it against)."""
+        repo.create("s", "req")
+        repo.delete("s")
+        assert repo.exists("s") is False
+        assert "s" not in repo.list_slugs()
+
+    def test_deleting_then_recreating_the_same_slug_succeeds(self, repo: SessionRepository):
+        """Invariant 11's claim on a slug at this layer: the acceptance criterion is that a delete
+        genuinely releases the name, so a second `create()` for the identical slug must succeed
+        rather than colliding with residue the first session left behind."""
+        repo.create("s", "the first occupant")
+        repo.delete("s")
+        repo.create("s", "a completely different request")
+        assert repo.request_text("s") == "a completely different request"

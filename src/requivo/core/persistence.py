@@ -63,7 +63,21 @@ def _atomic_write(path: Path, content: str) -> Path:
     should have seen either a clean write or a `RevisionConflictError`."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
-        tmp.write_text(content, encoding="utf-8")
+        # newline="" disables universal-newline translation on write -- the direct analogue of the
+        # explicit encoding= beside it (invariant 16). Without it, text mode with the default
+        # newline=None translates every '\n' in content to os.linesep on write; a no-op on POSIX
+        # (os.linesep == '\n'), but on Windows a lone CR already in content becomes '\r\r\n' on disk,
+        # a line the document never had (#464). See test_atomic_write_passes_newline_empty_to_disable_translation.
+        #
+        # Written through `.open()` and not `write_text(..., newline="")`: that keyword reached
+        # `Path.write_text` only in 3.10, and this project's floor is 3.9, where passing it is a
+        # TypeError on every single write -- which is what it was, on three CI legs. `.open()` has
+        # taken `newline=` since the method existed. tests/test_cli_untrusted_output.py already
+        # carried the read-side twin of this rule (`read_text(newline=...)` is 3.13+); the write side
+        # learned it the expensive way. The version rule is guarded as a class rather than at this
+        # one site, by test_no_text_call_passes_a_keyword_the_declared_floor_rejects.
+        with tmp.open("w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
         _replace_with_retry(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # never leave scratch behind on a failed write
@@ -112,6 +126,47 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
 
 _LOCK_TIMEOUT_SECONDS = 30.0
 _held_locks = threading.local()
+
+
+class _LockHandle:
+    """What `session_lock` yields: a way for the body to ask that the lock *file* be removed as part
+    of the lock's own teardown, the instant after the fd is closed.
+
+    It exists for `delete_session` and for the platform where its first attempt cannot work (#469).
+    Unlinking the lock file while the lock is still held is the correct ordering and is what
+    `delete_session` still tries first -- but that unlink is legal on POSIX and raises on Windows,
+    where a handle `os.open` opened permits no same-process delete. The old code caught the raise and
+    left the file, so every Windows `session delete` left a lock file behind that `doctor` then
+    reported as unmatched residue: the verb that answers *is this install healthy* accusing the user
+    of a state Requivo itself had just created, which is this repository's own recurring defect shape.
+
+    Deferring to the teardown is second-best and stated as such. The window it opens -- release,
+    close, unlink, with no Python between them -- is two syscalls wide where holding the lock makes
+    it zero, and in that window a `create_session` for the same slug (lock-free by design, invariant
+    11) followed by a third actor's `session_lock` could open the inode this unlink then removes,
+    after which a fourth actor's `O_CREAT` mints a new one and two holders each believe they have
+    the only lock. That is the same race `delete_session`'s docstring names; this narrows it to the
+    smallest form it can take rather than eliminating it. It is *not* the ordering #22 and that
+    docstring rejected, which put the whole of `session_lock`'s teardown, a return into the caller,
+    and a fresh `lock_path` validation between the release and the unlink.
+
+    **POSIX is unchanged.** The deferral is requested only after an in-lock unlink has actually
+    raised, so the platform where the zero-window ordering works keeps it, byte for byte.
+
+    Re-entrancy: the request is recorded against the lock *key*, not against this handle, so an inner
+    frame asking is honoured by the outermost frame -- the only one that owns the fd and can close it.
+    """
+
+    __slots__ = ("_key", "_requests")
+
+    def __init__(self, key: tuple, requests: set):
+        self._key = key
+        self._requests = requests
+
+    def unlink_on_release(self) -> None:
+        """Remove the lock file as soon as this lock's fd is closed. Idempotent."""
+        self._requests.add(self._key)
+
 
 # The POSIX poll interval (#265). `flock(LOCK_EX | LOCK_NB)` either succeeds immediately or raises,
 # so contention is a poll loop, not a single blocking call, and the interval trades latency for CPU:
@@ -443,7 +498,7 @@ class Store:
         return p
 
     @contextmanager
-    def session_lock(self, slug: str) -> Iterator[None]:
+    def session_lock(self, slug: str) -> Iterator[_LockHandle]:
         """Hold the exclusive lock on a session for the duration of the block.
 
         Re-entrant within a thread: a service that wraps a whole update can take the lock once, and the
@@ -496,11 +551,20 @@ class Store:
         """
         depths: dict[tuple[str, str], int] = getattr(_held_locks, "depths", None) or {}
         _held_locks.depths = depths
+        # Thread-local beside `depths`, and for the same reason: a lock is held by a thread, so the
+        # request to unlink its file on release belongs to that thread too. Not `or set()` -- an
+        # existing *empty* set would be silently replaced, and while every frame captures its own
+        # reference and so is unharmed, a reader should not have to establish that to trust the line.
+        requests = getattr(_held_locks, "unlink_requests", None)
+        if requests is None:
+            requests = set()
+            _held_locks.unlink_requests = requests
         key = self._lock_key(slug)
+        handle = _LockHandle(key, requests)
         if depths.get(key):
             depths[key] += 1
             try:
-                yield
+                yield handle
             finally:
                 depths[key] -= 1
             return
@@ -529,7 +593,7 @@ class Store:
             if not self.session_exists(slug):
                 raise self._no_session(slug)
             depths[key] = 1
-            yield
+            yield handle
         finally:
             depths[key] = 0
             try:
@@ -537,6 +601,16 @@ class Store:
                     _release(fd)
             finally:
                 os.close(fd)
+                # Immediately after the close and inside the same `finally`, so nothing -- not a
+                # generator resume, not a return into the caller, not a `lock_path` revalidation --
+                # runs between the two. See `_LockHandle` for why that distance is the whole point,
+                # and why only a caller whose in-lock unlink already raised ever gets here.
+                if key in requests:
+                    requests.discard(key)  # cleared first: a failed unlink is never retried later
+                    try:
+                        p.unlink(missing_ok=True)
+                    except OSError:
+                        pass  # best-effort; a leftover lock file is inert, see delete_session
 
     def canonical_dir(self, slug: str) -> Path:
         """The canonical session directory `<workspace>/.requivo/sessions/<slug>/`."""
@@ -664,6 +738,79 @@ class Store:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return meta
+
+    def delete_session(self, slug: str) -> None:
+        """Irreversibly remove a session: its directory and its lock file (#238).
+
+        **Ordering, and why.** The directory removal is the write a concurrent writer has to
+        serialise against (invariant 9), so it runs entirely inside `session_lock`'s own critical
+        section: `session_lock` already refuses a missing slug with `session_not_found`, both before
+        taking the lock (cheap, non-authoritative) and again just after (authoritative -- see its own
+        docstring), so a writer that races this delete either finishes first and has its result
+        removed, or blocks on the same lock and, once granted, meets that second check and refuses
+        cleanly rather than writing into a directory this method had only partly torn down.
+        `test_a_writer_racing_an_in_flight_delete_is_refused_rather_than_writing_into_a_half_removed_directory`
+        and `test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote` pin both halves.
+
+        **The lock file is unlinked *while the lock is still held*, not after releasing it -- found
+        in review, and the opposite of this method's first draft.** That draft unlinked after
+        `session_lock`'s own `finally` had already released and closed the fd, reasoning that nothing
+        could race the cleanup "in a way that matters" because a fresh caller would refuse on the
+        cheap existence check first. That reasoning missed the caller invariant 11 explicitly makes
+        legal: **the identical slug can be re-created the instant `session_exists` goes false**, which
+        happens the moment `rmtree` above returns -- still inside this very critical section, well
+        before either ordering releases the lock. A second actor's `create_session` for that slug is
+        lock-free by design (it is `create_session`'s own atomic rename that claims a slug, not this
+        lock), so it can succeed while this method is still running, and a third actor then taking
+        `session_lock` on the re-created slug opens `lock_path(slug)` fresh. If that open happens
+        *after* the unlink -- guaranteed once release-then-unlink puts a full lock teardown between
+        the two -- `os.open(..., O_CREAT)` finds no file and mints a **new inode**, distinct from the
+        one this method's own fd still names. That third actor then flocks the new inode
+        uncontended: two actors now each hold what they believe is *the* exclusive lock on `slug`, on
+        two different inodes that were never in contention -- silently broken mutual exclusion, the
+        exact failure `session_lock`'s own docstring names as the reason #22 rejected unlinking a
+        lock file "a concurrent process may be holding". Unlinking before release does not make the
+        window provably zero (a second actor could in principle still open the pre-unlink inode in
+        the instant between `rmtree` returning and this line), but it collapses the window from
+        "several function calls plus two syscalls" (the old ordering's release -- unlock, close, and
+        everything `session_lock`'s `finally` runs, before the unlink is even attempted) down to zero
+        Python bytecodes with no syscall in between, and self-referential unlinking is unconditionally
+        legal on POSIX (a directory entry is not the same object as the open file it names -- unlinking
+        never touches this method's own held flock). On Windows this can raise instead, since what a
+        handle `os.open` opened with no explicit share-delete flag permits for a same-process unlink
+        is not something this store can verify without a Windows machine to observe it on -- caught
+        by the same `except OSError` either way, and the outcome (a leftover, inert lock file) is
+        identical to the release-then-unlink draft's own accepted worst case.
+        `test_the_lock_file_is_gone_before_the_lock_is_released_not_after` pins the ordering directly.
+
+        **That accepted worst case turned out to be Windows's every case, not an edge (#469).** The
+        paragraph above was written as *this can raise instead*, and on the Windows leg it raises
+        every time: `os.open` takes no share-delete, so a same-process unlink of the file this method
+        still holds is refused, the `except OSError` swallowed it, and the lock file survived its
+        session. Four tests found it at once, and the one that matters is not about the file -- it is
+        `doctor --json` reporting `unmatched: ['s']` after an ordinary `session delete`. A leftover
+        lock file is inert; a *residue report* is not. The install diagnostic accused the user of a
+        state Requivo had created two lines earlier, on every delete, on one platform of four --
+        the shape invariants 14 and 15 were each written about.
+
+        So the in-lock unlink stays first and unchanged -- POSIX keeps the zero-window ordering this
+        docstring argues for, byte for byte -- and only the platform where it actually failed defers
+        to `_LockHandle.unlink_on_release`, which unlinks in the instant after the fd is closed. That
+        handle's docstring holds the argument for why two syscalls of window is the smallest form
+        this can take where the zero-window one is refused, and why it is not the release-then-unlink
+        draft rejected above. `test_delete_session_removes_the_directory_and_the_lock_file` and
+        `test_a_delete_whose_in_lock_unlink_is_refused_still_removes_the_lock_file` are the pair --
+        the second stages the Windows refusal on every platform, so the fallback is exercised on the
+        legs that can never reach it naturally.
+        """
+        with self.session_lock(slug) as lock:
+            shutil.rmtree(self.canonical_dir(slug))
+            try:
+                self.lock_path(slug).unlink(missing_ok=True)
+            except OSError:
+                # The unlink under the lock is the correct ordering and the only one with no window
+                # at all; a platform that refuses it gets the next-smallest, not a leftover file.
+                lock.unlink_on_release()
 
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                       provenance: dict | None = None) -> tuple[int, SessionMeta]:
@@ -1190,12 +1337,12 @@ def lock_path(slug: str) -> Path:
 
 
 @contextmanager
-def session_lock(slug: str) -> Iterator[None]:
+def session_lock(slug: str) -> Iterator[_LockHandle]:
     """Ambient-default wrapper (#272) -- resolves the workspace root fresh, from
     `paths.workspace_root()`, on every call. Full contract, including the re-entrancy keying, on
     `Store.session_lock`, which this delegates to."""
-    with _default_store().session_lock(slug):
-        yield
+    with _default_store().session_lock(slug) as handle:
+        yield handle   # forwarded, not swallowed: the annotation above is the contract, not decoration
 
 
 # A slug becomes a directory name, so it is bounded by what the filesystem accepts (~255 bytes on ext4
@@ -1985,6 +2132,11 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
     """Ambient-default wrapper (#272) -- see `Store.create_session`."""
     return _default_store().create_session(
         slug, request, provider=provider, model_name=model_name, context_cards=context_cards)
+
+
+def delete_session(slug: str) -> None:
+    """Ambient-default wrapper (#272) -- see `Store.delete_session`."""
+    return _default_store().delete_session(slug)
 
 
 def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,

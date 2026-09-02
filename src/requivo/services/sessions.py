@@ -388,6 +388,19 @@ class SessionService:
         session that may still live only in the legacy `out/` store."""
         self._ensure_canonical(slug)
 
+    # ── deletion ─────────────────────────────────────────────────────────────
+    def delete_session(self, slug: str) -> None:
+        """Irreversibly remove a session (#238). Refuses a missing slug with the structured
+        `session_not_found` error, raised by the repository's own locked existence check
+        (invariant 9) rather than a separate check here — a check here-and-there would be the exact
+        precondition-not-held-across-the-write shape invariant 9 is written against.
+
+        A thin delegation on purpose: the ordering that actually matters (lock, remove the
+        directory, release, unlink the lock file last) is the repository/store's own concern, so a
+        Postgres backing can implement the identical guarantee its own way underneath this call —
+        see `SessionRepository.delete`'s docstring."""
+        self.repo.delete(slug)
+
     @staticmethod
     def _identity_hash(request: str, context_cards: list[str] | None) -> str:
         """The fallback slug suffix: a short hash over what makes a discovery distinct. The cards join
@@ -498,7 +511,12 @@ class SessionService:
         must be in the mutation-backed store; call `ensure_canonical` first for one that may still be
         legacy, which is what every provider-backed operation does anyway before it writes."""
         if not self.repo.has_meta(slug):
-            raise SessionNotFoundError(store.no_session_message(slug), details={"slug": slug})
+            # `self.no_session(slug)`, not the module-level ambient `store.no_session_message` --
+            # #457, one call site over from what #272 already fixed for `no_session` itself. The
+            # ambient wrapper always names the *process* workspace; this service may be addressing an
+            # explicitly-rooted repository instead, and the refusal has to name the store it actually
+            # asked. See test_snapshot_names_the_root_of_an_explicitly_rooted_repository_not_the_ambient_one.
+            raise self.no_session(slug)
         with self.repo.lock(slug):
             meta = self.repo.read_meta(slug)
             return SessionSnapshot(

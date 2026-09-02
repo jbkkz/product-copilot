@@ -593,6 +593,143 @@ def test_the_guard_does_not_fire_on_correct_io(tmp_path):
 
 
 # --------------------------------------------------------------------------------------------------
+# The other half of the same call site: a keyword the floor does not have (#464, #469)
+# --------------------------------------------------------------------------------------------------
+#
+# Every guard above asks whether a text call declares its codec. This one asks whether the keywords
+# it declares them with *exist* on the oldest interpreter this project supports, because the fix for
+# #464 reached for `write_text(..., newline="")` -- correct in intent, correct on the developer's
+# 3.13, and a `TypeError` on every single write under the declared 3.9 floor. `_atomic_write` is
+# called by every persistence path, so three CI legs went red with 518 failures apiece over one
+# keyword.
+#
+# It lives here rather than in a new scanning tier because it is the same walk over the same two
+# trees asking about the same three methods -- CLAUDE.md's rule is to extend an existing tier's scan
+# rather than open a fourth (#288, #355).
+#
+# **The leg that should have caught this cannot, and that is measured rather than assumed.**
+# `[tool.pyright]` sets `pythonVersion = "3.9"` for exactly this class, with a comment saying so --
+# *a checker at 3.12 accepts what the oldest supported interpreter refuses*. Ran by hand against the
+# offending line at `--pythonversion 3.9`: **0 errors**. Typeshed does not version-gate `newline` on
+# `Path.write_text`, so the Types leg is structurally blind here and was green on the broken commit.
+# A guard that duplicates a working checker would be waste; this one covers a hole in it.
+_KEYWORDS_YOUNGER_THAN_THE_FLOOR = {
+    ("write_text", "newline"): (3, 10),
+    ("read_text", "newline"): (3, 13),
+}
+
+
+def _declared_floor() -> tuple:
+    """The `requires-python` floor, read out of pyproject rather than restated here.
+
+    A version written into this file would be a number in prose that nothing can falsify -- the
+    failure mode CLAUDE.md names twice. Raising the floor must relax this guard on its own, in the
+    same commit that raises it, with nobody remembering to come here."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^requires-python\s*=\s*"[><=~^ ]*(\d+)\.(\d+)', text, re.MULTILINE)
+    assert m, (
+        "could not read requires-python out of pyproject.toml -- this guard derives the floor from "
+        "it, and a floor it cannot read is not a floor it may guess at")
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def floor_violations(path: Path, floor: tuple) -> list:
+    """Every text call in `path` passing a keyword the declared floor's interpreter does not accept.
+
+    Attribute calls only, and by method name: the same deliberate blindness `encoding_violations`
+    already states for an aliased or dynamically built call. What this reaches is the shape the
+    defect actually took."""
+    out: list = []
+    for node in ast.walk(_parse(path)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        receiver = node.func.value
+        if isinstance(receiver, ast.Name) and receiver.id in _EXEMPT_RECEIVERS:
+            continue
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue
+            added = _KEYWORDS_YOUNGER_THAN_THE_FLOOR.get((node.func.attr, kw.arg))
+            if added is not None and added > floor:
+                out.append(
+                    f"line {node.lineno}: .{node.func.attr}({kw.arg}=...) -- that keyword reached "
+                    f"{node.func.attr} in Python {added[0]}.{added[1]}, and this project's floor is "
+                    f"{floor[0]}.{floor[1]}, where it is a TypeError on every call. Write it through "
+                    f".open(..., {kw.arg}=...) instead, which has always taken it."
+                )
+    return sorted(out)
+
+
+def test_no_text_call_passes_a_keyword_the_declared_floor_rejects():
+    """#469. `_atomic_write` wrote `tmp.write_text(content, encoding="utf-8", newline="")`; the
+    `newline=` keyword reached `Path.write_text` in 3.10 and `requires-python` is `>=3.9`, so the
+    write raised `TypeError` on the three 3.9 legs -- 518 failures each, from one keyword on the one
+    function every persistence path goes through."""
+    floor = _declared_floor()
+    offenders: dict = {}
+    for relative in sorted(SCAN_ROOTS):
+        for path in scan(REPO_ROOT / relative):
+            found = floor_violations(path, floor)
+            if found:
+                offenders[path.relative_to(REPO_ROOT).as_posix()] = found
+    assert not offenders, (
+        f"a text call passes a keyword the declared {floor[0]}.{floor[1]} floor does not accept, "
+        f"which is a TypeError there and invisible on a newer interpreter -- and invisible to the "
+        f"Types leg too, since typeshed does not version-gate these. Offenders: " + repr(offenders)
+    )
+
+
+def test_the_floor_guard_fires_on_the_exact_call_that_shipped_red(tmp_path):
+    """The must-fire control, written as the line #469 actually shipped rather than as a synthetic
+    one. Its must-not-fire twin is below: the same intent expressed through `.open()`, which is the
+    fix, must stay silent."""
+    root = tmp_path / "src"
+    _write_tree(root, {"as_shipped.py": """
+        from pathlib import Path
+
+        def write(tmp: Path, content: str) -> None:
+            tmp.write_text(content, encoding="utf-8", newline="")
+    """})
+    found = floor_violations(scan(root)[0], (3, 9))
+    assert len(found) == 1 and "write_text(newline=...)" in found[0], found
+
+
+def test_the_floor_guard_spares_the_fix_and_the_read_side_twin(tmp_path):
+    """Two must-not-fire cases in one. `.open(..., newline="")` is the fix and has taken the keyword
+    since the method existed; and a floor that has caught up must relax the rule rather than keep
+    reporting it -- the same call at a 3.10 floor is legal, which is why the floor is read from
+    pyproject and not written down here."""
+    root = tmp_path / "src"
+    _write_tree(root, {"fixed.py": """
+        from pathlib import Path
+
+        def write(tmp: Path, content: str) -> None:
+            with tmp.open("w", encoding="utf-8", newline="") as fh:
+                fh.write(content)
+    """})
+    assert floor_violations(scan(root)[0], (3, 9)) == []
+
+    raised = tmp_path / "raised"
+    _write_tree(raised, {"as_shipped.py": """
+        from pathlib import Path
+
+        def write(tmp: Path, content: str) -> None:
+            tmp.write_text(content, encoding="utf-8", newline="")
+    """})
+    assert floor_violations(scan(raised)[0], (3, 10)) == []
+
+
+def test_the_floor_is_read_from_pyproject_and_matches_what_ci_runs():
+    """The lever control. A floor this guard could not read would make every case above vacuous, and
+    a floor that disagreed with the CI matrix would guard a version nothing runs."""
+    floor = _declared_floor()
+    matrix = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert f'"{floor[0]}.{floor[1]}"' in matrix or f"'{floor[0]}.{floor[1]}'" in matrix, (
+        f"pyproject declares a {floor[0]}.{floor[1]} floor and no CI leg runs it, so nothing "
+        f"observes what that interpreter actually accepts")
+
+
+# --------------------------------------------------------------------------------------------------
 # The runtime half. #29 measured that this suite captures to io.StringIO, so nothing in-process can
 # reach the console encoder even once a Windows leg exists. A subprocess with a forced narrow
 # encoder reaches the real one, on every platform.

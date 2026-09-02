@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{# The explicit confirmation step the issue asks for (#238): a GET renders this page, and only a
+   POST from it removes anything -- a click on the session detail page is not, by itself, enough to
+   delete anything. #}
+{% block title %}Delete {{ slug }} — Requivo{% endblock %}
+{% block content %}
+<p><a class="backlink" href="/sessions/{{ slug }}">← Back to {{ slug }}</a></p>
+
+<h1>Delete this session?</h1>
+
+<div class="notice danger" role="alert">
+  <p>This removes <strong>{{ slug }}</strong> and everything reasoned from it — the request, every
+  question and answer, every generated document — permanently. There is no trash and no undo.</p>
+  <p>If you might want this again, <a href="/sessions/{{ slug }}/export">export it first</a>; the
+  download is a single file you can re-import later with <code>requivo session import</code>.</p>
+</div>
+
+<form method="post" action="/sessions/{{ slug }}/delete">
+  {% include "_csrf.html" %}
+  <div class="toolbar">
+    <button class="btn danger" type="submit">Delete {{ slug }}</button>
+    <a class="btn ghost" href="/sessions/{{ slug }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

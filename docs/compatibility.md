@@ -111,7 +111,7 @@ enforce it — but `validate_slug`/`validate_filename` refuse it on any *new* cr
 
 ## The `--json` outputs are public
 
-**Every `--json` output is public — all fifteen of them, and the structured error envelope
+**Every `--json` output is public — all sixteen of them, and the structured error envelope
 (`{code, message, path?, details?}`).** They follow the same rule as the session format: fields get
 added, populated fields do not change meaning without a note in the changelog.
 
@@ -122,6 +122,7 @@ added, populated fields do not change meaning without a note in the changelog.
 | `requivo session init` | `requivo session export` | `requivo model diff` |
 | `requivo session list` | `requivo session import` | `requivo artifact save` |
 | `requivo session migrate` | `requivo session rescope` | `requivo artifact list` |
+| `requivo session delete` | | |
 
 Written out in full rather than abbreviated, because the guard below compares this table against the
 parser literally, and an abbreviation is a fragment a test can match by accident.
@@ -144,7 +145,7 @@ what drifts.
 
 The promise is additive, not a freeze: nothing here says an output may never gain a field. What it
 says is that a populated field will not quietly change meaning, and that a change of shape is
-announced. That is cheap to keep for fifteen outputs and was never the expensive half.
+announced. That is cheap to keep for sixteen outputs and was never the expensive half.
 
 **What "public" means for a payload, in one testable sentence: a payload's top-level key set, and
 the JSON types of those values, are the contract.** Removing a top-level key, renaming one, or
@@ -158,7 +159,7 @@ a promise about it.
 `test_every_public_json_payload_keeps_its_recorded_top_level_shape` is what stops that being a
 sentence, and it is a *second* guard rather than a widening of the first: the one above
 (`test_every_json_verb_is_inside_the_promise`) checks that this page names every verb, which is
-membership and says nothing about what a verb prints. The new one runs each of the fifteen against a
+membership and says nothing about what a verb prints. The new one runs each of the sixteen against a
 fixture workspace and compares the top level of what it printed with a recorded key-and-type table.
 The two failure directions are reported separately, because they are not the same event — a key that
 vanished or changed type is a break, and a key that appeared wants one line added to the record.
@@ -724,14 +725,17 @@ session, and a third process opening the lock found a different file and acquire
 lock inside and simply holding it across the swap was not available either — a directory containing
 an open handle is precisely what Windows refuses to rename.
 
-**Deleting a session by hand leaves its lock file behind.** There is no `session delete` verb, so
-removing a session means removing its directory, and its lock is no longer inside it. The residue is
-one empty file under `.requivo/locks/`, which claims no slug and is read by nothing; delete it or
-leave it. `requivo doctor` reports the lock root under `workspace.locks` so there is a directory to
-point at, and — since #180 — its `locks` check walks it: which slugs a `<slug>.lock` file names no
-longer have a session, reported as candidate residue and never as a verdict, since the lock scan and
-the current session list it is checked against are two reads a moment apart — see the note in
-`session-format.md`.
+**Deleting a session by hand leaves its lock file behind; `session delete` (#238) does not.** The
+verb takes the same lock every other compound mutation does, removes the directory under it, and
+unlinks `.requivo/locks/<slug>.lock` last — after the lock is released, not while still held (see
+the ordering in `Store.delete_session`'s own docstring). A session removed *by hand* (`rm -rf`,
+bypassing the verb), or by an older Requivo with no delete verb at all, still leaves the lock file
+behind: the residue is one empty file under `.requivo/locks/`, which claims no slug and is read by
+nothing; delete it or leave it. `requivo doctor` reports the lock root under `workspace.locks` so
+there is a directory to point at, and — since #180 — its `locks` check walks it: which slugs a
+`<slug>.lock` file names no longer have a session, reported as candidate residue and never as a
+verdict, since the lock scan and the current session list it is checked against are two reads a
+moment apart — see the note in `session-format.md`.
 
 ## What a proposal means
 
@@ -943,7 +947,7 @@ characters** — `MAX_INPUT_CHARS` in `core/contracts.py` — is refused with `{
 "input_too_large"}` at exit **1**, instead of creating the session.
 
 `git show v1.3.0:src/requivo/services/sessions.py` has no length check at all, so this moves
-`session init` — one of the fifteen public `--json` payloads declared above — from exit 0 to exit 1
+`session init` — one of the sixteen public `--json` payloads declared above — from exit 0 to exit 1
 on an input it used to accept. That is the same shape #250 documents just above: a condition moved
 from one code to another, which this page's own promise calls **breaking**. Unlike the concern
 `changelog.d/255.fixed.md` first weighed and set aside — a caller relying on a billed provider call

@@ -76,4 +76,12 @@ CLI — they read the same session.</div>
 
 {% include "sessions/_session.html" %}
 {% endif %}
+
+<details class="danger-zone">
+  <summary>Danger zone</summary>
+  <p class="muted">Deleting a session is permanent — there is no trash.
+    <a href="/sessions/{{ slug if pending else s.slug }}/export">Export it first</a> if you might
+    want it again.</p>
+  <a class="btn danger small" href="/sessions/{{ slug if pending else s.slug }}/delete">Delete this session…</a>
+</details>
 {% endblock %}

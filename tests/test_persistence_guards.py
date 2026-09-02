@@ -23,6 +23,7 @@ import io
 import json
 import os
 import shutil
+import threading
 import time
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
@@ -637,6 +638,59 @@ def test_an_artifact_round_trips_non_ascii_content(workspace, monkeypatch):
         assert repo.load_artifact("read-utf8", ARTIFACT_FILENAMES["brief"]) == body
 
 
+# ── #464: _atomic_write must disable universal-newline translation on write ──────
+
+
+def test_atomic_write_passes_newline_empty_to_disable_translation(tmp_path, monkeypatch):
+    """#464. `_atomic_write` wrote via `tmp.write_text(content, encoding="utf-8")` -- text mode with
+    `newline=None`, which on write translates every '\n' character in the content to `os.linesep`.
+    On POSIX `os.linesep` is '\n', so the translation is a no-op and invisible to this suite; on
+    Windows it is '\r\n', and a lone CR already in the content (a provider reply that carries one --
+    see #460) becomes '\r\r\n' on disk, a line the document never had. `newline=""` disables the
+    translation outright and writes the string's own bytes on every platform -- the direct analogue
+    of what `encoding="utf-8"` already does one keyword along (invariant 16).
+
+    The corruption itself cannot be reproduced by running this suite on this platform: confirmed by
+    hand before writing this test that monkeypatching `os.linesep` before an ordinary
+    `open(path, "w")` changes nothing about what lands on disk here -- the translation target is not
+    read from the mutable `os.linesep` attribute at call time on this interpreter. So the assertion
+    below is on the mechanism the issue's own fix direction names -- which `newline=` keyword reaches
+    the write -- rather than on the corrupted bytes themselves. REASONED, NOT OBSERVED that this
+    prevents the Windows corruption; OBSERVED that the call now asks for no translation at all.
+
+    Spied on `Path.open` and not on `Path.write_text` (#469). The first fix wrote
+    `write_text(content, encoding="utf-8", newline="")`, and that keyword reached `write_text` only
+    in 3.10 while this project's floor is 3.9 -- a `TypeError` on every write, on the one function
+    every persistence path calls, which is 518 failures on each of three CI legs. The write goes
+    through `.open()` now, which has always taken `newline=`, so this spy follows it there. The
+    version rule itself is guarded as a class rather than at this one site, by
+    `test_no_text_call_passes_a_keyword_the_declared_floor_rejects` in tests/test_encoding.py."""
+    captured = {}
+    real_open = Path.open
+
+    def spy(self, *args, **kwargs):
+        if ".probe.json." in self.name:
+            captured["newline"] = kwargs.get("newline", "NOT PASSED")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+    store._atomic_write(tmp_path / "probe.json", "a line\r\nwith an embedded CR\r\nand a plain one\n")
+
+    assert "newline" in captured, "the write to the temp file was never observed by the spy"
+    assert captured["newline"] == "", (
+        f"_atomic_write must pass newline='' to disable the universal-newline translation that "
+        f"corrupts a lone CR on Windows; got newline={captured['newline']!r}")
+
+
+def test_atomic_write_still_writes_the_content_correctly_with_translation_disabled(tmp_path):
+    """Positive control for the assertion above: `newline=""` must not simply break the write. An
+    ordinary document with only '\n' line endings must round-trip byte-for-byte, exactly as it did
+    before -- the fix disables a translation that was already a no-op for this content on POSIX, so
+    this must stay true after it."""
+    store._atomic_write(tmp_path / "doc.md", "# Title\n\nA body line.\n")
+    assert (tmp_path / "doc.md").read_bytes() == b"# Title\n\nA body line.\n"
+
+
 # ── #22: session_lock() must not materialise the session it guards ──────────────
 
 
@@ -906,6 +960,275 @@ def test_a_non_contention_lock_error_fails_immediately_instead_of_waiting_out_th
         "a kernel resource error must surface as what it is, not be relabelled as SessionLockedError")
     # Immediate, not the 10s deadline this test set specifically so a masked error would be visible.
     assert elapsed < 1.0, elapsed
+
+
+# ── #238: session delete ──────────────────────────────────────────────────────
+#
+# `Store.delete_session` removes a session's directory and its lock file, under the same lock every
+# other compound mutation takes (invariant 9) -- the lock file itself lives outside the session
+# directory since #113, so the directory removal is the write a concurrent writer has to serialise
+# against, and unlinking the lock file is best-effort cleanup that runs only after the lock is fully
+# released (see the method's own docstring for why that ordering, not "while still held", was
+# chosen). Invariant 11's claim on a slug is `create_session`'s rename either way, so a slug a delete
+# just freed has to be claimable again exactly as if nothing had ever occupied it.
+
+
+def test_delete_session_removes_the_directory_and_the_lock_file(workspace):
+    """The uncontended positive control every negative test below needs: deleting a session that
+    nothing else is touching must actually remove both the directory and the lock file the issue's
+    own acceptance criteria name, not merely refuse to error."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="gone-soon")
+    svc.update_model("gone-soon", _full_model())
+    assert store.canonical_dir("gone-soon").exists()
+    assert store.lock_path("gone-soon").exists()
+
+    store.delete_session("gone-soon")
+
+    assert not store.canonical_dir("gone-soon").exists()
+    assert not store.lock_path("gone-soon").exists()
+    assert "gone-soon" not in store.list_session_slugs()
+
+
+def test_deleting_a_nonexistent_slug_is_refused_with_session_not_found(workspace):
+    with pytest.raises(RequivoError) as ei:
+        store.delete_session("never-existed")
+    assert ei.value.code == "session_not_found"
+    # Refusing must not conjure anything -- no directory, no lock file, for a slug nothing ever
+    # claimed (the same must-not-fire shape `test_a_lock_on_a_slug_with_no_session_leaves_no_trace`
+    # already pins for the lock alone).
+    assert not store.canonical_dir("never-existed").exists()
+    assert not store.lock_path("never-existed").exists()
+
+
+def test_deleting_then_recreating_the_same_slug_succeeds(workspace):
+    """The issue's own acceptance criterion, verbatim: the slug claim is genuinely released.
+    Invariant 11's claim on a slug is `create_session`'s rename -- if delete left anything behind
+    that rename could lose to (a ghost directory, a stale lock treated as an occupant), re-creating
+    the identical slug would either fail or silently inherit residue from the deleted session."""
+    svc = SessionService()
+    svc.create_session("The first occupant of this slug.", slug="reused")
+    svc.update_model("reused", _full_model(**{"problem": _slot(80, "explicit", "high", "FIRST")}))
+    store.delete_session("reused")
+
+    meta = svc.create_session("A completely different request.", slug="reused")
+    assert meta.current_revision == 0
+    assert store.session_request("reused") == "A completely different request."
+    assert store.list_session_slugs() == ["reused"]
+
+
+def test_a_writer_racing_an_in_flight_delete_is_refused_rather_than_writing_into_a_half_removed_directory(
+        workspace, monkeypatch):
+    """The issue's own acceptance criterion: a delete racing a concurrent writer must not leave a
+    half-removed directory. Forced into a deterministic ordering rather than raced for, the same
+    technique `test_a_session_deleted_before_the_lock_is_granted_is_refused` already uses for the
+    identical shape one call away: `_acquire` is patched to signal a waiting writer thread only once
+    the delete already holds the lock, so the writer is guaranteed to contend for the *same* lock the
+    delete is mid-critical-section on, never to win it first by chance.
+
+    Invariant 9's guarantee is that the writer, once it does get the lock, meets a world where the
+    session is already gone -- refused with `session_not_found`, never a directory a `rmtree` had
+    only partly cleared. This is the must-conflict half; the paired must-succeed half is
+    `test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote` below."""
+    SessionService().create_session("A real request.", slug="racer")
+    writer_may_start = threading.Event()
+    real_acquire = store._acquire
+
+    def signalling_acquire(fd, slug):
+        result = real_acquire(fd, slug)
+        writer_may_start.set()   # the delete now holds the lock; let the writer contend for it
+        return result
+
+    monkeypatch.setattr(store, "_acquire", signalling_acquire)
+
+    outcome: dict = {}
+    writer_finished = threading.Event()
+
+    def write_after_signal():
+        writer_may_start.wait(timeout=5)
+        try:
+            with store.session_lock("racer"):
+                pass  # pragma: no cover - must never be entered; the session is already gone
+            outcome["ok"] = True
+        except RequivoError as e:
+            outcome["ok"] = False
+            outcome["code"] = e.code
+        finally:
+            writer_finished.set()
+
+    t = threading.Thread(target=write_after_signal, daemon=True)
+    t.start()
+    store.delete_session("racer")
+    assert writer_finished.wait(timeout=5), "the racing writer never finished"
+
+    assert outcome.get("ok") is False, f"a writer racing an in-flight delete must be refused: {outcome}"
+    assert outcome["code"] == "session_not_found"
+    assert not store.canonical_dir("racer").exists()
+
+
+def test_the_lock_file_is_gone_before_the_lock_is_released_not_after(workspace, tmp_path,
+                                                                    monkeypatch):
+    """Found in review: the first draft unlinked the lock file *after* `session_lock`'s own release,
+    which reopens the exact "unlinking a lock file a concurrent process may be holding" hazard
+    `session_lock`'s own docstring says #22 rejected as a repair -- because invariant 11 lets a
+    second actor `create_session` the identical slug the instant `session_exists` goes false, which
+    is the moment `rmtree` returns, still inside this method's own critical section. A `session_lock`
+    taken on that re-created slug *after* a release-then-unlink ordering would open a fresh inode at
+    the just-vacated path and flock it uncontended -- a second "exclusive" holder the first ordering's
+    own fd (still open on the old inode) never contends with. Unlinking while still holding the lock
+    does not need a live race to prove: it only needs the unlink to have already happened by the
+    moment `_release` runs, which this test observes directly rather than trying to win a footrace
+    against the store's own critical section."""
+    SessionService().create_session("A real request.", slug="ordered")
+    lock_path = store.lock_path("ordered")
+    real_release = store._release
+    observed: dict = {}
+
+    def observing_release(fd):
+        observed["lock_file_existed_at_release"] = lock_path.exists()
+        return real_release(fd)
+
+    monkeypatch.setattr(store, "_release", observing_release)
+
+    store.delete_session("ordered")
+
+    if _platform_unlinks_a_file_it_still_holds(tmp_path):
+        assert observed.get("lock_file_existed_at_release") is False, (
+            "the lock file must already be gone by the time the lock is released, not unlinked "
+            "afterwards -- see delete_session's own docstring for why the other ordering is unsafe")
+    else:
+        # The third state, and it is a claim rather than a shrug (#469). Where the platform refuses a
+        # same-process unlink of a held file, the zero-window ordering above is not merely untested --
+        # it is unreachable, and asserting it here would redden a store behaving as correctly as the
+        # platform permits. What must still hold is that the file does not survive the call, which the
+        # assertion below states for both branches. The fallback path's own guard,
+        # test_a_delete_whose_in_lock_unlink_is_refused_still_removes_the_lock_file, stages this
+        # refusal on every platform, so nothing about it goes unexercised on the legs that pass here.
+        assert observed.get("lock_file_existed_at_release") is True, (
+            "this platform refuses to unlink a file it still holds, so the in-lock unlink cannot "
+            "have succeeded -- if it did, this probe is measuring the wrong thing")
+    assert not lock_path.exists()
+    assert not store.canonical_dir("ordered").exists()
+
+
+def _platform_unlinks_a_file_it_still_holds(tmp_path) -> bool:
+    """Does this platform permit unlinking a file this process holds an open fd on?
+
+    Measured, not derived from `sys.platform`: the question is what the filesystem and the open mode
+    actually allow here, and a name-based guess is the shape invariant 17's sequel was written about
+    -- a check whose answer depends on where it runs rather than on what it looked at."""
+    probe = tmp_path / "held.probe"
+    fd = os.open(probe, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+        probe.unlink(missing_ok=True)
+
+
+def test_a_delete_whose_in_lock_unlink_is_refused_still_removes_the_lock_file(workspace, tmp_path,
+                                                                              monkeypatch):
+    """#469. On Windows `os.open` takes no share-delete, so `delete_session`'s unlink of the lock
+    file it is still holding is refused every time -- not "can raise instead", which is how the
+    method's docstring first put it. The old code swallowed that `OSError` and left the file, so
+    every Windows `session delete` left residue `doctor --json` then reported as `unmatched`: the
+    install diagnostic accusing the user of a state Requivo had just created.
+
+    Staged here on every platform rather than left to the one leg that reaches it naturally, because
+    a fallback exercised only by Windows CI is a fallback whose next regression is found by Windows
+    CI. The first unlink of the lock path raises, later ones pass -- which is exactly the platform's
+    rule: refused while the handle is open, allowed once it is closed."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="refused")
+    svc.update_model("refused", _full_model())   # create_session is lock-free (invariant 11); an
+    lock_path = store.lock_path("refused")       # apply is what actually mints the lock file
+    assert lock_path.exists()
+
+    real_unlink = Path.unlink
+    refusals: list = []
+
+    def windows_shaped_unlink(self, *args, **kwargs):
+        if self == lock_path and not refusals:
+            refusals.append(self)
+            raise PermissionError(13, "Access is denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", windows_shaped_unlink)
+
+    store.delete_session("refused")
+
+    assert refusals, (
+        "the staged refusal never fired, so this test measured the ordinary path and says nothing "
+        "about the fallback it exists for")
+    assert not lock_path.exists(), (
+        "a platform that refuses the in-lock unlink must still not be left holding the lock file -- "
+        "it is removed as the lock tears down, see _LockHandle.unlink_on_release")
+    assert not store.canonical_dir("refused").exists()
+
+
+def test_a_lock_taken_without_a_delete_never_removes_its_lock_file(workspace):
+    """The must-not-fire twin of the fallback above. `_LockHandle` records its request against the
+    lock *key* on a thread-local, so a bug that let the flag survive one `session_lock` into the next
+    would silently unlink the lock file of every subsequently locked session -- reopening exactly the
+    "unlinking a lock file a concurrent process may be holding" hazard #22 rejected, from the
+    opposite direction and with nothing else in the suite watching for it."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="deleted-one")
+    svc.create_session("Another real request.", slug="survivor")
+    svc.update_model("deleted-one", _full_model())
+    store.delete_session("deleted-one")
+
+    with store.session_lock("survivor"):
+        pass
+    assert store.lock_path("survivor").exists(), (
+        "an ordinary lock take must leave its lock file behind; only a delete removes one")
+
+
+def test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote(workspace):
+    """The paired must-succeed half of the race above: a writer already using the session when
+    delete is asked for must not be interrupted mid-write, and delete must still succeed once the
+    writer is done -- genuinely serialised, not merely lucky. The middle assertion is the one that
+    would catch a regression to an unlocked or best-effort delete: it proves `delete_session` is
+    still blocked while the writer holds the lock, not that it happens to finish after it."""
+    svc = SessionService()
+    svc.create_session("A real request.", slug="patient")
+    svc.update_model("patient", _full_model())
+    writer_holds_lock = threading.Event()
+    writer_may_finish = threading.Event()
+
+    def hold_and_write():
+        with store.session_lock("patient"):
+            store.save_session_artifact("patient", "brief", ARTIFACT_FILENAMES["brief"],
+                                        "# Brief\n", source_revision=1)
+            writer_holds_lock.set()
+            writer_may_finish.wait(timeout=5)
+
+    writer = threading.Thread(target=hold_and_write, daemon=True)
+    writer.start()
+    assert writer_holds_lock.wait(timeout=5), "the writer never took the lock"
+
+    delete_finished = threading.Event()
+
+    def do_delete():
+        store.delete_session("patient")
+        delete_finished.set()
+
+    deleter = threading.Thread(target=do_delete, daemon=True)
+    deleter.start()
+
+    # Must genuinely be waiting on the writer's lock, not racing ahead of it.
+    assert not delete_finished.wait(timeout=0.2), (
+        "delete_session returned while the writer still held the lock -- it is not serialised")
+
+    writer_may_finish.set()
+    writer.join(timeout=5)
+    assert delete_finished.wait(timeout=5), "delete_session never finished once the writer released"
+
+    assert not store.canonical_dir("patient").exists()
+    assert not store.lock_path("patient").exists()
 
 
 # ── #36: a path that is only printed is still a path this code built ─────────────

@@ -377,3 +377,26 @@ def export_model(slug: str = Depends(safe_slug), sessions: SessionService = Depe
     model_json = sessions.load_model(slug).model_dump_json(indent=2)
     return PlainTextResponse(model_json, media_type="application/json", headers={
         "Content-Disposition": f'attachment; filename="{slug}.model.json"'})
+
+
+@router.get("/sessions/{slug}/delete")
+def delete_session_confirm(request: Request, slug: str = Depends(safe_slug),
+                           sessions: SessionService = Depends(get_sessions)):
+    """The explicit confirmation step the issue asks for (#238) — a GET that only ever renders a
+    page; nothing is removed until the reader submits the form on it, which is the POST below and
+    carries the CSRF token like every other write on this app."""
+    if not sessions.exists(slug):
+        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+    return templates.TemplateResponse(request, "sessions/delete_confirm.html", {"slug": slug})
+
+
+@router.post("/sessions/{slug}/delete")
+def delete_session(slug: str = Depends(safe_slug), sessions: SessionService = Depends(get_sessions)):
+    """Irreversibly remove a session and send the reader home, where it no longer appears (#238).
+    Refuses a slug nothing occupies with the same 404 every other route on a missing session answers
+    with -- reached before the delete itself, which is `SessionService.delete_session`'s own refusal
+    otherwise (see `Store.delete_session`'s docstring for the lock/removal ordering)."""
+    if not sessions.exists(slug):
+        raise SessionNotFoundError(f"no session '{slug}'", details={"slug": slug})
+    sessions.delete_session(slug)
+    return RedirectResponse(url="/", status_code=303)

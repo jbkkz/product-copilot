@@ -843,9 +843,10 @@ def test_context_can_be_asked_for_by_session(workspace):
 # ── lock-root residue (#180) ──────────────────────────────────────────────────
 #
 # #113/#179 moved the write lock outside the session directory to
-# `.requivo/locks/<slug>.lock`. There is no `session delete` verb — removing a session means
-# removing its directory by hand, which leaves the lock file behind, empty, claiming a slug nobody
-# has any more. `doctor` reports that residue the same way #67 reports a non-session entry under the
+# `.requivo/locks/<slug>.lock`. `session delete` (#238) unlinks it as the last step of a normal
+# delete, but a session removed by hand (`rm -rf`, bypassing that verb) or by an older Requivo with
+# no delete verb at all leaves the lock file behind, empty, claiming a slug nobody has any more.
+# `doctor` reports that residue the same way #67 reports a non-session entry under the
 # session root: what is there, in three states, and never a conclusion the directory alone cannot
 # support. `session_lock` only ever creates `<slug>.lock` for a slug that had a session *at that
 # instant*, so a lock whose slug currently names no session is candidate residue — never printed as
@@ -881,9 +882,24 @@ def test_a_lock_whose_session_still_exists_is_not_flagged(workspace):
     assert "✅" in _check_line(_run(["doctor"]), "locks")
 
 
+def test_a_session_removed_through_session_delete_leaves_no_lock_residue(workspace):
+    """The must-not-fire control against a fresh false positive: unlike the hand-deleted case below,
+    `session delete` (#238) unlinks its own `<slug>.lock` as the last step, so it must not show up
+    here at all -- the same clean report a workspace with no lock files ever had."""
+    _run(["session", "init", "Something.", "--slug", "s", "--json"])
+    _take_lock("s")
+    _run(["session", "delete", "s", "--json"])
+
+    r = _run_json(["doctor", "--json"])["locks"]
+    assert r == {"readable": True, "error": None, "total": 0, "sessions_checked": True,
+                 "unmatched": [], "unexpected": [], "unexaminable": []}
+    assert "✅" in _check_line(_run(["doctor"]), "locks")
+
+
 def test_a_lock_whose_session_was_deleted_by_hand_is_named_but_not_concluded(workspace):
-    """The ordinary way this residue arises, since there is no `session delete` verb: the session
-    directory goes, and the lock file — outside it since #113 — does not."""
+    """The ordinary way this residue still arises, even with `session delete` (#238) unlinking its
+    own lock file cleanly: a directory removed by hand (or by an older Requivo) goes, and the lock
+    file — outside it since #113 — does not."""
     _run(["session", "init", "Something.", "--slug", "s", "--json"])
     _take_lock("s")
     shutil.rmtree(store.canonical_dir("s"))

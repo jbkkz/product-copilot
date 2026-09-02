@@ -60,15 +60,16 @@ plugin and the Web app all read and write the same layout.
   opens it, `session export` skips it, and `session verify` ignores it. Deleting it is safe;
   leaving it costs nothing.
 
-  **And deleting a session leaves its lock file behind.** There is no `session delete` verb —
-  removing a session means removing `sessions/<slug>/`, and the lock is no longer inside it. What
-  stays is one empty file under `locks/` that claims no slug and is read by nothing. Delete it or
-  leave it.
+  **`session delete` (#238) removes both halves — `sessions/<slug>/` and its lock file — in one
+  operation, unlinking the lock last, after its own lock is released.** A session removed by hand
+  (`rm -rf`, bypassing that verb) or by an older Requivo with no delete verb at all still leaves the
+  lock file behind: what stays is one empty file under `locks/` that claims no slug and is read by
+  nothing. Delete it or leave it.
 
   **`requivo doctor` names this now (#180), and still stops short of concluding what it is.** Its
   `locks` check reports the total lock-file count and, of those, which slugs currently name no
-  session — the ordinary shape this residue takes, since there is no `session delete` verb — beside
-  anything under this root that is not a `<slug>.lock` file `session_lock` could have written. It
+  session — the ordinary shape this residue takes, from a hand-deleted session or an older Requivo —
+  beside anything under this root that is not a `<slug>.lock` file `session_lock` could have written. It
   never prints the word "orphan": the lock scan and the scan of current sessions it is checked
   against run a moment apart, and a session created or removed in that gap reads exactly the same
   way for a tick without being residue at all — the same rule that keeps `doctor` from concluding

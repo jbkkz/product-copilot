@@ -1340,11 +1340,34 @@ def _cmd_session_import(a, client) -> None:
           + (" (replaced an existing session)" if occupied else ""))
 
 
+def _cmd_session_delete(a, client) -> None:
+    """Irreversibly remove a session (#238) -- the directory and its lock file, under the same lock
+    every other compound mutation on it takes (see `Store.delete_session`). There is deliberately no
+    soft-delete, trash or undo here (the issue's own out-of-scope list): `session export` first is
+    the undo story, which is why the confirmation copy on the Web side points at it rather than at a
+    recovery this verb does not offer.
+
+    `a.session` may be a slug or a path, like every other verb that takes `session` (`resolve_slug`);
+    the existence check runs before the delete so a nonexistent slug is refused with the structured
+    `session_not_found` error rather than reaching the store's own (also correct, but less specific
+    to this entry point) refusal."""
+    svc = SessionService()
+    slug = svc.resolve_slug(a.session)
+    if not svc.exists(slug):
+        raise svc.no_session(slug)
+    svc.delete_session(slug)
+    if a.json:
+        print_json({"slug": slug, "deleted": True})
+        return
+    print(f"Deleted session '{slug}'.")
+
+
 def register_sessions(sub) -> None:
     """Attach the `session` verb group to the main `requivo` subparser."""
     # session
     sp = sub.add_parser("session",
-                        help="create, list, show, verify, restore, rescope, migrate, export/import sessions")
+                        help="create, list, show, verify, restore, rescope, delete, migrate, export/import "
+                             "sessions")
     ss = sp.add_subparsers(dest="subcommand", required=True, metavar="<action>")
 
     si = ss.add_parser("init", help="create a session from a request (no LLM)")
@@ -1401,3 +1424,9 @@ def register_sessions(sub) -> None:
                      help="replace a session of the same slug that already exists here")
     sig.add_argument("--json", action="store_true")
     sig.set_defaults(func=_cmd_session_import)
+
+    sd = ss.add_parser("delete", help="irreversibly remove a session -- `session export` first is "
+                       "the undo story; there is no trash")
+    sd.add_argument("session", help="session slug or path")
+    sd.add_argument("--json", action="store_true")
+    sd.set_defaults(func=_cmd_session_delete)

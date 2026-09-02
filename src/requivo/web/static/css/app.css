@@ -236,6 +236,10 @@ code { font-family: var(--mono); font-size: 0.88em; color: var(--ink); }
 .btn.secondary:hover { background: var(--surface-2); color: var(--ink); border-color: var(--border-strong); }
 .btn.ghost { background: var(--surface); color: var(--text); border-color: var(--border); box-shadow: none; }
 .btn.ghost:hover { background: var(--surface-2); color: var(--ink); border-color: var(--border-strong); box-shadow: var(--shadow); }
+/* The one destructive action in the product (#238) — same `--danger` the notice/badge variants
+   already use, so a reader who has learned that colour from a refusal recognises it here too. */
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; opacity: 0.9; }
 .btn.small { padding: 6px 11px; font-size: 12.5px; border-radius: var(--r-sm); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 

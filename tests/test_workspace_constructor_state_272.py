@@ -234,6 +234,32 @@ def test_no_session_names_the_root_of_an_explicitly_rooted_repository(tmp_path_f
     )
 
 
+def test_snapshot_names_the_root_of_an_explicitly_rooted_repository_not_the_ambient_one(
+        tmp_path_factory, monkeypatch):
+    """#457: `snapshot()` raised through the module-level ambient `store.no_session_message(slug)`
+    instead of `self.no_session(slug)` -- the instance method #272 added one function above it in
+    this same file, for exactly this reason: so the refusal names the store the service actually
+    addresses. One method along, in the same file and the same commit, `snapshot()` still named the
+    ambient root -- the identical bug #272 closed for `no_session` itself, unfixed one call site
+    over. Shaped as the sibling test above it (`test_no_session_names_the_root_of_an_explicitly_rooted_repository`),
+    against `snapshot()` instead of `no_session()`."""
+    explicit_root = tmp_path_factory.mktemp("explicit")
+    ambient_elsewhere = tmp_path_factory.mktemp("ambient-elsewhere")
+    monkeypatch.chdir(ambient_elsewhere)
+    monkeypatch.delenv("REQUIVO_WORKSPACE", raising=False)
+
+    svc = SessionService(FileSessionRepository(root=explicit_root))
+    with pytest.raises(SessionNotFoundError) as ei:
+        svc.snapshot("missing-slug")
+
+    assert str(explicit_root) in str(ei.value), (
+        f"the refusal must name the repository's own root, got: {ei.value}"
+    )
+    assert str(ambient_elsewhere) not in str(ei.value), (
+        "the refusal named the ambient workspace instead of the repository's explicit root"
+    )
+
+
 def test_no_session_still_names_the_ambient_root_for_the_default_repository(monkeypatch, tmp_path):
     """The must-not-regress control for the fix above: the ordinary, un-rooted case (every existing
     caller) must still name the ambient workspace exactly as before."""
