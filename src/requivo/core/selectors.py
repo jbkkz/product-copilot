@@ -61,6 +61,12 @@ from requivo.core.errors import EmptySelectorTokenError, UnsafeSelectorTokenErro
 # about as a whole.
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
+# `display_document`'s own class (#430): the same range, minus tab (\x09) and newline (\x0a) -- the
+# two control characters a document's own layout legitimately uses. CR (\x0d) stays in the guarded
+# range on purpose: the read path normalises a raw CR to LF (universal newlines), so a CR reaching
+# this function is not layout, it is the thing #430's own repro used to prove the guard was missing.
+_DOCUMENT_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
 
 def display_token(value: str) -> str:
     """One caller-supplied token, rendered as **one line** of terminal output.
@@ -77,6 +83,33 @@ def display_token(value: str) -> str:
     artifact filename — its sibling untrusted field, read out of the same file.
     """
     return value if not _CONTROL_CHARS.search(value) else repr(value)
+
+
+def display_document(value: str) -> str:
+    """Untrusted **prose that is a document**, rendered so it cannot write a line of its own (#430),
+    without collapsing the document's own layout.
+
+    The third sibling in this family, and the reason it exists rather than reusing `display_text`:
+    a saved artifact is a full markdown document -- headings, paragraphs, lists -- whose newlines and
+    tabs are its layout, not incidental whitespace. `display_text` escapes every control character
+    including `\\n` and `\\t`, which is exactly right for one line of prose (a question, a challenge
+    headline) and exactly wrong here -- it would turn an honest multi-paragraph brief into one long
+    line of visible `\\n` escapes, which is a worse outcome than the injection it guards against.
+
+    So this neutralizes the same class `display_token`/`display_text` neutralize -- everything that
+    can move a cursor or end a line on its own -- except the two characters a document legitimately
+    uses to lay itself out: `\\n` and `\\t`. A raw ESC, a raw CR, a raw form-feed and every other C0/C1
+    control character are still escaped, per character, exactly as `display_text` escapes them.
+
+    This is `artifact show`'s own guard (#430), the last unguarded member of the #213 class: the
+    saved-file bytes on disk and the web download route are untouched on purpose (both are the
+    byte-identical promise `core/integrity.py`'s hashing rests on) -- only the terminal print site
+    calls this, at print time, so what changes is what reaches the operator's screen, never what is
+    stored or downloaded.
+
+    Pure, like everything else here.
+    """
+    return _DOCUMENT_CONTROL_CHARS.sub(lambda m: repr(m.group())[1:-1], value)
 
 
 def display_text(value: str) -> str:

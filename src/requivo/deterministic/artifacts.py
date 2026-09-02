@@ -12,7 +12,7 @@ into the package's single `register()` by `deterministic/__init__.py`.
 from __future__ import annotations
 
 from requivo.core import persistence as store
-from requivo.core.selectors import display_token
+from requivo.core.selectors import display_document, display_token
 from requivo.deterministic._shared import _read_document, print_json
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService
 from requivo.services.sessions import SessionService
@@ -78,7 +78,13 @@ def _cmd_artifact_list(a, client) -> None:
 
 def _cmd_artifact_show(a, client) -> None:
     svc = SessionService()
-    print(ArtifactService().show(svc.resolve_slug(a.session), a.type))
+    # Neutralize at print time only (#430, the last unguarded member of the #213 class): the string
+    # returned by `.show()` is exactly what is on disk and exactly what the web download route
+    # serves, and both stay byte-identical on purpose -- `core/integrity.py`'s hashing and the
+    # download promise rest on it. `display_document` is the guard, not `display_text`: the content
+    # is a full markdown document whose own newlines and tabs are its layout, and `display_text`
+    # would escape those too and destroy it.
+    print(display_document(ArtifactService().show(svc.resolve_slug(a.session), a.type)))
 
 
 def register_artifacts(sub) -> None:

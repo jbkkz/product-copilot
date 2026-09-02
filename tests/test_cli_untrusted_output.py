@@ -455,6 +455,70 @@ def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
     ]
 
 
+# The saved artifact *body* itself, one call further than `artifact list`'s two metadata fields --
+# the last unguarded member of the #213 class (#430). `_cmd_artifact_show` was `print(content)` with
+# no neutralization at all: a hostile client request that steers the model into an artifact carrying
+# an embedded newline and a raw ESC sequence forges a line in Requivo's own voice at the operator's
+# terminal, the same threat #213 closed on the primary render path.
+#
+# Reusing `display_text` (#213's own neutralizer) here would be wrong rather than merely redundant:
+# it escapes *every* control character, including a real newline, and an artifact body is a real
+# multi-paragraph document whose newlines are its layout. So this needs `display_text`'s
+# document-shaped sibling -- everything `display_text` neutralizes except a real newline and a real
+# tab -- which is exactly what the issue asked for and exactly what the "ordinary document survives"
+# test below checks for.
+_FORGED_ARTIFACT = "# Real heading\nFORGED AT COLUMN ZERO\x1b[2Jtrailing prose"
+
+
+def _save_artifact(slug: str, content: str, tmp_path: Path) -> None:
+    """Get a session to revision 1 and save `content` as its `brief` artifact, through the CLI --
+    the same route `test_session_show_leaves_an_ordinary_session_byte_for_byte` uses to reach
+    `artifact save`, since `ArtifactService.save` itself refuses a revision-0 session."""
+    proposal = tmp_path / "p.json"
+    proposal.write_text(json.dumps(_full_model()), encoding="utf-8")
+    _run(["model", "apply", slug, str(proposal)])
+    doc = tmp_path / "doc.md"
+    doc.write_text(content, encoding="utf-8")
+    _run(["artifact", "save", slug, "--type", "brief", "--file", str(doc), "--revision", "1"])
+
+
+def test_artifact_show_cannot_be_made_to_print_a_line_a_session_wrote(workspace, tmp_path):
+    """must not fire: the raw ESC byte -- the thing that can move a cursor or clear a screen.
+    must fire: the document is still shown -- escaped, not dropped -- and its own embedded newlines
+    still read as real line breaks rather than one collapsed line of escapes.
+
+    A bare embedded newline with no control byte, on its own, is deliberately *not* neutralized here
+    -- the issue's own acceptance criteria scopes this guard to the ESC vector and says so
+    explicitly (`display_text` would escape `\\n` too and destroy the document's layout). The whole
+    printed body is untrusted prose to begin with, unlike a `render_turn` field sitting beside
+    trusted structural text it could impersonate, so a plain extra line of document text carries none
+    of the cursor-control risk `display_document` exists to close -- SECURITY.md's new caveat is the
+    written acknowledgement of that residual, not a gap this test is silent about.
+    """
+    _run(["session", "init", "Something.", "--slug", "as1"])
+    _save_artifact("as1", _FORGED_ARTIFACT, tmp_path)
+
+    out = _run(["artifact", "show", "as1", "--type", "brief"])
+
+    assert "\x1b" not in out, out                              # must not fire: no raw ESC reaches stdout
+    assert "\\x1b" in out, out                                 # must fire: neutralised, not dropped
+    assert "# Real heading" in out.splitlines(), out           # the document's own line break held
+    assert "FORGED AT COLUMN ZERO" in out, "neutralised must not mean dropped"
+
+
+def test_artifact_show_leaves_an_ordinary_document_byte_for_byte(workspace, tmp_path):
+    """The control. A document with no control character renders exactly as saved -- multi-line,
+    with a real tab -- so the guard added above cannot be the thing that makes an honest artifact
+    unreadable."""
+    _run(["session", "init", "Something.", "--slug", "as2"])
+    doc = "# Title\n\nSome prose with a tab\there, and a closing line.\n"
+    _save_artifact("as2", doc, tmp_path)
+
+    # `_cmd_artifact_show` is `print(content)`, which always appends its own trailing newline --
+    # that is pre-existing behaviour this test pins rather than a property of the new guard.
+    assert _run(["artifact", "show", "as2", "--type", "brief"]) == doc + "\n"
+
+
 # ── the same class, one layer out: the golden harness (#137) ─────────────────────────────────────
 #
 # `scripts/golden_diff.py --questions` renders a golden baseline, and every string it prints there —
