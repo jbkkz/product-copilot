@@ -153,6 +153,10 @@ is not on any of these screens; the translation is defined once in `web/viewmode
 - **Traceability details** — one disclosure holding everything the engine knows: the per-topic
   understanding, coverage, every open question, the decisions and contested premises, provenance, and
   the raw model export. The primary flow works without opening it.
+- **Danger zone** — one control, at the bottom of the session page, for the product's own erasure
+  primitive (#238): *Delete this session…* leads to an explicit confirmation page naming the session,
+  suggesting `session export` first as the undo story (there is no trash), before the POST that
+  actually removes it. Deleting redirects home, where the session no longer appears.
 
 ## Architecture
 

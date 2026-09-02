@@ -66,6 +66,19 @@ class SessionRepository(Protocol):
         """Create a fresh session (no model yet, revision 0) and return its metadata."""
         ...
 
+    def delete(self, slug: str) -> None:
+        """Irreversibly remove a session, raising `SessionNotFoundError` if there is none (#238).
+
+        On the protocol, not only the file backing: a hosted (e.g. Postgres) backing needs the
+        identical operation, and there was otherwise no method for it to implement -- the same
+        reasoning that keeps every other mutation here rather than only on `FileSessionRepository`.
+        A backing that claims a slug atomically on `create` (invariant 11) must release it just as
+        atomically here: once this returns, `exists(slug)` is False and `create(slug, ...)` for the
+        identical slug must succeed as though nothing had ever occupied it. See
+        `requivo.testing.repository_conformance.SessionRepositoryConformance` for the shared proof
+        every implementation runs against."""
+        ...
+
     def read_meta(self, slug: str) -> SessionMeta:
         """The session metadata, raising `SessionNotFoundError` if the session has none."""
         ...
@@ -216,6 +229,9 @@ class FileSessionRepository:
                model_name: Optional[str] = None, context_cards: Optional[list[str]] = None) -> SessionMeta:
         return self._resolve_store().create_session(slug, request, provider=provider,
                                                      model_name=model_name, context_cards=context_cards)
+
+    def delete(self, slug: str) -> None:
+        self._resolve_store().delete_session(slug)
 
     def read_meta(self, slug: str) -> SessionMeta:
         return self._resolve_store().read_meta(slug)

@@ -63,7 +63,12 @@ def _atomic_write(path: Path, content: str) -> Path:
     should have seen either a clean write or a `RevisionConflictError`."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
-        tmp.write_text(content, encoding="utf-8")
+        # newline="" disables universal-newline translation on write -- the direct analogue of the
+        # explicit encoding= one keyword back (invariant 16). Without it, text mode with the default
+        # newline=None translates every '\n' in content to os.linesep on write; a no-op on POSIX
+        # (os.linesep == '\n'), but on Windows a lone CR already in content becomes '\r\r\n' on disk,
+        # a line the document never had (#464). See test_atomic_write_passes_newline_empty_to_disable_translation.
+        tmp.write_text(content, encoding="utf-8", newline="")
         _replace_with_retry(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # never leave scratch behind on a failed write
@@ -664,6 +669,38 @@ class Store:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return meta
+
+    def delete_session(self, slug: str) -> None:
+        """Irreversibly remove a session: its directory and its lock file (#238).
+
+        **Ordering, and why.** The directory removal is the write a concurrent writer has to
+        serialise against (invariant 9), so it runs entirely inside `session_lock`'s own critical
+        section: `session_lock` already refuses a missing slug with `session_not_found`, both before
+        taking the lock (cheap, non-authoritative) and again just after (authoritative -- see its own
+        docstring), so a writer that races this delete either finishes first and has its result
+        removed, or blocks on the same lock and, once granted, meets that second check and refuses
+        cleanly rather than writing into a directory this method had only partly torn down.
+        `test_a_writer_racing_an_in_flight_delete_is_refused_rather_than_writing_into_a_half_removed_directory`
+        and `test_delete_waits_for_a_concurrent_writer_then_removes_what_it_wrote` pin both halves.
+
+        **The lock file is unlinked *after* the lock is released, not while still held.** Unlinking a
+        file this same process still has open is legal on POSIX, but what a Windows handle opened by
+        `os.open` with no explicit share-delete flag does to a self-referential unlink mid-hold is not
+        something this store can verify without a Windows machine to observe it on -- so the safer
+        ordering is: finish the locked work and fully release first, then remove the now-inert file
+        as a second step. Nothing can race that second step in a way that matters: any caller reaching
+        this slug after the lock is released and the directory is gone gets a clean refusal from
+        `session_lock`'s own cheap existence check before it ever touches the lock file, so a leftover
+        (or a `PermissionError` unlinking it, on a platform this store cannot exercise) is harmless
+        best-effort residue rather than a correctness gap -- `create_session`'s rename is still the
+        only real claim on a slug (invariant 11), and a stale lock file never contests it.
+        """
+        with self.session_lock(slug):
+            shutil.rmtree(self.canonical_dir(slug))
+        try:
+            self.lock_path(slug).unlink(missing_ok=True)
+        except OSError:
+            pass  # best-effort cleanup; see the docstring above
 
     def save_revision(self, slug: str, model: EngineOutput, *, expected_revision: int | None = None,
                       provenance: dict | None = None) -> tuple[int, SessionMeta]:
@@ -1985,6 +2022,11 @@ def create_session(slug: str, request: str, *, provider: str | None = None,
     """Ambient-default wrapper (#272) -- see `Store.create_session`."""
     return _default_store().create_session(
         slug, request, provider=provider, model_name=model_name, context_cards=context_cards)
+
+
+def delete_session(slug: str) -> None:
+    """Ambient-default wrapper (#272) -- see `Store.delete_session`."""
+    return _default_store().delete_session(slug)
 
 
 def save_revision(slug: str, model: EngineOutput, *, expected_revision: int | None = None,

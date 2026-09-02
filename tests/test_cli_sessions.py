@@ -734,3 +734,38 @@ def test_session_rescope_recovers_a_session_whose_card_no_longer_resolves_here(w
 
         assert _run_json(["session", "verify", "s", "--json"])["ok"] is True
         assert store.read_meta("s").context_cards == ["b2b-platform"]
+
+
+# ── #238: session delete ─────────────────────────────────────────────────────────
+
+
+def test_session_delete_removes_the_session(workspace):
+    _run(["session", "init", "A throwaway request.", "--slug", "throwaway"])
+    assert store.session_exists("throwaway")
+
+    r = _run_json(["session", "delete", "throwaway", "--json"])
+    assert r["slug"] == "throwaway"
+    assert r["deleted"] is True
+    assert not store.session_exists("throwaway")
+    assert "throwaway" not in store.list_session_slugs()
+
+
+def test_session_delete_refuses_a_nonexistent_slug_with_session_not_found(workspace):
+    """The issue's own acceptance criterion, verbatim: the structured `session_not_found` error, not
+    a bare traceback or a generic refusal."""
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        app(["session", "delete", "does-not-exist", "--json"], client=None)
+    assert e.value.code == 1
+    assert json.loads(buf.getvalue())["code"] == "session_not_found"
+
+
+def test_session_delete_then_recreating_the_same_slug_succeeds(workspace):
+    """The issue's own acceptance criterion at the CLI's own door: the slug claim is genuinely
+    released, so a second `session init` for the identical slug must succeed."""
+    _run(["session", "init", "The first occupant of this slug.", "--slug", "reused"])
+    _run(["session", "delete", "reused"])
+
+    r = _run_json(["session", "init", "A completely different request.", "--slug", "reused", "--json"])
+    assert r["slug"] == "reused"
+    assert store.session_request("reused") == "A completely different request."

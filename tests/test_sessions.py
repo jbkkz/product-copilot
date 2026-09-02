@@ -1265,6 +1265,21 @@ class InMemorySessionRepository:
             raise _NotFound(f"no session '{slug}'", details={"slug": slug})
         return self._meta[slug]
 
+    def delete(self, slug):
+        # The dict-backed analogue of the file backing's lock-then-remove: a Postgres row delete has
+        # no lock file to unlink, but it owes the identical release-the-slug guarantee the conformance
+        # suite checks (#238) -- a stale key left in any of these dicts would make a later create()
+        # for the same slug collide with residue this session left behind.
+        if slug not in self._meta:
+            raise _NotFound(f"no session '{slug}'", details={"slug": slug})
+        with self.lock(slug):
+            self._meta.pop(slug, None)
+            self._model.pop(slug, None)
+            self._req.pop(slug, None)
+            self._art.pop(slug, None)
+            for key in [k for k in self._revs if k[0] == slug]:
+                self._revs.pop(key, None)
+
     def write_meta(self, slug, meta): self._meta[slug] = meta
     def list_slugs(self): return sorted(self._meta)
 

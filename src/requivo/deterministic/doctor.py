@@ -162,10 +162,11 @@ def doctor_report() -> dict:
         # only surfaces later, as a refused artifact save with no obvious cause.
         "sessions": _session_health(cards_readable=cards_err is None),
         # Candidate residue under the write-lock root (#180). #113 moved the lock outside the
-        # session it guards; there is no `session delete` verb, so a hand-deleted session — the
-        # ordinary way one goes here — leaves its lock file behind. Reported the way #67 reports a
-        # non-session entry: what is there, in three states, never a conclusion the directory alone
-        # cannot support.
+        # session it guards, and `session delete` (#238) removes it as the last step of a normal
+        # delete — but a session removed by hand (`rm -rf`, bypassing that verb) or by an older
+        # Requivo with no delete verb at all still leaves its lock file behind, and that is the
+        # ordinary way one gets here now. Reported the way #67 reports a non-session entry: what is
+        # there, in three states, never a conclusion the directory alone cannot support.
         "locks": _lock_health(),
     }
 
@@ -612,11 +613,12 @@ def _print_locks(entries: dict) -> None:
     for slug in unmatched:
         print(f"     └─ {display_token(slug)} — no session currently named that")
     if unmatched:
-        print("     No session claims these slugs right now. A hand-deleted session is the "
-              "ordinary way that happens — there is no `session delete` verb — and a session "
-              "created or removed between this scan and the one above reads the same way for a "
-              "moment without being residue. Requivo has not opened or removed any of these; a "
-              "lock file costs nothing to leave and nothing to delete once nothing is running.")
+        print("     No session claims these slugs right now. A session removed by hand ('rm -rf', "
+              "bypassing `session delete`) or by an older Requivo with no delete verb is the "
+              "ordinary way that happens, and a session created or removed between this scan and "
+              "the one above reads the same way for a moment without being residue. Requivo has "
+              "not opened or removed any of these; a lock file costs nothing to leave and nothing "
+              "to delete once nothing is running.")
     if unchecked:
         print("     └─ the current session list could not be read (see above), so nothing is known "
               "about which of these locks still match a session.")

@@ -167,7 +167,9 @@ against, extracted so an external implementation can hold itself to it too.
 analytics — Requivo never phones home. When a provider is used, each turn sends your request, answers,
 prompts, schema and loaded context cards to the Anthropic API, and to no other server; in Claude Code
 mode, reasoning goes through your own Claude session. Treat anything you type as content sent to a
-model provider. Full notes: [SECURITY.md][security].
+model provider. **`requivo session delete <session>`** (or the same control on a session's own page in
+Requivo Web) is the erasure primitive: it removes a session's directory and everything under it,
+irreversibly — export it first if you might want it again. Full notes: [SECURITY.md][security].
 
 ---
 

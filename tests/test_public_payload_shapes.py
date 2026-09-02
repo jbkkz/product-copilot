@@ -263,6 +263,13 @@ _PAYLOAD_SHAPES: dict[str, tuple[_Case, ...]] = {
               {"migrated": "list", "skipped_already_present": "list", "interrupted": "list",
                "errors": "list", "unreadable": "list", "source": "str"}),
     ),
+    "session delete": (
+        # Last by necessity, not alphabetically: every case above operates on slug "s", and this one
+        # removes it. `session import --force` above already restored "s" from the exported archive,
+        # so it still exists here.
+        _Case("session delete --json", ("session", "delete", "s", "--json"),
+              {"slug": "str", "deleted": "bool"}),
+    ),
 }
 
 
