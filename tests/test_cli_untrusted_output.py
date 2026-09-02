@@ -456,11 +456,12 @@ def test_artifact_list_cannot_be_made_to_print_a_row_a_session_wrote(workspace):
     ]
 
 
-# The saved artifact *body* itself, one call further than `artifact list`'s two metadata fields --
-# the last unguarded member of the #213 class (#430). `_cmd_artifact_show` was `print(content)` with
-# no neutralization at all: a hostile client request that steers the model into an artifact carrying
-# an embedded newline and a raw ESC sequence forges a line in Requivo's own voice at the operator's
-# terminal, the same threat #213 closed on the primary render path.
+# The saved artifact *body* itself, one call further than `artifact list`'s two metadata fields
+# (#430). `_cmd_artifact_show` was `print(content)` with no neutralization at all: a hostile client
+# request that steers the model into an artifact carrying an embedded newline and a raw ESC sequence
+# forges a line in Requivo's own voice at the operator's terminal, the same threat #213 closed on the
+# primary render path. Not the class's last unguarded member, as this comment used to say -- see
+# #449's own section below, which closes the same gap on `prd`/`criteria`/`epic`/`release`.
 #
 # Reusing `display_text` (#213's own neutralizer) here would be wrong rather than merely redundant:
 # it escapes *every* control character, including a real newline, and an artifact body is a real
