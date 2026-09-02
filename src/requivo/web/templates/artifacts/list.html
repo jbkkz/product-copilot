@@ -37,7 +37,10 @@
     {% endif %}
 
     {% if provider is defined and provider.available %}
-    <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ s.primary_generatable.type }}"
+    {# `method`/`action` are the no-JS fallback (#428) — see the note beside the answers form in
+       discovery/_questions.html for the failure this replaces. #}
+    <form method="post" action="/sessions/{{ s.slug }}/artifacts/{{ s.primary_generatable.type }}"
+          hx-post="/sessions/{{ s.slug }}/artifacts/{{ s.primary_generatable.type }}"
           hx-target="#artifacts-region" hx-swap="outerHTML">
       {% include "_csrf.html" %}
       <div class="toolbar">
@@ -67,7 +70,8 @@
         {# The indicator is the toolbar, not the form: the "Generating…" text is a sibling of
            these forms, so the default (the requesting element carries `htmx-request`) never
            reaches it and the label was dead markup. #}
-        <form hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}"
+        <form method="post" action="/sessions/{{ s.slug }}/artifacts/{{ g.type }}"
+              hx-post="/sessions/{{ s.slug }}/artifacts/{{ g.type }}"
               hx-target="#artifacts-region" hx-swap="outerHTML" hx-indicator="closest .toolbar">
           {% include "_csrf.html" %}
           <button class="btn small secondary" type="submit">{{ g.label }}</button>

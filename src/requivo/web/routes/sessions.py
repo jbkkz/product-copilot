@@ -19,10 +19,11 @@ from requivo.core.errors import (
 from requivo.core.persistence import validate_slug
 from requivo.http import http_status_for
 from requivo.providers.errors import EngineError
+from requivo.services.artifacts import ArtifactService
 from requivo.services.discovery import DiscoveryService
 from requivo.services.sessions import SessionService
 from requivo.web.config import MAX_REQUEST_CHARS, MAX_SLUG_CHARS, provider_status
-from requivo.web.dependencies import get_discovery, get_sessions, safe_slug
+from requivo.web.dependencies import get_artifacts, get_discovery, get_sessions, safe_slug
 from requivo.web.example import is_example, seed_example
 from requivo.web.routes.home import home_context
 from requivo.web.spend import pop_web_usage, track_web_usage
@@ -216,7 +217,8 @@ def create_session(
 
 
 @router.post("/sessions/example")
-def create_example(sessions: SessionService = Depends(get_sessions)):
+def create_example(sessions: SessionService = Depends(get_sessions),
+                   artifacts: ArtifactService = Depends(get_artifacts)):
     """Materialise the bundled example and go to it — the keyless activation path (#226).
 
     A POST rather than a link, because it writes: it creates a session in the reader's workspace,
@@ -227,11 +229,12 @@ def create_example(sessions: SessionService = Depends(get_sessions)):
     neither shadows the other however they are ordered.
 
     Every decision this makes lives in `web/example.py`, not here: what a second click does, what
-    the revision claims about who produced it, and how the sample is recognised afterwards. This is
-    a redirect around one service call, which is what lets a second surface reuse the operation
-    without reimplementing the policy.
+    the revision claims about who produced it, how the sample is recognised afterwards, and — since
+    #429 — that the decision brief is seeded alongside the model. This is a redirect around one
+    service call, which is what lets a second surface reuse the operation without reimplementing the
+    policy.
     """
-    return RedirectResponse(url=f"/sessions/{seed_example(sessions)}", status_code=303)
+    return RedirectResponse(url=f"/sessions/{seed_example(sessions, artifacts)}", status_code=303)
 
 
 def _unreadable_session(request: Request, slug: str, exc: BaseException):

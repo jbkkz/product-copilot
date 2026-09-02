@@ -60,6 +60,12 @@ def submit_answers(
     """Fold the answers into the model as a new revision (optimistic-locked on `expected_revision`),
     then return the refreshed status region for an HTMX swap. A revision conflict surfaces as a clean
     error fragment via the app's exception handler."""
+    # A plain form submit (no JS, or JS that has not loaded htmx yet) carries no `HX-Request`
+    # header — that is what tells this route apart from the fragment the form's own `hx-post` asks
+    # for, and is the read-side half of #428's fix: the form now also carries `method="post"
+    # action="…"`, so a no-JS submit reaches this route as a real POST instead of the bare GET a
+    # form with neither attribute falls back to.
+    is_htmx = request.headers.get("HX-Request") == "true"
     text = answers.strip()
     if len(text) > MAX_ANSWERS_CHARS:
         # Refused rather than truncated — half an answer folded into the model is worse than none,
@@ -70,6 +76,20 @@ def submit_answers(
         # textarea. So the refusal did not merely fail to keep what was typed: the swap deleted the
         # field it was typed into, and there was no Back to return to. The whole region is returned
         # instead, with the submission still in it and the refusal stated on the form.
+        #
+        # A no-JS request never receives that fragment at all — it has no htmx to swap it in, so a
+        # bare `#session-body` region would render as the whole (shell-less) page (#428). It gets the
+        # full `sessions/detail.html` instead, carrying the same error context.
+        if not is_htmx:
+            detail = session_detail(sessions, slug)
+            return templates.TemplateResponse(request, "sessions/detail.html", {
+                "pending": False, "s": detail, "is_example": detail["is_example"],
+                "provider": provider_status(),
+                "answers_error": f"the answers exceed {MAX_ANSWERS_CHARS:,} characters — split them "
+                                 "across two turns",
+                "answers_error_code": InputTooLargeError.code,
+                "submitted_answers": text,
+            }, status_code=413)
         return templates.TemplateResponse(request, "sessions/_session.html", {
             "s": session_detail(sessions, slug),
             "provider": provider_status(),
@@ -86,6 +106,10 @@ def submit_answers(
         result = discovery.answer(slug, text, expected_revision=expected_revision,
                                   surface="web-answer")
         usage = usage_view(spend)
+    if not is_htmx:
+        # No fragment to swap and nothing to carry: the session page itself already states what
+        # changed (#428). A 303 so a refresh cannot silently re-POST the answers a second time.
+        return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
     return templates.TemplateResponse(request, "sessions/_session.html", {
         "s": session_detail(sessions, slug),
         "update": impact_view(result),

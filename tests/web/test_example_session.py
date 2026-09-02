@@ -220,3 +220,67 @@ def test_seeding_without_a_running_server_needs_only_the_service(client):
     let a second surface reuse it."""
     slug = seed_example(SessionService())
     assert SessionService().meta(slug).current_revision == 1
+
+
+# ── #429 -- the click delivers the decision brief too, not just the understanding ──────
+
+def test_one_click_also_seeds_the_decision_brief_no_key_needed(client):
+    """README.md's own promise: 'the understanding, the open questions, the readiness verdict and
+    the decision brief, all read from the payload bundled with the install.' Reaching the brief
+    route must not need a key or a call -- the autouse fixture above already refuses one."""
+    slug = _seed(client)
+    r = client.get(f"/sessions/{slug}/artifacts/brief")
+    assert r.status_code == 200, r.text[:400]
+    assert "Decision Brief" in r.text
+    assert "One word, two different problems" in r.text  # a real challenge, not a placeholder
+
+
+def test_the_seeded_brief_is_listed_as_up_to_date_on_the_session_page(client):
+    """"Nothing generated yet" still shows for the *other* documents (PRD, criteria, ...) -- only
+    the brief is seeded, matching the audit's own scope. The primary slot itself must show a real
+    artifact row rather than the "nothing to review yet" placeholder -- checked without assuming a
+    key is configured, since this whole path is meant to work without one."""
+    slug = _seed(client)
+    r = client.get(f"/sessions/{slug}")
+    assert "Decision brief" in r.text
+    assert "Up to date" in r.text
+    assert "The decision brief is what you take into a scope review" not in r.text
+
+
+def test_a_second_click_does_not_reseed_or_duplicate_the_brief(client):
+    """Mirrors `test_a_second_click_returns_to_the_same_session_rather_than_making_another` for the
+    model: idempotent on identity, not a fresh write every time."""
+    from requivo.services.artifacts import ArtifactService
+
+    first = _seed(client)
+    before = ArtifactService().list(first)["brief"]
+    second = _seed(client)
+    assert second == first
+    after = ArtifactService().list(first)["brief"]
+    assert after == before
+
+
+def test_a_readers_own_saved_brief_is_never_overwritten_by_a_later_click(client):
+    """A brief already recorded against this session -- generated for real, with the reader's own
+    key, however it got there -- must not be silently replaced by the bundled one on a later click
+    of the same button. Saved directly through the service rather than a real generation, so this
+    stays inside the module's no-provider guard above."""
+    from requivo.services.artifacts import ArtifactService
+
+    slug = _seed(client)
+    written = "# Decision Brief\n\nSomething the reader actually generated.\n"
+    ArtifactService().save(slug, "brief", written, source_revision=1)
+
+    r = client.post("/sessions/example", follow_redirects=False)
+    assert r.status_code == 303
+    assert ArtifactService().show(slug, "brief") == written
+
+
+def test_the_bundled_brief_is_read_rather_than_restated():
+    """Sibling of `test_the_bundled_payload_is_read_rather_than_restated`: the brief content ships
+    in the wheel, it is not assembled at seed time."""
+    from requivo.web.example import example_brief
+
+    brief = example_brief()
+    assert brief.startswith("# Decision Brief")
+    assert "One word, two different problems" in brief

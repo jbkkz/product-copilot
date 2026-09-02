@@ -8,7 +8,7 @@ CLI. Viewing and downloading read the saved content through the service; a route
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from requivo.render.html import markdown_to_html
 from requivo.services.artifacts import ARTIFACT_FILENAMES, ArtifactService, UnknownArtifactTypeError
@@ -47,6 +47,13 @@ def generate_artifact(
     with track_web_usage(f"web-{artifact_type}") as spend:
         discovery.generate(slug, artifact_type, surface=f"web-{artifact_type}")
         usage = usage_view(spend)
+    if request.headers.get("HX-Request") != "true":
+        # A plain form submit (#428): the form now carries `method="post" action="…"` beside its
+        # `hx-post`, so a no-JS reader reaches this route as a real POST rather than the bare GET a
+        # form with neither attribute falls back to. There is no fragment to swap and nowhere to put
+        # the spend footprint but the log, which `track_web_usage` already wrote — the session page
+        # this redirects to shows the freshly generated document.
+        return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
     return templates.TemplateResponse(request, "artifacts/list.html", {
         "s": session_detail(sessions, slug), "provider": provider_status(),
         "usage": usage,

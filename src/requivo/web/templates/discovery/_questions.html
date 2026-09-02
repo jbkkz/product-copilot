@@ -30,7 +30,12 @@
     documents that rest on it are marked for updating.</p>
   {% endif %}
 
-  <form hx-post="/sessions/{{ s.slug }}/answers" hx-target="#session-body" hx-swap="outerHTML">
+  {# `method`/`action` are the no-JS fallback (#428): with htmx loaded, hx-post takes over and this
+     plain submit never fires. Without it, this was the one form in the tree with no fallback — a
+     no-JS submit went out as a bare GET to the current URL, silently dropping the typed answers and
+     putting the CSRF token in the URL and browser history. #}
+  <form method="post" action="/sessions/{{ s.slug }}/answers"
+        hx-post="/sessions/{{ s.slug }}/answers" hx-target="#session-body" hx-swap="outerHTML">
     {% include "_csrf.html" %}
     <input type="hidden" name="expected_revision" value="{{ s.revision }}">
     {% if s.questions %}
