@@ -179,7 +179,11 @@ def create_app() -> FastAPI:
         # method and path are enough to locate it; the request body is deliberately not logged, since
         # it is the user's own product request.
         logger.exception("unhandled error serving %s %s", request.method, request.url.path)
-        return _render_error(request, 500, "internal_error", "Something went wrong on the server.")
+        response = _render_error(request, 500, "internal_error", "Something went wrong on the server.")
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = _REFERRER_POLICY
+        response.headers["Content-Security-Policy"] = _CSP
+        return response
 
     app.include_router(health.router)
     app.include_router(home.router)
