@@ -172,6 +172,14 @@ constructor argument rather than a fork of the orchestration:
 DiscoveryService(MyProvider()).start("A leave approval system.")
 ```
 
+`AnthropicProvider` itself takes an optional fixed model id (`AnthropicProvider(client=…, model=…)`,
+#434): unset (the default), every call resolves its model through `current_model_name()`'s
+`REQUIVO_MODEL`/`MODEL` env chain exactly as before; set, that id wins outright with no env read at
+all, threaded into every completion call, `model_name()` and `provenance()`. This is what lets two
+`AnthropicProvider` instances run two different models in one process — per-tenant or per-plan model
+selection without mutating process environment, which the ambient env chain cannot do safely for more
+than one caller at a time. See [cloud-boundary.md](cloud-boundary.md#36-optional-model-id-injection-on-the-provider-434--landed).
+
 **That is the cost of the swap, not the cost of the implementation** — and the two were stated here
 as one until #273 measured them apart. Roughly 400 of the 1,057 lines under `providers/anthropic` are
 provider-neutral orchestration: the per-operation message builders, the `_GENERATORS` / `_OP_PROMPTS`
