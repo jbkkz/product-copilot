@@ -699,19 +699,30 @@ def _git(args: list[str]) -> tuple[bool, str]:
     clone, or a path having no history in HEAD are all things a caller has to report, never crash on
     -- the same rule `turn_lens` already applies to its own "nothing to measure" case, one section up.
 
-    `encoding="utf-8"` explicitly (invariant 16): `text=True` alone decodes with the *locale's*
-    codec, not UTF-8, and git writes commit subjects as UTF-8 regardless of the locale this process
-    happens to run under -- the same mismatch invariant 16 names for a file this project writes and
-    reads. `UnicodeDecodeError` is caught alongside the process-launch failures so a non-UTF-8 byte
+    Captured as **bytes** and decoded explicitly with `.decode("utf-8")` (invariant 16) --
+    deliberately not `subprocess.run(text=True)`, which is what this call used to be (#456).
+    `text=True` turns on Python's universal-newlines translation, which rewrites a lone `\r` --
+    and every `\r\n` -- in the child's stdout into `\n` *before* this function, or any caller, ever
+    sees the string. `baseline_commits_since` below splits multi-commit `git log` output into
+    records on a real `\n` -- the exact byte git itself inserts between formatted entries, and the
+    correct boundary to split on. The rewrite happened one layer beneath that split, inside the
+    subprocess pipe itself: a commit subject carrying a raw `\r` arrived as an *already-forged*
+    second `\n`-terminated record, so no change to the split call downstream could have caught it
+    on its own (#456). Decoding bytes here, once, removes the rewrite for every caller of `_git` --
+    present and future -- rather than relying on each new subject-bearing `git log` call to
+    remember it independently.
+
+    `UnicodeDecodeError` is caught alongside the process-launch failures so a non-UTF-8 byte
     in a commit subject is a reported `unknown`, never a crash mid-readout."""
     try:
-        res = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True,
-                             encoding="utf-8", timeout=10)
+        res = subprocess.run(["git", *args], cwd=REPO, capture_output=True, timeout=10)
+        stdout = res.stdout.decode("utf-8")
+        stderr = res.stderr.decode("utf-8")
     except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
         return False, str(exc)
     if res.returncode != 0:
-        return False, res.stderr.strip() or "git exited non-zero with no stderr"
-    return True, res.stdout
+        return False, stderr.strip() or "git exited non-zero with no stderr"
+    return True, stdout
 
 
 _SEP = "\x1f"  # unit separator: unlike "|" or ":" it never appears in a commit subject
@@ -786,7 +797,15 @@ def baseline_commits_since(rel_path: str, watched: tuple[str, ...] = WATCHED_PAT
                               f"{baseline[0]}..HEAD", "--", *watched])
         if ok:
             since_commits = []
-            for line in since_out.splitlines():
+            # split("\n"), never splitlines() (#456): splitlines() treats nine characters as ending
+            # a line -- \r, \x0b, \x0c, \x1c, \x1d, \x1e, \x85, U+2028, U+2029 -- none of which ends a
+            # `git log --format` record. A commit subject carrying any of them was becoming a second,
+            # forged row, with the text past the boundary landing in that forged row's own `sha`
+            # field. The one true boundary between records is the literal `\n` git itself writes
+            # between formatted entries, which is exactly what `split("\n")` and nothing else splits
+            # on -- and only reliably so once `_git` hands back bytes decoded without the
+            # universal-newlines rewrite (see `_git`'s own docstring).
+            for line in since_out.split("\n"):
                 if not line:
                     continue
                 sha, _, rest = line.partition(_SEP)

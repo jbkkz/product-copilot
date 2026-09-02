@@ -20,7 +20,7 @@ from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
 from requivo.core.persistence import load_model
-from requivo.core.selectors import display_text
+from requivo.core.selectors import display_document, display_text
 from requivo.deterministic import is_file_argument, print_json, read_source
 from requivo.deterministic import register as register_deterministic
 from requivo.paths import DEMO
@@ -747,7 +747,15 @@ def _cmd_brief(a, client) -> None:
 def _cmd_prd(a, client) -> None:
     slug, disco = _generator_service(a, client)
     result = disco.generate(slug, "prd", surface="cli-prd")
-    print(prd_markdown(result.artifact))
+    # `display_document`, not `display_text` (#449 -- the #213 class, on the path that fires on
+    # every generation rather than only on a later `artifact show`): `prd_markdown` returns a full
+    # multi-paragraph document -- headings, bullet lists, a requirements table -- whose newlines and
+    # tabs are its layout, exactly `display_document`'s own reason for existing (#430). At print time
+    # only, the same way `_cmd_artifact_show` guards a saved artifact's content: the string written
+    # to disk two lines below, via `_wrote`, is `result.artifact` rendered by the same `prd_markdown`
+    # call inside `disco.generate` -- untouched, so the byte-identical-on-disk promise
+    # `core/integrity.py`'s hashing rests on stays intact. Only what reaches this terminal changes.
+    print(display_document(prd_markdown(result.artifact)))
     _wrote(slug, result, "PRD")
 
 
@@ -776,7 +784,10 @@ def _cmd_estimate(a, client) -> None:
 def _cmd_criteria(a, client) -> None:
     slug, disco = _generator_service(a, client)
     result = disco.generate(slug, "criteria", surface="cli-criteria")
-    print(criteria_markdown(result.artifact))
+    # `display_document`, same reason as `_cmd_prd` just above (#449): `criteria_markdown` is a
+    # multi-scenario Given/When/Then document, not a handful of single-line fields, and only the
+    # terminal print is guarded -- the saved artifact stays byte-identical.
+    print(display_document(criteria_markdown(result.artifact)))
     _wrote(slug, result, "acceptance criteria")
 
 
@@ -784,7 +795,13 @@ def _cmd_epic(a, client) -> None:
     slug, disco = _generator_service(a, client)
     result = disco.generate(slug, "epic", surface="cli-epic")  # one model call; every view renders from it
     epic = result.artifact
-    print(epic_markdown(epic))
+    # `display_document`, same reason as `_cmd_prd` above (#449): a milestone/goal preamble, scope
+    # bullets, and a per-issue section with its own description -- a document, not a field list.
+    # The three `if a.export_json`/`a.github`/`a.gitlab` prints below are untouched by this: each
+    # prints a validated artifact *path* off `write_artifact_file`'s return, the same chokepoint
+    # `_wrote` goes through, never the epic's own generated content -- out of #449's scope, not an
+    # oversight.
+    print(display_document(epic_markdown(epic)))
     _wrote(slug, result, "epic")
     if a.export_json:
         # `write_artifact_file`, not `repo.save_artifact`: these three are extra *views* of one
@@ -803,7 +820,10 @@ def _cmd_epic(a, client) -> None:
 def _cmd_release(a, client) -> None:
     slug, disco = _generator_service(a, client)
     result = disco.generate(slug, "release", surface="cli-release", version=a.version)
-    print(release_markdown(result.artifact))
+    # `display_document`, same reason as `_cmd_prd` above (#449): a heading, a summary paragraph and
+    # three bulleted sections -- a short document, still one whose blank lines and structure are its
+    # layout, not incidental whitespace a single-line guard could collapse without loss.
+    print(display_document(release_markdown(result.artifact)))
     _wrote(slug, result, "release notes")
 
 

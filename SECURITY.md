@@ -40,7 +40,8 @@ generated artifacts before acting on them.
 
 Artifacts saved to `.requivo/sessions/<slug>/artifacts/` are unsanitized markdown: they are the
 model's own reply, written to disk as-is, so that the file, the integrity hash and the web download
-all stay byte-identical to what was generated. `requivo artifact show` neutralizes control
+all stay byte-identical to what was generated. `requivo artifact show`, and `requivo prd`/`criteria`/
+`epic`/`release` on the ordinary generation that first produces the document, neutralize control
 characters (a raw escape sequence, for instance) before printing to your terminal; opening the file
 directly with `cat` or another tool that does not do the same is at the reader's own risk.
 
