@@ -9,11 +9,16 @@ impact or confidence is only trustworthy as a signal if it is stable across the 
 that flickers run-to-run is noise and can't be used to detect change. This module computes that
 consensus and the per-request stability (the empirical noise floor); `golden_run` captures the K runs,
 `golden_diff` compares two K-run baselines through it.
+
+A separate, unrelated concern also lives here: `baseline_commits_since` (below) answers whether a
+*committed* baseline itself predates a real change to what a capture measures -- see its own section
+for why (#405, #410).
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -650,3 +655,143 @@ def turn_movements(old: list[list[Turn]] | None, new: list[list[Turn]] | None) -
         out[f"{key}_added"] = sorted(after - before)
         out[f"{key}_removed"] = sorted(before - after)
     return out
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Baseline freshness — is a committed capture even current with respect to what it measures?
+#
+# `golden_diff` compares a fresh working-tree capture against the baseline committed in HEAD and
+# reports what moved, but nothing in that comparison says whether the *baseline itself* was captured
+# against the prompt/context/framework assets and generator code the tree carries today, or against
+# an older version of them. So an editor who changes one prompt and runs the harness sees the
+# combined effect of their own edit *and* every earlier asset change nobody re-captured against, with
+# no way to tell the two apart — the reader becomes the control, silently. That happened twice, and
+# both instances fund this per CLAUDE.md's own meta-guard budget rule (two named instances, folded
+# into the existing golden_lib/golden_diff tier rather than a new one):
+#
+#   #405  three commits under `src/requivo/assets/{prompts,context,framework}/` landed between one
+#         committed baseline and the next, and nothing said so — the baseline quietly answered a
+#         different question than `golden_diff` reported it as answering, for a month.
+#   #410  `ba526f6` dropped `indent=2` from the JSON `generators.py` sends as the *user* message for
+#         every `--brief` capture (`advise(...)`'s `out.model_dump_json()`). `prompt_version()` only
+#         hashes the *system* prompt and `tests/test_golden_baselines.py` only compares `request`/
+#         `answers` against `requests.md`, so nothing in the tree could see it: every committed
+#         `--brief` baseline was captured against a user message the tree no longer sends, three
+#         commits after the #405 fix landed, and the suite stayed green throughout.
+#
+# `WATCHED_PATHS` is scoped to exactly those two instances — the assets a capture's system prompt is
+# built from, and the one module that assembles every on-wire *user* message. It is deliberately not
+# exhaustive of everything that can change what a capture measures: `core/context.py`'s own assembly
+# logic, `completion.py`'s retry/JSON-extraction behaviour, and the model id itself are all real ways
+# a capture's meaning can move without a commit under `WATCHED_PATHS` — none of them has a reproduced
+# instance backing it yet, so none is in scope (the same bar CLAUDE.md's meta-guard section applies
+# to a new check generally). `baseline_commits_since` and everything downstream of it says exactly
+# which paths it checked, in its own output, rather than reading as coverage it does not have.
+WATCHED_PATHS: tuple[str, ...] = (
+    "src/requivo/assets/prompts",
+    "src/requivo/assets/context",
+    "src/requivo/assets/framework",
+    "src/requivo/providers/anthropic/generators.py",
+)
+
+
+def _git(args: list[str]) -> tuple[bool, str]:
+    """Run one git command inside REPO. Never raises: git being unavailable, this being a shallow
+    clone, or a path having no history in HEAD are all things a caller has to report, never crash on
+    -- the same rule `turn_lens` already applies to its own "nothing to measure" case, one section up.
+
+    `encoding="utf-8"` explicitly (invariant 16): `text=True` alone decodes with the *locale's*
+    codec, not UTF-8, and git writes commit subjects as UTF-8 regardless of the locale this process
+    happens to run under -- the same mismatch invariant 16 names for a file this project writes and
+    reads. `UnicodeDecodeError` is caught alongside the process-launch failures so a non-UTF-8 byte
+    in a commit subject is a reported `unknown`, never a crash mid-readout."""
+    try:
+        res = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True,
+                             encoding="utf-8", timeout=10)
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
+        return False, str(exc)
+    if res.returncode != 0:
+        return False, res.stderr.strip() or "git exited non-zero with no stderr"
+    return True, res.stdout
+
+
+_SEP = "\x1f"  # unit separator: unlike "|" or ":" it never appears in a commit subject
+
+
+def _freshness_from_git_data(is_shallow: bool | None, baseline: tuple[str, str] | None,
+                              since_commits: list[dict] | None,
+                              baseline_error: str | None = None) -> dict:
+    """The pure core `baseline_commits_since` wraps: three states over already-fetched git data, so
+    they can be exercised without a real repository (see `tests/test_golden_lib.py`).
+
+    `None` in `baseline`/`since_commits` stands for "that git call found nothing to answer with" --
+    see `baseline_commits_since` for what produces each one. `baseline_error` is a *different* shape
+    of `None`: the git call for the baseline's own commit did not merely come back empty, it failed
+    outright (git unavailable, corrupted object, permission error), and that has its own reason
+    rather than folding into "no commit history" -- a real failure and a genuinely history-less path
+    are different facts a maintainer would investigate differently, and collapsing them was reported
+    as a finding on this function's first review (self-review of #405, before the fold happened).
+
+    `is_shallow=True` gets its own `unknown` reason rather than folding into a git-failed case: the
+    git calls all *succeed* on a shallow clone, they just answer a truncated question -- the one
+    input here that fails silently rather than loudly, which is exactly the shape `golden_diff`'s own
+    docstring already refuses for a byte comparison ("a capture identical to HEAD reports not
+    re-captured, never no change"). This is that rule one layer up, for a commit *count* instead."""
+    if is_shallow is None:
+        return {"state": "unknown", "reason": "could not tell whether this is a shallow clone"}
+    if is_shallow:
+        return {"state": "unknown",
+                "reason": "shallow clone -- commit history is truncated, so a count of commits "
+                          "since the baseline cannot be trusted"}
+    if baseline_error is not None:
+        return {"state": "unknown",
+                "reason": f"git log (last commit touching the baseline) failed: {baseline_error}"}
+    if baseline is None:
+        return {"state": "unknown", "reason": "no commit history for this baseline in HEAD"}
+    if since_commits is None:
+        return {"state": "unknown", "reason": "git log (commits since the baseline) failed"}
+    _, captured_at = baseline
+    return {"state": "stale" if since_commits else "current",
+            "captured_at": captured_at, "commits": since_commits}
+
+
+def baseline_commits_since(rel_path: str, watched: tuple[str, ...] = WATCHED_PATHS) -> dict:
+    """Is the committed baseline at `rel_path` (relative to REPO -- e.g.
+    ``fixtures/golden/<slug>.runs.json``) current with respect to `watched`, or how many commits
+    landed since its own last commit in HEAD touching one of those paths.
+
+    Three states in the returned dict's `state`: ``current``, ``stale`` (with `commits`, oldest
+    first), or ``unknown`` (with `reason`) -- see `_freshness_from_git_data` for what decides each.
+    `unknown` must never be read as `current` by a caller: every caller in this file branches on
+    `state` explicitly rather than only checking `commits`, because an empty `commits` list means two
+    different things depending on which state it sits under."""
+    ok, shallow_out = _git(["rev-parse", "--is-shallow-repository"])
+    is_shallow = (shallow_out.strip() == "true") if ok else None
+
+    ok, log_out = _git(["log", "-1", f"--format=%H{_SEP}%cI", "HEAD", "--", rel_path])
+    baseline = None
+    # A `False` here is the git call itself failing, not the ordinary "no history yet" case below --
+    # kept apart so `_freshness_from_git_data` can give each its own reason.
+    baseline_error = None if ok else log_out
+    if ok and log_out.strip():
+        sha, _, captured_at = log_out.strip().partition(_SEP)
+        baseline = (sha, captured_at)
+
+    since_commits = None
+    if baseline is not None:
+        # --reverse: git log's default is newest-first, and the docstring above promises oldest
+        # first -- the order that matters for `golden_diff`'s own truncation (`commits[:5]`), since
+        # the *earliest* watched-path commit after the baseline is usually the one that actually
+        # started the drift, and hiding it behind "... and N more" would bury the lead.
+        ok, since_out = _git(["log", "--reverse", f"--format=%H{_SEP}%cI{_SEP}%s",
+                              f"{baseline[0]}..HEAD", "--", *watched])
+        if ok:
+            since_commits = []
+            for line in since_out.splitlines():
+                if not line:
+                    continue
+                sha, _, rest = line.partition(_SEP)
+                date, _, subject = rest.partition(_SEP)
+                since_commits.append({"sha": sha[:9], "date": date[:10], "subject": subject})
+
+    return _freshness_from_git_data(is_shallow, baseline, since_commits, baseline_error)
+

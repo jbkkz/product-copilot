@@ -44,6 +44,8 @@ from golden_lib import (  # noqa: E402
     GOLDEN,
     MEASURABLE_DEPTH,
     REPO,
+    WATCHED_PATHS,
+    baseline_commits_since,
     brief_consensus,
     brief_movements,
     configure_output,
@@ -68,23 +70,62 @@ def _head_version(rel_path: str) -> str | None:
     return res.stdout if res.returncode == 0 else None
 
 
+def _show_freshness(rel_path: str) -> None:
+    """Is the committed baseline at `rel_path` current with respect to `WATCHED_PATHS`, or how many
+    commits since it was captured touched one of them? Printed first, before any lens output — the
+    worked example #405's own third acceptance criterion asks for: "baseline captured 2026-08-01; 3
+    asset commits since" turns a day of measurement into one glance, because without it the reader
+    *is* the control — nothing else says whether the movement a lens reports below is a working-tree
+    edit's own effect or the accumulation of commits nobody has re-captured against yet (#405, #410).
+
+    Three states, and `unknown` must never render as `current` — the same collapse `golden_diff`'s
+    own module docstring already refuses for a byte-identical capture, one layer up: a git failure
+    and a clean baseline must not read the same way."""
+    fr = baseline_commits_since(rel_path)
+    watched = ", ".join(WATCHED_PATHS)
+    if fr["state"] == "unknown":
+        print(f"  ? baseline freshness: could not tell ({fr['reason']})")
+        return
+    if fr["state"] == "current":
+        print(f"  · baseline current as of {fr['captured_at']} (no commits since touching {watched})")
+        return
+    commits = fr["commits"]
+    print(f"  ⚠ baseline captured {fr['captured_at']}; {len(commits)} commit(s) touching {watched} "
+          f"since — any movement below may be their combined effect, not only a working-tree edit:")
+    for c in commits[:5]:
+        # A commit subject is contributor-written text, exactly the class `questions_one` already
+        # treats as untrusted for this file's own stated reason (invariant 14, #40): raw `\r` in a
+        # subject would return the cursor to column 0 and let it overwrite the date/sha prefix it
+        # sits behind, forging what reads as a different line of this readout.
+        print(f"      {c['date']}  {c['sha']}  {display_token(c['subject'])}")
+    if len(commits) > 5:
+        print(f"      … and {len(commits) - 5} more")
+
+
 def diff_one(slug: str) -> str:
     """Print the signal for one request. Returns its status: ``moved``, ``flat``, or ``stale``
     (no capture on disk, or a capture that is byte-identical to HEAD and so never landed)."""
     path = runs_path(slug)
+    rel_path = f"fixtures/golden/{slug}.runs.json"
+    old_text = _head_version(rel_path)
+
+    print(f"\n{slug}")
+    if old_text is not None:
+        # Freshness is a fact about the *committed* baseline — there is nothing to say about it when
+        # there isn't one yet; the "⊕ NEW" branch below already names that state on its own.
+        _show_freshness(rel_path)
+
     if not path.exists():
-        print(f"\n{slug}\n  ! no working-tree capture (run golden_run.py first)")
+        print("  ! no working-tree capture (run golden_run.py first)")
         return "stale"
 
     new = load_runs(path.read_text(encoding="utf-8"))
-    old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
-
     new_text = path.read_text(encoding="utf-8")
 
     if old_text is None:
         # No baseline yet — report the noise floor so we know how trustworthy future diffs will be.
         st = stability(new)
-        print(f"\n{slug}  ⊕ NEW (no baseline in HEAD)")
+        print("  ⊕ NEW (no baseline in HEAD)")
         print(f"  noise floor  {st['unanimous']['impact']}/{st['total_slots']} slots unanimous on "
               f"impact, {st['unanimous']['state']}/{st['total_slots']} on confidence, across "
               f"{st['n']} runs")
@@ -100,13 +141,12 @@ def diff_one(slug: str) -> str:
         # Byte-identical to HEAD means the capture never landed — the engine is non-deterministic, so
         # a genuine re-run can't reproduce a file exactly. Reporting "no change" here would be a false
         # all-clear, which is the one failure mode a regression lens must not have.
-        print(f"\n{slug}\n  ! capture identical to HEAD — not re-captured (re-run golden_run.py)")
+        print("  ! capture identical to HEAD — not re-captured (re-run golden_run.py)")
         return "stale"
 
     old = load_runs(old_text)
     m = movements(old, new)
 
-    print(f"\n{slug}")
     # Every lens runs, and the verdict is the union of what the ones that ran found. Independence is
     # the point, not the ordering: each watches something the others cannot see, so a null result
     # from one is not evidence against a finding from another. CLAUDE.md says this directly about
@@ -318,10 +358,14 @@ def questions_one(slug: str) -> None:
     a squash there would change what the lens concludes. `_cluster_headlines` is the one place the
     entry-squash *is* right, and it does it, for the reason stated at that line."""
     path = runs_path(slug)
-    old_text = _head_version(f"fixtures/golden/{slug}.runs.json")
+    rel_path = f"fixtures/golden/{slug}.runs.json"
+    old_text = _head_version(rel_path)
     if not path.exists() or old_text is None:
         print(f"\n{slug}\n  ! need both a working-tree capture and a HEAD baseline")
         return
+    # A baseline is what this whole readout is about here too -- the freshness line is not just a
+    # `diff_one` fixture, it belongs to every reader of a per-request baseline (#405).
+    _show_freshness(rel_path)
     new_text = path.read_text(encoding="utf-8")
     for title, text in (("HEAD", old_text), ("working tree", new_text)):
         print(f"\n{slug} — {title}")

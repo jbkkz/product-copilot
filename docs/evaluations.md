@@ -103,3 +103,32 @@ one that has drifted out of step, unless the slug is a declared exception in tha
 `_DECLARED_DRIFT` naming the issue that owns the (paid) re-capture. That dict is empty as of the
 seven-baseline re-capture in #405 — every committed baseline currently agrees with `requests.md` —
 and stays in the file as the mechanism for the next asset edit that outruns its re-capture.
+
+## Baseline freshness — is the committed capture even current?
+
+`tests/test_golden_baselines.py` (above) catches a baseline whose stored *request*/*answers* disagree
+with `requests.md`. It says nothing about a baseline that still agrees with `requests.md` but was
+captured before a prompt, context card, or the generator code that assembles the on-wire messages,
+changed underneath it — which is a different way for a baseline to be measuring something other than
+what a reader assumes.
+
+`golden_diff` reports that too now, as the first line of every request's readout, before any lens
+output: whether a commit touching `WATCHED_PATHS` (`scripts/golden_lib.py` —
+`src/requivo/assets/{prompts,context,framework}/` and
+`src/requivo/providers/anthropic/generators.py`) landed since the committed baseline's own last
+commit in HEAD. Three states, and the third never collapses into the first:
+
+- **current** — no commit touching `WATCHED_PATHS` since the baseline was captured.
+- **stale** — one or more did; each is named with its date and subject, so a movement reported below
+  can be told apart from a working-tree edit's own effect.
+- **unknown** — git could not answer (unavailable, a shallow clone, or the baseline has no commit
+  history in HEAD). Never rendered as `current` — the collapse this file's "It measures movement, not
+  improvement" section already refuses for a byte-identical capture applies here to a commit count.
+
+Funded by two reproduced instances: #405 itself (three asset commits landed between one baseline
+capture and the next, unnoticed for a month) and #410 (`ba526f6` dropped `indent=2` from the JSON
+`generators.py` sends as the user message for every `--brief` capture — invisible to
+`prompt_version()`, which hashes only the *system* prompt, and to `tests/test_golden_baselines.py`,
+which compares only `request`/`answers`). `WATCHED_PATHS` is scoped to exactly those two mechanisms
+and says so in its own printed line; it is not a claim that nothing else can move what a capture
+measures.

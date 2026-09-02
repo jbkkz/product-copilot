@@ -13,11 +13,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import golden_lib  # noqa: E402
 from golden_lib import (  # noqa: E402
+    WATCHED_PATHS,
     AnswerSheet,
     Turn,
     _cluster_headlines,
+    _freshness_from_git_data,
     answers_for_turn,
+    baseline_commits_since,
     brief_consensus,
     brief_movements,
     consensus,
@@ -448,3 +452,232 @@ def test_load_answers_reads_the_persisted_sheet():
 def test_load_answers_is_empty_for_a_single_pass_capture():
     text = json.dumps({"request": "r", "runs": [_model(problem=Impact.high).model_dump()]})
     assert load_answers(text) == {}
+
+# -- #405/#410: baseline freshness -- a committed baseline predating a real commit that changes what
+# a capture measures must be visible, without a control run, before any lens output is read ---------
+#
+# `_freshness_from_git_data` is the pure core `baseline_commits_since` wraps around three git calls
+# (is-shallow, last-commit-touching-the-baseline, commits-since-touching-`watched`). Exercising it
+# directly, over synthetic inputs, is what lets the three states below be proven without a real git
+# repository -- the brief's own instruction: "give it a fixture rather than a capture."
+
+def test_a_baseline_with_no_commits_since_touching_watched_paths_is_current():
+    """must not fire -- the positive control for the test below: nothing touched a watched path
+    since the baseline's own commit, so there is nothing to warn about."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report == {"state": "current", "captured_at": "2026-08-01T00:00:00+00:00", "commits": []}
+
+
+def test_a_commit_touching_a_watched_path_since_the_baseline_marks_it_stale():
+    """must fire -- the #405 shape itself: a watched-path commit landed after the baseline's own
+    commit and the baseline never re-captured against it."""
+    commits = [{"sha": "abc123def", "date": "2026-09-01", "subject": "edit a prompt"}]
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=commits)
+    assert report["state"] == "stale"
+    assert report["captured_at"] == "2026-08-01T00:00:00+00:00"
+    assert report["commits"] == commits
+
+
+def test_a_shallow_clone_is_reported_unknown_not_current():
+    """must fire -- a shallow clone's git calls all *succeed*, they just answer a truncated
+    question, so `since_commits` can come back `[]` for the wrong reason (history was never fetched,
+    not "nothing changed"). CLAUDE.md's own rule for a byte-identical capture -- never render a
+    check that could not look as the clean case -- applies here to a commit count.
+
+    Asserts the full reason rather than a bare `"shallow" in ...` substring -- both `unknown` causes
+    below mention "shallow" (one is the positive answer, the other is not being able to ask), so a
+    substring shared by both would not notice the two reasons being swapped between branches."""
+    report = _freshness_from_git_data(is_shallow=True, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report == {"state": "unknown",
+                       "reason": "shallow clone -- commit history is truncated, so a count of "
+                                 "commits since the baseline cannot be trusted"}
+
+
+def test_an_unknown_shallow_check_itself_is_reported_unknown():
+    """must fire -- the `git rev-parse --is-shallow-repository` call itself failed (no git, not a
+    repository at all), which is a different reason from a positive shallow answer and has to say so
+    rather than assume a full clone. Full-string assertion for the same reason as the test above."""
+    report = _freshness_from_git_data(is_shallow=None, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=[])
+    assert report == {"state": "unknown",
+                       "reason": "could not tell whether this is a shallow clone"}
+
+
+def test_a_baseline_with_no_commit_history_is_reported_unknown():
+    """must fire -- the baseline file has no commit touching it in HEAD at all (e.g. staged but
+    never committed, or the path is wrong), so there is no anchor to count commits since. This is
+    the "found nothing" case, distinct from the "the call itself failed" case right below it -- the
+    positive control confirming they read differently."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=None, since_commits=[])
+    assert report["state"] == "unknown"
+    assert "no commit history" in report["reason"]
+
+
+def test_a_failed_baseline_log_is_reported_with_its_own_reason_not_as_no_history():
+    """must fire -- the git call for the baseline's own last commit did not merely come back empty,
+    it failed outright (git unavailable, a corrupted object, a permission error). Collapsing that
+    into "no commit history" was a self-review finding on this function (#405): a real failure and a
+    genuinely history-less baseline are different facts a maintainer would chase differently."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=None, since_commits=None,
+                                       baseline_error="fatal: bad object HEAD")
+    assert report["state"] == "unknown"
+    assert "bad object HEAD" in report["reason"], report
+    assert "no commit history" not in report["reason"], report
+
+
+def test_a_failed_since_log_is_reported_unknown_even_with_a_good_baseline():
+    """must fire -- the baseline's own commit was found, but the second git log (commits since,
+    scoped to `watched`) failed; a `None` here must not be read as "zero commits"."""
+    report = _freshness_from_git_data(is_shallow=False, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
+                                       since_commits=None)
+    assert report["state"] == "unknown"
+    assert "git log" in report["reason"]
+
+
+def test_watched_paths_cover_both_funding_instances():
+    """`WATCHED_PATHS` is what #405 and #410 fund -- narrowing it silently (or widening it past what
+    is reproduced) is exactly the "reads as covering the whole mechanism" trap the brief names."""
+    assert "src/requivo/assets/prompts" in WATCHED_PATHS
+    assert "src/requivo/assets/context" in WATCHED_PATHS
+    assert "src/requivo/assets/framework" in WATCHED_PATHS
+    assert "src/requivo/providers/anthropic/generators.py" in WATCHED_PATHS
+
+
+def test_baseline_commits_since_finds_a_known_stale_baseline_in_a_synthetic_repo(tmp_path, monkeypatch):
+    """Integration, not a fixture -- but a synthetic repo, not the real one (#450).
+
+    This test used to read the REAL requivo repo's own history and assert `stale` against a commit
+    (`ba526f6`, #410's own instance) known to postdate the golden re-capture. That works on a full
+    clone and fails on a shallow one: `actions/checkout`'s default `fetch-depth: 1` truncates history,
+    so `baseline_commits_since` correctly reported `unknown` rather than guessing `stale` -- CI red on
+    every leg, on the exact assertion this docstring used to make. That is the third state doing its
+    job, not a regression: the defect was pinning an environment-dependent verdict in a test, this
+    repo's own recurring shape (a harness rendering an environment limit as a product verdict) landing
+    on the guard written to prevent exactly that.
+
+    A synthetic, full-history repo removes the dependency while still proving the wrapper's plumbing
+    -- the two real `git log` calls, the field parsing, the `--reverse` ordering -- rather than only
+    the pure core in `_freshness_from_git_data` above.
+    `test_baseline_commits_since_orders_commits_oldest_first` already uses this shape; this is the
+    same one, isolated to the `stale` case alone so a reader can tell the two apart at a glance."""
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / "watched").mkdir()
+    (tmp_path / "watched" / "f.txt").write_text("0")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    (tmp_path / "watched" / "f.txt").write_text("1")
+    run("add", ".")
+    run("commit", "-q", "-m", "watched-path commit after the baseline")
+
+    monkeypatch.setattr(golden_lib, "REPO", tmp_path)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt", watched=("watched",))
+    assert report["state"] == "stale", report
+    assert len(report["commits"]) == 1, report
+    assert report["commits"][0]["subject"] == "watched-path commit after the baseline", report
+
+
+def test_baseline_commits_since_reports_unknown_on_a_real_shallow_clone(tmp_path, monkeypatch):
+    """The `unknown`-on-shallow behaviour, pinned end-to-end against a REAL shallow clone rather
+    than only the pure-core `_freshness_from_git_data(is_shallow=True, ...)` case above.
+
+    #450 is why this exists as its own test: CI's shallow checkout demonstrated this path is correct
+    by accident, on a test that was not supposed to be testing it -- losing that proof while fixing
+    the test that accidentally depended on it would be the worse trade. A local `git clone --depth 1`
+    off a synthetic source repo reproduces the same shallow-history shape CI's checkout produces,
+    offline and independent of this checkout's own depth (so it is exercised whether the tree running
+    it is itself shallow or full)."""
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def run(*args, cwd=source):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (source / "fixtures").mkdir()
+    (source / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    (source / "fixtures" / "b.txt").write_text("changed")
+    run("add", ".")
+    run("commit", "-q", "-m", "a second commit, so the clone below has real history to truncate")
+
+    shallow = tmp_path / "shallow"
+    # Two belt-and-suspenders reasons this clones a `file://` URI rather than a bare path, not
+    # just one:
+    #  - a same-machine `git clone` of a bare local PATH silently ignores `--depth` by default
+    #    (git's local-clone optimization hardlinks the whole object store), so a shallow clone
+    #    of a filesystem source needs something to defeat that -- verified by hand: a plain
+    #    `git clone --depth 1 <local-path>` here reports `is-shallow-repository: false`.
+    #  - a bare Windows path (`D:\...`) handed to git's own clone argument is exactly the
+    #    "value reaches a subprocess argv where the callee's option parser decides what it
+    #    means" shape this repo's own cross-platform section warns about -- old git releases
+    #    disambiguated a drive letter from the scp-like `host:path` remote syntax by a few
+    #    characters of heuristic. `Path.as_uri()` sidesteps the ambiguity entirely rather than
+    #    trusting git's parser to keep drawing that line correctly forever, so `--no-local` is
+    #    kept only as documentation of intent -- a `file://` URI already forces the non-local
+    #    transport that makes `--depth` take effect, verified by hand alongside the case above.
+    subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", source.resolve().as_uri(),
+                   str(shallow)], check=True, capture_output=True)
+
+    monkeypatch.setattr(golden_lib, "REPO", shallow)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt")
+    assert report["state"] == "unknown", report
+    assert "shallow" in report["reason"], report
+
+
+def test_baseline_commits_since_reports_unknown_for_a_path_with_no_history():
+    """must fire, the negative control for the integration test above: a path that was never
+    committed has no baseline commit to anchor on, so this is `unknown`, not `current`."""
+    report = baseline_commits_since("fixtures/golden/this-slug-does-not-exist.runs.json")
+    assert report["state"] == "unknown", report
+
+def test_baseline_commits_since_orders_commits_oldest_first(tmp_path, monkeypatch):
+    """git log's default order is newest-first; `baseline_commits_since`'s own docstring promises
+    oldest-first, and `golden_diff`'s truncation (`commits[:5]`, "... and N more") depends on that
+    order to keep the *earliest* watched-path commit visible -- usually the one that actually started
+    the drift -- rather than folding it into "and N more" behind four more recent ones.
+
+    A synthetic repo, not the real one: the real repo currently has only one watched-path commit
+    since its own last golden re-capture (see the test above), which isn't enough to prove an order."""
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / "watched").mkdir()
+    (tmp_path / "watched" / "f.txt").write_text("0")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    for i in range(1, 4):
+        (tmp_path / "watched" / "f.txt").write_text(str(i))
+        run("add", ".")
+        run("commit", "-q", "-m", f"watched commit {i}")
+
+    monkeypatch.setattr(golden_lib, "REPO", tmp_path)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt", watched=("watched",))
+    assert report["state"] == "stale", report
+    subjects = [c["subject"] for c in report["commits"]]
+    assert subjects == ["watched commit 1", "watched commit 2", "watched commit 3"], subjects
+
+

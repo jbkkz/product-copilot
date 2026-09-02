@@ -88,13 +88,24 @@ def _briefs(contested: list[str], complexity: Level = Level.high, *, runs: int =
     return [_brief(contested, complexity) for _ in range(runs)]
 
 
+_CURRENT_FRESHNESS = {"state": "current", "captured_at": "2026-01-01T00:00:00+00:00"}
+
+
 @pytest.fixture
 def diff(tmp_path, monkeypatch):
-    """`diff_one` over two forged baselines. Returns its verdict and everything it printed."""
-    def run(old_text: str | None, new_text: str) -> tuple[str, list[str]]:
+    """`diff_one` over two forged baselines. Returns its verdict and everything it printed.
+
+    `baseline_commits_since` shells out to real git, which has nothing to do with the lens logic
+    every other test in this module exercises -- stubbed to `current` by default so those tests stay
+    hermetic and deterministic (an unstubbed call would answer against *this* checkout's own git
+    history, which none of them are testing). The freshness tests below pass their own dict to reach
+    the other two states."""
+    def run(old_text: str | None, new_text: str, freshness: dict | None = None) -> tuple[str, list[str]]:
         monkeypatch.setattr(golden_lib, "GOLDEN", tmp_path)
         (tmp_path / "forged.runs.json").write_text(new_text, encoding="utf-8")
         monkeypatch.setattr(golden_diff, "_head_version", lambda _rel: old_text)
+        monkeypatch.setattr(golden_diff, "baseline_commits_since",
+                            lambda _rel: freshness or _CURRENT_FRESHNESS)
         buf = io.StringIO()
         with redirect_stdout(buf):
             verdict = golden_diff.diff_one("forged")
@@ -337,3 +348,59 @@ def test_a_harness_script_survives_a_console_that_cannot_encode_its_output(
     out = raw.getvalue()
     assert b"\\u" in out or b"\\x" in out, out
     assert sys.stdout.errors == "backslashreplace", sys.stdout.errors
+
+# -- #405/#410: baseline freshness is named before any lens output ------------------------------
+#
+# `diff_one` reports whether the committed baseline in HEAD predates a commit that changes what a
+# capture measures (`WATCHED_PATHS`) -- printed first, so a reader sees it before reading a single
+# slot or assessment movement below. Three states, and the third (`unknown`) must not collapse into
+# the clean one: `_freshness_from_git_data` is unit-tested directly in `tests/test_golden_lib.py`;
+# these three exercise `diff_one`'s own reporting of what `baseline_commits_since` hands back.
+
+def test_a_stale_baseline_is_named_before_any_lens_output(diff):
+    """The finding. A baseline that predates a watched-path commit has to say so, by name, ahead of
+    the slot/assessment sections -- CLAUDE.md's own worked example for this: "baseline captured
+    2026-08-01; 3 asset commits since"."""
+    stale = {"state": "stale", "captured_at": "2026-08-01T00:00:00+00:00",
+             "commits": [{"sha": "abc123def", "date": "2026-08-15", "subject": "edit engine.md"},
+                        {"sha": "def456abc", "date": "2026-08-20", "subject": "add a context card"}]}
+    verdict, lines = diff(_capture(completeness=80), _capture(completeness=70), freshness=stale)
+
+    warned = _line(lines, "baseline captured")
+    assert warned is not None, lines
+    assert "2026-08-01" in warned and "2 commit(s)" in warned, warned
+    assert _line(lines, "abc123def") is not None, lines
+    assert _line(lines, "edit engine.md") is not None, lines
+    # it leads the readout: printed before the slot section runs at all.
+    noise = _line(lines, "no change above the noise floor")
+    assert lines.index(warned) < lines.index(noise), lines
+
+
+def test_a_current_baseline_says_so_without_alarm(diff):
+    """must not fire, the positive control: a baseline with nothing watched changed since it was
+    captured reports plainly, with no warning glyph and no commit count -- the same shape
+    `golden_diff`'s own "verdict and challenges unchanged" line has for the assessment lens."""
+    current = {"state": "current", "captured_at": "2026-08-01T00:00:00+00:00"}
+    verdict, lines = diff(_capture(completeness=80), _capture(completeness=70), freshness=current)
+
+    said = _line(lines, "baseline current")
+    assert said is not None, lines
+    assert "2026-08-01" in said, said
+    assert _line(lines, "⚠") is None, lines
+    assert _line(lines, "commit(s)") is None, lines
+
+
+def test_an_unrecoverable_freshness_check_is_reported_as_unknown_not_current(diff):
+    """must fire -- the third state. A shallow clone or a git failure has to read as *could not
+    tell*, never silently as *current*: the same collapse `golden_diff`'s own module docstring
+    already refuses for a byte-identical capture, one layer up, for a commit count instead of a
+    byte comparison."""
+    unknown = {"state": "unknown", "reason": "shallow clone -- commit history is truncated"}
+    verdict, lines = diff(_capture(completeness=80), _capture(completeness=70), freshness=unknown)
+
+    said = _line(lines, "could not tell")
+    assert said is not None, lines
+    assert "shallow clone" in said, said
+    # must not fire: an unrecoverable check must never render as the clean state.
+    assert _line(lines, "baseline current") is None, lines
+
