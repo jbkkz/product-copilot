@@ -9,6 +9,10 @@ impact or confidence is only trustworthy as a signal if it is stable across the 
 that flickers run-to-run is noise and can't be used to detect change. This module computes that
 consensus and the per-request stability (the empirical noise floor); `golden_run` captures the K runs,
 `golden_diff` compares two K-run baselines through it.
+
+A separate, unrelated concern also lives here: `baseline_commits_since` (below) answers whether a
+*committed* baseline itself predates a real change to what a capture measures -- see its own section
+for why (#405, #410).
 """
 
 from __future__ import annotations
@@ -755,7 +759,11 @@ def baseline_commits_since(rel_path: str, watched: tuple[str, ...] = WATCHED_PAT
 
     since_commits = None
     if baseline is not None:
-        ok, since_out = _git(["log", f"--format=%H{_SEP}%cI{_SEP}%s",
+        # --reverse: git log's default is newest-first, and the docstring above promises oldest
+        # first -- the order that matters for `golden_diff`'s own truncation (`commits[:5]`), since
+        # the *earliest* watched-path commit after the baseline is usually the one that actually
+        # started the drift, and hiding it behind "... and N more" would bury the lead.
+        ok, since_out = _git(["log", "--reverse", f"--format=%H{_SEP}%cI{_SEP}%s",
                               f"{baseline[0]}..HEAD", "--", *watched])
         if ok:
             since_commits = []

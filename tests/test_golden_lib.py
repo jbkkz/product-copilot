@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import golden_lib  # noqa: E402
 from golden_lib import (  # noqa: E402
     WATCHED_PATHS,
     AnswerSheet,
@@ -483,21 +484,26 @@ def test_a_shallow_clone_is_reported_unknown_not_current():
     """must fire -- a shallow clone's git calls all *succeed*, they just answer a truncated
     question, so `since_commits` can come back `[]` for the wrong reason (history was never fetched,
     not "nothing changed"). CLAUDE.md's own rule for a byte-identical capture -- never render a
-    check that could not look as the clean case -- applies here to a commit count."""
+    check that could not look as the clean case -- applies here to a commit count.
+
+    Asserts the full reason rather than a bare `"shallow" in ...` substring -- both `unknown` causes
+    below mention "shallow" (one is the positive answer, the other is not being able to ask), so a
+    substring shared by both would not notice the two reasons being swapped between branches."""
     report = _freshness_from_git_data(is_shallow=True, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
                                        since_commits=[])
-    assert report["state"] == "unknown"
-    assert "shallow" in report["reason"]
+    assert report == {"state": "unknown",
+                       "reason": "shallow clone -- commit history is truncated, so a count of "
+                                 "commits since the baseline cannot be trusted"}
 
 
 def test_an_unknown_shallow_check_itself_is_reported_unknown():
     """must fire -- the `git rev-parse --is-shallow-repository` call itself failed (no git, not a
     repository at all), which is a different reason from a positive shallow answer and has to say so
-    rather than assume a full clone."""
+    rather than assume a full clone. Full-string assertion for the same reason as the test above."""
     report = _freshness_from_git_data(is_shallow=None, baseline=("sha1", "2026-08-01T00:00:00+00:00"),
                                        since_commits=[])
-    assert report["state"] == "unknown"
-    assert "shallow" in report["reason"]
+    assert report == {"state": "unknown",
+                       "reason": "could not tell whether this is a shallow clone"}
 
 
 def test_a_baseline_with_no_commit_history_is_reported_unknown():
@@ -543,4 +549,38 @@ def test_baseline_commits_since_reports_unknown_for_a_path_with_no_history():
     committed has no baseline commit to anchor on, so this is `unknown`, not `current`."""
     report = baseline_commits_since("fixtures/golden/this-slug-does-not-exist.runs.json")
     assert report["state"] == "unknown", report
+
+def test_baseline_commits_since_orders_commits_oldest_first(tmp_path, monkeypatch):
+    """git log's default order is newest-first; `baseline_commits_since`'s own docstring promises
+    oldest-first, and `golden_diff`'s truncation (`commits[:5]`, "... and N more") depends on that
+    order to keep the *earliest* watched-path commit visible -- usually the one that actually started
+    the drift -- rather than folding it into "and N more" behind four more recent ones.
+
+    A synthetic repo, not the real one: the real repo currently has only one watched-path commit
+    since its own last golden re-capture (see the test above), which isn't enough to prove an order."""
+    import subprocess
+
+    def run(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / "watched").mkdir()
+    (tmp_path / "watched" / "f.txt").write_text("0")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "b.txt").write_text("baseline")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline commit")
+    for i in range(1, 4):
+        (tmp_path / "watched" / "f.txt").write_text(str(i))
+        run("add", ".")
+        run("commit", "-q", "-m", f"watched commit {i}")
+
+    monkeypatch.setattr(golden_lib, "REPO", tmp_path)
+    report = golden_lib.baseline_commits_since("fixtures/b.txt", watched=("watched",))
+    assert report["state"] == "stale", report
+    subjects = [c["subject"] for c in report["commits"]]
+    assert subjects == ["watched commit 1", "watched commit 2", "watched commit 3"], subjects
+
 
