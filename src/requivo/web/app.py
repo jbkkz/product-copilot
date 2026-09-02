@@ -183,6 +183,7 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = _REFERRER_POLICY
         response.headers["Content-Security-Policy"] = _CSP
+        response.headers["Cache-Control"] = _CACHE_CONTROL
         return response
 
     app.include_router(health.router)

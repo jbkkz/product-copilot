@@ -47,6 +47,7 @@ def test_security_headers_present(app, client):
         # `test_the_policy_this_app_sends_and_the_origin_guard_it_runs_agree` (#47). What belongs here is
         # that the app states the policy rather than inheriting whatever the browser defaults to.
         assert "Referrer-Policy" in h
+        assert h.get("Cache-Control") == "no-store"
 
 
 # ── the disk cache (#218) ─────────────────────────────────────────────────────
