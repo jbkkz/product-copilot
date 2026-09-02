@@ -20,7 +20,12 @@ import re
 
 from requivo.web.config import MAX_ANSWERS_CHARS
 from requivo.web.security import CSRF_FIELD, csrf_token
-from tests.web.conftest import BRIEF_REPLY, HIGH_EXPLICIT, HIGH_INFERRED, engine_reply
+from tests.web.conftest import BRIEF_REPLY, HIGH_EXPLICIT, HIGH_INFERRED, Spend, engine_reply
+
+# Enough tokens that the rendered figure is unmistakable in a page of other numbers -- same
+# constant-naming convention as tests/web/test_web_usage.py's PAID/PAID_TOKENS.
+_PAID = Spend(input_tokens=9000, output_tokens=3000, cache_read_input_tokens=400)
+_PAID_TOKENS = "12,400"
 
 
 def _seed(client, slug="leave-approval"):
@@ -39,7 +44,13 @@ def test_the_three_forms_all_carry_a_plain_post_fallback(client, with_provider, 
     _seed(client)
     page = client.get("/sessions/leave-approval").text
 
-    answers_action = re.search(r'<form[^>]*action="(/sessions/leave-approval/answers)"', page)
+    # `method="post"` has to be required in the SAME tag as `action=` -- a form with `action=` but
+    # no `method=` still defaults to GET (the HTML spec, and the exact bug #428 fixes), so an
+    # assertion that only checks `action=` exists would stay green if a partial revert dropped just
+    # the `method="post"` half of the fallback. Caught in review (#428): the first version of this
+    # assertion did exactly that.
+    answers_action = re.search(r'<form[^>]*method="post"[^>]*action="(/sessions/leave-approval/answers)"',
+                               page)
     assert answers_action, "the answers form has no method=post action= fallback"
     assert 'hx-post="/sessions/leave-approval/answers"' in page
 
@@ -119,3 +130,52 @@ def test_a_js_generate_submit_is_unchanged_a_fragment_not_a_redirect(client, wit
     r = client.post("/sessions/leave-approval/artifacts/brief", follow_redirects=False)
     assert r.status_code == 200
     assert "Decision brief" in r.text
+
+
+# -- the spend footprint survives the redirect too (review finding, #428) ---------------
+
+def test_a_no_js_answers_submit_still_shows_what_it_spent(raw_client, with_provider):
+    """A no-JS submit that reaches the provider is real money, exactly like the htmx path -- and the
+    reader who just spent it is looking at the page the 303 lands on, not a fragment. Without
+    `carry_to`, `spend.py`'s stash is never written and the figure is gone the moment the redirect's
+    response body (which has none) would have carried it."""
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED),
+                  engine_reply(converged=True, problem=HIGH_EXPLICIT, business_rules=HIGH_EXPLICIT),
+                  spend=_PAID)
+    _seed(raw_client)
+    r = raw_client.post("/sessions/leave-approval/answers",
+                        data={"answers": "Exceptions go to HR.", "expected_revision": "1",
+                              CSRF_FIELD: csrf_token()},
+                        follow_redirects=False)
+    assert r.status_code == 303
+    landing = raw_client.get(r.headers["location"]).text
+    assert _PAID_TOKENS in landing, "the spend the no-JS turn just made is nowhere on the page it lands on"
+
+
+def test_a_no_js_generate_submit_still_shows_what_it_spent(raw_client, with_provider, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with_provider(engine_reply(converged=True, problem=HIGH_EXPLICIT), BRIEF_REPLY, spend=_PAID)
+    _seed(raw_client)
+    r = raw_client.post("/sessions/leave-approval/artifacts/brief",
+                        data={CSRF_FIELD: csrf_token()}, follow_redirects=False)
+    assert r.status_code == 303
+    landing = raw_client.get(r.headers["location"]).text
+    assert _PAID_TOKENS in landing, "the spend the no-JS generation just made is nowhere on the page it lands on"
+
+
+def test_a_no_js_redirect_does_not_leave_a_stash_the_next_unrelated_view_would_repeat(raw_client,
+                                                                                      with_provider):
+    """The htmx path must not gain a `carry_to` it never had: a fragment already shows its own
+    figure inline, and stashing it too would surface it a second time on some later, unrelated GET
+    of the same session -- the read-once contract `spend.py` documents, broken from the other side."""
+    with_provider(engine_reply(problem=HIGH_EXPLICIT, business_rules=HIGH_INFERRED),
+                  engine_reply(converged=True, problem=HIGH_EXPLICIT, business_rules=HIGH_EXPLICIT),
+                  spend=_PAID)
+    _seed(raw_client)
+    fragment = raw_client.post("/sessions/leave-approval/answers",
+                               data={"answers": "Exceptions go to HR.", "expected_revision": "1",
+                                     CSRF_FIELD: csrf_token()},
+                               headers={"HX-Request": "true"})
+    assert _PAID_TOKENS in fragment.text          # shown once, inline, on the fragment itself
+    later = raw_client.get("/sessions/leave-approval").text
+    assert _PAID_TOKENS not in later, "a later, unrelated view must not repeat a stashed figure"

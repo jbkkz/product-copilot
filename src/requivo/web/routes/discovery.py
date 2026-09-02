@@ -102,13 +102,22 @@ def submit_answers(
     # as the log (#253) — the same treatment artifact generation gets, and the opposite of the two
     # redirecting paths, which have no body to put it in. The ledger is opened around the call and
     # read after it: a view model over the ledger, never a second computation of the same numbers.
-    with track_web_usage("web-answer") as spend:
+    #
+    # A no-JS submit *is* one of the bodyless-redirect paths (#428) — `carry_to=slug` only when this
+    # request is about to become one, so `spend.py`'s stash is what the following GET reads. Passing
+    # it unconditionally would leave a figure stashed and unread behind the fragment path too, and
+    # the *next*, unrelated GET of the session (a reload, a later visit) would then show a spend
+    # receipt for an action that page had nothing to do with — read-once is deliberate exactly to
+    # avoid that (spend.py's own docstring), and it only works when a courtesy stash is left for the
+    # cases that actually need one.
+    with track_web_usage("web-answer", carry_to=None if is_htmx else slug) as spend:
         result = discovery.answer(slug, text, expected_revision=expected_revision,
                                   surface="web-answer")
         usage = usage_view(spend)
     if not is_htmx:
-        # No fragment to swap and nothing to carry: the session page itself already states what
-        # changed (#428). A 303 so a refresh cannot silently re-POST the answers a second time.
+        # No fragment to swap: the session page itself already states what changed (#428). The
+        # spend footprint rides the stash above rather than the response, which is what makes it
+        # visible after the 303 at all. A 303 so a refresh cannot silently re-POST the answers again.
         return RedirectResponse(url=f"/sessions/{slug}", status_code=303)
     return templates.TemplateResponse(request, "sessions/_session.html", {
         "s": session_detail(sessions, slug),

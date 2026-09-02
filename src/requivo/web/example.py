@@ -166,6 +166,18 @@ def seed_example(sessions: SessionService, artifacts: ArtifactService | None = N
     real generation cannot silently discard it. Checking presence directly is what makes a re-seed
     idempotent in the ordinary case (#429's acceptance criterion) without either question leaking
     into the other's answer.
+
+    **The check and the save run under the same lock, and that is not incidental** (invariant 9: a
+    precondition is only a check when it is held across the write it authorises). `artifacts.list()`
+    is an unlocked read and `artifacts.save()` only locks around itself, so a plain
+    check-then-act left a window: a reader's own real generation (`POST
+    .../artifacts/brief`, which reaches `ArtifactService.save` too) completing inside that window
+    would have its content silently overwritten by this call's unconditional save — the exact thing
+    the paragraph above says must never happen. `sessions.repo.lock` is the same lock
+    `ArtifactService.save` takes internally (`services/artifacts.py`), and it is per-thread
+    re-entrant (invariant 9's own note), so holding it here across both the read and the write
+    serialises this whole gate against any other caller's `save` for this slug, including a real
+    generation, without deadlocking against the nested call this function makes into its own `save`.
     """
     artifacts = artifacts if artifacts is not None else ArtifactService(repo=sessions.repo)
     meta = sessions.create_session(example_request(), slug=EXAMPLE_SLUG)
@@ -175,6 +187,7 @@ def seed_example(sessions: SessionService, artifacts: ArtifactService | None = N
                                   provenance={"surface": EXAMPLE_SURFACE})
         except RevisionConflictError:
             pass  # a concurrent click seeded it first — see the docstring
-    if "brief" not in artifacts.list(meta.slug):
-        artifacts.save(meta.slug, "brief", example_brief(), source_revision=1)
+    with sessions.repo.lock(meta.slug):
+        if "brief" not in artifacts.list(meta.slug):
+            artifacts.save(meta.slug, "brief", example_brief(), source_revision=1)
     return meta.slug
