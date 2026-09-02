@@ -107,15 +107,43 @@ testing = ["pytest>=8.0"]
 # HTTPX 0.25 adds transport socket_options, used by supported Anthropic SDKs.
 # 0.23.1 imports on Python 3.13 but fails client construction with SDK 0.49.
 # This is a tested dev-only floor, not a new runtime dependency (#312).
-# `setuptools>=64` matches the `[build-system]` floor above -- not a second pin, the same one
-# reused, so it cannot drift from what actually builds the wheel. dev-only: `tests/test_sdist_
-# contents_431.py` calls `setuptools.build_meta.build_sdist()` in-process to prove `MANIFEST.in`
-# actually excludes `tests/` from what PyPI ships; nothing at runtime imports setuptools.
+# `setuptools>=70.1.0`, NOT the `[build-system]` floor above (`>=64`) -- this is a second, higher
+# pin, deliberately, and the divergence is the point rather than an oversight.
+#
+# The two numbers answer different questions. `[build-system].requires` is what `pip` resolves
+# *fresh* inside an isolated build environment when installing this package from source -- the
+# Dependency floor leg's `--resolution lowest-direct` governs the *installed* environment, not that
+# ephemeral one, so `>=64` there was never actually exercised at the literal floor and stayed fine.
+# This line is a *direct* `dev`-extra dependency instead: the floor leg installs it at the literal
+# floor, and PR #453's CI run put a real number on what that costs -- `setuptools==64.0.0` under
+# Python 3.12 crashes `import pkg_resources` itself (`AttributeError: module 'pkgutil' has no
+# attribute 'ImpImporter'`, from `pkg_resources/__init__.py`'s own `register_finder` call), before
+# `tests/test_sdist_contents_431.py`'s or `tests/test_repository_conformance_424.py`'s own assertions
+# ever run -- not a defect in what those tests check, but the declared floor being unable to build
+# *anything* on the newer end of this project's own supported Python range (3.12 is a declared
+# classifier). Bisected directly against Python 3.12.13/3.12.14 rather than guessed: 64.0.0 through
+# 66.0.0 all crash identically; 66.1.0 is the first release whose `pkg_resources` guards the
+# now-removed `pkgutil.ImpImporter` and builds a correct sdist. `build_wheel` needs one version more:
+# below 70.1.0 `bdist_wheel` is not a setuptools command at all without a separately installed `wheel`
+# package (this project declares none), and 70.1.0 is where the command is vendored in directly --
+# confirmed on a bare venv with no `wheel` installed. `70.1.0` is therefore the lowest floor that
+# builds both a real sdist and a real wheel on Python 3.12 with nothing else added, still declaring
+# `python_requires>=3.8` itself so this project's own 3.9 floor is untouched.
+#
+# dev-only: `tests/test_sdist_contents_431.py` and `tests/test_repository_conformance_424.py` call
+# `setuptools.build_meta.build_sdist()`/`build_wheel()` in-process to prove what `MANIFEST.in` and
+# the package-data config actually ship; nothing at runtime imports setuptools. Both tests also
+# degrade to a named skip (see their own `pytest.skip` calls) if the installed setuptools cannot even
+# import `pkg_resources` on the running interpreter -- this floor is what keeps that skip from firing
+# on any CI leg today, and the skip is what keeps a *future* incompatible combination (an interpreter
+# newer than any tested here, a consumer's own older pin) from turning into a bare traceback in
+# fixture setup instead of a legible, named gap.
+#
 # `testing` joined the self-reference above (#424) rather than restating `pytest>=8.0` as a fourth
 # direct pin here -- the same reasoning, one extra later.
 dev = ["requivo[anthropic,web,testing]", "ruff>=0.6", "httpx>=0.25.0,<1",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
-       "pyright>=1.1.400,<2", "setuptools>=64"]
+       "pyright>=1.1.400,<2", "setuptools>=70.1.0"]
 
 [tool.pyright]
 # #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
