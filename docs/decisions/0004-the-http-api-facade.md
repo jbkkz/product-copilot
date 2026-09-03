@@ -235,9 +235,23 @@ right-in-English-wrong-in-RFC test that chose 409 over 426). The knob is denomin
 USD over the ledger's own stamped-rate arithmetic, with the unpriced-call case surfaced rather than
 guessed — invariant 6's provenance rule applied to money. Living at the service layer, it protects
 the CLI and every future surface too, which is the identical argument that moved input caps into
-services (#255). It is deliberately not auth and not a cloud quota: it is the local operator's
-"nothing on this box spends more than X without a human", and the hosted product layers its own
-accounting above it.
+services (#255). It is deliberately not auth and not a cloud quota, and the hosted product layers
+its own accounting above it.
+
+**The ceiling is per-operation, not machine-wide, and that is a real gap rather than a rounding
+error (#466).** `requivo.usage.track_usage()` scopes the ledger `SpendPolicy.check()` reads against
+a `ContextVar`, opened fresh by `cli.py` around one CLI command and by `web/spend.py`'s
+`track_web_usage()` around one paid web action — not every incoming request, only the routes that
+make a provider call — and discarded the moment that scope exits, so the figure the ceiling
+compares against resets to $0 on the very next call. Against the threat model #427 itself was filed
+against — a scripted client issuing many separate requests, each individually under any per-request
+ceiling — this mechanism gives no protection at all: cumulative spend across a session, or across a
+box, is unbounded. What actually closes that gap is named in #427's own "Out of scope" list (its
+issue text, not this record) and nowhere built yet: rate limiting at the HTTP layer, once the facade
+in this record exists to put it in front of, or a persistent, cross-request `SpendPolicy` variant
+with state that survives past a single call. Until one of those ships, read this ceiling for exactly
+what it is — a brake on one runaway operation — and not as "nothing on this box spends more than X
+without a human."
 
 ### 6. Versioning: what freezes, and the preconditions
 
