@@ -145,7 +145,23 @@ testing = ["pytest>=8.0"]
 #
 # `testing` joined the self-reference above (#424) rather than restating `pytest>=8.0` as a fourth
 # direct pin here -- the same reasoning, one extra later.
-dev = ["requivo[anthropic,web,testing]", "ruff>=0.6", "httpx>=0.25.0,<1",
+#
+# **`httpx>=0.26.0`, not 0.25.0, and the floor leg is the only thing that can see why (#472).**
+# `httpx` is a direct dependency, so `--resolution lowest-direct` installs it at its floor;
+# `httpx 0.25.0` pins `httpcore>=0.18.0,<0.19.0`, and `httpcore 0.18.0` reads `anyio.abc` at
+# import time. `anyio` is transitive, so the same resolution leaves it at newest -- which the
+# floor leg states as the deliberate shape of the promise, ours to hold below, not above. On
+# 2026-09-03 `anyio 4.15.0` stopped exposing `anyio.abc` through its lazy `__getattr__`, and
+# `import httpx` began raising `AttributeError` on the floor leg while every other leg stayed
+# green: the 3.9 legs cap `anyio` at 4.12.1, where the old pair still works, so only the 3.12
+# floor resolve could reach it. Bisected, not guessed: 0.26.0 is the lowest release that
+# resolves to `httpcore 1.x` and imports cleanly under `anyio 4.15.0`.
+#
+# No upper bound was added to `anyio`. Holding a transitive bound would reverse the decision
+# `.github/workflows/ci.yml` already records in prose, to fix one release of one package.
+# `httpx` is test-only here -- `fastapi.testclient` and the wheel leg smoke test -- and nothing
+# shipped imports it, so raising this floor costs a consumer nothing.
+dev = ["requivo[anthropic,web,testing]", "ruff>=0.6", "httpx>=0.26.0,<1",
        "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
        "pyright>=1.1.400,<2", "setuptools>=70.1.0"]
 
