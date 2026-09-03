@@ -84,7 +84,11 @@ def _show_freshness(rel_path: str) -> None:
     fr = baseline_commits_since(rel_path)
     watched = ", ".join(WATCHED_PATHS)
     if fr["state"] == "unknown":
-        print(f"  ? baseline freshness: could not tell ({fr['reason']})")
+        # `reason` is the only one of this function's three printed fields that carries text from
+        # outside the process (git's stderr, or `str(exc)`) rather than a fixed git format like
+        # `%cI`/`%H` -- so it has the strongest claim to the same guard the commit-row loop below
+        # already gives `date`/`sha`/`subject`, and #461 is that guard reaching this print site too.
+        print(f"  ? baseline freshness: could not tell ({display_token(fr['reason'])})")
         return
     if fr["state"] == "current":
         print(f"  · baseline current as of {fr['captured_at']} (no commits since touching {watched})")
