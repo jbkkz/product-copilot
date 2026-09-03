@@ -131,14 +131,19 @@ def test_check_refuses_an_unpriced_call_rather_than_treating_it_as_free():
 
 def test_default_no_policy_is_byte_identical_to_before_this_existed():
     """Pinned by the issue's own acceptance criteria: no policy injected, no behaviour change --
-    even a ludicrously expensive call must go through uncontested."""
+    even a ludicrously expensive call must go through uncontested.
+
+    Revision 2, not 1: since #467, `start(finalize=True)` lands `analyze()` as revision 1 through
+    `finalize_discovery` *before* attempting the brief, then folds the brief in through the ordinary
+    `generate(slug, "brief")` path -- the same two-write shape #202 already established for the CLI's
+    interactive loop in this file -- so a full success now produces two revisions, not one."""
     sessions = SessionService()
     provider = _CountingProvider(cost_per_call=1_000_000.0)
     disco = DiscoveryService(provider=provider, sessions=sessions)  # no spend_policy
     with track_usage():
         disco.start("a leave approval system", finalize=True)
     assert provider.calls == 2
-    assert sessions.repo.read_meta(sessions.list_sessions()[0].slug).current_revision == 1
+    assert sessions.repo.read_meta(sessions.list_sessions()[0].slug).current_revision == 2
 
 
 def test_a_ceiling_not_yet_reached_still_reaches_the_provider():
@@ -173,8 +178,13 @@ def test_start_refuses_before_its_first_call_once_the_ceiling_is_already_reached
 def test_start_refuses_its_second_call_once_the_first_alone_reaches_the_ceiling():
     """The check runs before EACH provider call inside one operation, not only once at entry:
     `start(finalize=True)` makes two calls (analyze, then generate("brief")), and a ceiling the
-    first call alone reaches must stop the second before it is made -- and before anything is
-    persisted, since `finalize_discovery`'s write only happens after both."""
+    first call alone reaches must stop the second before it is made.
+
+    Since #467, "before anything is persisted" is no longer true of the *first* call, and must not
+    be: `finalize_discovery` now writes `analyze()`'s result as revision 1 before the brief is even
+    attempted, so a ceiling the first call alone reaches still leaves that write standing -- the paid
+    `analyze()` spend is never discarded, only the (also refused, so free) second call is stopped.
+    See `test_a_failed_brief_leaves_the_analyzed_discovery_applied_467.py` for the direct guard."""
     sessions = SessionService()
     provider = _CountingProvider(cost_per_call=0.05)
     disco = DiscoveryService(provider=provider, sessions=sessions,
@@ -183,10 +193,11 @@ def test_start_refuses_its_second_call_once_the_first_alone_reaches_the_ceiling(
         with pytest.raises(SpendCeilingReachedError):
             disco.start("a leave approval system", finalize=True)
     assert provider.calls == 1  # only analyze() ran; generate("brief") was refused
-    # claim_session() creates the session before any provider call; finalize_discovery()'s
-    # update_model() never ran, so it is still sitting at revision 0 with no model applied.
+    # claim_session() creates the session before any provider call, and finalize_discovery()'s own
+    # update_model() ran right after analyze() succeeded -- before the refused second call was even
+    # attempted -- so the session sits at revision 1 with the discovered model applied.
     slug = sessions.list_sessions()[0].slug
-    assert sessions.repo.read_meta(slug).current_revision == 0
+    assert sessions.repo.read_meta(slug).current_revision == 1
 
 
 def test_draft_turn_refuses_before_reasoning_once_the_ceiling_is_already_reached():
