@@ -473,6 +473,22 @@ def test_pc_discover_prints_the_default_cards_before_the_paid_call():
     assert store.read_meta(slug).context_cards is None  # no behavior change: still every card
 
 
+def test_pc_discover_names_the_fallback_weight_when_the_average_cannot_be_measured(monkeypatch):
+    """Found in review: `average_card_byte_size() -> None` (an edge case -- reachable only when the
+    card set's own average happens to be falsy, e.g. an empty install) has a dedicated fallback
+    string in `_cmd_discover` ("measurable weight" instead of a byte figure), and nothing exercised
+    it. Monkeypatches the CLI's own imported name, not the underlying function, so this pins the
+    branch `_cmd_discover` actually takes rather than re-testing `average_card_byte_size` itself
+    (that half is `tests/test_context.py`'s `..._is_none_on_an_empty_install`)."""
+    import requivo.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "average_card_byte_size", lambda: None)
+    output = _run_app(["discover", "clitest discover no measurable weight", "--once"],
+                       client=FakeClient(_ENGINE_REPLY))
+    assert "measurable weight" in output
+    assert "bytes each" not in output
+
+
 def test_pc_discover_with_explicit_context_does_not_also_print_the_all_cards_line():
     # The "no --context given" disclosure and the existing "Context cards: <selection>" line answer
     # the same question and must never both fire for one invocation -- that would say two different
