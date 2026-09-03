@@ -139,6 +139,27 @@ def test_a_write_conflict_is_logged_as_refused(_attached):
     assert any("conflict" in r.getMessage() for r in warnings), _messages(handler)
 
 
+def test_a_rescope_that_mints_a_revision_is_logged_too(_attached):
+    """`rescope()` is `sessions.py`'s *second* `save_revision(...)` call site (#168's own revision-
+    per-selection-switch, distinct from `_plan`'s) -- it mints a real revision on disk when a model
+    already exists, and the "model applied" seam this module documents must not silently exclude it
+    just because it went through a different method. A handler watching this logger for "a revision
+    landed" would otherwise see every `update_model` and miss every re-scope, with nothing from
+    outside the process able to tell the two situations apart."""
+    handler = _attached("requivo.services.sessions")
+    sessions = SessionService()
+    meta = sessions.create_session("a leave approval system")
+    sessions.update_model(
+        meta.slug, out({"problem": slot(80, "explicit", "high")}).model_dump_json(),
+        expected_revision=0)
+    handler.records.clear()
+    sessions.rescope(meta.slug, None)  # a no-op re-scope: create_session already recorded None
+    # force a genuine change so a revision is actually minted
+    sessions.rescope(meta.slug, ["b2b-platform"])
+    messages = _messages(handler)
+    assert any("revision" in m and "2" in m for m in messages), messages
+
+
 def test_artifact_saved_is_logged_with_its_stale_verdict(_attached):
     handler = _attached("requivo.services.artifacts")
     sessions = SessionService()

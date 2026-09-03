@@ -579,8 +579,15 @@ class SessionService:
                                      changed=False)
             if meta.current_revision > 0:
                 model = self.load_model(slug)
-                _, meta = self.repo.save_revision(slug, model,
-                                                  provenance={"surface": "session-rescope"})
+                revision, meta = self.repo.save_revision(slug, model,
+                                                         provenance={"surface": "session-rescope"})
+                # This is `sessions.py`'s *second* `save_revision` call site (`_plan`'s is the
+                # first) -- a re-scope mints a real revision on disk even though the model's
+                # content is unchanged (see this method's own docstring, point 1), and an operator
+                # watching this logger for "a revision landed" must see this one too, not only an
+                # `update_model`-driven apply. Found in this lane's own self-review (#435): both
+                # call sites predate this change, but only `_plan`'s was wired to log at first.
+                logger.info("session rescoped: slug=%s revision=%d", slug, revision)
             else:
                 # No model yet — nothing was reasoned under `previous`, so there is no revision to
                 # mint. `save_revision` bumps `updated_at` for the branch above; this branch is the
