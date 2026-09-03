@@ -37,8 +37,10 @@ can tweak a bundled card without editing the package.
 
 By default every card is loaded for every request, so cards can dilute one another — and it is also
 the most expensive default (#257). Measured against the 4 cards this repository bundles today
-(`wc -c` on `src/requivo/assets/context/*.md`, excluding `_template.md`): 23,262 bytes, ~5.8k tokens
-at 4 bytes/token, split roughly evenly across the four (3,842 / 5,576 / 6,995 / 6,849 bytes). Folded
+(`core.context.card_byte_size` on `src/requivo/assets/context/*.md`, excluding `_template.md` — not
+`wc -c`, which counts the CRLF line endings a Windows checkout has and the loader never sees):
+23,262 bytes, ~5.8k tokens at 4 bytes/token, split roughly evenly across the four
+(3,842 / 5,576 / 6,995 / 6,849 bytes). Folded
 into an assembled system prompt (`build_prompt()`, offline, no API call), that is **65–78% of every
 call's system prompt**, across the eight generator prompts measured on 2026-09-03 — lowest for
 `brief` (35,766 bytes total, cards are 65.0%), highest for `estimate`/`release` (~29.7k bytes total,

@@ -113,18 +113,38 @@ def available_cards() -> list[str]:
     return sorted(_card_paths())
 
 
+def card_byte_size(path: Path) -> int:
+    """The bytes one card contributes to a prompt — **not** its size on disk.
+
+    `st_size` is the wrong measurement and the difference is a platform, not a rounding: git checks
+    a text file out with CRLF line endings on Windows by default and this repository declares no
+    `.gitattributes`, while `load_context()` reads in text mode, where the decoder collapses CRLF to
+    LF before a single byte reaches `{{CONTEXT}}`. So `st_size` over-counts by one byte per line on
+    exactly one platform, and the number #257 exists to disclose — what a card costs you per call —
+    was inflated there in the CLI's pre-call line and the Web create form's hint alike.
+
+    Decoding and re-encoding is what makes the answer the same everywhere, because it is the same
+    operation the loader performs. It also means an undecodable card raises here rather than
+    reporting a plausible size for a file `load_context()` would refuse — the disclosure and the
+    loader now fail on the same inputs, which is the point (invariant 16).
+    """
+    return len(path.read_text(encoding="utf-8").encode("utf-8"))
+
+
 def average_card_byte_size() -> int | None:
-    """Average on-disk size, in bytes, across every loadable card (bundled + user) — `None` for an
+    """Average prompt weight, in bytes, across every loadable card (bundled + user) — `None` for an
     empty install. Used only to disclose the cost/dilution tradeoff of the all-cards default before a
     paid call (#257): the CLI's pre-call line and the Web create form's hint both read this rather
     than a number typed into prose, so the figure moves itself when a card is added, removed or
     resized, instead of quietly going stale the way a hardcoded one would (CLAUDE.md's own rule about
     a count nothing can falsify). Deliberately observational, like `available_cards()` beside it —
-    a UI hint has no business raising on an empty install any more than the card list does."""
+    a UI hint has no business raising on an empty install any more than the card list does.
+
+    Measured through `card_byte_size`, never `st_size`; that function says why."""
     paths = _card_paths()
     if not paths:
         return None
-    return sum(p.stat().st_size for p in paths.values()) // len(paths)
+    return sum(card_byte_size(p) for p in paths.values()) // len(paths)
 
 
 def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
