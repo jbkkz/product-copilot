@@ -292,19 +292,38 @@ row. A queue worker is a CLI-shaped caller, which is the caller this engine is h
 
 ## 6. Eventing and observability
 
-The engine's layers emit **zero** log records today (the one logging configuration in the tree
-belongs to the local web surface), and invariant 7 already blesses `logging` as the
-library-correct way of not printing. What this repository adds is minimal and stdlib-only (#435):
+Landed (#435). Before this, the engine's layers emitted **zero** log records (the one logging
+configuration in the tree belonged to the local web surface — `web/logging_setup.py`), and
+invariant 7 already blessed `logging` as the library-correct way of not printing. What shipped is
+minimal and stdlib-only, and — one thing the original proposal for this section did not name —
+required a second mechanism beyond simply not calling a handler-configuring function: with nothing
+configured *anywhere in the process*, a WARNING+ record from any of these loggers reaches Python's
+own `logging.lastResort`, which prints straight to stderr regardless of what this package does.
+`requivo/__init__.py` attaches a `NullHandler` to the top-level `requivo` logger at import — the
+stdlib-documented way a *library* stays silent — which absorbs that fallback for every descendant
+logger through ordinary propagation, without adding any handler an embedding application would
+have to notice or displace.
 
 - **Named loggers at the service seams** — `requivo.services.discovery`, `.sessions`,
-  `.artifacts` — emitting the handful of events an operator acts on: apply landed (slug, revision),
-  conflict refused, artifact saved (type, source revision, stale), provider call started/finished
-  (operation, duration). No handlers, no formatters, no configuration: silent by default,
-  attachable by anyone.
+  `.artifacts` — emitting the handful of events an operator acts on: a session created, a model
+  applied (slug, revision, changed/stale counts), a write conflict refused, an artifact saved (type,
+  source revision, stale verdict), and a provider call started/finished/failed (operation, duration
+  in ms) at the orchestration layer. No handlers, no formatters, no configuration: silent by
+  default, attachable by anyone.
+- **`requivo.providers.anthropic.completion` (optional, a child of `requivo.providers...`)** — the
+  one place a call's *attempts* and latency are actually known, since every other layer only sees
+  the typed result or a raised error. Logs a call completed (DEBUG) or gave up (WARNING) — a
+  transport failure, a truncated reply, or the retry loop exhausted — with the operation, model,
+  attempts and latency. A caller wanting per-HTTP-call detail attaches here or to `requivo.providers`
+  and gets it via propagation; nobody does by default.
 - **An `operation` field on `CallRecord`** (optional, default `None`). The ledger records model,
   tokens, cache tiers, latency and the rate a call was billed at — but not *which operation* spent
-  them, so per-verb metering ("a brief costs X, a discovery turn Y") is reconstruction. One
-  additive dataclass field, stamped where the call is filed.
+  them, so per-verb metering ("a brief costs X, a discovery turn Y") was reconstruction. One
+  additive dataclass field, stamped at every `_complete()` call site in `providers/anthropic/
+  generators.py` with the same vocabulary `_OP_PROMPTS`/`cli.py`'s subcommands already use
+  (`analyze`, `brief`, `stories`, `prd`, `criteria`, `epic`, `release`, `estimate`). Nothing in this
+  package reads it back yet — no renderer, no `--json` envelope — so today its only consumer is
+  whatever an embedding operator builds against the ledger themselves.
 
 Everything else attaches on the deployment's side: handlers, OTel, request-id correlation, metrics,
 billing pipelines reading the ledger per job, alerting. And deliberately **no more than this** — no

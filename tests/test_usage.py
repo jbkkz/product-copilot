@@ -3,13 +3,14 @@
 Split out of `test_engine.py` (#72).
 """
 import io
+import logging
 from contextlib import redirect_stdout
 from datetime import date as _date
 
 import anthropic
 import httpx
 import pytest
-from _fakes import _ENGINE_REPLY, _FakeBlock, _model_in_out, _run_app
+from _fakes import _ENGINE_REPLY, FakeClient, _FakeBlock, _model_in_out, _run_app
 
 from requivo.core.errors import RequivoError
 from requivo.providers.anthropic import run
@@ -332,3 +333,94 @@ def test_pc_status_reports_no_usage_offline():
     with _model_in_out("clitest-usage") as p:
         text = _run_app(["status", str(p)])
     assert "API USAGE" not in text
+
+
+# ── #435: an `operation` field on CallRecord, additive only ──────────────────────
+#
+# The issue's acceptance criteria states the constraint in as many words: the field must default
+# such that every existing pinned ledger/render shape still holds. These three pin that, plus the
+# one thing that actually changes -- `run()` (the "analyze" operation in `_OP_PROMPTS`'s own
+# vocabulary) now stamps it onto the `CallRecord` it files.
+
+
+def test_call_record_operation_defaults_to_none():
+    """Every existing `CallRecord(...)` construction in this suite (see `priced()` above and every
+    other call site grepped for this change) omits `operation` -- so the default has to be `None`,
+    not merely *a* default, or those constructions would now mean something different."""
+    rec = CallRecord(model="claude-sonnet-5")
+    assert rec.operation is None
+
+
+def test_render_usage_is_unaffected_by_the_operation_field():
+    """`render_usage()` prints ledger *totals* -- calls, tokens, latency, cost -- never a per-record
+    field, so whether a `CallRecord` carries an `operation` or not must produce byte-identical
+    output. An equality between two renders, not an absence-of-substring check: a future renderer
+    change that starts reading `operation` would have to touch this assertion deliberately rather
+    than slip past a check for one string it happens not to print today.
+    """
+    without = UsageLedger()
+    without.record(priced("claude-sonnet-5", input_tokens=1000, output_tokens=200, latency_ms=1500))
+    with_op = UsageLedger()
+    with_op.record(priced("claude-sonnet-5", input_tokens=1000, output_tokens=200, latency_ms=1500,
+                          operation="brief"))
+    buf_without, buf_with = io.StringIO(), io.StringIO()
+    with redirect_stdout(buf_without):
+        render_usage(without)
+    with redirect_stdout(buf_with):
+        render_usage(with_op)
+    assert buf_without.getvalue() == buf_with.getvalue()
+
+
+def test_run_stamps_the_analyze_operation_onto_the_call_record():
+    """`run()` is the discovery turn -- `"analyze"` in `_OP_PROMPTS`'s own vocabulary -- and it now
+    reaches `_complete()` with that name, so a ledger read back per-verb can tell a discovery turn's
+    spend from a generator's without reconstruction (#435's whole point). `providers/anthropic/
+    generators.py`'s other seven `_complete()` call sites (`derive_stories`, `advise`,
+    `generate_prd`, `generate_criteria`, `generate_epic`, `generate_release`, `estimate`) each stamp
+    their own name the same way; this is the one every offline fixture in this file already knows
+    how to drive, so it stands for the rest rather than repeating the same assertion eight times."""
+    client = FakeClient(_ENGINE_REPLY)
+    with track_usage() as ledger:
+        run(client, [{"role": "user", "content": "leave approval"}])
+    assert len(ledger.calls) == 1
+    assert ledger.calls[0].operation == "analyze"
+
+
+# ── the optional `requivo.providers...` logger: completed / gave up (#435) ───────
+#
+# `completion.py`'s own `_complete()` is the one place a call's attempts and latency are actually
+# known -- every other layer only sees the typed result or a raised error -- so this is where "a
+# call completed, or gave up, after N attempts in M ms" is logged. Silent by default like every
+# other logger this issue adds; the silence half is pinned once, cross-cuttingly, in
+# `tests/test_discovery.py` rather than repeated per logger name here.
+
+
+@pytest.fixture
+def _completion_handler():
+    logger = logging.getLogger("requivo.providers.anthropic.completion")
+    before = (list(logger.handlers), logger.level)
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    yield records
+    logger.handlers, logger.level = before
+
+
+def test_a_completed_call_is_logged_at_debug_with_attempts_and_latency(_completion_handler):
+    client = FakeClient(_ENGINE_REPLY)
+    run(client, [{"role": "user", "content": "leave approval"}])
+    messages = [r.getMessage() for r in _completion_handler]
+    assert any("provider call completed" in m and "operation=analyze" in m and "attempts=1" in m
+              for m in messages), messages
+
+
+def test_a_call_that_gives_up_is_logged_as_a_warning(_completion_handler):
+    client = _NonconformingClient(_FakeUsage(100, 50))
+    with pytest.raises(RequivoError):
+        run(client, [{"role": "user", "content": "x"}])
+    warnings = [r for r in _completion_handler if r.levelno == logging.WARNING]
+    assert any("provider call gave up" in r.getMessage() and "operation=analyze" in r.getMessage()
+              and "attempts=3" in r.getMessage() for r in warnings), (
+        [r.getMessage() for r in _completion_handler])

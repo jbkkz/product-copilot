@@ -9,6 +9,7 @@ compute readiness. It returns a structured `UpdateResult` so any caller can rend
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,12 +27,14 @@ from requivo.core.dependencies import (
     diff_reasoning,
     propagate,
 )
-from requivo.core.errors import SessionExistsError, SessionNotFoundError
+from requivo.core.errors import RevisionConflictError, SessionExistsError, SessionNotFoundError
 from requivo.core.persistence import SessionMeta, Store
 from requivo.core.selectors import display_token
 from requivo.core.validation import require_input_within_bounds, validate_proposal
 from requivo.paths import workspace_root
 from requivo.services.repository import SessionRepository, default_repository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -373,8 +376,10 @@ class SessionService:
         base = slug or self.slug_hint(request)
         for candidate in (base, f"{base}-{self._identity_hash(request, context_cards)}"):
             try:
-                return self.repo.create(candidate, request, provider=provider, model_name=model_name,
+                meta = self.repo.create(candidate, request, provider=provider, model_name=model_name,
                                         context_cards=context_cards)
+                logger.info("session created: slug=%s", meta.slug)
+                return meta
             except SessionExistsError:
                 if self._same_identity(candidate, request, context_cards):
                     return self.repo.read_meta(candidate)  # idempotent re-init of the same discovery
@@ -656,13 +661,20 @@ class SessionService:
             return [t for t in ARTIFACT_FILES if t in hit and t in generated]
 
         if apply:
-            revision, meta = self.repo.save_revision(
-                slug, new, expected_revision=expected_revision, provenance=provenance)
+            try:
+                revision, meta = self.repo.save_revision(
+                    slug, new, expected_revision=expected_revision, provenance=provenance)
+            except RevisionConflictError:
+                logger.warning("model apply refused: slug=%s expected_revision=%s (conflict)",
+                              slug, expected_revision)
+                raise
             stale = _resolve_stale(set(meta.artifact_status))
             if stale:
                 for t in stale:
                     meta.artifact_status[t].stale = True
                 self.repo.write_meta(slug, meta)
+            logger.info("model applied: slug=%s revision=%d changed_slots=%d stale_artifacts=%d",
+                       slug, revision, len(changed), len(stale))
         else:
             meta = self.repo.read_meta(slug) if self.repo.has_meta(slug) else None
             revision = (meta.current_revision + 1) if meta else 1

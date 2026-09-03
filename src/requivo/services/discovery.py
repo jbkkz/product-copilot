@@ -27,7 +27,9 @@ revision), so revision handling and staleness are identical to every other surfa
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -57,6 +59,8 @@ from requivo.render.markdown import brief_markdown, criteria_markdown, epic_mark
 from requivo.services.artifacts import ArtifactService
 from requivo.services.sessions import SessionService, SessionSnapshot, UpdateResult
 from requivo.usage import SpendPolicy, current_ledger
+
+logger = logging.getLogger(__name__)
 
 try:  # POSIX
     import fcntl
@@ -409,6 +413,34 @@ class DiscoveryService:
         if self._spend_policy is not None:
             self._spend_policy.check(current_ledger())
 
+    @contextmanager
+    def _provider_call(self, operation: str) -> Iterator[None]:
+        """Log a provider call's start and finish (or failure), with the operation and its
+        duration -- the orchestration-level seam `docs/cloud-boundary.md` §6 promises for
+        `requivo.services.discovery` (#435): DEBUG on start, INFO on a clean finish, WARNING (with
+        the exception re-raised unchanged) on failure. Wraps every `provider.analyze`/
+        `provider.generate` call site in this class, the same chokepoint `_check_spend` already
+        names in its own docstring.
+
+        Deliberately not the attempts/tokens `CallRecord` already carries per HTTP call -- that is
+        `completion.py`'s own optional `requivo.providers` logger, the one place attempts are
+        actually known. This is service-level wall-clock duration from the call site itself, which
+        for a caching turn (e.g. `draft_turn`, one call per invocation from here) is the same figure
+        either way, but is not guaranteed to be in general (a future looping caller, a provider that
+        retries outside `_complete`). Silent unless a caller attaches a handler -- see
+        `requivo/__init__.py`'s `NullHandler` (invariant 7)."""
+        started = time.perf_counter()
+        logger.debug("provider call started: operation=%s", operation)
+        try:
+            yield
+        except Exception:
+            logger.warning("provider call failed: operation=%s duration_ms=%d",
+                          operation, int((time.perf_counter() - started) * 1000))
+            raise
+        else:
+            logger.info("provider call finished: operation=%s duration_ms=%d",
+                       operation, int((time.perf_counter() - started) * 1000))
+
     def _provenance(self, op: str, *, cards: list[str] | None, surface: str,
                     usage: dict | None = None) -> dict:
         """The provenance for a revision: what the provider says about itself, which of our surfaces
@@ -515,7 +547,8 @@ class DiscoveryService:
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
             self._check_spend()
-            out = provider.analyze(request, only=cards)
+            with self._provider_call("analyze"):
+                out = provider.analyze(request, only=cards)
             slug_out = self.finalize_discovery(request, out, cards=cards, slug=meta.slug,
                                                surface=surface, usage=_usage_since(before))
             if finalize:
@@ -561,8 +594,9 @@ class DiscoveryService:
         if answers is not None:
             require_input_within_bounds(answers, field="answers")
         self._check_spend()
-        return self._need_provider().analyze(
-            request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
+        with self._provider_call("analyze"):
+            return self._need_provider().analyze(
+                request, current_model=current_model, answers=answers, only=cards, reuse_system=True)
 
     def run_discovery(self, slug: str, *, surface: str = "discover") -> UpdateResult:
         """Run the first discovery turn on an already-created session (the 'create session only' path
@@ -599,7 +633,8 @@ class DiscoveryService:
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
             self._check_spend()
-            out = self._need_provider().analyze(snap.request, only=snap.context_cards)
+            with self._provider_call("analyze"):
+                out = self._need_provider().analyze(snap.request, only=snap.context_cards)
             return self.sessions.update_model(
                 slug, out.model_dump_json(), expected_revision=snap.revision,
                 provenance=self._provenance("analyze", cards=snap.context_cards, surface=surface,
@@ -641,8 +676,9 @@ class DiscoveryService:
         ledger = current_ledger()
         before = len(ledger.calls) if ledger is not None else 0
         self._check_spend()
-        out = self._need_provider().analyze(
-            snap.request, current_model=model, answers=answers, only=snap.context_cards)
+        with self._provider_call("analyze"):
+            out = self._need_provider().analyze(
+                snap.request, current_model=model, answers=answers, only=snap.context_cards)
         return self.sessions.update_model(
             slug, out.model_dump_json(),
             expected_revision=expected_revision if expected_revision is not None else snap.revision,
@@ -675,8 +711,9 @@ class DiscoveryService:
         Pinned by `test_the_estimate_verb_reads_stories_and_estimate_from_one_snapshot`."""
         model = _require_a_model(snap.slug, snap)
         self._check_spend()
-        return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
-                                              **kwargs)
+        with self._provider_call(artifact_type):
+            return self._need_provider().generate(artifact_type, model, only=snap.context_cards,
+                                                  **kwargs)
 
     # `generate()`'s public signature is these six overloads, not the implementation below (#271).
     # Five are keyed by `Literal` on the artifact type it actually saves a document for -- the same
@@ -738,7 +775,8 @@ class DiscoveryService:
             ledger = current_ledger()
             before = len(ledger.calls) if ledger is not None else 0
             self._check_spend()
-            brief = provider.generate("brief", out, only=cards)
+            with self._provider_call("brief"):
+                brief = provider.generate("brief", out, only=cards)
             absorb_reasoning(out, brief)
             usage = _usage_since(before)
             # `out` is the revision-N model plus the reasoning just derived from it. Applying it without
@@ -791,7 +829,8 @@ class DiscoveryService:
         except KeyError as e:
             raise ValueError(f"{artifact_type!r} has no saveable document — use `reason()`") from e
         self._check_spend()
-        artifact = provider.generate(artifact_type, out, only=cards, **kwargs)
+        with self._provider_call(artifact_type):
+            artifact = provider.generate(artifact_type, out, only=cards, **kwargs)
         status = self._save_generated(slug, artifact_type, writer(artifact), source_revision)
         return Generated(status=status, artifact=artifact, model=out)
 

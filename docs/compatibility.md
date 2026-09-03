@@ -1089,7 +1089,9 @@ priced correctly — that is this page's job, same as everywhere else on it.
   names.
 - **`requivo.usage`** — `UsageLedger`, `CallRecord`, `track_usage`, `record_call`, `current_ledger`.
   Provider-neutral by construction (#167) — a hosted caller reads a call's cost without importing
-  anything Anthropic-specific.
+  anything Anthropic-specific. `CallRecord` gained an optional `operation: str | None = None` field
+  (#435, additive — a consumer constructing one the old way is unaffected, and the default reads
+  identically to a `CallRecord` built before the field existed).
 - **`requivo.testing`** (#424) — `SessionRepositoryConformance` and `full_model`, both re-exported
   from the package's own `__init__.py` rather than only reachable via the submodule path.
   `SessionRepositoryConformance` is the factory-parametrised pytest suite behind CLAUDE.md's claim

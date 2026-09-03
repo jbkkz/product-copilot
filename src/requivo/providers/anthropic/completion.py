@@ -12,11 +12,20 @@ failure and the truncation refusal (both through `_stop()`, which exists so the 
 have one place to get it right), and the retry give-up. Only `_stop()` reads as obviously about
 billing, which is why the give-up carries its own line saying so.
 `test_a_failed_call_is_still_recorded_on_every_exit` goes red when any exit stops recording.
+
+**`requivo.providers.anthropic.completion`, silent by default (#435).** This is the one place every
+provider call's attempts and latency are actually known — every other layer only sees the typed
+result or a raised error — so it is where "a call completed, or gave up, after N attempts in M ms"
+is logged, at DEBUG (success) and WARNING (any of the three failure exits). A caller who wants the
+per-verb view (which *operation* — discovery vs. a named generator) attaches a handler here or to
+its `requivo.providers` parent; nobody does by default, so this prints nothing on its own
+(invariant 7, and see `requivo/__init__.py`'s `NullHandler`).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -39,6 +48,8 @@ from requivo.providers.anthropic.client import (
 from requivo.providers.anthropic.pricing import price_call
 from requivo.providers.errors import EngineError
 from requivo.usage import CallRecord, record_call
+
+logger = logging.getLogger(__name__)
 
 # How many failed replies `.requivo/debug/` keeps before the oldest are pruned -- documented here
 # because #283's acceptance criteria calls for a stated retention, not just a bounded one. Kept
@@ -130,6 +141,21 @@ def _record(rec: CallRecord) -> None:
     deliberately has none.
     """
     record_call(price_call(rec))
+
+
+def _log_completed(rec: CallRecord) -> None:
+    """DEBUG: a call returned a validated result. See the module docstring (#435)."""
+    logger.debug("provider call completed: operation=%s model=%s attempts=%d latency_ms=%d",
+                rec.operation, rec.model, rec.attempts, rec.latency_ms)
+
+
+def _log_gave_up(rec: CallRecord, reason: str) -> None:
+    """WARNING: a call will not be retried again — a transport failure, a truncated reply, or the
+    retry loop exhausted. `reason` is a short label, not the full user-facing message: the latter is
+    already raised as a structured error, and this line is for an operator scanning logs, not a
+    duplicate of that error text (#435)."""
+    logger.warning("provider call gave up: operation=%s model=%s attempts=%d latency_ms=%d reason=%s",
+                  rec.operation, rec.model, rec.attempts, rec.latency_ms, reason)
 
 
 def _response_text(resp) -> str:
@@ -228,9 +254,16 @@ def _transport_message(e: Exception) -> str:
 
 
 def _complete(client, system: str, messages: list[dict], out_model, retries: int = 2,
-              validate=None, *, reuse_system: bool = True, model: str | None = None):
+              validate=None, *, reuse_system: bool = True, model: str | None = None,
+              operation: str | None = None):
     """One call → validated `out_model`. Retries with a nudge on malformed/non-conformant JSON.
     The nudge lives in a local copy so the caller's clean history is never polluted.
+
+    `operation` is the verb this call is for — `"analyze"`, `"brief"`, `"stories"`, ... the same
+    vocabulary `_OP_PROMPTS` already uses — stamped onto the `CallRecord` (#435) purely as
+    provenance: nothing here branches on it. `None` (the default) is what every caller that has not
+    been updated yet still passes, and it is a legitimate value, not a missing one — see
+    `CallRecord.operation`'s own docstring.
 
     `validate` is an optional semantic post-check `(instance) -> None` that raises `ValueError` to
     reject an output Pydantic accepted but the caller still considers incomplete (e.g. a discovery
@@ -252,7 +285,7 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
     attempt = messages
     last_err = None
     model = model if model is not None else current_model_name()
-    rec = CallRecord(model=model, attempts=0)
+    rec = CallRecord(model=model, attempts=0, operation=operation)
     started = time.perf_counter()
 
     def _stop(msg: str) -> EngineError:
@@ -263,6 +296,7 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
         # `test_a_failed_call_is_still_recorded_on_every_exit`.
         rec.latency_ms = int((time.perf_counter() - started) * 1000)
         _record(rec)
+        _log_gave_up(rec, msg.splitlines()[0] if msg else "(no message)")
         return EngineError(msg)
 
     for _ in range(retries + 1):
@@ -316,6 +350,7 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
                 validate(result)
             rec.latency_ms = int((time.perf_counter() - started) * 1000)
             _record(rec)
+            _log_completed(rec)
             return result
         except (json.JSONDecodeError, ValueError, ValidationError) as e:
             last_err = e
@@ -336,6 +371,7 @@ def _complete(client, system: str, messages: list[dict], out_model, retries: int
             ]
     rec.latency_ms = int((time.perf_counter() - started) * 1000)
     _record(rec)  # record the spend even on give-up — those tokens were still billed
+    _log_gave_up(rec, f"retries exhausted against the {out_model.__name__} contract")
     # The final raw reply never validated, and give-up is the one exit where that reply is worth
     # keeping (#283): a user filing "the provider returned output that did not match the contract"
     # otherwise has nothing to attach, and the maintainer cannot tell a prompt regression from a
