@@ -321,12 +321,14 @@ def _usage_since(before: int) -> dict:
     most of the offline test suite runs) or it recorded no calls in that span. Both are "nothing to
     report", never "spent nothing": invariant 6's rule about provenance, applied to this ledger.
 
-    Several calls can land in one span — `start(..., finalize=True)` makes two (`analyze`, then the
-    brief's own `generate`) before the one apply that follows — and their tokens are summed, because
-    the revision they produced embodies both. The rate is stamped only when every call in the span
-    agrees on it: the ordinary case is one provider, one model, one price table for the whole span,
-    and a genuine disagreement is refused rather than guessed at — the same argument `UsageLedger`'s
-    own docstring makes for cost."""
+    More than one call can still land in one span if a future caller opens one around several —
+    every call site today closes its span around exactly one provider call (since #467 split
+    `start(..., finalize=True)`'s `analyze` and its brief's own `generate` into two separate applies,
+    each with its own span, the last caller that spanned more than one) — and such a span sums the
+    tokens, because the revision it produced would embody all of them. The rate is stamped only when
+    every call in the span agrees on it: the ordinary case is one provider, one model, one price table
+    for the whole span, and a genuine disagreement is refused rather than guessed at — the same
+    argument `UsageLedger`'s own docstring makes for cost."""
     ledger = current_ledger()
     if ledger is None:
         return {}
@@ -492,7 +494,20 @@ class DiscoveryService:
         merely delayed past the point a winner has already finished *and released* the guard, would
         otherwise walk in on a stale belief and pay for a call it was always going to lose at
         `finalize_discovery`'s own `expected_revision=0`. Re-reading here, before spending anything,
-        closes that window the same way `_require_revision_zero` above closes the wide-open one."""
+        closes that window the same way `_require_revision_zero` above closes the wide-open one.
+
+        **`finalize` used to reason both calls before writing either (#467).** `analyze()` and the
+        brief's own `generate()` both ran, and only then did the one `finalize_discovery` write land
+        -- so a refused or failed brief call (a transport error, or #427's spend ceiling reached by
+        the first call alone) discarded the already-billed `analyze()` result every time, with the
+        session left at revision 0 as though nothing had been paid for. This mirrors #202's own fix
+        for the CLI's interactive loop, in this same file: `finalize_discovery` runs immediately after
+        `analyze()`, landing revision 1 before the brief is even attempted, and the brief is folded in
+        through the ordinary `generate(slug, "brief")` path -- the same one every other caller of a
+        brief takes, with its own spend check, its own revision-conflict handling and its own artifact
+        save. A stop or a failure there leaves revision 1 standing, discovery applied, brief
+        retryable with `generate(slug, "brief")` -- never a total loss of the `analyze()` spend.
+        Pinned by `test_a_failed_brief_leaves_the_analyzed_discovery_applied_467`."""
         provider = self._need_provider()
         meta = self.claim_session(request, cards=cards, slug=slug)
         with _discovery_guard(meta.slug, self._store_for_repo()):
@@ -501,11 +516,11 @@ class DiscoveryService:
             before = len(ledger.calls) if ledger is not None else 0
             self._check_spend()
             out = provider.analyze(request, only=cards)
+            slug_out = self.finalize_discovery(request, out, cards=cards, slug=meta.slug,
+                                               surface=surface, usage=_usage_since(before))
             if finalize:
-                self._check_spend()
-            brief = provider.generate("brief", out, only=cards) if finalize else None
-            return self.finalize_discovery(request, out, cards=cards, slug=meta.slug, brief=brief,
-                                           surface=surface, usage=_usage_since(before))
+                self.generate(slug_out, "brief", surface=surface)
+            return slug_out
 
     # ── interactive drafting (before there is a session) ─────────────────────────
     # An interactive surface reasons several turns against a request that has not been persisted
