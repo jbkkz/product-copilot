@@ -1,0 +1,3 @@
+Agent	oss:developer	dispatching-a-lane.md	remind			
+Bash	~(git-push|gh-pr-merge|(^|[;&|[:space:]])git[[:space:]]+(push|merge))	how-work-lands.md	once,remind			
+Agent	oss:auditor	reviewer-depth.md	remind			
