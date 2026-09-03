@@ -74,7 +74,8 @@ def run(client, messages: list[dict], retries: int = 2, only: list[str] | None =
     costs full price on every repeat (`_complete`). The remaining direct callers of this function are
     `answer_turn` and `scripts/golden_run.py`; no interface reaches it."""
     proposal = _complete(client, build_prompt("engine.md", only), messages, ModelProposal, retries,
-                         validate=_require_complete_model, reuse_system=reuse_system, model=model)
+                         validate=_require_complete_model, reuse_system=reuse_system, model=model,
+                         operation="analyze")
     return proposal.resolve(carry_from)
 
 
@@ -130,7 +131,7 @@ def derive_stories(client, out: EngineOutput, only: list[str] | None = None, *,
     system = build_prompt("stories.md", only)
     user = "Completed requirements model to decompose into user stories:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Stories,
-                     reuse_system=reuse_system, model=model)
+                     reuse_system=reuse_system, model=model, operation="stories")
 
 
 def advise(client, out: EngineOutput, only: list[str] | None = None, *,
@@ -145,7 +146,7 @@ def advise(client, out: EngineOutput, only: list[str] | None = None, *,
     system = build_prompt("brief.md", only)
     user = "Completed requirements model to advise on:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Brief,
-                     reuse_system=reuse_system, model=model)
+                     reuse_system=reuse_system, model=model, operation="brief")
 
 
 def generate_prd(client, out: EngineOutput, only: list[str] | None = None, *,
@@ -154,7 +155,7 @@ def generate_prd(client, out: EngineOutput, only: list[str] | None = None, *,
     system = build_prompt("prd.md", only)
     user = "Completed requirements model to turn into a PRD:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], PRD,
-                     reuse_system=reuse_system, model=model)
+                     reuse_system=reuse_system, model=model, operation="prd")
 
 
 def generate_criteria(client, out: EngineOutput, only: list[str] | None = None, *,
@@ -163,7 +164,7 @@ def generate_criteria(client, out: EngineOutput, only: list[str] | None = None, 
     system = build_prompt("criteria.md", only)
     user = "Completed requirements model to turn into acceptance criteria:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], AcceptanceCriteria,
-                     reuse_system=reuse_system, model=model)
+                     reuse_system=reuse_system, model=model, operation="criteria")
 
 
 def generate_epic(client, out: EngineOutput, only: list[str] | None = None, *,
@@ -172,7 +173,7 @@ def generate_epic(client, out: EngineOutput, only: list[str] | None = None, *,
     system = build_prompt("epic.md", only)
     user = "Completed requirements model to turn into a delivery epic:\n" + out.model_dump_json()
     return _complete(client, system, [{"role": "user", "content": user}], Epic,
-                     reuse_system=reuse_system, model=model)
+                     reuse_system=reuse_system, model=model, operation="epic")
 
 
 def generate_release(client, out: EngineOutput, version: str = "",
@@ -182,7 +183,7 @@ def generate_release(client, out: EngineOutput, version: str = "",
     system = build_prompt("release.md", only)
     user = "Completed requirements model to turn into release notes:\n" + out.model_dump_json()
     notes = _complete(client, system, [{"role": "user", "content": user}], ReleaseNotes,
-                      reuse_system=reuse_system, model=model)
+                      reuse_system=reuse_system, model=model, operation="release")
     if version:
         notes.version = version
     return notes
@@ -202,7 +203,7 @@ def estimate(client, out: EngineOutput, stories: Stories,
         + (", ".join(soft) if soft else "(none — the model is solid)")
     )
     draft = _complete(client, system, [{"role": "user", "content": user}], EstimateDraft,
-                      reuse_system=reuse_system, model=model)
+                      reuse_system=reuse_system, model=model, operation="estimate")
     return draft, soft, estimate_confidence(len(soft))
 
 

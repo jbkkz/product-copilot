@@ -56,6 +56,15 @@ class CallRecord:
     attempts: int = 1
     rate_per_mtok: tuple[float, float] | None = None
     priced_as_of: str | None = None
+    # Which verb spent this call: "analyze", "brief", "stories", "prd", ... — the same vocabulary
+    # providers/anthropic/generators.py's _GENERATORS/_OP_PROMPTS and cli.py's subcommands already
+    # use, so a ledger read back per-operation needs no second vocabulary (#435). Optional and
+    # additive: `None` is the default, stamped by every existing call site until it says otherwise,
+    # so a `CallRecord(...)` construction that predates this field is unaffected. Nothing in this
+    # package reads it yet — no renderer, no `--json` envelope — an embedding operator aggregating
+    # the ledger themselves is the intended reader (invariant 6: a fact worth recording is recorded
+    # even before this package has its own consumer for it).
+    operation: str | None = None
 
 
 @dataclass

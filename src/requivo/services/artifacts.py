@@ -8,10 +8,14 @@ provider (or Claude Code) produces the text; this service persists and tracks it
 
 from __future__ import annotations
 
+import logging
+
 from requivo.core.dependencies import ARTIFACT_FILENAMES, REASONING_CONSUMERS, diff_models, diff_reasoning, propagate
 from requivo.core.errors import InvalidSessionError, RequivoError, SessionNotFoundError
 from requivo.core.persistence import ArtifactStatus
 from requivo.services.repository import SessionRepository, default_repository
+
+logger = logging.getLogger(__name__)
 
 # The saveable artifact vocabulary (type → filename under <session>/artifacts/) lives in Core, where
 # the CLI's `--type` choices and the integrity checker read the same one. Re-exported here because
@@ -143,8 +147,11 @@ class ArtifactService:
                              # `null` says that.
                              "cause": None})
             stale = self._stale_since(slug, artifact_type, source_revision, meta.current_revision)
-            return self.repo.save_artifact(slug, artifact_type, filename, content,
-                                           source_revision=source_revision, stale=stale)
+            result = self.repo.save_artifact(slug, artifact_type, filename, content,
+                                             source_revision=source_revision, stale=stale)
+            logger.info("artifact saved: slug=%s type=%s source_revision=%d stale=%s",
+                       slug, artifact_type, source_revision, stale)
+            return result
 
     def _stale_since(self, slug: str, artifact_type: str, source_revision: int,
                      current_revision: int) -> bool:
