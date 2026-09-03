@@ -37,13 +37,22 @@ jobs:
   # names (`Test (py3.9)` … `Test (py3.13)`), so folding an `os` axis in here would rename all five,
   # none of the required checks would ever report again, and no pull request could merge. The
   # platform axis is a separate job below for that reason.
+  #
+  # `3.14` was added as a sixth matrix entry (#298, step 1 of 2) rather than folded into a floor
+  # decision -- it is purely additive, a new job name (`Test (py3.14)`) beside the existing five, and
+  # does not touch `requires-python`, `[tool.ruff] target-version`, `[tool.pyright] pythonVersion` or
+  # the platform matrix's low end. Whether to *raise the floor* off 3.9 (EOL, and this repo's own
+  # carrying costs for it are real -- see invariant 17's 3.9-Windows realpath narrative) is step 2,
+  # deliberately deferred until pypistats download data says who is actually still on it. This leg
+  # is not yet in the branch-protection required-checks list -- appending it there is a documented
+  # manual step (see the note on the platform-axis job below) and is out of scope for this change.
   test:
     name: Test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

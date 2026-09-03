@@ -1255,6 +1255,18 @@ def test_a_lock_for_a_session_that_exists_but_is_unexaminable_is_not_claimed_as_
     d = store.canonical_dir("s")
     d.chmod(0o000)
     try:
+        # The same root guard the sibling fixtures in tests/test_unexaminable_entries.py carry, and
+        # the reason it is needed here too (#298): a runner whose process can read a 0o000 directory
+        # makes the must-fire control below assert something the platform did not do. It fired on
+        # the py3.14 leg the moment that leg existed, on a test nothing about 3.14 touches.
+        try:
+            (d / "session.json").exists()
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("chmod 000 did not deny the session.json probe on this run (running as "
+                        "root?). UNTESTED HERE: that a lock for a session the workspace could not "
+                        "examine is not claimed as unmatched residue.")
         r = _run_json(["doctor", "--json"])
         text = _run(["doctor"])
     finally:

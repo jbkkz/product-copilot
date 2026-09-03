@@ -192,7 +192,7 @@ open-source strategy — is indexed in [`docs/`][docs-index].
 
 | Platform | Python | Tested in CI |
 |---|---|---|
-| Linux | 3.9 – 3.13 | every version, every push |
+| Linux | 3.9 – 3.14 | every version, every push |
 | macOS | 3.9 – 3.13 | 3.9 and 3.13 |
 | Windows | 3.9 – 3.13 | 3.9 and 3.13 |
 
@@ -201,7 +201,9 @@ is which. The ends of the version range are tested on macOS and Windows rather t
 version, and the ends are the point: a platform's own standard library can behave differently at each
 one. Windows on 3.9 cannot resolve a symlink whose target is missing, where Windows on 3.13 can —
 which once left a path-containment guard holding on twelve of thirteen CI legs and not on the
-thirteenth. Differences in the language itself show on the Linux axis, which runs all five.
+thirteenth. Differences in the language itself show on the Linux axis, which runs all six (a `3.14`
+leg landed in #298; the macOS/Windows ends and the `3.9` floor itself are a separate, not yet
+decided, question — see `docs/compatibility.md`).
 
 Those legs test the `requivo` **package**. Nothing in CI exercises the Claude Code plugin, which runs
 inside Claude Code rather than inside Python, and on native Windows that plugin carries a prerequisite

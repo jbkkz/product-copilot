@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
-from requivo.core.context import available_cards
+from requivo.core.context import available_cards, average_card_byte_size
 from requivo.services.sessions import SessionService
 from requivo.web.config import provider_status
 from requivo.web.dependencies import get_sessions
@@ -39,8 +39,15 @@ def home_context(sessions: SessionService, **extra) -> dict:
     Refusing is still correct and is unchanged (invariant 3, *refuse, don't truncate*). What changed
     is what the refusal costs.
     """
+    cards = available_cards()
+    # #257: the create form's default (every box unchecked) reasons over every card, which is the
+    # most expensive and most diluted path -- a one-line hint states the measured per-card cost so
+    # the visibly-recommended path is the cheap and sharp one, not the default. Computed here rather
+    # than typed into the template so a card added, removed or resized moves the number itself
+    # instead of a literal quietly going stale (CLAUDE.md's own rule about a count nothing falsifies).
     return {"sessions": session_list(sessions), "provider": provider_status(),
-            "cards": available_cards(), "form": empty_form(), **extra}
+            "cards": cards, "card_avg_bytes": average_card_byte_size(),
+            "form": empty_form(), **extra}
 
 
 @router.get("/")

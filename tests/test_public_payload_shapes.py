@@ -290,6 +290,17 @@ _EPIC_EXPORT_SKELETONS: dict[int, dict[str, dict[str, str]]] = {
         "issue": {"ref": "str", "title": "str", "description": "str", "labels": "list",
                   "milestone": "str", "depends_on": "list"},
     },
+    # v2 (#274): `slug` and `source_revision` are the provenance stamp epic.json was missing --
+    # the machine-consumed input an n8n flow acts on, with no staleness row of its own, gained a
+    # basis it can compare against `requivo status --json`'s `artifacts.epic.stale`. The `epic` and
+    # `issue` sub-skeletons are unchanged from v1; only the envelope gained the two top-level keys.
+    2: {
+        "envelope": {"format": "str", "version": "int", "slug": "str", "source_revision": "int",
+                     "epic": "dict", "issues": "list", "open_questions": "list"},
+        "epic": {"title": "str", "description": "str", "labels": "list", "milestone": "str"},
+        "issue": {"ref": "str", "title": "str", "description": "str", "labels": "list",
+                  "milestone": "str", "depends_on": "list"},
+    },
 }
 
 
@@ -492,7 +503,7 @@ def test_the_epic_export_skeleton_is_pinned_to_its_version():
         "entries are what an importer pinned to an older number still receives.")
     skeleton = _EPIC_EXPORT_SKELETONS[EPIC_EXPORT_VERSION]
 
-    payload = epic_export(_epic())
+    payload = epic_export(_epic(), "leave-approval", 3)
     assert payload["format"] == EPIC_EXPORT_FORMAT
     assert payload["version"] == EPIC_EXPORT_VERSION
     # must fire: an empty `issues` would make the per-issue comparison below iterate over nothing.

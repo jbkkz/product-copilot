@@ -19,9 +19,11 @@ import sys
 
 import pytest
 from _fakes import _ENGINE_REPLY, FakeClient, _model_in_out, _run_app, full_slots, slot
+from _fakes import out as _built_model
 
 from requivo.cli import _cmd_web, app
 from requivo.core import persistence as store
+from requivo.core.context import available_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.errors import RequivoError
 from requivo.core.persistence import load_model
@@ -412,6 +414,30 @@ def test_pc_epic_writes_all_views():
             assert (p.parent / "artifacts" / name).exists()
 
 
+def test_pc_epic_export_stamps_the_same_revision_the_paired_epic_md_was_saved_against():
+    """#274: epic.json is the machine-consumed input an n8n flow acts on, and it used to carry no
+    provenance -- an automation reading it had no signal that the session had moved on since it was
+    written. `_cmd_epic` must thread the one `Generated.status.revision` snapshot the `epic.md` save
+    used, not take a second read of the revision (invariant 12) -- so the assertion here is against
+    the session's own recorded `artifact_status["epic"].revision`, not a hardcoded number, which is
+    what would let a hardcoded stamp slip through."""
+    slug = "clitest-epic-revision"
+    with _model_in_out(slug) as p:
+        # Bump past revision 1 first, so a test that only ever sees "1" cannot pass by accident --
+        # the fixture above already lands the session at revision 1.
+        store.save_revision(slug, _built_model({"problem": slot(80, "explicit", "high")}))
+        assert store.read_meta(slug).current_revision == 2
+        _run_app(["epic", p.parent.name, "--export-json", "--github", "--gitlab"],
+                 client=FakeClient(json.dumps(_EPIC)))
+        epic_revision = store.read_meta(slug).artifact_status["epic"].revision
+        assert epic_revision == 2
+        for name in ("epic.json", "epic.github.json", "epic.gitlab.json"):
+            payload = json.loads((p.parent / "artifacts" / name).read_text(encoding="utf-8"))
+            assert payload["source_revision"] == epic_revision
+        neutral = json.loads((p.parent / "artifacts" / "epic.json").read_text(encoding="utf-8"))
+        assert neutral["slug"] == slug
+
+
 def test_pc_release_stamps_version():
     with _model_in_out("clitest-release") as p:
         _run_app(["release", p.parent.name, "v1.0"], client=FakeClient(json.dumps({"title": "X"})))
@@ -426,6 +452,52 @@ def test_pc_discover_once_saves_model():
     assert (folder / "request.md").exists()   # saved so `requivo answer` can resume
     assert store.read_meta(slug).current_revision == 1
     assert store.read_meta(slug).provider == "anthropic"
+
+
+def test_pc_discover_prints_the_default_cards_before_the_paid_call():
+    """#257: the default (no --context) reasons over every installed card, which CLAUDE.md's own
+    "Known limit" note already names as the most expensive and most diluted path -- and nothing told
+    a user which cards that was. The disclosure must be additive only: it must not change which
+    cards actually get loaded, so `context_cards` on the saved session must still be `None` (== every
+    card), the same as before this change -- a test that only checked the printed line could pass
+    even if the disclosure secretly started narrowing the selection."""
+    from requivo.services.sessions import SessionService
+
+    output = _run_app(["discover", "clitest discover default cards", "--once"],
+                       client=FakeClient(_ENGINE_REPLY))
+    cards = available_cards()
+    assert cards, "no bundled context cards found -- this test is not exercising anything"
+    for name in cards:
+        assert name in output, f"{name!r} (a real installed card) is not named in the pre-call output"
+    slug = SessionService().list_sessions()[0].slug
+    assert store.read_meta(slug).context_cards is None  # no behavior change: still every card
+
+
+def test_pc_discover_names_the_fallback_weight_when_the_average_cannot_be_measured(monkeypatch):
+    """Found in review: `average_card_byte_size() -> None` (an edge case -- reachable only when the
+    card set's own average happens to be falsy, e.g. an empty install) has a dedicated fallback
+    string in `_cmd_discover` ("measurable weight" instead of a byte figure), and nothing exercised
+    it. Monkeypatches the CLI's own imported name, not the underlying function, so this pins the
+    branch `_cmd_discover` actually takes rather than re-testing `average_card_byte_size` itself
+    (that half is `tests/test_context.py`'s `..._is_none_on_an_empty_install`)."""
+    import requivo.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "average_card_byte_size", lambda: None)
+    output = _run_app(["discover", "clitest discover no measurable weight", "--once"],
+                       client=FakeClient(_ENGINE_REPLY))
+    assert "measurable weight" in output
+    assert "bytes each" not in output
+
+
+def test_pc_discover_with_explicit_context_does_not_also_print_the_all_cards_line():
+    # The "no --context given" disclosure and the existing "Context cards: <selection>" line answer
+    # the same question and must never both fire for one invocation -- that would say two different
+    # things about what was loaded.
+    output = _run_app(["discover", "clitest discover explicit cards", "--once",
+                       "--context", "b2b-platform"],
+                      client=FakeClient(_ENGINE_REPLY))
+    assert "Context cards: b2b-platform" in output
+    assert "document-management" not in output  # a card that was NOT selected must not be named
 
 
 def test_discover_file_check_survives_a_real_length_request():

@@ -84,6 +84,21 @@ def test_home_without_sessions(client):
     assert r.status_code == 200 and "Nothing here yet" in r.text
 
 
+def test_home_states_the_measured_context_card_cost(client):
+    """#257: the create form's card selector defaults to every box unchecked, which loads every
+    card — the most expensive and most diluted path (CLAUDE.md's own "Known limit" note). The hint
+    must be additive disclosure only, so this does not touch which cards a submission actually loads
+    -- see the discovery service's own tests for that half."""
+    from requivo.core.context import available_cards, average_card_byte_size
+
+    page = client.get("/").text
+    assert available_cards(), "no bundled context cards found -- this test is not exercising anything"
+    avg = average_card_byte_size()
+    assert avg, "average_card_byte_size() returned nothing for a non-empty install"
+    assert "context-cost-hint" in page
+    assert f"{avg:,}" in page, f"the rendered hint does not name the measured average ({avg:,} bytes)"
+
+
 def test_home_lists_an_existing_session(client):
     _make_session("leave-approval", problem=HIGH_EXPLICIT)
     r = client.get("/")

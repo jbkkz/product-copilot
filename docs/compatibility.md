@@ -779,7 +779,7 @@ section appear to contain a surface with no verdict in a section that says each 
 ### The epic export envelope — **stable**, and versioned
 
 `requivo epic <slug> --export-json` writes an envelope carrying its own `format` (`requivo-epic`) and
-`version` (**1**). It exists to be validated by something outside this repo — an importer, an n8n
+`version` (**2**, see below). It exists to be validated by something outside this repo — an importer, an n8n
 flow — so declaring it unstable would contradict the code that declares it stable. Changing the shape
 of `epic` inside it is breaking; the escape hatch is `version`, and bumping it is itself breaking and
 announced here.
@@ -797,6 +797,35 @@ The **tracker plans** from `--github` and `--gitlab` are stable in the same way,
 worth stating: they describe somebody else's API. A change we make to their shape is breaking. A
 change forced on us because GitHub or GitLab moved is not a promise we were ever able to make, and it
 will be documented as what it is rather than dressed as a choice.
+
+### The epic export gains a provenance stamp — `EPIC_EXPORT_VERSION` 1 → 2 (#274)
+
+**New top-level keys on the envelope: `slug` (string) and `source_revision` (int).** Both tracker
+plans (`--github`, `--gitlab`) carry `source_revision` through into their own top-level output too.
+This is additive to the envelope's *keys* and breaking under the versioning rule stated just above,
+which is why the version moved rather than the keys being added silently — an importer pinned to
+`version == 1` still receives exactly the v1 skeleton from an older Requivo, and a v2 skeleton is
+recorded beside it in `test_the_epic_export_skeleton_is_pinned_to_its_version`.
+
+**Why:** `epic.json` (and its `--github`/`--gitlab` siblings) are written outside `ArtifactService`,
+deliberately — see the "stable, and versioned" section above — so unlike `epic.md` they carry no
+staleness row in `session.json`, and the automation that consumes them (an n8n flow) is the one
+reader that cannot exercise judgment about whether the file it just read is still current. Before
+this change there was no signal at all.
+
+**One consumption rule, stated once here because it matters more than the two new keys:**
+`source_revision` identifies the *basis* the export was rendered from — it never judges freshness by
+itself. Comparing it against another revision number, or against a wall-clock age, is exactly
+invariant 1's anti-pattern ("staleness is the dependency graph, never the revision number"). The
+freshness verdict for a session is `requivo status --json`'s `artifacts.epic.stale`; an automation
+that wants to know whether an export is still current fetches that and compares, it does not infer an
+answer from `source_revision` alone. `docs/cli.md` states the same rule where the export flags are
+documented.
+
+`_cmd_epic` populates `source_revision` from the same `Generated.status.revision` snapshot the paired
+`epic.md` save used for that invocation — one snapshot, per invariant 12 — never a second read of the
+session's current revision, which could disagree with `epic.md`'s if something else wrote to the
+session in between.
 
 ### Environment variables — **stable**, with one exception
 
@@ -1038,6 +1067,24 @@ than `RequivoError` subclasses, so they are outside the vocabulary the `--json` 
 invisible to the test that walks it. **They are presentational.** A caller scripting the Web branches
 on the HTTP status, which is stable; the code on the banner is for a human reading the page and may
 change without notice.
+
+### CI gained a `3.14` leg — the supported floor did not move (#298)
+
+The compatibility-axis matrix (`.github/workflows/ci.yml`, the `test` job) gained a sixth entry,
+`3.14`, beside the existing `3.9`–`3.13` five — a new job name (`Test (py3.14)`), additive, the same
+shape as any other leg added to that matrix. **This is not a floor change.** `requires-python` stays
+`>=3.9`, and so do `[tool.ruff] target-version`, `[tool.pyright] pythonVersion`, the `tomli` marker,
+and the macOS/Windows platform matrix's `3.9`/`3.13` ends. Whether to raise the floor off `3.9` (EOL
+since October 2025) is a separate decision this change deliberately does not make: it needs pypistats
+download-share data on who is actually still pinned to a `3.9` system interpreter, which the audit
+that filed #298 named as the step-2 gate.
+
+**The new leg is not yet a required check.** Adding a leg to a workflow file does not add it to
+`main`'s branch-protection required-status-checks list — that is a separate, manual API call (see the
+`test` job's own header comment in `ci.yml`, and `decision: appending-a-required-check`), and it is
+out of scope for this change: it is an administrative action on the repository, not a code change,
+and the wrong verb (`PATCH` instead of a `POST` to the `contexts` sub-resource) silently replaces the
+whole list rather than extending it.
 
 ## The Python import surface — the declared seam (#423)
 
