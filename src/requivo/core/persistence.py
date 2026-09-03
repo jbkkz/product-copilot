@@ -396,6 +396,14 @@ class Store:
         # read-consistency lock would be the one thing standing between an already-on-disk reserved
         # name and its data, even though locking creates nothing under that name.
         # `test_a_reserved_lock_stems_classification_survives_the_session_being_deleted`.
+        #
+        # `<slug>.lock` is itself a reserved-stem-shaped name on Windows -- `con.lock` matches the same
+        # before-the-first-dot rule `validate_filename` enforces for artifact names (raised in review).
+        # Not a live gap: reaching this line at all requires a session already occupying `slug` on
+        # disk, and Windows's own `CreateDirectory` refuses to *materialize* a `con` directory in the
+        # first place, independent of anything this file does -- so a reserved-named session cannot
+        # exist on a real Windows filesystem for this branch to be reached from, which is also why the
+        # sibling tests that build one are POSIX-only.
         _refuse_new_reserved_slug(slug, self.session_root() / slug)
         p = root / (slug + ".lock")
         if not is_contained(p, root):
@@ -1459,7 +1467,7 @@ def is_slug(name: str) -> bool:
     Deliberately implemented by *calling* it rather than by re-testing `_SLUG_RE`: validity is the
     pattern **and** the length, and an earlier predicate written against the pattern alone marked an
     81-character kebab-case directory as a name a session would silently lose, when `canonical_dir`
-    refuses it outright and loudly (#67).
+    refuses it outright and loudly. One rule, one place, found by review.
 
     **Has no caller in this codebase as of #408, and that is correct rather than dead weight.** The
     two callers it used to have were both describing an entry that already exists on disk, so their
