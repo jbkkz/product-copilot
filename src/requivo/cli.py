@@ -15,7 +15,7 @@ from requivo import __version__
 from requivo.core import persistence as store
 from requivo.core.adapters import epic_export_json, to_github_json, to_gitlab_json
 from requivo.core.analysis import model_status, slot_label
-from requivo.core.context import resolve_cards
+from requivo.core.context import available_cards, average_card_byte_size, resolve_cards
 from requivo.core.contracts import EngineOutput
 from requivo.core.dependencies import propagate, resolve_slots
 from requivo.core.errors import RequivoError, SessionNotFoundError
@@ -383,6 +383,21 @@ def _cmd_discover(a, client) -> None:
     only = resolve_cards(a.context.split(",")) if a.context else None
     if only:
         print(f"Context cards: {', '.join(only)}")
+    else:
+        # #257: the default is *every* installed card, and CLAUDE.md's own "Known limit" note
+        # already names that as the most expensive and most diluted path -- adding a card dilutes
+        # its neighbours, and every card adds prompt weight on every call. Nothing said which cards
+        # that was before this turn spent money reasoning over them, so name them here, before the
+        # paid call -- disclosure only: `only` stays `None`, so nothing about which cards get loaded
+        # changes (see docs/context-cards.md for the measured per-card cost).
+        all_cards = available_cards()
+        if all_cards:
+            avg_bytes = average_card_byte_size()
+            weight = f"~{avg_bytes:,} bytes each" if avg_bytes else "measurable weight"
+            print(f"Context cards: all {len(all_cards)} ({', '.join(all_cards)}) — no --context "
+                  f"given. Each card adds {weight} to every prompt and dilutes the others; narrow "
+                  "with --context/--cards if this request is about one product area "
+                  "(see docs/context-cards.md).")
 
     # Discovery orchestration (run the provider → apply through the validated path) lives in the shared
     # DiscoveryService, so the Web drives the exact same pipeline — the CLI only owns the interactive
@@ -805,16 +820,22 @@ def _cmd_epic(a, client) -> None:
     _wrote(slug, result, "epic")
     if a.export_json:
         # `write_artifact_file`, not `repo.save_artifact`: these three are extra *views* of one
-        # already-saved artifact and are deliberately untracked — no type, no source revision, no
-        # staleness. Giving them artifact status would put three rows in `artifact list` that no
-        # generator can refresh. Direct, and it stays direct until a second surface writes them.
-        print(f"Wrote neutral epic export → {store.write_artifact_file(slug, 'epic.json', epic_export_json(epic))}")
+        # already-saved artifact and are deliberately untracked — no type, no ArtifactService
+        # staleness row. Giving them full artifact status would put three rows in `artifact list`
+        # that no generator can refresh. Direct, and it stays direct until a second surface writes
+        # them. They are not provenance-free, though (#274): `result.status.revision` is the same
+        # `Generated.status.revision` the paired `epic.md` save just used above — one snapshot, per
+        # invariant 12 — so the export is stamped with exactly the revision a reader can compare
+        # against `requivo status --json`'s `artifacts.epic.stale` for a freshness verdict. The
+        # stamp identifies the basis; it does not itself judge staleness (invariant 1).
+        print(f"Wrote neutral epic export → "
+              f"{store.write_artifact_file(slug, 'epic.json', epic_export_json(epic, slug, result.status.revision))}")
     if a.github:
         print(f"Wrote GitHub issue-creation plan → "
-              f"{store.write_artifact_file(slug, 'epic.github.json', to_github_json(epic, slug))}")
+              f"{store.write_artifact_file(slug, 'epic.github.json', to_github_json(epic, slug, result.status.revision))}")
     if a.gitlab:
         print(f"Wrote GitLab issue-creation plan → "
-              f"{store.write_artifact_file(slug, 'epic.gitlab.json', to_gitlab_json(epic, slug))}")
+              f"{store.write_artifact_file(slug, 'epic.gitlab.json', to_gitlab_json(epic, slug, result.status.revision))}")
 
 
 def _cmd_release(a, client) -> None:

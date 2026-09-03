@@ -60,6 +60,11 @@ still be saved, and you can analyse it from Claude Code or the CLI: they share t
       {% if cards %}
       <fieldset>
         <legend>Product context <span class="hint">(sharpens the questions — leave all unchecked to use every card)</span></legend>
+        {% if card_avg_bytes %}
+        <p class="hint" id="context-cost-hint">Every unchecked box means every card is loaded — each
+          adds roughly {{ "{:,}".format(card_avg_bytes) }} bytes to every prompt and dilutes the
+          others. Picking the 1–2 that match this request is cheaper and sharper than the default.</p>
+        {% endif %}
         {# The selection survives a refusal too. A session's identity is its request *and* its card
            selection — the impact estimates are read against them — so handing back the textarea while
            silently clearing these would return a form that no longer says what the reader told it. #}

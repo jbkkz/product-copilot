@@ -113,6 +113,20 @@ def available_cards() -> list[str]:
     return sorted(_card_paths())
 
 
+def average_card_byte_size() -> int | None:
+    """Average on-disk size, in bytes, across every loadable card (bundled + user) — `None` for an
+    empty install. Used only to disclose the cost/dilution tradeoff of the all-cards default before a
+    paid call (#257): the CLI's pre-call line and the Web create form's hint both read this rather
+    than a number typed into prose, so the figure moves itself when a card is added, removed or
+    resized, instead of quietly going stale the way a hardcoded one would (CLAUDE.md's own rule about
+    a count nothing can falsify). Deliberately observational, like `available_cards()` beside it —
+    a UI hint has no business raising on an empty install any more than the card list does."""
+    paths = _card_paths()
+    if not paths:
+        return None
+    return sum(p.stat().st_size for p in paths.values()) // len(paths)
+
+
 def resolve_cards(tokens: Iterable[str]) -> list[str] | None:
     """Map caller-supplied card names to card stems, case-insensitively. Returns None when *no*
     selection was made (== all cards), and raises on a name that does not exist or on an empty token.

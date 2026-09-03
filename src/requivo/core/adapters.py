@@ -7,15 +7,23 @@ from requivo.core.contracts import Epic
 EPIC_EXPORT_FORMAT = "requivo-epic"
 
 
-EPIC_EXPORT_VERSION = 1
+EPIC_EXPORT_VERSION = 2
 
 
-def epic_export(epic: Epic) -> dict:
+def epic_export(epic: Epic, slug: str, source_revision: int) -> dict:
     """A tool-neutral, importable view of an epic — maps cleanly onto GitHub or GitLab issues.
 
     A stable, versioned envelope an importer (or an n8n flow) can validate and feed to either
     tracker's API. The epic becomes a tracking issue / GitLab epic; each issue keeps its labels,
     the shared milestone, and `depends_on` as issue refs so relationships can be wired after create.
+
+    `slug` and `source_revision` (#274) stamp *provenance*, not freshness: this envelope is written
+    outside `ArtifactService`, deliberately (three rows in `artifact list` that no generator can
+    refresh), so nothing tracks it in the staleness graph the way `epic.md` is tracked. Without a
+    revision, the one reader that cannot exercise judgment about that — an n8n flow consuming this
+    file directly — had no signal at all that the session had moved on since this was written.
+    `source_revision` identifies the basis a caller can compare against `requivo status --json`'s
+    `artifacts.epic.stale`; comparing revision numbers directly is invariant 1's own anti-pattern.
     """
     description = "\n\n".join(
         part
@@ -30,6 +38,8 @@ def epic_export(epic: Epic) -> dict:
     return {
         "format": EPIC_EXPORT_FORMAT,
         "version": EPIC_EXPORT_VERSION,
+        "slug": slug,
+        "source_revision": source_revision,
         "epic": {
             "title": epic.title,
             "description": description,
@@ -51,8 +61,8 @@ def epic_export(epic: Epic) -> dict:
     }
 
 
-def epic_export_json(epic: Epic) -> str:
-    return json.dumps(epic_export(epic), indent=2) + "\n"
+def epic_export_json(epic: Epic, slug: str, source_revision: int) -> str:
+    return json.dumps(epic_export(epic, slug, source_revision), indent=2) + "\n"
 
 
 def to_github(export: dict, slug: str) -> dict:
@@ -81,6 +91,7 @@ def to_github(export: dict, slug: str) -> dict:
 
     return {
         "target": "github",
+        "source_revision": export["source_revision"],
         "idempotency_label": label,
         "tracking_issue": {
             "title": f"Epic: {epic_title}",
@@ -101,8 +112,8 @@ def to_github(export: dict, slug: str) -> dict:
     }
 
 
-def to_github_json(epic: Epic, slug: str) -> str:
-    return json.dumps(to_github(epic_export(epic), slug), indent=2) + "\n"
+def to_github_json(epic: Epic, slug: str, source_revision: int) -> str:
+    return json.dumps(to_github(epic_export(epic, slug, source_revision), slug), indent=2) + "\n"
 
 
 def to_gitlab(export: dict, slug: str) -> dict:
@@ -133,6 +144,7 @@ def to_gitlab(export: dict, slug: str) -> dict:
 
     return {
         "target": "gitlab",
+        "source_revision": export["source_revision"],
         "idempotency_label": label,
         "tracking_issue": {
             "title": f"Epic: {epic_title}",
@@ -154,5 +166,5 @@ def to_gitlab(export: dict, slug: str) -> dict:
     }
 
 
-def to_gitlab_json(epic: Epic, slug: str) -> str:
-    return json.dumps(to_gitlab(epic_export(epic), slug), indent=2) + "\n"
+def to_gitlab_json(epic: Epic, slug: str, source_revision: int) -> str:
+    return json.dumps(to_gitlab(epic_export(epic, slug, source_revision), slug), indent=2) + "\n"

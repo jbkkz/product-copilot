@@ -112,6 +112,13 @@ Each is a view of the saved model: `requivo <verb> <slug>`.
 | `requivo epic <slug> [--export-json] [--github] [--gitlab]` | Delivery epic + optional tracker issue plans and a tool-neutral `epic.json` |
 | `requivo release <slug> [version]` | Client-facing release notes |
 
+`--export-json`/`--github`/`--gitlab` write versioned envelopes outside `ArtifactService` (no
+staleness row of their own) that stamp `source_revision` and `slug` — the basis they were rendered
+from, never a freshness verdict. That verdict is `requivo status --json`'s `artifacts.epic.stale`;
+comparing revision numbers directly is the anti-pattern the staleness model exists to replace. The
+full envelope shape, per-version skeleton and a worked consumer flow live in
+[integrations.md](integrations.md#the-epic-export-envelope-requivo-epic).
+
 ## Local browser interface
 
 | Command | Does |

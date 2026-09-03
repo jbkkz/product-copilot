@@ -951,8 +951,11 @@ _SURFACE_STORAGE_ALLOWLIST = {
     ),
     ("cli.py", "write_artifact_file"): (
         "writes the three neutral epic exports, which are extra *views* of one already-saved "
-        "artifact and deliberately untracked -- no type, no source revision, no staleness. "
-        "`repo.save_artifact` would put three rows in `artifact list` that no generator can refresh."
+        "artifact and deliberately untracked -- no artifact-list type, no staleness row. "
+        "`repo.save_artifact` would put three rows in `artifact list` that no generator can "
+        "refresh. Since #274 the export envelope itself carries a `source_revision` stamp -- "
+        "provenance, not a tracked staleness flag; that stamp is data inside the file this "
+        "call writes, not a second call site."
     ),
     ("cli.py", "load_model"): (
         "reads a bare `model.json` the user named on the command line. That file is not a session "
