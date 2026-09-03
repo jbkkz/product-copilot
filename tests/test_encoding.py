@@ -719,6 +719,20 @@ def test_the_floor_guard_spares_the_fix_and_the_read_side_twin(tmp_path):
     assert floor_violations(scan(raised)[0], (3, 10)) == []
 
 
+def test_the_new_3_14_leg_is_declared_consistently():
+    """#298 (step 1 of 2): a `Test (py3.14)` leg was added to the CI compatibility-axis matrix as a
+    new job name beside the existing five, without touching the floor -- `requires-python`, ruff's
+    `target-version`, pyright's `pythonVersion` and the platform matrix's low end are all untouched
+    (that is step 2, deferred pending pypistats download data). Pin the two places that must agree
+    with each other so a leg added to CI and not to the package's own advertised versions -- or the
+    reverse -- goes red instead of silently under- or over-stating what is actually tested."""
+    matrix = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert '"3.14"' in matrix, "ci.yml's compatibility-axis matrix does not list 3.14"
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "Programming Language :: Python :: 3.14" in pyproject, (
+        "pyproject.toml's classifiers do not name 3.14, though CI now tests it")
+
+
 def test_the_floor_is_read_from_pyproject_and_matches_what_ci_runs():
     """The lever control. A floor this guard could not read would make every case above vacuous, and
     a floor that disagreed with the CI matrix would guard a version nothing runs."""
