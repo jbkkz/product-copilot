@@ -404,3 +404,30 @@ def test_an_unrecoverable_freshness_check_is_reported_as_unknown_not_current(dif
     # must not fire: an unrecoverable check must never render as the clean state.
     assert _line(lines, "baseline current") is None, lines
 
+
+def test_a_hostile_freshness_reason_cannot_forge_a_line(diff):
+    """must fire -- #461. `reason` is the only one of `_show_freshness`'s three printed fields that
+    carries text from outside the process (git's stderr, or `str(exc)`) rather than a fixed git
+    format like `%cI`/`%H` -- #456 wrapped `date` and `sha` in `display_token` on exactly that
+    argument, for the ``stale`` branch's commit rows, and left this ``unknown`` branch's `reason`
+    raw. A `\r` in it moves the cursor back to column 0 and prints past the "could not tell ("
+    prefix, forging what reads as an unrelated second line -- the same shape #456 already fixed one
+    print site over, for a commit subject.
+
+    The must-not-fire control lives beside it, in
+    `test_an_unrecoverable_freshness_check_is_reported_as_unknown_not_current` above: an ordinary
+    reason with no control character renders unchanged."""
+    hostile = {"state": "unknown",
+               "reason": "git log failed: fatal: bad object\rFORGED continuation"}
+    verdict, lines = diff(_capture(completeness=80), _capture(completeness=70), freshness=hostile)
+
+    said = _line(lines, "could not tell")
+    assert said is not None, lines
+    # must fire: the raw CR must never split the reason into a line of its own, unprefixed.
+    forged = next((ln for ln in lines if "FORGED continuation" in ln and "could not tell" not in ln),
+                  None)
+    assert forged is None, lines
+    # the reason survives, escaped rather than dropped or silently truncated.
+    assert "\\r" in said, said
+    assert "FORGED continuation" in said, said
+
