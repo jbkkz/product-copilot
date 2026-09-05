@@ -114,9 +114,18 @@ SHOTS = (
 def surface_digest(root: Path = REPO) -> str:
     """One digest over every file that can change what the shots show.
 
-    Sorted by repo-relative POSIX path and hashing the path alongside the bytes, so a rename is a
+    Sorted by repo-relative POSIX path and hashing the path alongside the content, so a rename is a
     change: a template moved to a new name renders the same page and is exactly the kind of edit
     that should send someone back to look at the screenshots.
+
+    **Line endings are normalised before hashing, and that is not tidiness.** Every file in `SURFACE`
+    is text, this repository ships no `.gitattributes`, and a Windows checkout therefore holds CRLF
+    where macOS and Linux hold LF. Hashing raw bytes made the digest a fact about the checkout rather
+    than about the surface, so the guard went red on `Test (py3.13, windows-latest)` alone while
+    twelve other legs were green -- the same shape as #257's `card_byte_size`, which measured
+    `st_size` for content the loader reads in text mode. A file that is not valid UTF-8 falls back to
+    its bytes rather than raising: `SURFACE` names only text today, and a guard is not the place to
+    discover otherwise.
 
     `root` is a parameter only so the guard's must-fire control can build a tree of its own --
     `test_the_screenshot_freshness_digest_moves_when_the_surface_does`. Nothing in this script
@@ -134,8 +143,22 @@ def surface_digest(root: Path = REPO) -> str:
             raise SystemExit(f"SURFACE names {entry}, which is not in the tree - update this script")
     for path in sorted(files, key=lambda p: p.relative_to(root).as_posix()):
         h.update(path.relative_to(root).as_posix().encode("utf-8"))
-        h.update(path.read_bytes())
+        h.update(_normalised_bytes(path.read_bytes()))
     return h.hexdigest()
+
+
+def _normalised_bytes(raw: bytes) -> bytes:
+    """The content of a text file with its line endings flattened to LF.
+
+    Deliberately not `read_text(..., newline="")`: that keyword reached `Path.read_text` in 3.13 and
+    `requires-python` is `>=3.9`, where it is a `TypeError` the Types leg cannot see -- #469 shipped
+    exactly that mistake on `write_text` and #470 records why the checker is blind to it.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
 
 
 def read_manifest() -> dict:

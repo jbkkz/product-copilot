@@ -208,3 +208,24 @@ def test_the_freshness_guard_refuses_a_surface_path_that_no_longer_exists(tmp_pa
     shutil.rmtree(tmp_path / "src/requivo/web/templates")
     with pytest.raises(SystemExit, match="not in the tree"):
         _shoot_module().surface_digest(tmp_path)
+
+
+def test_the_digest_is_the_same_whatever_the_line_endings(tmp_path):
+    """The freshness digest is a fact about the web surface, not about the checkout it was computed
+    in. This repository ships no `.gitattributes`, so a Windows clone holds CRLF where macOS and
+    Linux hold LF -- and hashing raw bytes made the guard above fail on `Test (py3.13,
+    windows-latest)` alone while twelve other legs were green, reporting a stale screenshot on a
+    tree where nothing had moved. Same shape as #257's `card_byte_size`, one directory along."""
+    digest = _shoot_module().surface_digest
+    _surface_tree(tmp_path)
+    lf = digest(tmp_path)
+
+    for entry in _shoot_module().SURFACE:
+        target = tmp_path / entry
+        for path in ([target] if target.suffix else target.rglob("*")):
+            if path.is_file():
+                path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    assert digest(tmp_path) == lf, (
+        "the digest moved when the same content was checked out with CRLF endings — it is measuring "
+        "the checkout rather than the surface, and will go red on Windows and nowhere else"
+    )
