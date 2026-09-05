@@ -165,15 +165,23 @@ def test_every_manifest_entry_names_an_image_that_exists_and_matches_its_recorde
 
 
 def _surface_tree(root: Path) -> None:
-    """The smallest tree `surface_digest` accepts: one file at every path `SURFACE` names."""
+    """The smallest tree `surface_digest` accepts: one file at every path `SURFACE` names.
+
+    `write_bytes`, never `write_text`, and that is the whole fixture. Text mode translates `\n` to
+    the platform's line ending on write, so a baseline written with `write_text` is already CRLF on
+    Windows -- and the line-ending test below would then be converting that to `\r\r\n` and
+    comparing two things that are both wrong. A test that builds its own fixture in text mode has
+    already lost the platform difference it exists to reproduce: it went red on the two Windows legs
+    and nowhere else, which is the same sentence as the defect it guards.
+    """
     for entry in _shoot_module().SURFACE:
         target = root / entry
         if target.suffix:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("original\n", encoding="utf-8")
+            target.write_bytes(b"original\n")
         else:
             target.mkdir(parents=True, exist_ok=True)
-            (target / "a.html").write_text("original\n", encoding="utf-8")
+            (target / "a.html").write_bytes(b"original\n")
 
 
 def test_the_screenshot_freshness_digest_moves_when_the_surface_does(tmp_path):
@@ -186,10 +194,10 @@ def test_the_screenshot_freshness_digest_moves_when_the_surface_does(tmp_path):
     baseline = digest(tmp_path)
 
     edited = tmp_path / "src/requivo/web/templates/a.html"
-    edited.write_text("edited\n", encoding="utf-8")
+    edited.write_bytes(b"edited\n")
     assert digest(tmp_path) != baseline, "an edited template left the digest unchanged"
 
-    edited.write_text("original\n", encoding="utf-8")
+    edited.write_bytes(b"original\n")
     assert digest(tmp_path) == baseline, "the digest is not stable for unchanged content"
 
     edited.rename(edited.with_name("b.html"))
@@ -224,7 +232,9 @@ def test_the_digest_is_the_same_whatever_the_line_endings(tmp_path):
         target = tmp_path / entry
         for path in ([target] if target.suffix else target.rglob("*")):
             if path.is_file():
-                path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+                # Flatten first: converting blind would turn an existing CRLF into `\r\r\n`.
+                flat = path.read_bytes().replace(b"\r\n", b"\n")
+                path.write_bytes(flat.replace(b"\n", b"\r\n"))
     assert digest(tmp_path) == lf, (
         "the digest moved when the same content was checked out with CRLF endings — it is measuring "
         "the checkout rather than the surface, and will go red on Windows and nowhere else"
