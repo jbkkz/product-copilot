@@ -119,12 +119,32 @@ is the intended behaviour, not a limitation to work around.
 
 The policy is stated to the model in each prompt asset's *Output format* block — one sentence in
 `engine.md` for the mirroring half, one identical sentence in the six artifact prompts for the
-English half — so it is enforced on every call rather than left to emerge. Requivo does **not**
-detect the request's language: nothing is stored about it and nothing branches on it. Both halves
-are instructions to the model about what it is writing, not a routing decision made in Python.
+English half — so it is an instruction on those calls rather than something left to emerge. Requivo
+does **not** detect the request's language: nothing is stored about it and nothing branches on it.
+Both halves are instructions to the model about what it is writing, not a routing decision made in
+Python.
+
+**One call is deliberately outside the policy, and it is named here rather than left to be
+discovered.** `estimate` is prompted with no language sentence, so its `note` and `risks` — free text
+a reader sees — come back in whatever language the model settles on. That is not an oversight in the
+sweep: `estimate` is the one generator that produces **no file**. Every artifact on the English side
+is written to disk and read downstream by a dev team or a tracker; `estimate` is a terminal analysis
+read by the person who ran it, which is the same reader, and the same room, as the mirroring half.
+Assigning it would extend the policy rather than record it, so it is left open and stated as open.
+Until it is decided, "every artifact anchors English" means the six with filenames, and a mixed-
+language `requivo estimate` is a known consequence rather than a contradiction.
 
 Requivo Web reflects the same split. The page declares `lang="en"` for its own chrome, and the
 regions the policy says mirror the request — the request itself, the understanding, the questions —
 declare an empty `lang`, which is HTML's way of saying the language is unknown. Unknown is the
 honest claim: nothing here knows what language the client wrote in, and a guess that is usually
 right is still a guess.
+
+**What that buys, and what it does not.** It removes a false claim: the page no longer asserts that a
+French objective is English. It does **not** make a screen reader pronounce that objective correctly.
+[WCAG 3.1.2](https://www.w3.org/WAI/WCAG22/Understanding/language-of-parts) asks for the actual
+language of each passage to be programmatically determinable, and `lang=""` is the opposite of
+determinable — a reader defaulting to English will read French with English rules exactly as before.
+So this is the strongest *true* statement available without detection, and the accessibility gap
+stays open behind it. Closing it needs a real BCP 47 value, which needs either detection or asking
+the user, and neither has been decided.
