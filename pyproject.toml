@@ -167,7 +167,11 @@ testing = ["pytest>=8.0"]
 # file for what the config does and does not say, and `.github/workflows/ci.yml` for the one
 # non-gating leg that prints the table. Until it landed, this repository had no line coverage at all:
 # a codebase whose culture is "a claim gets a guard or comes out" was mapping its own coverage by
-# grep, which is how `render/terminal.py`'s `render_stale` reached a release with zero tests.
+# grep -- which is how `render/terminal.py`'s `render_stale` was recorded as untested on the
+# strength of a name search over `tests/` that returned nothing. The first table this config
+# produced corrected that map rather than confirming it: 7 of its 8 lines are exercised indirectly
+# through the CLI, and the eighth is an early return no caller in the tree can reach. A grep
+# measures whether a name is *mentioned*; it was being read as whether a line is *run*.
 #
 # A ceiling on the major, for the reason `pyright` carries one in the same list and more sharply:
 # this is a pytest *plugin*, auto-loaded through an entry point on every pytest invocation on every
@@ -321,8 +325,12 @@ split-on-trailing-comma = false
 # **The report is for reading, not for passing.** This repository makes precise narrative claims
 # about what is tested -- invariants, MUST-FIRE notes, allowlists asserted in both directions -- and
 # had no way to check any of them except by grep. That is how `render_stale` in
-# `render/terminal.py` reached a release with zero tests, found by hand in the 2026-08-29 audit and
-# visible in the first table this config produced.
+# `render/terminal.py` was written down as untested in the 2026-08-29 audit: the grep over `tests/`
+# found no mention of the name, and the conclusion drawn from it was "no tests". The first table
+# this config produced is what disproved it -- 7 of 8 lines covered, indirectly, through the CLI --
+# so the entry a reader is most likely to remember from that audit is one this measurement
+# *corrected*, not one it confirmed. That is the argument for the table, and a sharper one than a
+# gap it merely found would have been.
 #
 # What is deliberately absent is as much of the decision as what is here:
 #
