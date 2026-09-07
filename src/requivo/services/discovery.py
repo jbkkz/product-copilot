@@ -240,7 +240,9 @@ def _discovery_guard(slug: str, store: Store) -> Iterator[None]:
     `store` is the one `DiscoveryService._store_for_repo()` resolved, so two services over two
     explicitly-rooted repositories serialise independently rather than contending on one ambient
     guard file neither may be addressing. Pinned by
-    `test_snapshot_names_the_root_of_an_explicitly_rooted_repository_not_the_ambient_one`.
+    `test_the_discovery_guard_addresses_an_explicitly_rooted_repositorys_own_workspace`, which
+    asserts the guard file lands under the repository's own root *and* that the ambient one is never
+    touched -- the negative half is what makes it fire when this resolution goes back to ambient.
     """
     p = _discovery_guard_path(slug, store)
     store.ensure_store_dir(p.parent)
