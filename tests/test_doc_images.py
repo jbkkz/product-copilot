@@ -73,11 +73,18 @@ def test_every_relative_image_path_in_a_doc_page_resolves(page):
 # Two named instances is the bar CLAUDE.md sets for funding coverage, and #237/#235 are them. It
 # folds into this file rather than opening a new one, per the same rule.
 #
-# The digest is deliberately coarse -- one hash over every template, the CSS, `app.js` and the two
-# view-model modules, rather than a per-image dependency list. A hand-kept map of which template
+# The digest is deliberately coarse -- one hash over every template, the CSS, `app.js` and the
+# view-model package, rather than a per-image dependency list. A hand-kept map of which template
 # feeds which screenshot is a second thing to keep in sync, and it would drift silently, which is
 # the defect this guard exists to answer. Re-shooting is one command, so a false positive costs
 # that command.
+#
+# **Coarse in what it watches, per-image in what it records, and those are different questions.**
+# The digest was written once at the top of the manifest, so a partial re-run -- which the script
+# takes shot names for -- stamped the current tree onto all four entries while re-taking one. Each
+# entry carries the digest of the tree *it* was shot against now. That is not the per-image
+# dependency map rejected above: it is a fact the script observed at capture time, not a mapping
+# anyone has to keep true.
 
 MANIFEST = REPO / "docs" / "images" / "manifest.json"
 
@@ -110,14 +117,15 @@ def test_the_screenshots_were_taken_from_the_web_surface_as_it_stands_now():
         "docs/images/manifest.json is missing — run `python scripts/shoot_doc_images.py`"
     )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    recorded = manifest.get("surface_digest")
-    current = _shoot_module().surface_digest()
-    assert recorded == current, (
-        f"the web surface has changed since the screenshots in docs/images/ were taken on "
-        f"{manifest.get('shot_at')}, so they may now show a product that no longer exists — the "
-        f"exact defect #329 was filed for. Re-shoot them and commit both the images and the "
-        f"manifest:\n    python scripts/shoot_doc_images.py\n"
-        f"  recorded: {recorded}\n  current:  {current}"
+    shoot = _shoot_module()
+    current = shoot.surface_digest()
+    stale = shoot.stale_shots(manifest, current)
+    assert not stale, (
+        f"{', '.join(stale)} — the web surface has changed since {'these were' if len(stale) > 1 else 'this was'} "
+        f"shot (manifest dated {manifest.get('shot_at')}), so they may now show a product that no "
+        f"longer exists — the exact defect #329 was filed for. Re-shoot and commit both the images "
+        f"and the manifest:\n    python scripts/shoot_doc_images.py {' '.join(stale)}\n"
+        f"  current: {current}"
     )
 
 
@@ -239,3 +247,43 @@ def test_the_digest_is_the_same_whatever_the_line_endings(tmp_path):
         "the digest moved when the same content was checked out with CRLF endings — it is measuring "
         "the checkout rather than the surface, and will go red on Windows and nowhere else"
     )
+
+
+def test_a_partial_reshoot_does_not_bless_the_shots_it_did_not_take():
+    """The must-fire control for the per-image digest, and the defect that produced it.
+
+    `shoot(names)` takes shot names, preserves the manifest entries and the files of everything it
+    was not asked for, and used to overwrite one shared `surface_digest` with the current tree
+    regardless. So the documented partial refresh --  `python scripts/shoot_doc_images.py web-home`
+    -- silently certified three screenshots nobody had re-taken, in the guard whose entire subject
+    is a screenshot that quietly stopped being true.
+
+    Asserted against `stale_shots`, the predicate both `check()` and the guard above read, rather
+    than by driving `shoot()`: taking a real screenshot needs playwright, a browser and a served
+    session, none of which this suite has -- and the arithmetic that went wrong is here, not in the
+    capture.
+    """
+    shoot = _shoot_module()
+    fresh, old = "d" * 64, "0" * 64
+    partially = {"images": {
+        "web-home": {"surface_digest": fresh},        # re-taken
+        "web-session": {"surface_digest": old},       # not, and still shows the old surface
+        "web-questions": {"surface_digest": old},
+        "web-brief": {"surface_digest": old},
+    }}
+    assert shoot.stale_shots(partially, fresh) == ["web-brief", "web-questions", "web-session"], (
+        "a partial re-shoot marked the shots it never took as current"
+    )
+    assert shoot.stale_shots({"images": {n: {"surface_digest": fresh} for n in partially["images"]}},
+                             fresh) == [], "a full re-shoot must leave nothing flagged"
+
+
+def test_a_manifest_entry_with_no_recorded_digest_reads_as_stale():
+    """The third state, and the direction it has to fail in. An entry written before the digest was
+    recorded per image knows nothing about the tree it was shot against, and *unknown* is not
+    *current*: a freshness guard that answers "fine" when it has nothing to compare is the all-clear
+    nobody earned -- `test_the_freshness_guard_refuses_a_surface_path_that_no_longer_exists` above
+    is the same rule one function along, and `golden_diff`'s `unknown` baseline state is it in
+    another script entirely."""
+    shoot = _shoot_module()
+    assert shoot.stale_shots({"images": {"web-home": {"width": 2560}}}, "d" * 64) == ["web-home"]

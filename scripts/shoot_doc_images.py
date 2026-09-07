@@ -60,12 +60,19 @@ MANIFEST = IMAGES / "manifest.json"
 # named directly. `viewmodels/` is in here because CLAUDE.md's "two vocabularies" section makes it
 # the owner of the words on screen -- a relabelling there is invisible to the templates and fully
 # visible in a screenshot.
+#
+# **The whole directory, not the two modules whose names sounded like vocabulary.** This named
+# `labels.py` and `status.py` and left out `sessions.py`, which decides the title and the ordering of
+# every session row in `web-home.webp`: changing its `TITLE_CHARS` from 110 to 25 left the digest
+# identical while the rendered titles moved, and the session-ordering class of drift sat outside the
+# guard entirely. Enumerating the members of a directory whose argument for being here applies to the
+# directory is how a watch set silently stops watching -- the same shape as the `SURFACE` entry that
+# no longer exists, which `surface_digest` refuses rather than quietly hashing less.
 SURFACE = (
     "src/requivo/web/templates",
     "src/requivo/web/static/css",
     "src/requivo/web/static/js",
-    "src/requivo/web/viewmodels/labels.py",
-    "src/requivo/web/viewmodels/status.py",
+    "src/requivo/web/viewmodels",
 )
 
 # 1280 CSS px at deviceScaleFactor 2 is what the shipped set was framed at: every file in
@@ -276,6 +283,10 @@ def shoot(names: list[str]) -> int:
 
         manifest = read_manifest()
         images = dict(manifest.get("images", {}))
+        # Once, before the first shot: every image taken in this run is taken against one tree, and
+        # reading the surface again per shot would record a different answer for each if a file
+        # moved mid-run.
+        digest = surface_digest()
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -303,6 +314,10 @@ def shoot(names: list[str]) -> int:
                     "caption": s.caption,
                     "width": width,
                     "height": height,
+                    # Stamped per image, and that is the whole of the partial-reshoot fix: this
+                    # script takes shot names, so blessing every entry with one shared digest let
+                    # `shoot(["web-home"])` mark three screenshots nobody re-took as current.
+                    "surface_digest": digest,
                 }
                 print(f"  {s.name}.webp  {width}x{height}  from {url}")
             browser.close()
@@ -312,14 +327,14 @@ def shoot(names: list[str]) -> int:
             json.dumps(
                 {
                     "_comment": (
-                        "Written by scripts/shoot_doc_images.py. `surface_digest` is what "
-                        "tests/test_doc_images.py compares against the tree; when it goes red the "
-                        "web surface moved after these shots were taken - re-run the script."
+                        "Written by scripts/shoot_doc_images.py. Each image carries the "
+                        "`surface_digest` of the tree it was shot against; "
+                        "tests/test_doc_images.py compares each one against the tree, so a shot "
+                        "left out of a partial re-run stays flagged - re-run the script."
                     ),
                     "shot_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                     "viewport": VIEWPORT,
                     "device_scale_factor": SCALE,
-                    "surface_digest": surface_digest(),
                     "images": dict(sorted(images.items())),
                 },
                 indent=2,
@@ -332,19 +347,37 @@ def shoot(names: list[str]) -> int:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def stale_shots(manifest: dict, current: str) -> list[str]:
+    """The images in `manifest` that were not shot against `current`, by name.
+
+    An entry with no `surface_digest` is stale, not current: it was written before this script
+    recorded one per image, and *unknown* has to read as *go and look*. The all-clear is the one
+    answer a freshness guard must never give by default -- the same rule `surface_digest` applies to
+    a `SURFACE` path that has gone missing, and `golden_diff`'s `unknown` baseline state one script
+    along.
+    """
+    return sorted(name for name, entry in manifest.get("images", {}).items()
+                  if entry.get("surface_digest") != current)
+
+
 def check() -> int:
     manifest = read_manifest()
     if not manifest:
         print(f"{MANIFEST.relative_to(REPO)} does not exist - run this script with no arguments")
         return 1
-    recorded, current = manifest.get("surface_digest"), surface_digest()
-    if recorded == current:
+    current = surface_digest()
+    stale = stale_shots(manifest, current)
+    if not stale:
         print(f"docs/images/ is current with the web surface (shot {manifest.get('shot_at')})")
         return 0
     print(
-        f"the web surface has changed since the screenshots were taken on {manifest.get('shot_at')}.\n"
-        f"  recorded: {recorded}\n  current:  {current}\n"
-        "Re-shoot them:  python scripts/shoot_doc_images.py"
+        f"the web surface has changed since {len(stale)} of "
+        f"{len(manifest.get('images', {}))} screenshots were taken.\n"
+        + "".join(f"  {name}: shot against "
+                  f"{manifest['images'][name].get('surface_digest') or '(not recorded)'}\n"
+                  for name in stale)
+        + f"  current:  {current}\n"
+        f"Re-shoot them:  python scripts/shoot_doc_images.py {' '.join(stale)}"
     )
     return 1
 
