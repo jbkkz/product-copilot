@@ -1,0 +1,55 @@
+{
+  "_comment": "Written by scripts/shoot_doc_images.py. Each image carries the `surface_digest` of the tree it was shot against; tests/test_doc_images.py compares each one against the tree, so a shot left out of a partial re-run stays flagged - re-run the script.",
+  "shot_at": "2026-09-05",
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "device_scale_factor": 2,
+  "images": {
+    "web-brief": {
+      "route": "/sessions/{slug}/artifacts/brief",
+      "frame": {
+        "top": null,
+        "bottom": "h2:text-is('Decisions made')"
+      },
+      "caption": "The decision brief as a rendered document: request and objective, current understanding, what is confirmed, and the important assumptions.",
+      "width": 2560,
+      "height": 4244,
+      "surface_digest": "d5b939a0e4fe2533ad824c6b32b728926f6c005b0b0c4e2918e0516879d1b70d"
+    },
+    "web-home": {
+      "route": "/",
+      "frame": {
+        "top": null,
+        "bottom": null
+      },
+      "caption": "The home page: the request box, the context-card cost note, and the recent sessions.",
+      "width": 2560,
+      "height": 2190,
+      "surface_digest": "d5b939a0e4fe2533ad824c6b32b728926f6c005b0b0c4e2918e0516879d1b70d"
+    },
+    "web-questions": {
+      "route": "/sessions/{slug}",
+      "frame": {
+        "top": "h2:text-is('What could change the solution')",
+        "bottom": "h2:text-is('Documents')"
+      },
+      "caption": "The open questions with why each matters, the answer form, and the readiness verdict.",
+      "width": 2560,
+      "height": 3456,
+      "surface_digest": "d5b939a0e4fe2533ad824c6b32b728926f6c005b0b0c4e2918e0516879d1b70d"
+    },
+    "web-session": {
+      "route": "/sessions/{slug}",
+      "frame": {
+        "top": null,
+        "bottom": "h2:text-is('What could change the solution')"
+      },
+      "caption": "The session page: the objective, the request as read, and what is confirmed vs assumed.",
+      "width": 2560,
+      "height": 3586,
+      "surface_digest": "d5b939a0e4fe2533ad824c6b32b728926f6c005b0b0c4e2918e0516879d1b70d"
+    }
+  }
+}
