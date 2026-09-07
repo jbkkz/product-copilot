@@ -230,12 +230,56 @@ include = ["src/requivo"]
 # The floor `requires-python` declares, not the interpreter the leg happens to run. A checker at 3.12
 # accepts what the oldest supported interpreter refuses, which is the same shape of unverified claim
 # the Dependency floor leg exists for (#91).
+#
+# **And it is a claim about symbols, and only sometimes about signatures** (#470). Typeshed
+# version-gates whole names reliably; it gates individual *parameters* only where a stub author
+# happened to write a version-conditional signature, and there is no rule saying which functions got
+# one. Both halves measured, not assumed:
+#   - not gated, the instance this repo actually met: `pyright --pythonversion 3.9` reports 0 errors
+#     on `Path("x").write_text("a", newline="")`, the 3.10+ keyword #469 shipped, which then failed
+#     518 tests apiece on the three 3.9 legs.
+#   - gated, one stdlib module along: the same invocation reports `No parameter named "dir_fd"` and
+#     `No parameter named "onexc"` for `shutil.rmtree`, whose stub carries per-version signatures.
+# So the leg's parameter coverage is whatever Typeshed's authors wrote, function by function, and it
+# is not something a caller can look up before relying on it. Which is the same conclusion the first
+# draft of this comment reached by the wrong route -- it read one uncovered instance as a rule about
+# Typeshed, and a reviewer measured a covered one. Treat it as unknown per call site rather than as
+# absent: whoever reads the paragraph above as a guarantee that the floor is checked will be wrong
+# wherever the stub is silent, and has no way to tell from here where that is.
+# The two instances this repo has actually met are covered by a test rather than by this setting --
+# `test_no_text_call_passes_a_keyword_the_declared_floor_rejects` in `tests/test_encoding.py`, whose
+# table is deliberately two rows long, per CLAUDE.md's bar on funding coverage from named instances.
 pythonVersion = "3.9"
 
 # `All` is the stricter setting, not a convenience. It type-checks the Windows-only locking path from
 # the Linux leg, on a codebase bitten by Windows-only behaviour three times (invariants 17 and 18).
 # Left at the host's platform it reported `msvcrt.locking` as missing — a fact about the machine
 # running the check, not about the code.
+#
+# **Its limit is sharper than the version key's, and `All` is the reason.** The first draft of this
+# comment measured the platform half under `--pythonplatform Linux` and `--pythonplatform Windows`
+# -- which is not the setting this file sets, and a reviewer measured it under the one that is.
+# Under `All`, pyright treats every platform as possible, so a symbol available on *any* of them is
+# available: the union, not the intersection. Measured through a config file, because the CLI flag
+# refuses the value:
+#   - symbol, NOT caught under `All`: unconditional `os.startfile("x")` and `os.getuid()` each report
+#     0 errors, though each is missing on one platform this project supports. Pinned to a specific
+#     platform they are caught -- `os.startfile` under `Linux` and `os.getuid` under `Windows` each
+#     report `reportAttributeAccessIssue` -- which is what the first draft measured and generalised.
+#   - parameter, not caught either: `subprocess.run(..., preexec_fn=...)` under `Windows` reports
+#     0 errors, and CPython raises `ValueError("preexec_fn is not supported on Windows ...")` there.
+# So `All` buys the thing it was chosen for -- it type-checks the Windows-only locking path from the
+# Linux leg instead of reporting `msvcrt` as missing -- and it buys **no** platform-availability
+# checking at all, in either direction. Those are two different senses of "stricter" and the trade is
+# deliberate: this codebase has been bitten three times by an unchecked Windows path (invariants 17
+# and 18) and zero times by calling a platform-absent symbol.
+#
+# The answer for both keys is therefore one sentence, narrower than the one this comment first wrote:
+# **this leg checks that a name exists somewhere across the supported platforms, on the declared
+# floor; it does not check that the name exists on the platform the code will run on, and it checks a
+# signature only where Typeshed happens to gate one.** No guard is added for the platform half,
+# because unlike the version half this repo has met zero real instances of it, and one plausible
+# class does not fund coverage here (CLAUDE.md, #288).
 pythonPlatform = "All"
 
 typeCheckingMode = "basic"
