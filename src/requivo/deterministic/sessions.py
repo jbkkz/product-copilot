@@ -683,8 +683,12 @@ def _cmd_session_verify(a, client) -> None:
     moment is the failure this whole change is about.
 
     **Three answers, three exit codes.** The rendering always distinguished them and the exit code
-    distinguished two, in the verb whose whole job is to answer *is this session sound*. Pinned by
-    `test_session_verify_exits_one_when_the_cards_were_checked_and_are_broken`:
+    distinguished two, in the verb whose whole job is to answer *is this session sound*. It takes two
+    tests to pin, one per firm claim, because either alone is green while the other's arm is broken:
+    `test_session_verify_exits_one_when_the_cards_were_checked_and_are_broken` for the 1, and
+    `test_session_verify_exits_four_when_it_could_not_check_the_product_context` for the 4 that used
+    to be collapsed into it -- the distinction this whole change is about, and the one a reference to
+    the first alone leaves unguarded:
 
     - `problems` — checked, the session is inconsistent. A complete answer. **1**.
     - `cards["problem"]` — checked, its product context is broken. Also complete. **1**.
