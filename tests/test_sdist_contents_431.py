@@ -54,7 +54,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `"64.0.0"` cleanly where `import setuptools` raises. `_build_sdist` below reaches
 # `from setuptools.build_meta import build_sdist` only after this check has already confirmed the
 # version is new enough to import safely.
-_MIN_SETUPTOOLS_FOR_SDIST = "66.1.0"
+# Raised from 66.1.0 to the PEP 639 parse floor (#337): since the licence moved to
+# `[project] license = "Apache-2.0"`, a setuptools below 77 cannot read this pyproject.toml at all --
+# it fails in `get_requires_for_build_wheel` with `project.license must be valid exactly by one
+# definition`, which is a build *error*, not the clean skip this guard exists to produce. 77.0.0 was
+# never published, so 77.0.1 is the lowest pinnable value. The `66.1.0` history is in pyproject.toml
+# beside the floor itself: it is still what would decide this if the licence form were reverted.
+_MIN_SETUPTOOLS_FOR_SDIST = "77.0.1"
 
 
 def _setuptools_build_backend_reason(min_version: str) -> str | None:

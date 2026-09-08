@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,13 +8,13 @@ version = "3.1.0"
 description = "Turn a vague product request into a versioned requirements model: ask only the questions that change the solution, generate the brief and PRD from it, and compute exactly what a changed answer invalidates."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 keywords = ["requirements", "product", "llm", "anthropic", "claude", "prd", "discovery", "elicitation"]
 authors = [{ name = "jbkkz" }]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -94,6 +94,17 @@ testing = ["pytest>=8.0"]
 # are dev-only: they are part of how the runtime floors are *measured* (#91), never part of what a
 # user installs.
 #
+# **`packaging>=24.2`, and the floor leg is the only thing that could have found why (#337).** The
+# PEP 639 licence move raised the setuptools floor to 77.0.1, and setuptools 77's `dist.py` imports
+# `packaging.licenses.canonicalize_license_expression` from the *top-level* `packaging` -- an
+# installed one shadows setuptools' own vendored copy, so an environment carrying an older
+# `packaging` beside a new setuptools cannot build this project at all. At the declared floor that
+# was `packaging 23.0`, and the failure is a bare `ModuleNotFoundError: No module named
+# packaging.licenses` out of `setuptools/dist.py`, in fixture setup, on the two tests that build in
+# process. Bisected rather than guessed: 24.0 and 24.1 do not carry the module, 24.2 is the first
+# that does, and it installs on Python 3.9.6, this project's oldest supported interpreter. Cheap
+# because it is dev-only -- no `pip install requivo` is affected by this bound.
+#
 # `pyright` (#78) carries an upper bound on the major for the same reason the workflow files pin
 # their actions to a tag: a type checker's new release can report on code that has not changed, and
 # on a *blocking* leg that turns an unrelated upstream release into a red `main`. The floor is where
@@ -127,9 +138,18 @@ testing = ["pytest>=8.0"]
 # now-removed `pkgutil.ImpImporter` and builds a correct sdist. `build_wheel` needs one version more:
 # below 70.1.0 `bdist_wheel` is not a setuptools command at all without a separately installed `wheel`
 # package (this project declares none), and 70.1.0 is where the command is vendored in directly --
-# confirmed on a bare venv with no `wheel` installed. `70.1.0` is therefore the lowest floor that
+# confirmed on a bare venv with no `wheel` installed. `70.1.0` was therefore the lowest floor that
 # builds both a real sdist and a real wheel on Python 3.12 with nothing else added, still declaring
 # `python_requires>=3.8` itself so this project's own 3.9 floor is untouched.
+#
+# **Superseded by `77.0.1` when the licence moved to PEP 639's SPDX form (#337).** That is not a
+# refinement of the reasoning above -- it is a different constraint arriving in front of it. A
+# setuptools below 77 cannot *parse* `[project] license = "Apache-2.0"` at all: it fails in
+# `get_requires_for_build_wheel` with `project.license must be valid exactly by one definition`,
+# before any of the `bdist_wheel` reasoning above is reachable. Measured, not inferred -- 70.1.0
+# fails exactly that way and 77.0.1 builds a correct wheel. `77.0.0` is not a floor anyone can pin:
+# it was never published. The history above is kept because it is still what decides the floor for
+# anyone who reverts the licence form; it is no longer what decides it today.
 #
 # dev-only: `tests/test_sdist_contents_431.py` and `tests/test_repository_conformance_424.py` call
 # `setuptools.build_meta.build_sdist()`/`build_wheel()` in-process to prove what `MANIFEST.in` and
@@ -191,8 +211,8 @@ testing = ["pytest>=8.0"]
 # a report on, and it says so instead of asserting a behaviour no leg can go red for -- the failure
 # CLAUDE.md's #134 rule names, which a reviewer caught in the first draft of this very comment.
 dev = ["requivo[anthropic,web,testing]", "ruff>=0.6", "httpx>=0.26.0,<1",
-       "tomli>=1.1.0; python_version < '3.11'", "packaging>=23.0",
-       "pyright>=1.1.400,<2", "setuptools>=70.1.0", "pytest-cov>=5.0,<8"]
+       "tomli>=1.1.0; python_version < '3.11'", "packaging>=24.2",
+       "pyright>=1.1.400,<2", "setuptools>=77.0.1", "pytest-cov>=5.0,<8"]
 
 [tool.pyright]
 # #78. Ruff and pytest were the whole static story, on a codebase whose architectural safety is
@@ -306,11 +326,24 @@ requivo = "requivo.cli:app"
 # wheel is a redistribution, so omitting it here would put every `pip install` out of compliance with
 # the licence this file declares. THIRD-PARTY-NOTICES.md is here for a different reason — the wheel
 # carries a verbatim copy of htmx, and a redistributed file should be traceable to its source and
-# version even though its licence (0BSD) asks for nothing. Kept as the setuptools-specific key rather
-# than PEP 639's `[project] license-files`, which would raise the build-time setuptools floor and the
-# metadata version; whether that trade-off still binds is #337, deliberately not settled here.
-license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
-
+# version even though its licence (0BSD) asks for nothing.
+#
+# **Both files now ride along through `[project] license-files` instead (#337).** This was the
+# setuptools-specific key, kept deliberately because PEP 639's form would raise the build-time
+# setuptools floor and the metadata version. That trade-off was re-taken rather than reversed in
+# passing, and all three of the checks #337 named to settle it were run:
+#
+#   1. setuptools 82.0.1 installs cleanly on Python 3.9.6, this project's oldest supported
+#      interpreter -- so the raised build floor does not strand the bottom of the CI matrix, which
+#      is the question the original decision actually turned on.
+#   2. The built wheel carries `Metadata-Version: 2.4` and `License-Expression: Apache-2.0`, with no
+#      `License:` field and no licence classifier -- PEP 639 rejects a build carrying both.
+#   3. pip 21.2.4 (this project's declared pip floor) on Python 3.9 installs that wheel and reads
+#      its metadata back correctly. Metadata 2.4 does not break the oldest installer supported here.
+#
+# The one visible consequence: the three files land in `dist-info/licenses/` rather than directly in
+# `dist-info/`. They still ship, so the Apache-2.0 section 4(d) argument above is untouched -- only
+# the path a reader looks at changed.
 # The sdist deliberately ships no tests/ (#431): MANIFEST.in `prune`s it rather than shipping a
 # half-collectable copy (the default sdist file-finder pulled in tests/*.py without the underscore
 # helpers, conftest.py, tests/web/, scripts/ or fixtures/ those tests need to even collect — verified

@@ -84,7 +84,9 @@ def test_the_suite_ships_in_the_built_wheel():
     # "not installed" as one of its own named cases.
     from test_sdist_contents_431 import _setuptools_build_backend_reason
 
-    too_old = _setuptools_build_backend_reason("70.1.0")
+    # 77.0.1, not 70.1.0, since #337: the licence is a PEP 639 SPDX string now, and a setuptools
+    # below 77 fails to *parse* pyproject.toml before `bdist_wheel`'s own availability is reachable.
+    too_old = _setuptools_build_backend_reason("77.0.1")
     if too_old:
         pytest.skip(too_old)
 
