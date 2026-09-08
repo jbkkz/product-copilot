@@ -95,3 +95,74 @@ new one.
 Readiness is binary: a high-impact slot must be both `explicit` **and** covered above the soft
 boundary to stop blocking the build. A high-impact gap — empty, unknown, or stated-but-thin — keeps a
 session out of "ready". Requivo does not invent graded "nearly ready" levels; it shows what blocks.
+
+## The language of the outputs
+
+A request often arrives in the client's own language — a forwarded French or Spanish email. Requivo
+splits its outputs in two, because the two halves have different readers:
+
+- **The conversation mirrors the request.** The questions Requivo asks back, and the understanding it
+  renders every turn — the objective, the likely scope, the assumptions and the least-explored area —
+  are written in the language the request arrived in. They are read by the person who received that
+  email and who has to take the questions back to their client, so mirroring is what makes them
+  usable. Requivo mirrors; it does not translate the request into English and answer in English.
+- **The buildable artifacts anchor English.** The decision brief, the PRD, the stories, the
+  acceptance criteria, the epic and the release notes are written in English whatever language the
+  request was in. They feed dev teams and trackers — a GitHub or GitLab issue body, a backlog, a
+  spec a build team reads — and those are English-speaking destinations by default. The decision
+  brief sits on this side rather than with the conversation because its reasoning is folded into the
+  model and every later generator is prompted with that model: a brief in the request's language
+  would carry that language into all five artifacts downstream of it.
+
+**The saved decision brief is the one artifact this split does not cleanly divide, and it is
+bilingual on purpose rather than by accident.** `brief_markdown` is the only writer that receives an
+`EngineOutput` as well as its contract, and half of what it emits is a *projection* of the model:
+the objective, the current understanding, each slot's stated value under *What is confirmed* and the
+first half of *Important assumptions* are the model's own words, copied through. Those words are on
+the mirroring side, so a French request produces a `solution-assessment.md` whose judgment —
+problem, solution, complexity, decisions, challenges, risks — is English and whose four projected
+sections are French.
+
+That is not a defect to render away. The projection exists because a restatement can drift from the
+model it restates and a projection cannot (CLAUDE.md: *ask the provider for judgment; read the facts
+off the model*), so translating those four sections means asking the provider to restate facts it
+was already given — the exact thing that design rejects. The alternative is to move the brief to the
+mirroring side entirely, which is coherent and is a larger decision than this page records. So the
+English anchor on the brief covers **the judgment the provider writes**, and the assignment of its
+projected half is open, in the same sense `estimate` below is open. It is confined to one function
+if it is ever changed.
+
+So a French request produces French questions and a French understanding, and an English PRD. That
+is the intended behaviour, not a limitation to work around.
+
+The policy is stated to the model in each prompt asset's *Output format* block — one sentence in
+`engine.md` for the mirroring half, one identical sentence in the six artifact prompts for the
+English half — so it is an instruction on those calls rather than something left to emerge. Requivo
+does **not** detect the request's language: nothing is stored about it and nothing branches on it.
+Both halves are instructions to the model about what it is writing, not a routing decision made in
+Python.
+
+**One call is deliberately outside the policy, and it is named here rather than left to be
+discovered.** `estimate` is prompted with no language sentence, so its `note` and `risks` — free text
+a reader sees — come back in whatever language the model settles on. That is not an oversight in the
+sweep: `estimate` is the one generator that produces **no file**. Every artifact on the English side
+is written to disk and read downstream by a dev team or a tracker; `estimate` is a terminal analysis
+read by the person who ran it, which is the same reader, and the same room, as the mirroring half.
+Assigning it would extend the policy rather than record it, so it is left open and stated as open.
+Until it is decided, "every artifact anchors English" means the six with filenames, and a mixed-
+language `requivo estimate` is a known consequence rather than a contradiction.
+
+Requivo Web reflects the same split. The page declares `lang="en"` for its own chrome, and the
+regions the policy says mirror the request — the request itself, the understanding, the questions —
+declare an empty `lang`, which is HTML's way of saying the language is unknown. Unknown is the
+honest claim: nothing here knows what language the client wrote in, and a guess that is usually
+right is still a guess.
+
+**What that buys, and what it does not.** It removes a false claim: the page no longer asserts that a
+French objective is English. It does **not** make a screen reader pronounce that objective correctly.
+[WCAG 3.1.2](https://www.w3.org/WAI/WCAG22/Understanding/language-of-parts) asks for the actual
+language of each passage to be programmatically determinable, and `lang=""` is the opposite of
+determinable — a reader defaulting to English will read French with English rules exactly as before.
+So this is the strongest *true* statement available without detection, and the accessibility gap
+stays open behind it. Closing it needs a real BCP 47 value, which needs either detection or asking
+the user, and neither has been decided.
