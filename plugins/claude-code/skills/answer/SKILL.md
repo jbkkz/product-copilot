@@ -34,7 +34,8 @@ under you, which is what `--expected-revision` is there to catch.
 ## 2. Reason → propose the refinement
 Start from the current model. For each slot the answers touch: raise `completeness`, flip `inferred` →
 `explicit` where the client confirmed it, and update `value`. Leave untouched slots as they are. Keep
-**every** required slot present. Add follow-up `questions` only where information value is still high;
+**every** required slot present. Add follow-up `questions` only where information value is still high —
+each one `{ "q": …, "slot": …, "why": … }`, the text field being **`q`** — and
 emit `[]` when nothing is both uncertain and high-impact (discovery has converged). Pass the client's
 answers through faithfully — do not embellish them.
 
