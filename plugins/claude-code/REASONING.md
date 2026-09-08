@@ -169,6 +169,12 @@ files anywhere:
    { "model": { … }, "questions": [ … ], "summary": { … } }
    JSON
    ```
+   A question is `{ "q": …, "slot": …, "why": … }` — **the text field is `q`**, not `question`. It is
+   spelled out because `question` is the natural guess and the contract is `extra="forbid"`, so the
+   guess costs a whole validate cycle: two errors per question (`questions.N.q Field required` and
+   `questions.N.question Extra inputs are not permitted`), which is 12 for a six-question turn.
+   Recoverable — the first of each pair names `q` — but the round trip is avoidable, and it was
+   spent for real on a plugin session before this line existed (#489).
 3. If it fails, read the JSON error (`code`, `message`, `details`) and **fix your proposal**, then
    validate again. Repeat until valid. Common codes: `unknown_slot` (a slot id isn't in the schema),
    `missing_required_slot` (you dropped a required slot — emit every one), `invalid_model` (shape/JSON).

@@ -291,6 +291,47 @@ def test_every_skill_body_points_at_another_skill():
             f"to go next. Its own `# /requivo:{name}` heading does not count.")
 
 
+def test_the_pages_that_build_a_proposal_name_every_field_a_question_is_made_of():
+    """A page that asks Claude to emit `questions` must spell out the fields one is made of — `q`
+    above all, because `question` is the natural guess and nothing in the prose said otherwise.
+
+    Sibling of the enum test below, and the same defect class approached from the other side: that
+    one is a placeholder offering values the contract rejects, this one is a *required field the
+    prose never names at all*, which leaves the reader to guess. `Question` is `extra="forbid"`, so
+    the guess costs a whole validate cycle -- two errors per question (`questions.N.q Field
+    required`, `questions.N.question Extra inputs are not permitted`), 12 for a six-question turn.
+    Reproduced against the real CLI, and spent for real on a plugin session reported by an external
+    contributor (#489). Recoverable, since the first error of each pair names `q`; avoidable
+    entirely by writing the field down.
+
+    Scoped to the pages that actually build a proposal -- the ones naming `model validate` or `model
+    apply` -- rather than to every mention of the word, because `status` merely *reports* open
+    questions and owes the reader nothing about their shape. Held as a property and not as a
+    sentence, per #96: it asserts the field names are somewhere on the page a reader is following,
+    never where or in what words, so these pages stay cheap to rewrite.
+    """
+    from requivo.core.contracts import Question
+
+    required = sorted(n for n, f in Question.model_fields.items() if f.is_required())
+    assert "q" in required, "the Question contract no longer has a `q` field — update this guard"
+
+    checked = []
+    for path in [*_skill_files(), PLUGIN / "REASONING.md"]:
+        text = path.read_text(encoding="utf-8")
+        if "`questions`" not in text or not re.search(r"model (validate|apply)", text):
+            continue
+        checked.append(path.parent.name)
+        # Named as a code span (`q`) or as a JSON key ("q"), because both put the exact string in
+        # front of the reader. Which one a page uses is formatting, and formatting is not the rule.
+        missing = [f for f in required if not re.search(rf'[`"]{f}[`"]', text)]
+        assert not missing, (
+            f"{path.parent.name}/{path.name} asks for `questions` and never names {missing}. A "
+            f'required field the prose leaves out is guessed at, and `extra="forbid"` turns the '
+            f"guess into a wasted validate cycle (#489).")
+    assert len(checked) >= 2, (
+        f"only {checked} were found to build a proposal — this guard is watching almost nothing")
+
+
 def test_skill_enum_placeholders_name_values_the_contracts_accept():
     """A skill's JSON template is a prompt: Claude fills it in and the deterministic CLI validates the
     result. So a wrong alternative in a `"field": "a|b|c"` placeholder is not a typo in a comment — it
