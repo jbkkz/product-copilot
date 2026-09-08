@@ -12,8 +12,11 @@ to build from. Everything in the repo — code, comments, docs, prompts and cont
 The engine's **output** is split, and deliberately so: the questions and the understanding it renders
 each turn mirror the language of the client's request, while every buildable artifact — the decision
 brief, PRD, stories, criteria, epic, release notes — anchors English, because those feed dev teams
-and trackers. The policy, and the prompt sentences that enforce it, are in
-`docs/requirements-model.md` under "The language of the outputs".
+and trackers. The saved decision brief is bilingual and says so: `brief_markdown` is the only writer
+that also receives an `EngineOutput`, and its four projected sections are the model's own words,
+which are on the mirroring side. The policy, its two named open edges (`estimate`, and the brief's
+projected half) and the prompt sentences that enforce it are in `docs/requirements-model.md` under
+"The language of the outputs".
 
 ## Run and test
 

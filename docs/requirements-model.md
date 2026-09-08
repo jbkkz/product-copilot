@@ -114,6 +114,24 @@ splits its outputs in two, because the two halves have different readers:
   model and every later generator is prompted with that model: a brief in the request's language
   would carry that language into all five artifacts downstream of it.
 
+**The saved decision brief is the one artifact this split does not cleanly divide, and it is
+bilingual on purpose rather than by accident.** `brief_markdown` is the only writer that receives an
+`EngineOutput` as well as its contract, and half of what it emits is a *projection* of the model:
+the objective, the current understanding, each slot's stated value under *What is confirmed* and the
+first half of *Important assumptions* are the model's own words, copied through. Those words are on
+the mirroring side, so a French request produces a `solution-assessment.md` whose judgment —
+problem, solution, complexity, decisions, challenges, risks — is English and whose four projected
+sections are French.
+
+That is not a defect to render away. The projection exists because a restatement can drift from the
+model it restates and a projection cannot (CLAUDE.md: *ask the provider for judgment; read the facts
+off the model*), so translating those four sections means asking the provider to restate facts it
+was already given — the exact thing that design rejects. The alternative is to move the brief to the
+mirroring side entirely, which is coherent and is a larger decision than this page records. So the
+English anchor on the brief covers **the judgment the provider writes**, and the assignment of its
+projected half is open, in the same sense `estimate` below is open. It is confined to one function
+if it is ever changed.
+
 So a French request produces French questions and a French understanding, and an English PRD. That
 is the intended behaviour, not a limitation to work around.
 

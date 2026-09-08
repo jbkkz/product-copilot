@@ -21,7 +21,7 @@ from requivo.core.contracts import (
     Opportunity,
     ReleaseNotes,
 )
-from requivo.render.markdown import criteria_markdown, epic_markdown, prd_markdown, release_markdown
+from requivo.render.markdown import brief_markdown, criteria_markdown, epic_markdown, prd_markdown, release_markdown
 from requivo.render.terminal import render_brief
 
 
@@ -187,3 +187,48 @@ def test_render_brief_opportunity_names_reached_modules():
     assert "↳ reaches: Absence, Contracts, Missions" in text
     assert "Add a dashboard later." in text
     assert text.count("↳ reaches:") == 1
+
+
+# ── The decision brief is bilingual by construction (#277) ────────────────────
+# `docs/requirements-model.md` puts the six saved artifacts on the English side of the output-language
+# policy. For five of them that is the whole story: `prd_markdown`, `criteria_markdown`,
+# `epic_markdown` and `release_markdown` each receive only the contract the provider filled, so the
+# language instruction in their prompt is the only thing that decides what they say.
+#
+# `brief_markdown` is the exception, and the exception was documented as an anchor for a whole release
+# candidate: it takes an `EngineOutput` as well as its `Brief`, and four of its sections are a
+# *projection* of that model — the objective, the current understanding, each slot's stated value under
+# "What is confirmed", and the first half of "Important assumptions". Model text mirrors the request.
+# So an English `Brief` over a French model saves a French-and-English document, and the page claiming
+# otherwise was the same defect #277 was opened about, one artifact along.
+#
+# The two tests below hold the shape the page now describes rather than the shape it wished for. They
+# are not a licence to translate the projection: that is the invariant CLAUDE.md states as *ask the
+# provider for judgment; read the facts off the model*, and a restatement can drift where a projection
+# cannot. If the brief is ever moved to the mirroring side instead, these are the assertions that say
+# what changed and what it cost.
+
+def _bilingual_brief() -> str:
+    model = out({"problem": {"completeness": 90, "confidence": "explicit", "impact": "high",
+                             "value": "Les congés sont validés par courriel."}})
+    model.summary.objective = "Gérer les congés des employés."
+    model.summary.scope = "Un portail où chaque salarié dépose sa demande."
+    model.summary.assumptions = ["Les managers valident sous 48 heures."]
+    return brief_markdown(model, Brief(complexity="low", problem="Leave approvals are inconsistent.",
+                                       solution="A single approval workflow."))
+
+
+def test_the_decision_brief_projects_the_models_own_words_rather_than_restating_them():
+    md = _bilingual_brief()
+    # Copied through verbatim, from all four projected sections. Nothing here was written by the
+    # provider, so nothing here obeys the prompt's English sentence.
+    assert "**Objective:** Gérer les congés des employés." in md
+    assert "Un portail où chaque salarié dépose sa demande." in md
+    assert "Les congés sont validés par courriel." in md
+    assert "Les managers valident sous 48 heures." in md
+
+
+def test_the_decision_briefs_english_anchor_covers_the_judgment_the_provider_wrote():
+    md = _bilingual_brief()
+    assert "**Problem:** Leave approvals are inconsistent." in md
+    assert "**Solution:** A single approval workflow." in md
